@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: lcm-db-dev
+    environment:
+      POSTGRES_USER: lcm
+      POSTGRES_PASSWORD: lcm
+      POSTGRES_DB: lcm
+    ports:
+      - '5432:5432'
+    volumes:
+      - lcm-postgres-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U lcm -d lcm']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  lcm-postgres-dev:
