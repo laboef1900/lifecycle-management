@@ -9,6 +9,7 @@ import type { Env } from './env.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import prismaPlugin from './plugins/prisma.js';
 import tenantContextPlugin from './plugins/tenant-context.js';
+import { applicationRoutes } from './routes/applications.js';
 import { clusterRoutes } from './routes/clusters.js';
 import { healthRoutes } from './routes/health.js';
 import { hostRoutes } from './routes/hosts.js';
@@ -36,6 +37,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(healthRoutes);
   await server.register(clusterRoutes, { prefix: '/api' });
   await server.register(hostRoutes, { prefix: '/api' });
+  await server.register(applicationRoutes, { prefix: '/api' });
 
   return server;
 }
