@@ -11,6 +11,7 @@ import prismaPlugin from './plugins/prisma.js';
 import tenantContextPlugin from './plugins/tenant-context.js';
 import { clusterRoutes } from './routes/clusters.js';
 import { healthRoutes } from './routes/health.js';
+import { hostRoutes } from './routes/hosts.js';
 
 export interface BuildServerOptions {
   env: Env;
@@ -34,6 +35,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(prismaPlugin, prisma ? { prisma } : {});
   await server.register(healthRoutes);
   await server.register(clusterRoutes, { prefix: '/api' });
+  await server.register(hostRoutes, { prefix: '/api' });
 
   return server;
 }
