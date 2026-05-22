@@ -7,8 +7,10 @@ import type {
   ClusterUpdateInput,
   MetricStateResponse,
 } from '../schemas/cluster.js';
+import type { EventCategory } from '../schemas/event.js';
 
 import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
+import { computeForecast } from './forecast.js';
 
 const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
 
@@ -17,6 +19,9 @@ const clusterInclude = {
     include: { metricType: true },
     orderBy: { metricType: { key: 'asc' as const } },
   },
+  hosts: { include: { capacities: true } },
+  applications: { include: { allocations: true } },
+  events: true,
 } satisfies Prisma.ClusterInclude;
 
 type ClusterRow = Prisma.ClusterGetPayload<{ include: typeof clusterInclude }>;
@@ -151,14 +156,54 @@ export class ClustersService {
   }
 
   private toResponse(row: ClusterRow): ClusterResponse {
+    const today = firstOfCurrentMonth();
     const metrics: MetricStateResponse[] = row.baselines.map((b) => {
       const baselineConsumption = b.baselineConsumption.toNumber();
       const baselineCapacity = b.baselineCapacity.toNumber();
-      // TODO(#8): include host capacity, application allocation, and event deltas
-      //           in effect at "today". For now the current state equals the baseline.
-      const currentConsumption = baselineConsumption;
-      const currentCapacity = baselineCapacity;
-      const utilization = currentCapacity === 0 ? 0 : currentConsumption / currentCapacity;
+
+      const forecast = computeForecast(
+        {
+          baselineDate: row.baselineDate,
+          baselineConsumption,
+          baselineCapacity,
+          hosts: row.hosts.map((h) => ({
+            id: h.id,
+            name: h.name,
+            commissionedAt: h.commissionedAt,
+            decommissionedAt: h.decommissionedAt,
+            capacities: h.capacities
+              .filter((c) => c.metricTypeId === b.metricTypeId)
+              .map((c) => ({ effectiveFrom: c.effectiveFrom, amount: c.amount.toNumber() })),
+          })),
+          applications: row.applications.map((a) => ({
+            id: a.id,
+            name: a.name,
+            startedAt: a.startedAt,
+            endedAt: a.endedAt,
+            allocations: a.allocations
+              .filter((al) => al.metricTypeId === b.metricTypeId)
+              .map((al) => ({ effectiveFrom: al.effectiveFrom, amount: al.amount.toNumber() })),
+          })),
+          events: row.events
+            .filter((e) => e.metricTypeId === b.metricTypeId)
+            .map((e) => ({
+              id: e.id,
+              effectiveDate: e.effectiveDate,
+              category: e.category as EventCategory,
+              title: e.title,
+              description: e.description,
+              consumptionDelta: e.consumptionDelta?.toNumber() ?? null,
+              capacityDelta: e.capacityDelta?.toNumber() ?? null,
+            })),
+        },
+        today,
+        today,
+      );
+      const point = forecast.months[0];
+      const currentConsumption = point?.consumption ?? baselineConsumption;
+      const currentCapacity = point?.capacity ?? baselineCapacity;
+      const utilization = point?.utilization ?? 0;
+
       return {
         metricTypeKey: b.metricType.key,
         metricTypeDisplayName: b.metricType.displayName,
@@ -193,4 +238,9 @@ export class ClustersService {
       );
     }
   }
+}
+
+function firstOfCurrentMonth(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
