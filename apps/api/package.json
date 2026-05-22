@@ -11,12 +11,21 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "seed": "echo 'seed placeholder — implemented in issue #3'"
+    "seed": "tsx prisma/seed.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio"
   },
   "dependencies": {
-    "@lcm/shared": "workspace:*"
+    "@lcm/shared": "workspace:*",
+    "@prisma/client": "^6.4.0"
   },
   "devDependencies": {
+    "prisma": "^6.4.0",
     "tsx": "^4.19.2"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }
