@@ -1,0 +1,190 @@
+// LCM v1 — data model
+// Spec: docs/superpowers/specs/2026-05-22-lcm-v1-design.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Lookup ----------
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  clusters       Cluster[]
+  baselines      ClusterMetricBaseline[]
+  hosts          Host[]
+  hostCapacities HostMetricCapacity[]
+  applications   Application[]
+  appAllocations ApplicationMetricAllocation[]
+  events         Event[]
+
+  @@map("tenants")
+}
+
+model MetricType {
+  id          String @id @default(cuid())
+  key         String @unique
+  displayName String @map("display_name")
+  unit        String
+
+  baselines      ClusterMetricBaseline[]
+  hostCapacities HostMetricCapacity[]
+  appAllocations ApplicationMetricAllocation[]
+  events         Event[]
+
+  @@map("metric_types")
+}
+
+// ---------- Cluster + baselines ----------
+
+model Cluster {
+  id           String   @id @default(cuid())
+  tenantId     String   @default("default") @map("tenant_id")
+  name         String
+  description  String?
+  baselineDate DateTime @map("baseline_date") @db.Date
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  baselines    ClusterMetricBaseline[]
+  hosts        Host[]
+  applications Application[]
+  events       Event[]
+
+  @@unique([tenantId, name], map: "clusters_tenant_name_unique")
+  @@map("clusters")
+}
+
+model ClusterMetricBaseline {
+  clusterId           String  @map("cluster_id")
+  metricTypeId        String  @map("metric_type_id")
+  tenantId            String  @default("default") @map("tenant_id")
+  baselineConsumption Decimal @map("baseline_consumption") @db.Decimal(18, 3)
+  baselineCapacity    Decimal @map("baseline_capacity") @db.Decimal(18, 3)
+
+  cluster    Cluster    @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  metricType MetricType @relation(fields: [metricTypeId], references: [id])
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+
+  @@id([clusterId, metricTypeId])
+  @@map("cluster_metric_baselines")
+}
+
+// ---------- Hosts (capacity providers) ----------
+
+model Host {
+  id               String    @id @default(cuid())
+  tenantId         String    @default("default") @map("tenant_id")
+  clusterId        String    @map("cluster_id")
+  name             String
+  description      String?
+  commissionedAt   DateTime  @map("commissioned_at") @db.Date
+  decommissionedAt DateTime? @map("decommissioned_at") @db.Date
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  tenant     Tenant               @relation(fields: [tenantId], references: [id])
+  cluster    Cluster              @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  capacities HostMetricCapacity[]
+
+  @@index([clusterId])
+  @@map("hosts")
+}
+
+model HostMetricCapacity {
+  id            String   @id @default(cuid())
+  hostId        String   @map("host_id")
+  metricTypeId  String   @map("metric_type_id")
+  tenantId      String   @default("default") @map("tenant_id")
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  amount        Decimal  @db.Decimal(18, 3)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  host       Host       @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  metricType MetricType @relation(fields: [metricTypeId], references: [id])
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+
+  @@unique([hostId, metricTypeId, effectiveFrom])
+  @@map("host_metric_capacities")
+}
+
+// ---------- Applications (consumption sources) ----------
+
+model Application {
+  id          String    @id @default(cuid())
+  tenantId    String    @default("default") @map("tenant_id")
+  clusterId   String    @map("cluster_id")
+  name        String
+  category    String
+  description String?
+  startedAt   DateTime  @map("started_at") @db.Date
+  endedAt     DateTime? @map("ended_at") @db.Date
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  tenant      Tenant                        @relation(fields: [tenantId], references: [id])
+  cluster     Cluster                       @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  allocations ApplicationMetricAllocation[]
+
+  @@index([clusterId])
+  @@map("applications")
+}
+
+model ApplicationMetricAllocation {
+  id            String   @id @default(cuid())
+  applicationId String   @map("application_id")
+  metricTypeId  String   @map("metric_type_id")
+  tenantId      String   @default("default") @map("tenant_id")
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  amount        Decimal  @db.Decimal(18, 3)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  metricType  MetricType  @relation(fields: [metricTypeId], references: [id])
+  tenant      Tenant      @relation(fields: [tenantId], references: [id])
+
+  @@unique([applicationId, metricTypeId, effectiveFrom])
+  @@map("application_metric_allocations")
+}
+
+// ---------- Events (un-attributed deltas + annotations) ----------
+
+enum EventCategory {
+  growth
+  hardware_change
+  openshift
+  note
+
+  @@map("event_category")
+}
+
+model Event {
+  id               String        @id @default(cuid())
+  tenantId         String        @default("default") @map("tenant_id")
+  clusterId        String        @map("cluster_id")
+  metricTypeId     String        @map("metric_type_id")
+  effectiveDate    DateTime      @map("effective_date") @db.Date
+  category         EventCategory
+  title            String
+  description      String?
+  consumptionDelta Decimal?      @map("consumption_delta") @db.Decimal(18, 3)
+  capacityDelta    Decimal?      @map("capacity_delta") @db.Decimal(18, 3)
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  cluster    Cluster    @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  metricType MetricType @relation(fields: [metricTypeId], references: [id])
+
+  @@index([clusterId, effectiveDate])
+  @@map("events")
+}
