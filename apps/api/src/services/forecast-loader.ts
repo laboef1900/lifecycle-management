@@ -1,6 +1,5 @@
+import type { EventCategory } from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
-
-import type { EventCategory } from '../schemas/event.js';
 
 import { NotFoundError, UnprocessableError } from './errors.js';
 import {

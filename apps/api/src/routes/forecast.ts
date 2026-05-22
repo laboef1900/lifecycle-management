@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 
-import { forecastParamsSchema, forecastQuerySchema } from '../schemas/forecast.js';
+import { forecastParamsSchema, forecastQuerySchema } from '@lcm/shared';
+
 import { ForecastService } from '../services/forecast-loader.js';
 
 export const forecastRoutes: FastifyPluginAsync = async (fastify) => {

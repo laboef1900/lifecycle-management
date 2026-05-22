@@ -6,7 +6,8 @@ import {
   applicationIdParamsSchema,
   applicationUpdateInputSchema,
   clusterIdApplicationsParamsSchema,
-} from '../schemas/application.js';
+} from '@lcm/shared';
+
 import { ApplicationsService } from '../services/applications.js';
 
 export const applicationRoutes: FastifyPluginAsync = async (fastify) => {

@@ -1,5 +1,6 @@
-import { formatDate } from '../schemas/common.js';
-import type { EventCategory } from '../schemas/event.js';
+import type { EventCategory } from '@lcm/shared';
+
+import { formatDate } from '../lib/dates.js';
 
 export interface ForecastCapacityRow {
   effectiveFrom: Date;

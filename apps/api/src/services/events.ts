@@ -1,13 +1,13 @@
-import { Prisma, type PrismaClient } from '@prisma/client';
-
-import { formatDate } from '../schemas/common.js';
 import {
   hasPayloadOrIsNote,
   type EventCategory,
   type EventCreateInput,
   type EventResponse,
   type EventUpdateInput,
-} from '../schemas/event.js';
+} from '@lcm/shared';
+import { Prisma, type PrismaClient } from '@prisma/client';
+
+import { formatDate } from '../lib/dates.js';
 
 import { NotFoundError, UnprocessableError } from './errors.js';
 

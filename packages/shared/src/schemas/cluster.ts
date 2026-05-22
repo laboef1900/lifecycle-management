@@ -31,9 +31,7 @@ export const clusterUpdateInputSchema = z
     { message: 'At least one field must be provided' },
   );
 
-export const clusterIdParamsSchema = z.object({
-  id: cuid,
-});
+export const clusterIdParamsSchema = z.object({ id: cuid });
 
 export type ClusterCreateInput = z.infer<typeof clusterCreateInputSchema>;
 export type ClusterUpdateInput = z.infer<typeof clusterUpdateInputSchema>;

@@ -1,13 +1,13 @@
-import { Prisma, type PrismaClient } from '@prisma/client';
-
-import { formatDate } from '../schemas/common.js';
 import type {
   ClusterCreateInput,
   ClusterResponse,
   ClusterUpdateInput,
+  EventCategory,
   MetricStateResponse,
-} from '../schemas/cluster.js';
-import type { EventCategory } from '../schemas/event.js';
+} from '@lcm/shared';
+import { Prisma, type PrismaClient } from '@prisma/client';
+
+import { formatDate } from '../lib/dates.js';
 
 import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
 import { computeForecast } from './forecast.js';

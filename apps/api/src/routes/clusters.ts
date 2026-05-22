@@ -4,7 +4,8 @@ import {
   clusterCreateInputSchema,
   clusterIdParamsSchema,
   clusterUpdateInputSchema,
-} from '../schemas/cluster.js';
+} from '@lcm/shared';
+
 import { ClustersService } from '../services/clusters.js';
 
 export const clusterRoutes: FastifyPluginAsync = async (fastify) => {
