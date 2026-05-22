@@ -1,0 +1,71 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+
+import { buildServer } from '../server.js';
+import { makeFakePrisma, makeTestEnv } from './test-helpers.js';
+
+describe('error handler', () => {
+  const created: Array<{ close: () => Promise<void> }> = [];
+
+  afterEach(async () => {
+    while (created.length) {
+      const server = created.pop();
+      await server?.close();
+    }
+  });
+
+  it('translates ZodError thrown in a handler into a 400 with the uniform error shape', async () => {
+    const server = await buildServer({ env: makeTestEnv(), prisma: makeFakePrisma() });
+    created.push(server);
+
+    const schema = z.object({ name: z.string().min(1) });
+    server.post('/test-validation', async (request) => {
+      schema.parse(request.body);
+      return { ok: true };
+    });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/test-validation',
+      payload: { name: '' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { error: { code: string; message: string; details: unknown } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toBe('Request validation failed');
+    expect(body.error.details).toBeDefined();
+  });
+
+  it('returns 404 with the uniform error shape for unknown routes', async () => {
+    const server = await buildServer({ env: makeTestEnv(), prisma: makeFakePrisma() });
+    created.push(server);
+
+    const response = await server.inject({ method: 'GET', url: '/does-not-exist' });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({
+      error: {
+        code: 'NOT_FOUND',
+        message: 'Route GET /does-not-exist not found',
+      },
+    });
+  });
+
+  it('hides 500 error messages from clients but logs the original', async () => {
+    const server = await buildServer({ env: makeTestEnv(), prisma: makeFakePrisma() });
+    created.push(server);
+
+    server.get('/boom', async () => {
+      throw new Error('sensitive internal detail');
+    });
+
+    const response = await server.inject({ method: 'GET', url: '/boom' });
+
+    expect(response.statusCode).toBe(500);
+    const body = response.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('INTERNAL_ERROR');
+    expect(body.error.message).toBe('Internal server error');
+    expect(body.error.message).not.toContain('sensitive internal detail');
+  });
+});
