@@ -61,7 +61,7 @@ function ClusterDetailPage(): React.JSX.Element {
           <ErrorCard message={clusterQuery.error?.message ?? 'Cluster not found'} />
         ) : (
           <div>
-            <h1 className="text-[1.625rem] font-semibold tracking-tight">
+            <h1 className="text-[1.625rem] font-semibold tracking-tight [overflow-wrap:anywhere]">
               {clusterQuery.data.name}
             </h1>
             <p className="text-sm text-muted-foreground">
