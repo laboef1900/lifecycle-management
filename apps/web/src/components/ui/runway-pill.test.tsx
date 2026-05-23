@@ -20,7 +20,7 @@ describe('<RunwayPill>', () => {
   it('uses the red variant when months < 3', () => {
     render(<RunwayPill summary={{ months: 2, alreadyBreached: false }} />);
     const pill = screen.getByText(/2 mo to 70%/i);
-    expect(pill.parentElement?.className).toMatch(/danger/);
+    expect(pill.parentElement?.className).toMatch(/destructive/);
   });
 
   it('shows "Over 70%" amber when already breached at warn', () => {
@@ -32,7 +32,7 @@ describe('<RunwayPill>', () => {
   it('shows "Over 90%" red when already breached at crit', () => {
     render(<RunwayPill summary={{ months: 0, alreadyBreached: 'crit' }} />);
     const pill = screen.getByText(/Over 90%/i);
-    expect(pill.parentElement?.className).toMatch(/danger/);
+    expect(pill.parentElement?.className).toMatch(/destructive/);
   });
 
   it('shows the horizon hint with a "+" when there is no projected breach', () => {
