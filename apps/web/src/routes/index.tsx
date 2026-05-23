@@ -3,6 +3,7 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
 
+import { resolveWindow } from '@/components/clusters/window-controls';
 import { ClusterTile } from '@/components/overview/cluster-tile';
 import { FleetCapacityChart } from '@/components/overview/fleet-capacity-chart';
 import { KpiTile } from '@/components/overview/kpi-tile';
@@ -25,7 +26,7 @@ function OverviewPage(): React.JSX.Element {
   const forecastQueries = useQueries({
     queries: clusters.map((cluster) => {
       const metric = cluster.metrics[0];
-      const range = computeWindow(cluster.baselineDate, 24);
+      const range = resolveWindow('24mo', cluster.baselineDate);
       return {
         queryKey: ['forecast', cluster.id, metric?.metricTypeKey, range.from, range.to],
         queryFn: () =>
@@ -138,19 +139,6 @@ function OverviewPage(): React.JSX.Element {
       ) : null}
     </div>
   );
-}
-
-function computeWindow(baselineDate: string, months: number): { from: string; to: string } {
-  const baseline = new Date(`${baselineDate}T00:00:00Z`);
-  const half = Math.floor(months / 2);
-  const from = new Date(baseline);
-  from.setUTCMonth(from.getUTCMonth() - half);
-  const to = new Date(baseline);
-  to.setUTCMonth(to.getUTCMonth() + (months - half));
-  return {
-    from: `${from.getUTCFullYear()}-${String(from.getUTCMonth() + 1).padStart(2, '0')}-01`,
-    to: `${to.getUTCFullYear()}-${String(to.getUTCMonth() + 1).padStart(2, '0')}-01`,
-  };
 }
 
 function OverviewSkeleton(): React.JSX.Element {
