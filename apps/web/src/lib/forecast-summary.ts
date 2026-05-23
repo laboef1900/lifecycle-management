@@ -59,3 +59,12 @@ export function fleetRunwayToWarn(series: ForecastMonthPoint[][]): RunwaySummary
     }));
   return runwayToWarn(merged);
 }
+
+export type UtilStatus = 'ok' | 'warn' | 'crit';
+
+/** Maps a utilization ratio (0..1) to the KpiTile status band. */
+export function utilStatus(utilization: number): UtilStatus {
+  if (utilization >= CRIT_THRESHOLD) return 'crit';
+  if (utilization >= WARN_THRESHOLD) return 'warn';
+  return 'ok';
+}

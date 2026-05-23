@@ -1,7 +1,7 @@
 import type { ForecastMonthPoint } from '@lcm/shared';
 import { describe, expect, it } from 'vitest';
 
-import { fleetRunwayToWarn, runwayToWarn } from '../lib/forecast-summary';
+import { fleetRunwayToWarn, runwayToWarn, utilStatus } from '../lib/forecast-summary';
 
 const point = (month: string, consumption: number, capacity: number): ForecastMonthPoint => ({
   month,
@@ -82,5 +82,22 @@ describe('fleetRunwayToWarn', () => {
     const b = [point('2026-05-01', 200, 1000), point('2026-06-01', 750, 1000)];
     // May: 500/2000 = 25% (no breach). June: 750/1000 = 75% (warn, index 1, not the current month).
     expect(fleetRunwayToWarn([a, b])).toEqual({ months: 1, alreadyBreached: false });
+  });
+});
+
+describe('utilStatus', () => {
+  it('returns ok below 70%', () => {
+    expect(utilStatus(0)).toBe('ok');
+    expect(utilStatus(0.5)).toBe('ok');
+    expect(utilStatus(0.699)).toBe('ok');
+  });
+  it('returns warn at and above 70% below 90%', () => {
+    expect(utilStatus(0.7)).toBe('warn');
+    expect(utilStatus(0.89)).toBe('warn');
+  });
+  it('returns crit at and above 90%', () => {
+    expect(utilStatus(0.9)).toBe('crit');
+    expect(utilStatus(1)).toBe('crit');
+    expect(utilStatus(1.5)).toBe('crit');
   });
 });

@@ -10,6 +10,7 @@ import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
 import { api } from '@/lib/api-client';
+import { utilStatus } from '@/lib/forecast-summary';
 
 export const Route = createFileRoute('/')({
   component: OverviewPage,
@@ -81,9 +82,7 @@ function OverviewPage(): React.JSX.Element {
             label="Fleet utilization"
             value={`${(summary.utilization * 100).toFixed(1)}%`}
             caption="memory used"
-            status={
-              summary.utilization >= 0.9 ? 'crit' : summary.utilization >= 0.7 ? 'warn' : 'ok'
-            }
+            status={utilStatus(summary.utilization)}
           />
           <KpiTile
             className="col-span-12 sm:col-span-4"
@@ -101,13 +100,7 @@ function OverviewPage(): React.JSX.Element {
                 ? `${(summary.worstCluster.utilization * 100).toFixed(1)}% utilization`
                 : 'no data'
             }
-            status={
-              summary.worstCluster && summary.worstCluster.utilization >= 0.9
-                ? 'crit'
-                : summary.worstCluster && summary.worstCluster.utilization >= 0.7
-                  ? 'warn'
-                  : 'ok'
-            }
+            status={summary.worstCluster ? utilStatus(summary.worstCluster.utilization) : 'ok'}
           />
 
           <Card className="col-span-12 p-4">

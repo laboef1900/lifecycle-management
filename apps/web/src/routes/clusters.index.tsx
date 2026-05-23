@@ -10,7 +10,7 @@ import { resolveWindow } from '@/components/clusters/window-controls';
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
-import { fleetRunwayToWarn } from '@/lib/forecast-summary';
+import { fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
 import { api } from '@/lib/api-client';
 
 export const Route = createFileRoute('/clusters/')({
@@ -109,26 +109,14 @@ function ClustersPage(): React.JSX.Element {
             label="Used"
             value={`${numberFormat.format(Math.round(fleetSummary.totalConsumption))} GB`}
             caption={`of ${numberFormat.format(Math.round(fleetSummary.totalCapacity))} GB capacity`}
-            status={
-              fleetSummary.utilization >= 0.9
-                ? 'crit'
-                : fleetSummary.utilization >= 0.7
-                  ? 'warn'
-                  : 'ok'
-            }
+            status={utilStatus(fleetSummary.utilization)}
           />
           <KpiTile
             className="col-span-12 sm:col-span-4"
             label="Headroom"
             value={`${numberFormat.format(Math.round(headroom))} GB`}
             caption={`${((1 - fleetSummary.utilization) * 100).toFixed(1)}% available`}
-            status={
-              fleetSummary.utilization >= 0.9
-                ? 'crit'
-                : fleetSummary.utilization >= 0.7
-                  ? 'warn'
-                  : 'ok'
-            }
+            status={utilStatus(fleetSummary.utilization)}
           />
           <KpiTile
             className="col-span-12 sm:col-span-4"
