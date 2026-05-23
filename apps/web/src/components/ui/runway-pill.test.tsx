@@ -44,4 +44,9 @@ describe('<RunwayPill>', () => {
     render(<RunwayPill summary={undefined} />);
     expect(screen.getByText('—')).toBeInTheDocument();
   });
+
+  it('falls back to "No breach in horizon" copy when no horizonMonths is given', () => {
+    render(<RunwayPill summary={{ months: null, alreadyBreached: false }} />);
+    expect(screen.getByText(/No breach in horizon/i)).toBeInTheDocument();
+  });
 });
