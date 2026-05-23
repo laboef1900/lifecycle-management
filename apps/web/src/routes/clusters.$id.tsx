@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { UtilizationGauge } from '@/components/ui/utilization-gauge';
 import { api } from '@/lib/api-client';
 import { runwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { useMediaQuery } from '@/lib/use-media-query';
 
 const numberFormat = new Intl.NumberFormat('en-US');
 
@@ -31,6 +32,7 @@ export const Route = createFileRoute('/clusters/$id')({
 function ClusterDetailPage(): React.JSX.Element {
   const { id } = Route.useParams();
   const [windowSelection, setWindowSelection] = useState<ForecastWindow>('24mo');
+  const isWide = useMediaQuery('(min-width: 640px)');
 
   const clusterQuery = useQuery({
     queryKey: ['cluster', id],
@@ -94,7 +96,7 @@ function ClusterDetailPage(): React.JSX.Element {
             <ErrorCard message={forecastQuery.error?.message ?? 'Could not load forecast'} />
           ) : (
             <>
-              <ForecastChart forecast={forecastQuery.data} />
+              <ForecastChart forecast={forecastQuery.data} compact={!isWide} />
               <UtilizationPanel forecast={forecastQuery.data} />
             </>
           )}

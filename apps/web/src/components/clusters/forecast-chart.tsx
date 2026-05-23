@@ -17,6 +17,7 @@ import { useChartColors } from '@/lib/use-chart-colors';
 
 interface ForecastChartProps {
   forecast: ForecastResponse;
+  compact?: boolean;
 }
 
 const numberFormat = new Intl.NumberFormat('en-US');
@@ -30,7 +31,10 @@ function formatMonth(month: string): string {
   });
 }
 
-export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Element {
+export function ForecastChart({
+  forecast,
+  compact = false,
+}: ForecastChartProps): React.JSX.Element {
   const colors = useChartColors();
   const data = forecast.months.map((point) => ({
     month: point.month,
@@ -53,7 +57,10 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
     <Card className="p-4">
       <div className="h-[320px] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 12, right: 56, bottom: 0, left: 8 }}>
+          <ComposedChart
+            data={data}
+            margin={{ top: 12, right: compact ? 16 : 56, bottom: 0, left: 8 }}
+          >
             <defs>
               <linearGradient id="forecast-consumption" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={colors.consumption} stopOpacity={0.45} />
@@ -64,13 +71,13 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
             <XAxis
               dataKey="month"
               tickFormatter={formatMonth}
-              tick={{ fontSize: 11 }}
+              tick={{ fontSize: compact ? 10 : 11 }}
               stroke={colors.axis}
               interval="preserveStartEnd"
               minTickGap={24}
             />
             <YAxis
-              tick={{ fontSize: 11 }}
+              tick={{ fontSize: compact ? 10 : 11 }}
               stroke={colors.axis}
               tickFormatter={(v: number) => numberFormat.format(v)}
               domain={ceilingForDomain ? [0, ceilingForDomain] : ['auto', 'auto']}
@@ -78,7 +85,7 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
                 value: 'GB',
                 angle: -90,
                 position: 'insideLeft',
-                style: { fontSize: 11, fill: colors.axis },
+                style: { fontSize: compact ? 10 : 11, fill: colors.axis },
               }}
             />
             <Tooltip
@@ -166,12 +173,14 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
                 y={maxCeiling * 0.7}
                 stroke={colors.utilizationWarn}
                 strokeDasharray="2 2"
-                label={{
-                  value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
-                  position: 'right',
-                  fontSize: 10,
-                  fill: colors.utilizationWarn,
-                }}
+                {...(!compact && {
+                  label: {
+                    value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
+                    position: 'right' as const,
+                    fontSize: 10,
+                    fill: colors.utilizationWarn,
+                  },
+                })}
               />
             ) : null}
             {maxCeiling > 0 ? (
@@ -179,12 +188,14 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
                 y={maxCeiling * 0.9}
                 stroke={colors.utilizationCrit}
                 strokeDasharray="2 2"
-                label={{
-                  value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
-                  position: 'right',
-                  fontSize: 10,
-                  fill: colors.utilizationCrit,
-                }}
+                {...(!compact && {
+                  label: {
+                    value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
+                    position: 'right' as const,
+                    fontSize: 10,
+                    fill: colors.utilizationCrit,
+                  },
+                })}
               />
             ) : null}
             <Line

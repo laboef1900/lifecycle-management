@@ -11,6 +11,7 @@ import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
 import { api } from '@/lib/api-client';
 import { fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { useMediaQuery } from '@/lib/use-media-query';
 
 export const Route = createFileRoute('/')({
   component: OverviewPage,
@@ -47,6 +48,7 @@ function OverviewPage(): React.JSX.Element {
   }));
 
   const summary = aggregateFleet(clusters, forecastEntries);
+  const isWide = useMediaQuery('(min-width: 640px)');
 
   const fleetRunway = fleetRunwayToWarn(summary.perClusterSeries.map((s) => s.months));
   const horizonMonths = Math.max(0, ...summary.perClusterSeries.map((s) => s.months.length));
@@ -132,6 +134,7 @@ function OverviewPage(): React.JSX.Element {
                 clusterId: s.clusterId,
                 clusterName: s.clusterName,
               }))}
+              compact={!isWide}
             />
           </Card>
 
