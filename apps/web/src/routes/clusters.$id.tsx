@@ -1,4 +1,18 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { useQuery } from '@tanstack/react-query';
+import { Link, createFileRoute } from '@tanstack/react-router';
+import { ArrowLeft } from 'lucide-react';
+import { useState } from 'react';
+
+import { ForecastChart } from '@/components/clusters/forecast-chart';
+import { UtilizationBadge } from '@/components/clusters/utilization-badge';
+import { UtilizationPanel } from '@/components/clusters/utilization-panel';
+import {
+  WindowControls,
+  resolveWindow,
+  type ForecastWindow,
+} from '@/components/clusters/window-controls';
+import { Button } from '@/components/ui/button';
+import { api } from '@/lib/api-client';
 
 export const Route = createFileRoute('/clusters/$id')({
   component: ClusterDetailPage,
@@ -6,10 +20,106 @@ export const Route = createFileRoute('/clusters/$id')({
 
 function ClusterDetailPage(): React.JSX.Element {
   const { id } = Route.useParams();
+  const [windowSelection, setWindowSelection] = useState<ForecastWindow>('24mo');
+
+  const clusterQuery = useQuery({
+    queryKey: ['cluster', id],
+    queryFn: () => api.clusters.get(id),
+  });
+
+  const baselineDate = clusterQuery.data?.baselineDate;
+  const metric = clusterQuery.data?.metrics[0];
+  const range = baselineDate ? resolveWindow(windowSelection, baselineDate) : null;
+
+  const forecastQuery = useQuery({
+    queryKey: ['forecast', id, metric?.metricTypeKey, range?.from, range?.to],
+    queryFn: () =>
+      api.clusters.forecast(id, {
+        metric: metric!.metricTypeKey,
+        from: range!.from,
+        to: range!.to,
+      }),
+    enabled: Boolean(metric && range),
+  });
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <Button asChild variant="ghost" size="sm" className="-ml-3 mb-2 text-muted-foreground">
+          <Link to="/">
+            <ArrowLeft className="h-4 w-4" />
+            Back to dashboard
+          </Link>
+        </Button>
+
+        {clusterQuery.isPending ? (
+          <HeaderSkeleton />
+        ) : clusterQuery.isError || !clusterQuery.data ? (
+          <ErrorCard message={clusterQuery.error?.message ?? 'Cluster not found'} />
+        ) : (
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight">{clusterQuery.data.name}</h1>
+              <p className="text-sm text-muted-foreground">
+                Baseline {clusterQuery.data.baselineDate}
+                {clusterQuery.data.description ? ` · ${clusterQuery.data.description}` : null}
+              </p>
+            </div>
+            {metric ? (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">Current utilization</span>
+                <UtilizationBadge value={metric.utilization} />
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+
+      {clusterQuery.data && metric ? (
+        <>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Capacity forecast</h2>
+            <WindowControls value={windowSelection} onChange={setWindowSelection} />
+          </div>
+
+          {forecastQuery.isPending ? (
+            <ChartSkeleton />
+          ) : forecastQuery.isError || !forecastQuery.data ? (
+            <ErrorCard message={forecastQuery.error?.message ?? 'Could not load forecast'} />
+          ) : (
+            <>
+              <ForecastChart forecast={forecastQuery.data} />
+              <UtilizationPanel forecast={forecastQuery.data} />
+            </>
+          )}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function HeaderSkeleton(): React.JSX.Element {
   return (
     <div className="space-y-2">
-      <h1 className="text-2xl font-semibold tracking-tight">Cluster {id}</h1>
-      <p className="text-sm text-muted-foreground">Chart and entity tabs arrive in #14 and #15.</p>
+      <div className="h-7 w-48 animate-pulse rounded bg-muted" />
+      <div className="h-4 w-64 animate-pulse rounded bg-muted/60" />
+    </div>
+  );
+}
+
+function ChartSkeleton(): React.JSX.Element {
+  return (
+    <div className="space-y-4">
+      <div className="h-[320px] animate-pulse rounded-lg bg-muted/60" />
+      <div className="h-[140px] animate-pulse rounded-lg bg-muted/40" />
+    </div>
+  );
+}
+
+function ErrorCard({ message }: { message: string }): React.JSX.Element {
+  return (
+    <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+      {message}
     </div>
   );
 }
