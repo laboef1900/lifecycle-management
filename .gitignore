@@ -49,3 +49,7 @@ apps/web/src/routeTree.gen.ts
 
 # Playwright MCP scratch
 .playwright-mcp/
+
+# Playwright test artefacts
+apps/web/playwright-report/
+apps/web/test-results/
