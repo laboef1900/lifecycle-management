@@ -12,6 +12,7 @@ import tenantContextPlugin from './plugins/tenant-context.js';
 import { applicationRoutes } from './routes/applications.js';
 import { clusterRoutes } from './routes/clusters.js';
 import { eventRoutes } from './routes/events.js';
+import { forecastRoutes } from './routes/forecast.js';
 import { healthRoutes } from './routes/health.js';
 import { hostRoutes } from './routes/hosts.js';
 
@@ -40,6 +41,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(hostRoutes, { prefix: '/api' });
   await server.register(applicationRoutes, { prefix: '/api' });
   await server.register(eventRoutes, { prefix: '/api' });
+  await server.register(forecastRoutes, { prefix: '/api' });
 
   return server;
 }

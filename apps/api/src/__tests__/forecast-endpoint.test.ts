@@ -1,0 +1,187 @@
+import { PrismaClient } from '@prisma/client';
+import type { FastifyInstance } from 'fastify';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { buildServer } from '../server.js';
+import { makeTestEnv } from './test-helpers.js';
+
+const CLUSTER_PREFIX = '__test_forecast_cluster_';
+const prisma = new PrismaClient();
+
+let server: FastifyInstance;
+let clusterId: string;
+
+async function cleanupTestClusters(): Promise<void> {
+  await prisma.cluster.deleteMany({
+    where: { name: { startsWith: CLUSTER_PREFIX } },
+  });
+}
+
+async function createCluster(consumption = 0, capacity = 0): Promise<string> {
+  const response = await server.inject({
+    method: 'POST',
+    url: '/api/clusters',
+    payload: {
+      name: `${CLUSTER_PREFIX}${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+      baselineDate: '2026-05-01',
+      baselines: [
+        {
+          metricTypeKey: 'memory_gb',
+          baselineConsumption: consumption,
+          baselineCapacity: capacity,
+        },
+      ],
+    },
+  });
+  return (response.json() as { id: string }).id;
+}
+
+beforeAll(async () => {
+  await cleanupTestClusters();
+  server = await buildServer({ env: makeTestEnv(), prisma });
+});
+
+beforeEach(async () => {
+  await cleanupTestClusters();
+  clusterId = await createCluster(3378, 7680);
+});
+
+afterAll(async () => {
+  await cleanupTestClusters();
+  await server.close();
+  await prisma.$disconnect();
+});
+
+describe('GET /api/clusters/:id/forecast', () => {
+  it('returns 24 months by default starting at the baseline date', async () => {
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb`,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      fromMonth: string;
+      toMonth: string;
+      months: Array<{ month: string; consumption: number; capacity: number }>;
+    };
+    expect(body.fromMonth).toBe('2026-05-01');
+    expect(body.toMonth).toBe('2028-05-01');
+    expect(body.months).toHaveLength(25);
+    expect(body.months[0]).toMatchObject({ consumption: 3378, capacity: 7680 });
+  });
+
+  it('honors from/to query parameters', async () => {
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&from=2026-06&to=2026-08`,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      months: Array<{ month: string }>;
+    };
+    expect(body.months.map((m) => m.month)).toEqual(['2026-06-01', '2026-07-01', '2026-08-01']);
+  });
+
+  it('folds host capacity and application allocation into the time series', async () => {
+    await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: {
+        name: 'host-1',
+        commissionedAt: '2026-07-01',
+        capacities: [{ metricTypeKey: 'memory_gb', effectiveFrom: '2026-07-01', amount: 1024 }],
+      },
+    });
+    await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/applications`,
+      payload: {
+        name: 'app-1',
+        category: 'openshift',
+        startedAt: '2026-08-01',
+        allocations: [{ metricTypeKey: 'memory_gb', effectiveFrom: '2026-08-01', amount: 200 }],
+      },
+    });
+    await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/events`,
+      payload: {
+        metricTypeKey: 'memory_gb',
+        effectiveDate: '2026-09-01',
+        category: 'growth',
+        title: 'Q3 growth',
+        consumptionDelta: 100,
+      },
+    });
+
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&from=2026-06&to=2026-09`,
+    });
+    const body = response.json() as {
+      months: Array<{ month: string; consumption: number; capacity: number }>;
+      hosts: Array<{ name: string; contributions: Array<{ month: string; amount: number }> }>;
+      applications: Array<{
+        name: string;
+        contributions: Array<{ month: string; amount: number }>;
+      }>;
+      events: Array<{ title: string }>;
+    };
+
+    const byMonth = Object.fromEntries(body.months.map((m) => [m.month, m]));
+    expect(byMonth['2026-06-01']).toMatchObject({ consumption: 3378, capacity: 7680 });
+    expect(byMonth['2026-07-01']).toMatchObject({ consumption: 3378, capacity: 8704 });
+    expect(byMonth['2026-08-01']).toMatchObject({ consumption: 3578, capacity: 8704 });
+    expect(byMonth['2026-09-01']).toMatchObject({ consumption: 3678, capacity: 8704 });
+    expect(body.hosts).toHaveLength(1);
+    expect(body.hosts[0]?.contributions).toEqual([
+      { month: '2026-06-01', amount: 0 },
+      { month: '2026-07-01', amount: 1024 },
+      { month: '2026-08-01', amount: 1024 },
+      { month: '2026-09-01', amount: 1024 },
+    ]);
+    expect(body.applications[0]?.contributions).toContainEqual({
+      month: '2026-08-01',
+      amount: 200,
+    });
+    expect(body.events.map((e) => e.title)).toEqual(['Q3 growth']);
+  });
+
+  it('returns 404 when the cluster does not exist', async () => {
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/clusters/missing/forecast?metric=memory_gb',
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('returns 422 when the metric is unknown', async () => {
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=plutonium_kg`,
+    });
+    expect(response.statusCode).toBe(422);
+    expect((response.json() as { error: { code: string } }).error.code).toBe('UNKNOWN_METRIC');
+  });
+
+  it('returns 422 when the cluster does not track that metric', async () => {
+    // The seed cluster only has memory_gb. Add a new metric type and ask for it.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores' },
+      update: { displayName: 'CPU', unit: 'cores' },
+      create: { key: 'cpu_cores', displayName: 'CPU', unit: 'cores' },
+    });
+    try {
+      const response = await server.inject({
+        method: 'GET',
+        url: `/api/clusters/${clusterId}/forecast?metric=cpu_cores`,
+      });
+      expect(response.statusCode).toBe(422);
+      expect((response.json() as { error: { code: string } }).error.code).toBe(
+        'METRIC_NOT_TRACKED',
+      );
+    } finally {
+      await prisma.metricType.deleteMany({ where: { key: 'cpu_cores' } });
+    }
+  });
+});
