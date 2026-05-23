@@ -1,0 +1,16 @@
+{
+  "name": "@lcm/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'web dev placeholder — implemented in issue #12'",
+    "build": "echo 'web build placeholder — implemented in issue #12'",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@lcm/shared": "workspace:*"
+  }
+}
