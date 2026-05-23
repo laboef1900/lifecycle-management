@@ -13,6 +13,7 @@ export interface ChartColors {
   utilizationWarn: string;
   utilizationCrit: string;
   event: Record<EventCategory, string>;
+  clusterPalette: string[];
 }
 
 const LIGHT: ChartColors = {
@@ -30,6 +31,14 @@ const LIGHT: ChartColors = {
     openshift: 'oklch(55% 0.2 290)',
     note: 'oklch(55% 0.02 260)',
   },
+  clusterPalette: [
+    'oklch(55% 0.18 262)',
+    'oklch(58% 0.18 195)',
+    'oklch(60% 0.17 145)',
+    'oklch(62% 0.19 60)',
+    'oklch(60% 0.22 25)',
+    'oklch(58% 0.20 305)',
+  ],
 };
 
 const DARK: ChartColors = {
@@ -47,6 +56,14 @@ const DARK: ChartColors = {
     openshift: 'oklch(72% 0.15 290)',
     note: 'oklch(70% 0.02 260)',
   },
+  clusterPalette: [
+    'oklch(72% 0.16 262)',
+    'oklch(74% 0.14 195)',
+    'oklch(75% 0.13 145)',
+    'oklch(78% 0.16 60)',
+    'oklch(75% 0.18 25)',
+    'oklch(74% 0.16 305)',
+  ],
 };
 
 export function useChartColors(): ChartColors {
