@@ -1,8 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 
+import { CommandPalette } from '@/components/command/command-palette';
+import { KeyboardShortcuts } from '@/components/command/keyboard-shortcuts';
+import { ShortcutsDialog } from '@/components/command/shortcuts-dialog';
 import { ThemeProvider } from '@/components/theme/theme-provider';
 import { Toaster } from '@/components/ui/toaster';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 import { routeTree } from './routeTree.gen';
 
@@ -32,8 +36,13 @@ export function App(): React.JSX.Element {
   return (
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-        <Toaster />
+        <TooltipProvider delayDuration={200}>
+          <RouterProvider router={router} />
+          <CommandPalette />
+          <ShortcutsDialog />
+          <KeyboardShortcuts />
+          <Toaster />
+        </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );
