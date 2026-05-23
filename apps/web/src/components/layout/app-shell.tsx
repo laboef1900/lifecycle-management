@@ -2,6 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
 import { Activity } from 'lucide-react';
 
+import { CommandPalette } from '@/components/command/command-palette';
+import { KeyboardShortcuts } from '@/components/command/keyboard-shortcuts';
+import { ShortcutsDialog } from '@/components/command/shortcuts-dialog';
 import { Breadcrumbs } from '@/components/layout/breadcrumbs';
 import { Sidebar } from '@/components/layout/sidebar';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
@@ -11,17 +14,22 @@ import { api } from '@/lib/api-client';
 
 export function AppShell(): React.JSX.Element {
   return (
-    <div className="flex h-full min-h-screen flex-col bg-background text-foreground">
-      <Header />
-      <div className="flex min-h-0 flex-1">
-        <Sidebar />
-        <main className="min-w-0 flex-1 overflow-x-hidden">
-          <div className="mx-auto w-full max-w-7xl px-6 py-6">
-            <Outlet />
-          </div>
-        </main>
+    <>
+      <div className="flex h-full min-h-screen flex-col bg-background text-foreground">
+        <Header />
+        <div className="flex min-h-0 flex-1">
+          <Sidebar />
+          <main className="min-w-0 flex-1 overflow-x-hidden">
+            <div className="mx-auto w-full max-w-7xl px-6 py-6">
+              <Outlet />
+            </div>
+          </main>
+        </div>
       </div>
-    </div>
+      <CommandPalette />
+      <ShortcutsDialog />
+      <KeyboardShortcuts />
+    </>
   );
 }
 
