@@ -1,4 +1,4 @@
-import type { ClusterResponse, ForecastResponse } from '@lcm/shared';
+import type { ClusterCreateInput, ClusterResponse, ForecastResponse } from '@lcm/shared';
 
 export interface ApiErrorBody {
   error: {
@@ -74,6 +74,12 @@ export const api = {
   clusters: {
     list: () => request<ClusterResponse[]>('/api/clusters'),
     get: (id: string) => request<ClusterResponse>(`/api/clusters/${id}`),
+    create: (input: ClusterCreateInputWire) =>
+      request<ClusterResponse>('/api/clusters', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    delete: (id: string) => request<void>(`/api/clusters/${id}`, { method: 'DELETE' }),
     forecast: (id: string, params: { metric: string; from?: string; to?: string }) => {
       const search = new URLSearchParams({ metric: params.metric });
       if (params.from) search.set('from', params.from);
@@ -81,4 +87,14 @@ export const api = {
       return request<ForecastResponse>(`/api/clusters/${id}/forecast?${search.toString()}`);
     },
   },
+};
+
+/**
+ * Wire shape of clusterCreateInputSchema: a Zod-parsed ClusterCreateInput has
+ * a real Date for baselineDate, but JSON.stringify serializes that to an ISO
+ * string. POST bodies must send the original wire shape (YYYY-MM-DD), so we
+ * widen the type here to accept either.
+ */
+export type ClusterCreateInputWire = Omit<ClusterCreateInput, 'baselineDate'> & {
+  baselineDate: string;
 };
