@@ -25,14 +25,19 @@ function buildRouter() {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/',
-    component: () => <div data-testid="dashboard">Dashboard</div>,
+    component: () => <div data-testid="overview">Overview</div>,
+  });
+  const clustersRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/clusters',
+    component: () => <div data-testid="clusters">Clusters</div>,
   });
   const settingsRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/settings',
     component: () => <div data-testid="settings">Settings</div>,
   });
-  const routeTree = rootRoute.addChildren([indexRoute, settingsRoute]);
+  const routeTree = rootRoute.addChildren([indexRoute, clustersRoute, settingsRoute]);
   return createRouter({
     routeTree,
     history: createMemoryHistory({ initialEntries: ['/'] }),
@@ -51,20 +56,20 @@ function wrap(router: ReturnType<typeof buildRouter>): React.ReactElement {
 }
 
 describe('KeyboardShortcuts (real router context)', () => {
-  test('g s navigates to /settings', async () => {
+  test('g c navigates to /clusters', async () => {
     const user = userEvent.setup();
     const router = buildRouter();
     render(wrap(router));
 
     await user.keyboard('g');
-    await user.keyboard('s');
+    await user.keyboard('c');
 
     // Allow router to flush state
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(router.state.location.pathname).toBe('/settings');
+    expect(router.state.location.pathname).toBe('/clusters');
   });
 
-  test('g d navigates to /', async () => {
+  test('g o navigates to /', async () => {
     const user = userEvent.setup();
     const router = buildRouter();
     render(wrap(router));
@@ -73,7 +78,7 @@ describe('KeyboardShortcuts (real router context)', () => {
     await router.navigate({ to: '/settings' });
 
     await user.keyboard('g');
-    await user.keyboard('d');
+    await user.keyboard('o');
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(router.state.location.pathname).toBe('/');

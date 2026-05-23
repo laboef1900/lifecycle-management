@@ -47,9 +47,12 @@ export function KeyboardShortcuts(): React.JSX.Element {
 
       // Vim-style two-key sequences
       if (pendingPrefix.current === 'g') {
-        if (event.key === 'd') {
+        if (event.key === 'o') {
           event.preventDefault();
           navigate({ to: '/' });
+        } else if (event.key === 'c') {
+          event.preventDefault();
+          navigate({ to: '/clusters' });
         } else if (event.key === 's') {
           event.preventDefault();
           navigate({ to: '/settings' });

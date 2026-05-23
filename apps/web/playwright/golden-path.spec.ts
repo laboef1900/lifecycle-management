@@ -27,8 +27,8 @@ test('create cluster, add host + application, chart reflects updates', async ({
         // localStorage may be unavailable in some contexts; ignore.
       }
     });
-    await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+    await page.goto('/clusters');
+    await expect(page.getByRole('heading', { name: 'Clusters', level: 1 })).toBeVisible();
 
     // Create the cluster from the dashboard.
     await page.getByRole('button', { name: '+ Add cluster' }).click();
