@@ -43,3 +43,9 @@ logs/
 # Prisma generated client (kept in node_modules typically; ignore stray dumps)
 *.sqlite
 *.sqlite-journal
+
+# TanStack Router generated route tree
+apps/web/src/routeTree.gen.ts
+
+# Playwright MCP scratch
+.playwright-mcp/
