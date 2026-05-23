@@ -1,13 +1,13 @@
-import { Prisma, type PrismaClient } from '@prisma/client';
-
-import { formatDate } from '../schemas/common.js';
 import type {
   AllocationResponseRow,
   AllocationRowInput,
   ApplicationCreateInput,
   ApplicationResponse,
   ApplicationUpdateInput,
-} from '../schemas/application.js';
+} from '@lcm/shared';
+import { Prisma, type PrismaClient } from '@prisma/client';
+
+import { formatDate } from '../lib/dates.js';
 
 import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
 

@@ -5,7 +5,8 @@ import {
   eventCreateInputSchema,
   eventIdParamsSchema,
   eventUpdateInputSchema,
-} from '../schemas/event.js';
+} from '@lcm/shared';
+
 import { EventsService } from '../services/events.js';
 
 export const eventRoutes: FastifyPluginAsync = async (fastify) => {

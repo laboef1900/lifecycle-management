@@ -6,7 +6,8 @@ import {
   hostCreateInputSchema,
   hostIdParamsSchema,
   hostUpdateInputSchema,
-} from '../schemas/host.js';
+} from '@lcm/shared';
+
 import { HostsService } from '../services/hosts.js';
 
 export const hostRoutes: FastifyPluginAsync = async (fastify) => {
