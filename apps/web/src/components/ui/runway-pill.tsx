@@ -35,7 +35,11 @@ export function RunwayPill({ summary, horizonMonths }: RunwayPillProps): React.J
   if (summary.months === null) {
     return (
       <Badge variant="success">
-        <span>{horizonMonths ? `${horizonMonths}+ mo` : 'No breach in horizon'}</span>
+        <span>
+          {horizonMonths !== undefined && horizonMonths > 0
+            ? `${horizonMonths}+ mo`
+            : 'No breach in horizon'}
+        </span>
       </Badge>
     );
   }

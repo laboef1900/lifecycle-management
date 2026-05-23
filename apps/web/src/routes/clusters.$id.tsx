@@ -138,8 +138,8 @@ function ClusterDetailKpiStrip({
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Current utilization
           </p>
-          <p className="mt-1 text-2xl font-semibold tracking-tight">
-            {(metric.utilization * 100).toFixed(1)}%
+          <p className="mt-1 font-mono text-sm tabular-nums text-muted-foreground">
+            {numberFormat.format(Math.round(metric.currentConsumption))} GB used
           </p>
         </div>
       </Card>
