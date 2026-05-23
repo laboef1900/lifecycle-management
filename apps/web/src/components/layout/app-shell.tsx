@@ -12,7 +12,7 @@ import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
-import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { api } from '@/lib/api-client';
 
 export function AppShell(): React.JSX.Element {
@@ -41,7 +41,8 @@ function MobileSidebarSheet(): React.JSX.Element {
   const { open, setOpen } = useMobileNav();
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetContent aria-label="Primary navigation">
+      <SheetContent>
+        <SheetTitle className="sr-only">Primary navigation</SheetTitle>
         <SidebarNav onNavigate={() => setOpen(false)} />
       </SheetContent>
     </Sheet>

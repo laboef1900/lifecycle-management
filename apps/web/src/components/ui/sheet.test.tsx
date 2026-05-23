@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { Sheet, SheetContent, SheetTrigger } from './sheet';
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from './sheet';
 
 describe('<Sheet>', () => {
   it('opens via the trigger and closes on Escape', async () => {
@@ -10,7 +10,8 @@ describe('<Sheet>', () => {
     render(
       <Sheet>
         <SheetTrigger>Open</SheetTrigger>
-        <SheetContent aria-label="Nav">
+        <SheetContent>
+          <SheetTitle className="sr-only">Nav</SheetTitle>
           <a href="/">Home</a>
         </SheetContent>
       </Sheet>,
@@ -29,7 +30,8 @@ describe('<Sheet>', () => {
     render(
       <Sheet>
         <SheetTrigger>Open</SheetTrigger>
-        <SheetContent aria-label="Nav">
+        <SheetContent>
+          <SheetTitle className="sr-only">Nav</SheetTitle>
           <span>content</span>
         </SheetContent>
       </Sheet>,
