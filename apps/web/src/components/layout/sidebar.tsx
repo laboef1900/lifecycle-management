@@ -37,7 +37,7 @@ export function Sidebar(): React.JSX.Element {
   return (
     <aside
       className={cn(
-        'flex shrink-0 flex-col border-r border-border bg-card transition-[width] duration-150 ease-out',
+        'flex shrink-0 flex-col border-r border-border bg-card/60 backdrop-blur-xl transition-[width] duration-150 ease-out',
         collapsed ? 'w-16' : 'w-60',
       )}
       aria-label="Primary navigation"
@@ -53,7 +53,7 @@ export function Sidebar(): React.JSX.Element {
                   collapsed && 'justify-center px-0',
                 )}
                 activeProps={{
-                  className: 'bg-muted text-foreground',
+                  className: 'bg-muted text-foreground shadow-[inset_3px_0_0_0_var(--primary)]',
                 }}
                 activeOptions={{ exact: item.exact }}
                 title={collapsed ? item.label : undefined}

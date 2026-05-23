@@ -34,6 +34,10 @@
   --destructive-foreground: oklch(99% 0.005 257);
   --destructive-strong: oklch(38% 0.22 25);
   --radius: 0.5rem;
+  --radius-card: 0.75rem;
+  --radius-modal: 1rem;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
+  --bg-gradient-bottom: oklch(97% 0.005 257);
 }
 
 html.dark {
@@ -63,6 +67,8 @@ html.dark {
   --destructive: oklch(70% 0.18 25);
   --destructive-foreground: oklch(13% 0.01 257);
   --destructive-strong: oklch(82% 0.18 25);
+  --shadow-card: none;
+  --bg-gradient-bottom: oklch(11% 0.01 257);
 }
 
 @theme {
@@ -93,6 +99,9 @@ html.dark {
   --color-destructive-foreground: var(--destructive-foreground);
   --color-destructive-strong: var(--destructive-strong);
   --radius: var(--radius);
+  --radius-card: var(--radius-card);
+  --radius-modal: var(--radius-modal);
+  --shadow-card: var(--shadow-card);
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
@@ -104,6 +113,8 @@ body,
 }
 
 body {
+  background: linear-gradient(180deg, var(--background) 0%, var(--bg-gradient-bottom) 100%);
+  background-attachment: fixed;
   font-family: var(--font-sans);
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }

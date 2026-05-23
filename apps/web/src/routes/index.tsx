@@ -22,7 +22,7 @@ function DashboardPage(): React.JSX.Element {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <h1 className="text-[1.625rem] font-semibold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
             {clustersQuery.data?.length
               ? `${clustersQuery.data.length} clusters tracked`
