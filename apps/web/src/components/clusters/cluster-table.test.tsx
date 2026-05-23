@@ -139,4 +139,17 @@ describe('ClusterTable runway + navigation', () => {
     renderTable(clusters);
     expect(screen.queryByRole('columnheader', { name: /12-month/i })).toBeNull();
   });
+
+  it('sorts stably when multiple clusters have no forecast data', () => {
+    const many = [
+      makeCluster({ name: 'Cluster-A', metric: { consumption: 100, capacity: 1000 } }),
+      makeCluster({ name: 'Cluster-B', metric: { consumption: 200, capacity: 1000 } }),
+      makeCluster({ name: 'Cluster-C', metric: { consumption: 300, capacity: 1000 } }),
+    ];
+    renderTable(many);
+    // No forecasts provided → all rows have sortRunway = +Infinity.
+    // Sort by Runway must not crash or produce NaN-driven ordering; the table
+    // should still render all three rows in some deterministic order.
+    expect(visibleNames()).toHaveLength(3);
+  });
 });

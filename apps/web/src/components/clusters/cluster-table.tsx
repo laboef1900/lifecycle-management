@@ -74,9 +74,10 @@ export function ClusterTable({
       if (typeof aValue === 'string' && typeof bValue === 'string') {
         return sort.dir === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
       }
-      return sort.dir === 'asc'
-        ? (aValue as number) - (bValue as number)
-        : (bValue as number) - (aValue as number);
+      const aN = aValue as number;
+      const bN = bValue as number;
+      if (aN === bN) return 0;
+      return sort.dir === 'asc' ? aN - bN : bN - aN;
     });
     return copy;
   }, [rows, sort]);
