@@ -123,15 +123,13 @@ function OverviewPage(): React.JSX.Element {
           {summary.perClusterSeries.map((series) => {
             const cluster = clusters.find((c) => c.id === series.clusterId);
             if (!cluster) return null;
-            const trend = series.months.slice(-12).map((m) => m.consumption);
-            const ceiling = series.months.slice(-12).map((m) => m.capacity);
             return (
               <ClusterTile
                 key={series.clusterId}
                 className="col-span-12 md:col-span-6"
                 cluster={cluster}
-                trend={trend}
-                trendCeiling={ceiling}
+                forecastMonths={series.months}
+                horizonMonths={series.months.length}
               />
             );
           })}
