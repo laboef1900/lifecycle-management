@@ -29,6 +29,23 @@ timeline`.
 - Squash-merge to keep `main` history linear, unless the branch has
   meaningful intermediate commits worth keeping.
 
+### Merging stacked PRs
+
+When a PR's base is another open PR (not `main`), the merge order matters:
+
+- Use `--merge` (not `--squash` or `--rebase`) for every PR in the stack.
+  Squash and rebase rewrite SHAs, which orphans every dependent branch and
+  causes GitHub to **close** the dependent PRs instead of retargeting them.
+- Before merging PR _N_, retarget PR _N+1_'s base to `main` first:
+  `gh pr edit <N+1> --base main`. GitHub closes any PR the moment its base
+  branch is deleted, _before_ any retargeting could fire, so the swap has to
+  happen first.
+- Then `gh pr merge <N> --merge --delete-branch`.
+
+In short: **retarget the next, then merge the current.** Once `main` has
+caught up, the dependent branch's ancestry is fully reachable and the next
+merge is clean.
+
 ## Code style
 
 - TypeScript everywhere, `strict` + `noUncheckedIndexedAccess` +
