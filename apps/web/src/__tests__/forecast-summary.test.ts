@@ -16,7 +16,7 @@ describe('runwayToWarn', () => {
     expect(runwayToWarn(months)).toEqual({ months: null, alreadyBreached: false });
   });
 
-  it('returns the index of the first month that crosses 70%', () => {
+  it('returns the index of the first month at or above 70%', () => {
     const months = [
       point('2026-05-01', 500, 1000), // 50%
       point('2026-06-01', 600, 1000), // 60%
@@ -47,6 +47,11 @@ describe('runwayToWarn', () => {
   it('returns null months + no breach for an empty forecast', () => {
     expect(runwayToWarn([])).toEqual({ months: null, alreadyBreached: false });
   });
+
+  it('treats utilization of exactly 70% as breaching the warn band', () => {
+    const months = [point('2026-05-01', 500, 1000), point('2026-06-01', 700, 1000)];
+    expect(runwayToWarn(months)).toEqual({ months: 1, alreadyBreached: false });
+  });
 });
 
 describe('fleetRunwayToWarn', () => {
@@ -69,5 +74,13 @@ describe('fleetRunwayToWarn', () => {
 
   it('returns null for empty input', () => {
     expect(fleetRunwayToWarn([])).toEqual({ months: null, alreadyBreached: false });
+  });
+
+  it('aggregates partial coverage using only the months that are reported', () => {
+    // Cluster A reports May only; cluster B reports May + June.
+    const a = [point('2026-05-01', 300, 1000)];
+    const b = [point('2026-05-01', 200, 1000), point('2026-06-01', 750, 1000)];
+    // May: 500/2000 = 25% (no breach). June: 750/1000 = 75% (warn, index 1, not the current month).
+    expect(fleetRunwayToWarn([a, b])).toEqual({ months: 1, alreadyBreached: false });
   });
 });

@@ -6,17 +6,21 @@ export const CRIT_THRESHOLD = 0.9;
 export interface RunwaySummary {
   /** Index of first month at or above WARN_THRESHOLD, else null. */
   months: number | null;
-  /** First month's status when months === 0 (or false if no breach there). */
+  /** 'warn' | 'crit' when months === 0 (the breach is the current month); false otherwise. */
   alreadyBreached: 'warn' | 'crit' | false;
 }
 
-const NO_BREACH: RunwaySummary = { months: null, alreadyBreached: false };
+const NO_BREACH: RunwaySummary = Object.freeze({
+  months: null,
+  alreadyBreached: false,
+}) as RunwaySummary;
 
-export function runwayToWarn(months: ForecastMonthPoint[]): RunwaySummary {
-  for (let i = 0; i < months.length; i++) {
-    const m = months[i]!;
-    if (m.capacity <= 0) continue;
-    const u = m.consumption / m.capacity;
+export function runwayToWarn(points: ForecastMonthPoint[]): RunwaySummary {
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i]!;
+    if (p.capacity <= 0) continue;
+    // Recompute rather than trusting p.utilization to avoid any server-side rounding skew.
+    const u = p.consumption / p.capacity;
     if (u >= WARN_THRESHOLD) {
       const breached = i === 0 ? (u >= CRIT_THRESHOLD ? 'crit' : 'warn') : false;
       return { months: i, alreadyBreached: breached };
@@ -25,6 +29,15 @@ export function runwayToWarn(months: ForecastMonthPoint[]): RunwaySummary {
   return NO_BREACH;
 }
 
+/**
+ * Aggregates per-month consumption and capacity across the supplied series,
+ * then applies {@link runwayToWarn} to the merged sequence.
+ *
+ * Months that appear in some series but not others are aggregated using only
+ * the data available — partial coverage is treated as "fleet utilization for
+ * the clusters reporting that month". Callers that need apples-to-apples
+ * comparison across the horizon must pre-align the series themselves.
+ */
 export function fleetRunwayToWarn(series: ForecastMonthPoint[][]): RunwaySummary {
   if (series.length === 0) return NO_BREACH;
   const byMonth = new Map<string, { consumption: number; capacity: number }>();
