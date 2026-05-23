@@ -4,7 +4,7 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 const badgeVariants = cva(
-  'inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+  'inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
   {
     variants: {
       variant: {
@@ -12,18 +12,46 @@ const badgeVariants = cva(
         secondary: 'border-transparent bg-secondary text-secondary-foreground',
         destructive: 'border-transparent bg-destructive text-destructive-foreground',
         outline: 'text-foreground',
-        success: 'border-transparent bg-emerald-100 text-emerald-900',
-        warning: 'border-transparent bg-amber-100 text-amber-900',
-        danger: 'border-transparent bg-red-100 text-red-900',
+        success: 'border-success/30 bg-success/15 text-success',
+        warning: 'border-warning/30 bg-warning/15 text-warning',
+        danger: 'border-destructive/30 bg-destructive/15 text-destructive',
       },
     },
     defaultVariants: { variant: 'default' },
   },
 );
 
-export interface BadgeProps
-  extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
+const dotColor: Record<NonNullable<VariantProps<typeof badgeVariants>['variant']>, string> = {
+  default: 'bg-primary-foreground',
+  secondary: 'bg-muted-foreground',
+  destructive: 'bg-destructive-foreground',
+  outline: 'bg-muted-foreground',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-destructive',
+};
 
-export function Badge({ className, variant, ...props }: BadgeProps): React.JSX.Element {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
+export interface BadgeProps
+  extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {
+  dot?: boolean;
+}
+
+export function Badge({
+  className,
+  variant,
+  dot,
+  children,
+  ...props
+}: BadgeProps): React.JSX.Element {
+  return (
+    <span className={cn(badgeVariants({ variant }), className)} {...props}>
+      {dot ? (
+        <span
+          aria-hidden
+          className={cn('h-1.5 w-1.5 rounded-full', dotColor[variant ?? 'default'])}
+        />
+      ) : null}
+      {children}
+    </span>
+  );
 }
