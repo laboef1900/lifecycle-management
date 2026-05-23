@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "generate-routes": "tsr generate"
   },
   "dependencies": {
     "@lcm/shared": "workspace:*",
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@playwright/test": "^1.49.1",
     "@tailwindcss/vite": "^4.0.0",
+    "@tanstack/router-cli": "^1.95.0",
     "@tanstack/router-devtools": "^1.95.0",
     "@tanstack/router-plugin": "^1.95.0",
     "@testing-library/jest-dom": "^6.6.3",

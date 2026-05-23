@@ -38,6 +38,12 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter @lcm/api exec prisma generate
 
+      # Generate the TanStack Router route tree (src/routeTree.gen.ts is
+      # gitignored; the Vite plugin produces it during dev/build, but
+      # typecheck runs before either).
+      - name: Generate web route tree
+        run: pnpm --filter @lcm/web generate-routes
+
       - name: Lint
         run: pnpm lint
 
