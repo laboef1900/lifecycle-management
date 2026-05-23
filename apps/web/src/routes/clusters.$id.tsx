@@ -56,7 +56,9 @@ function ClusterDetailPage(): React.JSX.Element {
         ) : (
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight">{clusterQuery.data.name}</h1>
+              <h1 className="text-[1.625rem] font-semibold tracking-tight">
+                {clusterQuery.data.name}
+              </h1>
               <p className="text-sm text-muted-foreground">
                 Baseline {clusterQuery.data.baselineDate}
                 {clusterQuery.data.description ? ` · ${clusterQuery.data.description}` : null}
@@ -75,7 +77,12 @@ function ClusterDetailPage(): React.JSX.Element {
       {clusterQuery.data && metric ? (
         <>
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Capacity forecast</h2>
+            <div className="space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Forecast
+              </p>
+              <h2 className="text-lg font-semibold">Capacity forecast</h2>
+            </div>
             <WindowControls value={windowSelection} onChange={setWindowSelection} />
           </div>
 

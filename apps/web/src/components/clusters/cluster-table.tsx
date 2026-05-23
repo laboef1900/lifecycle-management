@@ -91,7 +91,7 @@ export function ClusterTable({ clusters }: ClusterTableProps): React.JSX.Element
           {sorted.map((cluster) => {
             const metric = cluster.metrics[0];
             return (
-              <TableRow key={cluster.id} className="hover:bg-muted/50">
+              <TableRow key={cluster.id} className="hover:bg-muted/60">
                 <TableCell className="font-medium">{cluster.name}</TableCell>
                 <TableCell className="text-right font-mono tabular-nums">
                   {metric ? numberFormat.format(Math.round(metric.currentConsumption)) : '—'}

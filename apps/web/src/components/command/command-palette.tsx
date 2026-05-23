@@ -57,8 +57,8 @@ export function CommandPalette(): React.JSX.Element {
         <Dialog.Content
           aria-describedby={undefined}
           className={cn(
-            'fixed left-[50%] top-[20%] z-50 grid w-[92vw] max-w-[640px] translate-x-[-50%] gap-0',
-            'overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-xl',
+            'fixed left-[50%] top-[20%] z-50 grid w-[92vw] max-w-[680px] translate-x-[-50%] gap-0',
+            'overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground shadow-xl',
             'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
           )}
         >
