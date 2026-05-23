@@ -34,9 +34,11 @@ export function KpiTile({
       <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         {label}
       </p>
-      <p className="mt-1.5 text-3xl font-semibold tracking-tight">{value}</p>
+      <p className="mt-1.5 text-2xl font-semibold tracking-tight [overflow-wrap:anywhere] sm:text-3xl">
+        {value}
+      </p>
       {caption || status ? (
-        <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
           {status ? <span aria-hidden className={dotVariants({ status })} /> : null}
           {caption}
         </p>

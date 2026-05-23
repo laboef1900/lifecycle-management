@@ -16,6 +16,7 @@ import {
 import { runwayToWarn } from '@/lib/forecast-summary';
 import { cn } from '@/lib/utils';
 
+import { ClusterListCard } from './cluster-list-card';
 import { UtilizationBadge } from './utilization-badge';
 
 interface ClusterTableProps {
@@ -89,77 +90,92 @@ export function ClusterTable({
   };
 
   return (
-    <Card className="overflow-hidden">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <SortableHead label="Cluster" sortKey="name" sort={sort} onToggle={toggle} />
-            <SortableHead
-              label="Consumption (GB)"
-              sortKey="consumption"
-              sort={sort}
-              onToggle={toggle}
-              align="right"
+    <>
+      <div className="space-y-2 md:hidden">
+        {sorted.map(({ cluster }) => {
+          const months = forecastsById?.[cluster.id] ?? [];
+          return (
+            <ClusterListCard
+              key={cluster.id}
+              cluster={cluster}
+              months={months}
+              horizonMonths={horizonMonths ?? 0}
             />
-            <SortableHead
-              label="Capacity (GB)"
-              sortKey="capacity"
-              sort={sort}
-              onToggle={toggle}
-              align="right"
-            />
-            <SortableHead
-              label="Utilization"
-              sortKey="utilization"
-              sort={sort}
-              onToggle={toggle}
-              align="right"
-            />
-            <SortableHead label="Runway" sortKey="runway" sort={sort} onToggle={toggle} />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {sorted.map(({ cluster, summary }) => {
-            const metric = cluster.metrics[0];
-            return (
-              <TableRow
-                key={cluster.id}
-                className="cursor-pointer hover:bg-muted/60 focus-within:bg-muted/60"
-              >
-                <TableCell className="font-medium">
-                  <Link
-                    to="/clusters/$id"
-                    params={{ id: cluster.id }}
-                    className="block w-full focus-visible:outline-none"
-                  >
-                    {cluster.name}
-                  </Link>
-                </TableCell>
-                <TableCell className="text-right font-mono tabular-nums">
-                  {metric ? numberFormat.format(Math.round(metric.currentConsumption)) : '—'}
-                </TableCell>
-                <TableCell className="text-right font-mono tabular-nums">
-                  {metric ? numberFormat.format(Math.round(metric.currentCapacity)) : '—'}
-                </TableCell>
-                <TableCell className="text-right">
-                  {metric ? <UtilizationBadge value={metric.utilization} /> : '—'}
-                </TableCell>
-                <TableCell>
-                  {summary === undefined ? (
-                    '—'
-                  ) : (
-                    <RunwayPill
-                      summary={summary}
-                      {...(horizonMonths !== undefined && { horizonMonths })}
-                    />
-                  )}
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </Card>
+          );
+        })}
+      </div>
+      <Card className="hidden overflow-hidden md:block">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <SortableHead label="Cluster" sortKey="name" sort={sort} onToggle={toggle} />
+              <SortableHead
+                label="Consumption (GB)"
+                sortKey="consumption"
+                sort={sort}
+                onToggle={toggle}
+                align="right"
+              />
+              <SortableHead
+                label="Capacity (GB)"
+                sortKey="capacity"
+                sort={sort}
+                onToggle={toggle}
+                align="right"
+              />
+              <SortableHead
+                label="Utilization"
+                sortKey="utilization"
+                sort={sort}
+                onToggle={toggle}
+                align="right"
+              />
+              <SortableHead label="Runway" sortKey="runway" sort={sort} onToggle={toggle} />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sorted.map(({ cluster, summary }) => {
+              const metric = cluster.metrics[0];
+              return (
+                <TableRow
+                  key={cluster.id}
+                  className="cursor-pointer hover:bg-muted/60 focus-within:bg-muted/60"
+                >
+                  <TableCell className="font-medium">
+                    <Link
+                      to="/clusters/$id"
+                      params={{ id: cluster.id }}
+                      className="block w-full focus-visible:outline-none"
+                    >
+                      {cluster.name}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {metric ? numberFormat.format(Math.round(metric.currentConsumption)) : '—'}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {metric ? numberFormat.format(Math.round(metric.currentCapacity)) : '—'}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {metric ? <UtilizationBadge value={metric.utilization} /> : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {summary === undefined ? (
+                      '—'
+                    ) : (
+                      <RunwayPill
+                        summary={summary}
+                        {...(horizonMonths !== undefined && { horizonMonths })}
+                      />
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </Card>
+    </>
   );
 }
 

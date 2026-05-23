@@ -22,6 +22,40 @@ function readStored(): 'expanded' | 'collapsed' {
   return 'expanded';
 }
 
+interface SidebarNavProps {
+  collapsed?: boolean;
+  onNavigate?: () => void;
+}
+
+export function SidebarNav({ collapsed = false, onNavigate }: SidebarNavProps): React.JSX.Element {
+  return (
+    <nav className="flex-1 px-2 py-4">
+      <ul className="flex flex-col gap-1">
+        {navItems.map((item) => (
+          <li key={item.to}>
+            <Link
+              to={item.to}
+              onClick={onNavigate}
+              className={cn(
+                'flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground',
+                collapsed && 'justify-center px-0',
+              )}
+              activeProps={{
+                className: 'bg-muted text-foreground shadow-[inset_3px_0_0_0_var(--primary)]',
+              }}
+              activeOptions={{ exact: item.exact }}
+              title={collapsed ? item.label : undefined}
+            >
+              <item.icon className="h-5 w-5 shrink-0" aria-hidden />
+              {!collapsed && <span>{item.label}</span>}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
 export function Sidebar(): React.JSX.Element {
   const [state, setState] = useState<'expanded' | 'collapsed'>(() => readStored());
 
@@ -38,34 +72,12 @@ export function Sidebar(): React.JSX.Element {
   return (
     <aside
       className={cn(
-        'flex shrink-0 flex-col border-r border-border bg-card/60 backdrop-blur-xl transition-[width] duration-150 ease-out',
+        'hidden shrink-0 flex-col border-r border-border bg-card/60 backdrop-blur-xl transition-[width] duration-150 ease-out lg:flex',
         collapsed ? 'w-16' : 'w-60',
       )}
       aria-label="Primary navigation"
     >
-      <nav className="flex-1 px-2 py-4">
-        <ul className="flex flex-col gap-1">
-          {navItems.map((item) => (
-            <li key={item.to}>
-              <Link
-                to={item.to}
-                className={cn(
-                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground',
-                  collapsed && 'justify-center px-0',
-                )}
-                activeProps={{
-                  className: 'bg-muted text-foreground shadow-[inset_3px_0_0_0_var(--primary)]',
-                }}
-                activeOptions={{ exact: item.exact }}
-                title={collapsed ? item.label : undefined}
-              >
-                <item.icon className="h-5 w-5 shrink-0" aria-hidden />
-                {!collapsed && <span>{item.label}</span>}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <SidebarNav collapsed={collapsed} />
       <div className="border-t border-border p-2">
         <button
           type="button"

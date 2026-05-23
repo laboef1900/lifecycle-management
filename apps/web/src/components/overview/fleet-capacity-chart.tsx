@@ -27,6 +27,7 @@ interface ClusterMeta {
 interface FleetCapacityChartProps {
   fleetMonths: FleetMonthRow[];
   clusters: ClusterMeta[];
+  compact?: boolean;
 }
 
 const numberFormat = new Intl.NumberFormat('en-US');
@@ -39,6 +40,7 @@ function formatMonth(month: string): string {
 export function FleetCapacityChart({
   fleetMonths,
   clusters,
+  compact = false,
 }: FleetCapacityChartProps): React.JSX.Element {
   const colors = useChartColors();
 
@@ -56,18 +58,21 @@ export function FleetCapacityChart({
     <div className="w-full">
       <div className="h-[320px] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={enrichedRows} margin={{ top: 12, right: 56, bottom: 0, left: 8 }}>
+          <AreaChart
+            data={enrichedRows}
+            margin={{ top: 12, right: compact ? 16 : 56, bottom: 0, left: 8 }}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
             <XAxis
               dataKey="month"
               tickFormatter={formatMonth}
-              tick={{ fontSize: 11 }}
+              tick={{ fontSize: compact ? 10 : 11 }}
               stroke={colors.axis}
               interval="preserveStartEnd"
               minTickGap={24}
             />
             <YAxis
-              tick={{ fontSize: 11 }}
+              tick={{ fontSize: compact ? 10 : 11 }}
               stroke={colors.axis}
               tickFormatter={(v: number) => numberFormat.format(v)}
               domain={ceilingForDomain ? [0, ceilingForDomain] : ['auto', 'auto']}
@@ -75,7 +80,7 @@ export function FleetCapacityChart({
                 value: 'GB',
                 angle: -90,
                 position: 'insideLeft',
-                style: { fontSize: 11, fill: colors.axis },
+                style: { fontSize: compact ? 10 : 11, fill: colors.axis },
               }}
             />
             <Tooltip
@@ -167,12 +172,14 @@ export function FleetCapacityChart({
                 y={maxCeiling * 0.7}
                 stroke={colors.utilizationWarn}
                 strokeDasharray="2 2"
-                label={{
-                  value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
-                  position: 'right',
-                  fontSize: 10,
-                  fill: colors.utilizationWarn,
-                }}
+                {...(!compact && {
+                  label: {
+                    value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
+                    position: 'right' as const,
+                    fontSize: 10,
+                    fill: colors.utilizationWarn,
+                  },
+                })}
               />
             ) : null}
             {maxCeiling > 0 ? (
@@ -180,12 +187,14 @@ export function FleetCapacityChart({
                 y={maxCeiling * 0.9}
                 stroke={colors.utilizationCrit}
                 strokeDasharray="2 2"
-                label={{
-                  value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
-                  position: 'right',
-                  fontSize: 10,
-                  fill: colors.utilizationCrit,
-                }}
+                {...(!compact && {
+                  label: {
+                    value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
+                    position: 'right' as const,
+                    fontSize: 10,
+                    fill: colors.utilizationCrit,
+                  },
+                })}
               />
             ) : null}
             <Line
