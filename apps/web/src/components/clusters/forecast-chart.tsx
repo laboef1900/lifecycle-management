@@ -162,30 +162,30 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
               />
             ) : null}
             {maxCeiling > 0 ? (
-              <>
-                <ReferenceLine
-                  y={maxCeiling * 0.7}
-                  stroke={colors.utilizationWarn}
-                  strokeDasharray="2 2"
-                  label={{
-                    value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
-                    position: 'right',
-                    fontSize: 10,
-                    fill: colors.utilizationWarn,
-                  }}
-                />
-                <ReferenceLine
-                  y={maxCeiling * 0.9}
-                  stroke={colors.utilizationCrit}
-                  strokeDasharray="2 2"
-                  label={{
-                    value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
-                    position: 'right',
-                    fontSize: 10,
-                    fill: colors.utilizationCrit,
-                  }}
-                />
-              </>
+              <ReferenceLine
+                y={maxCeiling * 0.7}
+                stroke={colors.utilizationWarn}
+                strokeDasharray="2 2"
+                label={{
+                  value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
+                  position: 'right',
+                  fontSize: 10,
+                  fill: colors.utilizationWarn,
+                }}
+              />
+            ) : null}
+            {maxCeiling > 0 ? (
+              <ReferenceLine
+                y={maxCeiling * 0.9}
+                stroke={colors.utilizationCrit}
+                strokeDasharray="2 2"
+                label={{
+                  value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
+                  position: 'right',
+                  fontSize: 10,
+                  fill: colors.utilizationCrit,
+                }}
+              />
             ) : null}
             <Line
               type="stepAfter"
