@@ -1,6 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 
+import { ClusterTable } from '@/components/clusters/cluster-table';
+import { CreateClusterDialog } from '@/components/clusters/create-cluster-dialog';
+import { ClustersEmptyState } from '@/components/clusters/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api-client';
 
@@ -15,21 +18,41 @@ function DashboardPage(): React.JSX.Element {
     refetchInterval: 30_000,
   });
 
+  const clustersQuery = useQuery({
+    queryKey: ['clusters'],
+    queryFn: () => api.clusters.list(),
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
-            Cluster list and trend sparklines arrive in the next ticket.
+            {clustersQuery.data?.length
+              ? `${clustersQuery.data.length} clusters tracked`
+              : 'Capacity forecasts across all tracked clusters.'}
           </p>
         </div>
-        <ApiStatusBadge state={healthQuery.status} value={healthQuery.data?.status} />
+        <div className="flex items-center gap-2">
+          <ApiStatusBadge state={healthQuery.status} value={healthQuery.data?.status} />
+          {clustersQuery.data && clustersQuery.data.length > 0 ? <CreateClusterDialog /> : null}
+        </div>
       </div>
 
-      <div className="rounded-lg border border-dashed bg-card p-12 text-center text-sm text-muted-foreground">
-        Cluster list placeholder — implemented in #13.
-      </div>
+      {clustersQuery.isPending ? <ClusterTableSkeleton /> : null}
+
+      {clustersQuery.isError ? (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+          Could not load clusters: {clustersQuery.error.message}
+        </div>
+      ) : null}
+
+      {clustersQuery.data?.length === 0 ? <ClustersEmptyState /> : null}
+
+      {clustersQuery.data && clustersQuery.data.length > 0 ? (
+        <ClusterTable clusters={clustersQuery.data} />
+      ) : null}
     </div>
   );
 }
@@ -47,4 +70,16 @@ function ApiStatusBadge({ state, value }: ApiStatusBadgeProps): React.JSX.Elemen
     return <Badge variant="danger">API: unreachable</Badge>;
   }
   return <Badge variant="success">API: {value}</Badge>;
+}
+
+function ClusterTableSkeleton(): React.JSX.Element {
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="space-y-2">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="h-12 animate-pulse rounded bg-muted/60" />
+        ))}
+      </div>
+    </div>
+  );
 }

@@ -15,6 +15,7 @@ export default defineConfig({
     alias: {
       '@': resolve(__dirname, 'src'),
     },
+    dedupe: ['react', 'react-dom'],
   },
   server: {
     port: 5173,
