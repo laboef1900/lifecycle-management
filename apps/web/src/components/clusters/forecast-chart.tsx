@@ -90,7 +90,9 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
                   (payload.find((p) => p.dataKey === 'consumption')?.value as number) ?? 0;
                 const headroom =
                   (payload.find((p) => p.dataKey === 'headroom')?.value as number) ?? 0;
-                const capacity = consumption + headroom;
+                const capacity =
+                  (payload.find((p) => p.dataKey === 'capacity')?.value as number) ??
+                  consumption + headroom;
                 const utilization = capacity > 0 ? (consumption / capacity) * 100 : 0;
                 const monthEvents = eventsByMonth.get(label) ?? [];
                 return (
