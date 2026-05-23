@@ -26,10 +26,13 @@
   --accent-foreground: oklch(15% 0.02 0);
   --success: oklch(60% 0.18 142);
   --success-foreground: oklch(99% 0.005 257);
+  --success-strong: oklch(35% 0.18 142);
   --warning: oklch(70% 0.2 80);
   --warning-foreground: oklch(15% 0.02 0);
+  --warning-strong: oklch(40% 0.18 80);
   --destructive: oklch(58% 0.22 25);
   --destructive-foreground: oklch(99% 0.005 257);
+  --destructive-strong: oklch(38% 0.22 25);
   --radius: 0.5rem;
 }
 
@@ -53,10 +56,13 @@ html.dark {
   --accent-foreground: oklch(96% 0.005 257);
   --success: oklch(72% 0.12 142);
   --success-foreground: oklch(13% 0.01 257);
+  --success-strong: oklch(82% 0.13 142);
   --warning: oklch(78% 0.14 80);
   --warning-foreground: oklch(13% 0.01 257);
+  --warning-strong: oklch(86% 0.15 80);
   --destructive: oklch(70% 0.18 25);
   --destructive-foreground: oklch(13% 0.01 257);
+  --destructive-strong: oklch(82% 0.18 25);
 }
 
 @theme {
@@ -79,10 +85,13 @@ html.dark {
   --color-accent-foreground: var(--accent-foreground);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
+  --color-success-strong: var(--success-strong);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  --color-warning-strong: var(--warning-strong);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-strong: var(--destructive-strong);
   --radius: var(--radius);
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
