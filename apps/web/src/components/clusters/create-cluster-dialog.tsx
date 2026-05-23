@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
+import { Field } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -13,7 +14,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { ApiError, api, type ClusterCreateInputWire } from '@/lib/api-client';
 
 interface CreateClusterDialogProps {
@@ -172,24 +172,5 @@ export function CreateClusterDialog({ trigger }: CreateClusterDialogProps): Reac
         </form>
       </DialogContent>
     </Dialog>
-  );
-}
-
-interface FieldProps extends React.ComponentProps<typeof Input> {
-  label: string;
-  error?: string | undefined;
-}
-
-function Field({ label, error, ...inputProps }: FieldProps): React.JSX.Element {
-  const id =
-    inputProps.id ?? `field-${inputProps.name ?? label.toLowerCase().replaceAll(' ', '-')}`;
-  return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="text-sm font-medium">
-        {label}
-      </label>
-      <Input id={id} aria-invalid={error ? 'true' : undefined} {...inputProps} />
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
-    </div>
   );
 }

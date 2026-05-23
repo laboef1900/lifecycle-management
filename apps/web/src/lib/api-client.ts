@@ -1,4 +1,12 @@
-import type { ClusterCreateInput, ClusterResponse, ForecastResponse } from '@lcm/shared';
+import type {
+  ApplicationResponse,
+  ClusterCreateInput,
+  ClusterResponse,
+  EventCategory,
+  EventResponse,
+  ForecastResponse,
+  HostResponse,
+} from '@lcm/shared';
 
 export interface ApiErrorBody {
   error: {
@@ -66,6 +74,83 @@ function isApiErrorBody(value: unknown): value is ApiErrorBody {
   );
 }
 
+// ---------- Wire body types ----------
+
+/**
+ * Wire shape of clusterCreateInputSchema: a Zod-parsed ClusterCreateInput has
+ * a real Date for baselineDate, but JSON.stringify serializes that to an ISO
+ * string. POST bodies must send the original wire shape (YYYY-MM-DD).
+ */
+export type ClusterCreateInputWire = Omit<ClusterCreateInput, 'baselineDate'> & {
+  baselineDate: string;
+};
+
+export interface HostCreateInputWire {
+  name: string;
+  description?: string;
+  commissionedAt: string;
+  decommissionedAt?: string | null;
+  capacities: Array<{ metricTypeKey: string; effectiveFrom: string; amount: number }>;
+}
+
+export interface HostUpdateInputWire {
+  name?: string;
+  description?: string | null;
+  commissionedAt?: string;
+  decommissionedAt?: string | null;
+}
+
+export interface CapacityAppendInputWire {
+  metricTypeKey: string;
+  effectiveFrom: string;
+  amount: number;
+}
+
+export interface ApplicationCreateInputWire {
+  name: string;
+  category: string;
+  description?: string;
+  startedAt: string;
+  endedAt?: string | null;
+  allocations: Array<{ metricTypeKey: string; effectiveFrom: string; amount: number }>;
+}
+
+export interface ApplicationUpdateInputWire {
+  name?: string;
+  category?: string;
+  description?: string | null;
+  startedAt?: string;
+  endedAt?: string | null;
+}
+
+export interface AllocationAppendInputWire {
+  metricTypeKey: string;
+  effectiveFrom: string;
+  amount: number;
+}
+
+export interface EventCreateInputWire {
+  metricTypeKey: string;
+  effectiveDate: string;
+  category: EventCategory;
+  title: string;
+  description?: string;
+  consumptionDelta?: number | null;
+  capacityDelta?: number | null;
+}
+
+export interface EventUpdateInputWire {
+  metricTypeKey?: string;
+  effectiveDate?: string;
+  category?: EventCategory;
+  title?: string;
+  description?: string | null;
+  consumptionDelta?: number | null;
+  capacityDelta?: number | null;
+}
+
+// ---------- API surface ----------
+
 export const api = {
   health: {
     live: () => request<HealthResponse>('/healthz'),
@@ -87,14 +172,59 @@ export const api = {
       return request<ForecastResponse>(`/api/clusters/${id}/forecast?${search.toString()}`);
     },
   },
-};
-
-/**
- * Wire shape of clusterCreateInputSchema: a Zod-parsed ClusterCreateInput has
- * a real Date for baselineDate, but JSON.stringify serializes that to an ISO
- * string. POST bodies must send the original wire shape (YYYY-MM-DD), so we
- * widen the type here to accept either.
- */
-export type ClusterCreateInputWire = Omit<ClusterCreateInput, 'baselineDate'> & {
-  baselineDate: string;
+  hosts: {
+    listByCluster: (clusterId: string) =>
+      request<HostResponse[]>(`/api/clusters/${clusterId}/hosts`),
+    create: (clusterId: string, input: HostCreateInputWire) =>
+      request<HostResponse>(`/api/clusters/${clusterId}/hosts`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    update: (id: string, input: HostUpdateInputWire) =>
+      request<HostResponse>(`/api/hosts/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      }),
+    appendCapacity: (id: string, input: CapacityAppendInputWire) =>
+      request<HostResponse>(`/api/hosts/${id}/capacity`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    delete: (id: string) => request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
+  },
+  applications: {
+    listByCluster: (clusterId: string) =>
+      request<ApplicationResponse[]>(`/api/clusters/${clusterId}/applications`),
+    create: (clusterId: string, input: ApplicationCreateInputWire) =>
+      request<ApplicationResponse>(`/api/clusters/${clusterId}/applications`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    update: (id: string, input: ApplicationUpdateInputWire) =>
+      request<ApplicationResponse>(`/api/applications/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      }),
+    appendAllocation: (id: string, input: AllocationAppendInputWire) =>
+      request<ApplicationResponse>(`/api/applications/${id}/allocation`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    delete: (id: string) => request<void>(`/api/applications/${id}`, { method: 'DELETE' }),
+  },
+  events: {
+    listByCluster: (clusterId: string) =>
+      request<EventResponse[]>(`/api/clusters/${clusterId}/events`),
+    create: (clusterId: string, input: EventCreateInputWire) =>
+      request<EventResponse>(`/api/clusters/${clusterId}/events`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    update: (id: string, input: EventUpdateInputWire) =>
+      request<EventResponse>(`/api/events/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      }),
+    delete: (id: string) => request<void>(`/api/events/${id}`, { method: 'DELETE' }),
+  },
 };

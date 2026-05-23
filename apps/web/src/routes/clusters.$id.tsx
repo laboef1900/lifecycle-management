@@ -3,7 +3,10 @@ import { Link, createFileRoute } from '@tanstack/react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useState } from 'react';
 
+import { ApplicationsTab } from '@/components/clusters/applications-tab';
+import { EventsTab } from '@/components/clusters/events-tab';
 import { ForecastChart } from '@/components/clusters/forecast-chart';
+import { HostsTab } from '@/components/clusters/hosts-tab';
 import { UtilizationBadge } from '@/components/clusters/utilization-badge';
 import { UtilizationPanel } from '@/components/clusters/utilization-panel';
 import {
@@ -12,6 +15,7 @@ import {
   type ForecastWindow,
 } from '@/components/clusters/window-controls';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api-client';
 
 export const Route = createFileRoute('/clusters/$id')({
@@ -92,6 +96,23 @@ function ClusterDetailPage(): React.JSX.Element {
               <UtilizationPanel forecast={forecastQuery.data} />
             </>
           )}
+
+          <Tabs defaultValue="hosts" className="pt-2">
+            <TabsList>
+              <TabsTrigger value="hosts">Hosts</TabsTrigger>
+              <TabsTrigger value="applications">Applications</TabsTrigger>
+              <TabsTrigger value="events">Events</TabsTrigger>
+            </TabsList>
+            <TabsContent value="hosts">
+              <HostsTab clusterId={id} />
+            </TabsContent>
+            <TabsContent value="applications">
+              <ApplicationsTab clusterId={id} />
+            </TabsContent>
+            <TabsContent value="events">
+              <EventsTab clusterId={id} />
+            </TabsContent>
+          </Tabs>
         </>
       ) : null}
     </div>
