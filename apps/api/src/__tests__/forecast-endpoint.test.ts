@@ -1,55 +1,28 @@
-import { PrismaClient } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildServer } from '../server.js';
+import { makeCluster } from './factories.js';
+import { prisma } from './setup.js';
 import { makeTestEnv } from './test-helpers.js';
-
-const CLUSTER_PREFIX = '__test_forecast_cluster_';
-const prisma = new PrismaClient();
 
 let server: FastifyInstance;
 let clusterId: string;
 
-async function cleanupTestClusters(): Promise<void> {
-  await prisma.cluster.deleteMany({
-    where: { name: { startsWith: CLUSTER_PREFIX } },
-  });
-}
-
-async function createCluster(consumption = 0, capacity = 0): Promise<string> {
-  const response = await server.inject({
-    method: 'POST',
-    url: '/api/clusters',
-    payload: {
-      name: `${CLUSTER_PREFIX}${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
-      baselineDate: '2026-05-01',
-      baselines: [
-        {
-          metricTypeKey: 'memory_gb',
-          baselineConsumption: consumption,
-          baselineCapacity: capacity,
-        },
-      ],
-    },
-  });
-  return (response.json() as { id: string }).id;
-}
-
 beforeAll(async () => {
-  await cleanupTestClusters();
   server = await buildServer({ env: makeTestEnv(), prisma });
 });
 
 beforeEach(async () => {
-  await cleanupTestClusters();
-  clusterId = await createCluster(3378, 7680);
+  const cluster = await makeCluster(prisma, {
+    baselineConsumption: 3378,
+    baselineCapacity: 7680,
+  });
+  clusterId = cluster.id;
 });
 
 afterAll(async () => {
-  await cleanupTestClusters();
   await server.close();
-  await prisma.$disconnect();
 });
 
 describe('GET /api/clusters/:id/forecast', () => {

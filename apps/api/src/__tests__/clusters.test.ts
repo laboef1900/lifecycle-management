@@ -1,35 +1,25 @@
-import { PrismaClient } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildServer } from '../server.js';
+import { prisma } from './setup.js';
 import { makeTestEnv } from './test-helpers.js';
-
-const TEST_PREFIX = '__test_cluster_';
-const prisma = new PrismaClient();
 
 let server: FastifyInstance;
 
-async function cleanupTestClusters(): Promise<void> {
-  await prisma.cluster.deleteMany({
-    where: { name: { startsWith: TEST_PREFIX } },
-  });
-}
-
 beforeAll(async () => {
-  await cleanupTestClusters();
   server = await buildServer({ env: makeTestEnv(), prisma });
 });
 
-afterEach(cleanupTestClusters);
-
 afterAll(async () => {
   await server.close();
-  await prisma.$disconnect();
 });
 
-const uniqueName = (suffix: string): string =>
-  `${TEST_PREFIX}${suffix}_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+let sequence = 0;
+const uniqueName = (suffix: string): string => {
+  sequence += 1;
+  return `cluster-${suffix}-${sequence}`;
+};
 
 describe('POST /api/clusters', () => {
   it('creates a cluster with baselines and returns 201', async () => {
