@@ -35,9 +35,14 @@ export function AppShell(): React.JSX.Element {
 
 function Header(): React.JSX.Element {
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/95 px-4 backdrop-blur">
-      <Link to="/" className="flex items-center gap-2 font-semibold">
-        <Activity className="h-5 w-5 text-primary" aria-hidden />
+    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur-xl">
+      <Link to="/" className="flex items-center gap-2.5 font-semibold">
+        <span
+          aria-hidden
+          className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70 shadow-[var(--shadow-card)]"
+        >
+          <Activity className="h-4 w-4 text-primary-foreground" />
+        </span>
         <span className="hidden sm:inline">Capacity Forecast</span>
       </Link>
       <div className="hidden h-6 w-px bg-border md:block" aria-hidden />
