@@ -27,9 +27,9 @@ function nextBandOf(band: 'ok' | 'warning' | 'critical'): 'warning' | 'critical'
 }
 
 const FILL: Record<'ok' | 'warning' | 'critical', string> = {
-  ok: 'var(--utilization-ok, oklch(60% 0.18 142))',
-  warning: 'var(--utilization-warn, oklch(70% 0.20 80))',
-  critical: 'var(--utilization-crit, oklch(58% 0.22 25))',
+  ok: 'var(--success)',
+  warning: 'var(--warning)',
+  critical: 'var(--destructive)',
 };
 
 export function UtilizationGauge({
@@ -62,6 +62,7 @@ export function UtilizationGauge({
         className="-rotate-90"
         {...props}
       >
+        {/* Unfilled track is tinted with the next band's color to signal proximity to the next threshold. */}
         <circle
           cx={cx}
           cy={cy}

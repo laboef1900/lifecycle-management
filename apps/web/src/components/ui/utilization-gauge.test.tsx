@@ -10,7 +10,7 @@ describe('<UtilizationGauge>', () => {
   });
 
   it('reports an accessible name describing the status band', () => {
-    render(<UtilizationGauge value={0.5} aria-labelledby="gauge-label" />);
+    render(<UtilizationGauge value={0.5} />);
     const gauge = screen.getByRole('img');
     expect(gauge).toHaveAccessibleName(/50\.0%, status: ok/i);
   });
@@ -29,5 +29,35 @@ describe('<UtilizationGauge>', () => {
     render(<UtilizationGauge value={undefined} />);
     expect(screen.getByText('—')).toBeInTheDocument();
     expect(screen.getByRole('img')).toHaveAccessibleName(/status: empty/i);
+  });
+
+  it('renders 0.0% at the low boundary', () => {
+    render(<UtilizationGauge value={0} />);
+    expect(screen.getByText('0.0%')).toBeInTheDocument();
+    expect(screen.getByRole('img')).toHaveAccessibleName(/status: ok/i);
+  });
+
+  it('renders 100.0% and the critical band at full', () => {
+    render(<UtilizationGauge value={1} />);
+    expect(screen.getByText('100.0%')).toBeInTheDocument();
+    expect(screen.getByRole('img')).toHaveAccessibleName(/status: critical/i);
+  });
+
+  it('clamps values above 1 to 100.0%', () => {
+    render(<UtilizationGauge value={1.5} />);
+    expect(screen.getByText('100.0%')).toBeInTheDocument();
+  });
+
+  it('renders a 96px lg gauge when size="lg"', () => {
+    const { container } = render(<UtilizationGauge value={0.5} size="lg" />);
+    const svg = container.querySelector('svg');
+    expect(svg).toHaveAttribute('width', '96');
+    expect(svg).toHaveAttribute('height', '96');
+  });
+
+  it('renders a 28px sm gauge when size="sm"', () => {
+    const { container } = render(<UtilizationGauge value={0.5} size="sm" />);
+    const svg = container.querySelector('svg');
+    expect(svg).toHaveAttribute('width', '28');
   });
 });
