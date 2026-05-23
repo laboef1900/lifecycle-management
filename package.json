@@ -10,7 +10,7 @@
   "packageManager": "pnpm@11.2.2",
   "scripts": {
     "dev": "pnpm --parallel --filter \"./apps/*\" dev",
-    "build": "pnpm -r build",
+    "build": "pnpm --filter @lcm/web build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
