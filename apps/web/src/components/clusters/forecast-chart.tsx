@@ -5,6 +5,7 @@ import {
   ComposedChart,
   Line,
   ReferenceDot,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -34,8 +35,11 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
   const data = forecast.months.map((point) => ({
     month: point.month,
     consumption: Math.round(point.consumption),
+    headroom: Math.max(0, Math.round(point.capacity - point.consumption)),
     capacity: Math.round(point.capacity),
   }));
+  const maxCeiling = data.reduce((max, d) => Math.max(max, d.capacity), 0);
+  const ceilingForDomain = maxCeiling > 0 ? maxCeiling * 1.05 : undefined;
 
   const eventsByMonth = new Map<string, ForecastResponse['events']>();
   for (const event of forecast.events) {
@@ -49,7 +53,7 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
     <Card className="p-4">
       <div className="h-[320px] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 12, right: 16, bottom: 0, left: 8 }}>
+          <ComposedChart data={data} margin={{ top: 12, right: 56, bottom: 0, left: 8 }}>
             <defs>
               <linearGradient id="forecast-consumption" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={colors.consumption} stopOpacity={0.45} />
@@ -69,6 +73,7 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
               tick={{ fontSize: 11 }}
               stroke={colors.axis}
               tickFormatter={(v: number) => numberFormat.format(v)}
+              domain={ceilingForDomain ? [0, ceilingForDomain] : ['auto', 'auto']}
               label={{
                 value: 'GB',
                 angle: -90,
@@ -81,8 +86,13 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
                 if (!active || !payload || payload.length === 0 || typeof label !== 'string') {
                   return null;
                 }
-                const consumption = (payload[0]?.value as number) ?? 0;
-                const capacity = (payload[1]?.value as number) ?? 0;
+                const consumption =
+                  (payload.find((p) => p.dataKey === 'consumption')?.value as number) ?? 0;
+                const headroom =
+                  (payload.find((p) => p.dataKey === 'headroom')?.value as number) ?? 0;
+                const capacity =
+                  (payload.find((p) => p.dataKey === 'capacity')?.value as number) ??
+                  consumption + headroom;
                 const utilization = capacity > 0 ? (consumption / capacity) * 100 : 0;
                 const monthEvents = eventsByMonth.get(label) ?? [];
                 return (
@@ -96,6 +106,10 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
                       <dt className="text-muted-foreground">Capacity</dt>
                       <dd className="text-right font-mono tabular-nums">
                         {numberFormat.format(capacity)} GB
+                      </dd>
+                      <dt className="text-muted-foreground">Headroom</dt>
+                      <dd className="text-right font-mono tabular-nums">
+                        {numberFormat.format(headroom)} GB
                       </dd>
                       <dt className="text-muted-foreground">Utilization</dt>
                       <dd className="text-right font-mono tabular-nums">
@@ -127,11 +141,52 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
               type="monotone"
               dataKey="consumption"
               name="Consumption"
+              stackId="capacity"
               stroke={colors.consumption}
               strokeWidth={2}
               fill="url(#forecast-consumption)"
               isAnimationActive={false}
             />
+            {maxCeiling > 0 ? (
+              <Area
+                type="monotone"
+                dataKey="headroom"
+                name="Headroom"
+                stackId="capacity"
+                stroke={colors.capacity}
+                strokeDasharray="2 3"
+                strokeOpacity={0.6}
+                fill={colors.capacity}
+                fillOpacity={0.08}
+                isAnimationActive={false}
+              />
+            ) : null}
+            {maxCeiling > 0 ? (
+              <ReferenceLine
+                y={maxCeiling * 0.7}
+                stroke={colors.utilizationWarn}
+                strokeDasharray="2 2"
+                label={{
+                  value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
+                  position: 'right',
+                  fontSize: 10,
+                  fill: colors.utilizationWarn,
+                }}
+              />
+            ) : null}
+            {maxCeiling > 0 ? (
+              <ReferenceLine
+                y={maxCeiling * 0.9}
+                stroke={colors.utilizationCrit}
+                strokeDasharray="2 2"
+                label={{
+                  value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
+                  position: 'right',
+                  fontSize: 10,
+                  fill: colors.utilizationCrit,
+                }}
+              />
+            ) : null}
             <Line
               type="stepAfter"
               dataKey="capacity"
@@ -191,6 +246,7 @@ function ChartLegend({ events, colors }: ChartLegendProps): React.JSX.Element {
     <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
       <LegendItem swatch={colors.consumption} label="Consumption" />
       <LegendItem swatch={colors.capacity} label="Capacity ceiling" dashed />
+      <LegendItem swatch={colors.capacity} label="Headroom" dashed faint />
       {categories.length > 0 ? (
         <span aria-hidden className="mx-1">
           ·
@@ -213,11 +269,13 @@ function LegendItem({
   label,
   dot,
   dashed,
+  faint,
 }: {
   swatch: string;
   label: string;
   dot?: boolean;
   dashed?: boolean;
+  faint?: boolean;
 }): React.JSX.Element {
   return (
     <span className="flex items-center gap-1.5">
@@ -226,8 +284,12 @@ function LegendItem({
         className={dot ? 'h-2 w-2 rounded-full' : 'h-0 w-4 border-t-2'}
         style={
           dot
-            ? { background: swatch }
-            : { borderColor: swatch, borderStyle: dashed ? 'dashed' : 'solid' }
+            ? { background: swatch, opacity: faint ? 0.4 : 1 }
+            : {
+                borderColor: swatch,
+                borderStyle: dashed ? 'dashed' : 'solid',
+                opacity: faint ? 0.4 : 1,
+              }
         }
       />
       <span>{label}</span>

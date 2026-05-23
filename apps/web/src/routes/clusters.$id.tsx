@@ -1,3 +1,4 @@
+import type { ClusterResponse, ForecastResponse } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
@@ -7,16 +8,21 @@ import { ApplicationsTab } from '@/components/clusters/applications-tab';
 import { EventsTab } from '@/components/clusters/events-tab';
 import { ForecastChart } from '@/components/clusters/forecast-chart';
 import { HostsTab } from '@/components/clusters/hosts-tab';
-import { UtilizationBadge } from '@/components/clusters/utilization-badge';
 import { UtilizationPanel } from '@/components/clusters/utilization-panel';
 import {
   WindowControls,
   resolveWindow,
   type ForecastWindow,
 } from '@/components/clusters/window-controls';
+import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
+import { RunwayPill } from '@/components/ui/runway-pill';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { UtilizationGauge } from '@/components/ui/utilization-gauge';
 import { api } from '@/lib/api-client';
+import { runwayToWarn, utilStatus } from '@/lib/forecast-summary';
+
+const numberFormat = new Intl.NumberFormat('en-US');
 
 export const Route = createFileRoute('/clusters/$id')({
   component: ClusterDetailPage,
@@ -54,28 +60,24 @@ function ClusterDetailPage(): React.JSX.Element {
         ) : clusterQuery.isError || !clusterQuery.data ? (
           <ErrorCard message={clusterQuery.error?.message ?? 'Cluster not found'} />
         ) : (
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="text-[1.625rem] font-semibold tracking-tight">
-                {clusterQuery.data.name}
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                Baseline {clusterQuery.data.baselineDate}
-                {clusterQuery.data.description ? ` · ${clusterQuery.data.description}` : null}
-              </p>
-            </div>
-            {metric ? (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-muted-foreground">Current utilization</span>
-                <UtilizationBadge value={metric.utilization} />
-              </div>
-            ) : null}
+          <div>
+            <h1 className="text-[1.625rem] font-semibold tracking-tight">
+              {clusterQuery.data.name}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Baseline {clusterQuery.data.baselineDate}
+              {clusterQuery.data.description ? ` · ${clusterQuery.data.description}` : null}
+            </p>
           </div>
         )}
       </div>
 
       {clusterQuery.data && metric ? (
         <>
+          {forecastQuery.data ? (
+            <ClusterDetailKpiStrip forecast={forecastQuery.data} metric={metric} />
+          ) : null}
+
           <div className="flex items-center justify-between">
             <div className="space-y-1">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -115,6 +117,47 @@ function ClusterDetailPage(): React.JSX.Element {
           </Tabs>
         </>
       ) : null}
+    </div>
+  );
+}
+
+function ClusterDetailKpiStrip({
+  forecast,
+  metric,
+}: {
+  forecast: ForecastResponse;
+  metric: NonNullable<ClusterResponse['metrics'][number]>;
+}): React.JSX.Element {
+  const headroom = Math.max(0, metric.currentCapacity - metric.currentConsumption);
+  const summary = runwayToWarn(forecast.months);
+  return (
+    <div className="grid grid-cols-12 gap-4">
+      <Card className="col-span-12 flex items-center gap-4 p-5 sm:col-span-4">
+        <UtilizationGauge value={metric.utilization} size="md" />
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Current utilization
+          </p>
+          <p className="mt-1 font-mono text-sm tabular-nums text-muted-foreground">
+            {numberFormat.format(Math.round(metric.currentConsumption))} GB used
+          </p>
+        </div>
+      </Card>
+      <KpiTile
+        className="col-span-12 sm:col-span-4"
+        label="Headroom"
+        value={`${numberFormat.format(Math.round(headroom))} GB`}
+        caption={`of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`}
+        status={utilStatus(metric.utilization)}
+      />
+      <Card className="col-span-12 flex flex-col justify-between p-5 sm:col-span-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Runway
+        </p>
+        <div className="mt-1">
+          <RunwayPill summary={summary} horizonMonths={forecast.months.length} />
+        </div>
+      </Card>
     </div>
   );
 }

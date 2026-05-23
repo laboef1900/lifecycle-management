@@ -10,6 +10,7 @@ import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
 import { api } from '@/lib/api-client';
+import { fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
 
 export const Route = createFileRoute('/')({
   component: OverviewPage,
@@ -47,6 +48,32 @@ function OverviewPage(): React.JSX.Element {
 
   const summary = aggregateFleet(clusters, forecastEntries);
 
+  const fleetRunway = fleetRunwayToWarn(summary.perClusterSeries.map((s) => s.months));
+  const horizonMonths = Math.max(0, ...summary.perClusterSeries.map((s) => s.months.length));
+
+  let runwayValue: string;
+  let runwayCaption: string;
+  let runwayStatus: 'ok' | 'warn' | 'crit';
+  if (fleetRunway.alreadyBreached === 'crit') {
+    runwayValue = 'Over 90%';
+    runwayCaption = 'fleet has breached crit';
+    runwayStatus = 'crit';
+  } else if (fleetRunway.alreadyBreached === 'warn') {
+    runwayValue = 'Over 70%';
+    runwayCaption = 'fleet has breached warn';
+    runwayStatus = 'warn';
+  } else if (fleetRunway.months === null) {
+    runwayValue = horizonMonths > 0 ? `${horizonMonths}+ mo` : '—';
+    runwayCaption = 'no projected breach';
+    runwayStatus = 'ok';
+  } else {
+    runwayValue = `${fleetRunway.months} mo to 70%`;
+    runwayCaption = summary.worstCluster
+      ? `limited by ${summary.worstCluster.name}`
+      : 'fleet projection';
+    runwayStatus = fleetRunway.months < 3 ? 'crit' : fleetRunway.months < 12 ? 'warn' : 'ok';
+  }
+
   const isLoading = clustersQuery.isPending;
   const isError = clustersQuery.isError;
 
@@ -81,9 +108,7 @@ function OverviewPage(): React.JSX.Element {
             label="Fleet utilization"
             value={`${(summary.utilization * 100).toFixed(1)}%`}
             caption="memory used"
-            status={
-              summary.utilization >= 0.9 ? 'crit' : summary.utilization >= 0.7 ? 'warn' : 'ok'
-            }
+            status={utilStatus(summary.utilization)}
           />
           <KpiTile
             className="col-span-12 sm:col-span-4"
@@ -94,20 +119,10 @@ function OverviewPage(): React.JSX.Element {
           />
           <KpiTile
             className="col-span-12 sm:col-span-4"
-            label="Worst cluster"
-            value={summary.worstCluster?.name ?? '—'}
-            caption={
-              summary.worstCluster
-                ? `${(summary.worstCluster.utilization * 100).toFixed(1)}% utilization`
-                : 'no data'
-            }
-            status={
-              summary.worstCluster && summary.worstCluster.utilization >= 0.9
-                ? 'crit'
-                : summary.worstCluster && summary.worstCluster.utilization >= 0.7
-                  ? 'warn'
-                  : 'ok'
-            }
+            label="Fleet runway"
+            value={runwayValue}
+            caption={runwayCaption}
+            status={runwayStatus}
           />
 
           <Card className="col-span-12 p-4">
@@ -123,15 +138,13 @@ function OverviewPage(): React.JSX.Element {
           {summary.perClusterSeries.map((series) => {
             const cluster = clusters.find((c) => c.id === series.clusterId);
             if (!cluster) return null;
-            const trend = series.months.slice(-12).map((m) => m.consumption);
-            const ceiling = series.months.slice(-12).map((m) => m.capacity);
             return (
               <ClusterTile
                 key={series.clusterId}
                 className="col-span-12 md:col-span-6"
                 cluster={cluster}
-                trend={trend}
-                trendCeiling={ceiling}
+                forecastMonths={series.months}
+                horizonMonths={series.months.length}
               />
             );
           })}

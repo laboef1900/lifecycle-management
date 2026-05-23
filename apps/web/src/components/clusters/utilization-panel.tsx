@@ -48,7 +48,7 @@ export function UtilizationPanel({ forecast }: UtilizationPanelProps): React.JSX
       <CardContent className="pt-2">
         <div className="h-[140px] w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ top: 4, right: 16, bottom: 0, left: 8 }}>
+            <BarChart data={data} margin={{ top: 4, right: 56, bottom: 0, left: 8 }}>
               <XAxis
                 dataKey="month"
                 tickFormatter={formatMonth}
@@ -64,8 +64,28 @@ export function UtilizationPanel({ forecast }: UtilizationPanelProps): React.JSX
                 tickFormatter={(v: number) => `${v}%`}
                 width={36}
               />
-              <ReferenceLine y={70} stroke={colors.utilizationWarn} strokeDasharray="2 2" />
-              <ReferenceLine y={90} stroke={colors.utilizationCrit} strokeDasharray="2 2" />
+              <ReferenceLine
+                y={70}
+                stroke={colors.utilizationWarn}
+                strokeDasharray="2 2"
+                label={{
+                  value: 'Warn 70%',
+                  position: 'right',
+                  fontSize: 10,
+                  fill: colors.utilizationWarn,
+                }}
+              />
+              <ReferenceLine
+                y={90}
+                stroke={colors.utilizationCrit}
+                strokeDasharray="2 2"
+                label={{
+                  value: 'Crit 90%',
+                  position: 'right',
+                  fontSize: 10,
+                  fill: colors.utilizationCrit,
+                }}
+              />
               <Tooltip
                 content={({ active, payload, label }) => {
                   if (!active || !payload || payload.length === 0 || typeof label !== 'string') {

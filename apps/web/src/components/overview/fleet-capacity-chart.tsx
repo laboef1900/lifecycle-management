@@ -4,6 +4,7 @@ import {
   AreaChart,
   CartesianGrid,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -41,11 +42,21 @@ export function FleetCapacityChart({
 }: FleetCapacityChartProps): React.JSX.Element {
   const colors = useChartColors();
 
+  const enrichedRows = fleetMonths.map((row) => {
+    const consumed = clusters.reduce((sum, c) => {
+      const v = row[c.clusterId];
+      return sum + (typeof v === 'number' ? v : 0);
+    }, 0);
+    return { ...row, headroom: Math.max(0, row.capacityTotal - consumed) };
+  });
+  const maxCeiling = enrichedRows.reduce((max, r) => Math.max(max, r.capacityTotal), 0);
+  const ceilingForDomain = maxCeiling > 0 ? maxCeiling * 1.05 : undefined;
+
   return (
     <div className="w-full">
       <div className="h-[320px] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={fleetMonths} margin={{ top: 12, right: 16, bottom: 0, left: 8 }}>
+          <AreaChart data={enrichedRows} margin={{ top: 12, right: 56, bottom: 0, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
             <XAxis
               dataKey="month"
@@ -59,6 +70,7 @@ export function FleetCapacityChart({
               tick={{ fontSize: 11 }}
               stroke={colors.axis}
               tickFormatter={(v: number) => numberFormat.format(v)}
+              domain={ceilingForDomain ? [0, ceilingForDomain] : ['auto', 'auto']}
               label={{
                 value: 'GB',
                 angle: -90,
@@ -101,6 +113,13 @@ export function FleetCapacityChart({
                           </dd>
                         </React.Fragment>
                       ))}
+                      <dt className="text-muted-foreground">Headroom</dt>
+                      <dd className="text-right font-mono tabular-nums">
+                        {numberFormat.format(
+                          (payload.find((p) => p.dataKey === 'headroom')?.value as number) ?? 0,
+                        )}{' '}
+                        GB
+                      </dd>
                       <dt className="mt-1 border-t border-border pt-1 text-muted-foreground">
                         Fleet total
                       </dt>
@@ -129,6 +148,46 @@ export function FleetCapacityChart({
                 isAnimationActive={false}
               />
             ))}
+            {maxCeiling > 0 ? (
+              <Area
+                type="monotone"
+                dataKey="headroom"
+                name="Headroom"
+                stackId="fleet"
+                stroke={colors.capacity}
+                strokeDasharray="2 3"
+                strokeOpacity={0.6}
+                fill={colors.capacity}
+                fillOpacity={0.08}
+                isAnimationActive={false}
+              />
+            ) : null}
+            {maxCeiling > 0 ? (
+              <ReferenceLine
+                y={maxCeiling * 0.7}
+                stroke={colors.utilizationWarn}
+                strokeDasharray="2 2"
+                label={{
+                  value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
+                  position: 'right',
+                  fontSize: 10,
+                  fill: colors.utilizationWarn,
+                }}
+              />
+            ) : null}
+            {maxCeiling > 0 ? (
+              <ReferenceLine
+                y={maxCeiling * 0.9}
+                stroke={colors.utilizationCrit}
+                strokeDasharray="2 2"
+                label={{
+                  value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
+                  position: 'right',
+                  fontSize: 10,
+                  fill: colors.utilizationCrit,
+                }}
+              />
+            ) : null}
             <Line
               type="stepAfter"
               dataKey="capacityTotal"
@@ -163,6 +222,14 @@ function FleetChartLegend({ clusters }: { clusters: ClusterMeta[] }): React.JSX.
       ))}
       <span aria-hidden className="mx-1">
         ·
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span
+          aria-hidden
+          className="h-0 w-4 border-t-2 border-dashed"
+          style={{ borderColor: colors.capacity, opacity: 0.5 }}
+        />
+        <span>Headroom</span>
       </span>
       <span className="flex items-center gap-1.5">
         <span
