@@ -29,11 +29,6 @@ function renderHref(to: string, params?: Record<string, string>): string {
   return out;
 }
 
-// Sparkline cell fires its own forecast query — short-circuit it for these tests.
-vi.mock('./cluster-sparkline-cell', () => ({
-  ClusterSparklineCell: () => null,
-}));
-
 const makeCluster = (
   overrides: Partial<ClusterResponse> & {
     metric: { consumption: number; capacity: number };
@@ -114,5 +109,34 @@ describe('ClusterTable sorting', () => {
     renderTable(clusters);
     await user.click(screen.getByRole('button', { name: 'Consumption (GB)' }));
     expect(visibleNames()).toEqual(['Cluster-B', 'Cluster-C', 'Cluster-A']);
+  });
+});
+
+describe('ClusterTable runway + navigation', () => {
+  const clusters = [
+    makeCluster({ name: 'Cluster-A', metric: { consumption: 200, capacity: 1000 } }),
+  ];
+
+  it('renders a Runway column with em-dash when no forecast prop is provided', () => {
+    renderTable(clusters);
+    const row = screen.getAllByRole('row')[1]!;
+    expect(within(row).getByText('—')).toBeInTheDocument();
+  });
+
+  it('makes the row a link to the cluster detail page', () => {
+    renderTable(clusters);
+    const row = screen.getAllByRole('row')[1]!;
+    const link = within(row).getByRole('link');
+    expect(link).toHaveAttribute('href', '/clusters/c-Cluster-A');
+  });
+
+  it('no longer renders the Actions column', () => {
+    renderTable(clusters);
+    expect(screen.queryByRole('columnheader', { name: /actions/i })).toBeNull();
+  });
+
+  it('no longer renders the 12-month trend column', () => {
+    renderTable(clusters);
+    expect(screen.queryByRole('columnheader', { name: /12-month/i })).toBeNull();
   });
 });

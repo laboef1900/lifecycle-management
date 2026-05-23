@@ -1,10 +1,10 @@
-import type { ClusterResponse } from '@lcm/shared';
+import type { ClusterResponse, ForecastMonthPoint } from '@lcm/shared';
 import { Link } from '@tanstack/react-router';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { RunwayPill } from '@/components/ui/runway-pill';
 import {
   Table,
   TableBody,
@@ -13,16 +13,19 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { runwayToWarn } from '@/lib/forecast-summary';
 import { cn } from '@/lib/utils';
 
-import { ClusterSparklineCell } from './cluster-sparkline-cell';
 import { UtilizationBadge } from './utilization-badge';
 
 interface ClusterTableProps {
   clusters: ClusterResponse[];
+  /** Per-cluster forecast months, keyed by cluster id. Optional — runway shows '—' when missing. */
+  forecastsById?: Record<string, ForecastMonthPoint[]>;
+  horizonMonths?: number;
 }
 
-type SortKey = 'name' | 'consumption' | 'capacity' | 'utilization';
+type SortKey = 'name' | 'consumption' | 'capacity' | 'utilization' | 'runway';
 type SortDir = 'asc' | 'desc';
 
 interface SortState {
@@ -31,12 +34,40 @@ interface SortState {
 }
 
 const numberFormat = new Intl.NumberFormat('en-US');
+// Used as the "no breach" sentinel for sort ordering — larger than any realistic horizon.
+const RUNWAY_NONE = Number.POSITIVE_INFINITY;
 
-export function ClusterTable({ clusters }: ClusterTableProps): React.JSX.Element {
+interface Row {
+  cluster: ClusterResponse;
+  summary: ReturnType<typeof runwayToWarn> | undefined;
+  sortRunway: number;
+}
+
+export function ClusterTable({
+  clusters,
+  forecastsById,
+  horizonMonths,
+}: ClusterTableProps): React.JSX.Element {
   const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' });
 
+  const rows = useMemo<Row[]>(
+    () =>
+      clusters.map((cluster) => {
+        const months = forecastsById?.[cluster.id];
+        const summary = months ? runwayToWarn(months) : undefined;
+        const sortRunway =
+          summary === undefined
+            ? RUNWAY_NONE
+            : summary.alreadyBreached !== false
+              ? 0
+              : (summary.months ?? RUNWAY_NONE);
+        return { cluster, summary, sortRunway };
+      }),
+    [clusters, forecastsById],
+  );
+
   const sorted = useMemo(() => {
-    const copy = [...clusters];
+    const copy = [...rows];
     copy.sort((a, b) => {
       const aValue = extractSortValue(a, sort.key);
       const bValue = extractSortValue(b, sort.key);
@@ -48,7 +79,7 @@ export function ClusterTable({ clusters }: ClusterTableProps): React.JSX.Element
         : (bValue as number) - (aValue as number);
     });
     return copy;
-  }, [clusters, sort]);
+  }, [rows, sort]);
 
   const toggle = (key: SortKey): void => {
     setSort((prev) =>
@@ -83,16 +114,26 @@ export function ClusterTable({ clusters }: ClusterTableProps): React.JSX.Element
               onToggle={toggle}
               align="right"
             />
-            <TableHead>12-month trend</TableHead>
-            <TableHead className="w-20 text-right">Actions</TableHead>
+            <SortableHead label="Runway" sortKey="runway" sort={sort} onToggle={toggle} />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {sorted.map((cluster) => {
+          {sorted.map(({ cluster, summary }) => {
             const metric = cluster.metrics[0];
             return (
-              <TableRow key={cluster.id} className="hover:bg-muted/60">
-                <TableCell className="font-medium">{cluster.name}</TableCell>
+              <TableRow
+                key={cluster.id}
+                className="cursor-pointer hover:bg-muted/60 focus-within:bg-muted/60"
+              >
+                <TableCell className="font-medium">
+                  <Link
+                    to="/clusters/$id"
+                    params={{ id: cluster.id }}
+                    className="block w-full focus-visible:outline-none"
+                  >
+                    {cluster.name}
+                  </Link>
+                </TableCell>
                 <TableCell className="text-right font-mono tabular-nums">
                   {metric ? numberFormat.format(Math.round(metric.currentConsumption)) : '—'}
                 </TableCell>
@@ -103,16 +144,14 @@ export function ClusterTable({ clusters }: ClusterTableProps): React.JSX.Element
                   {metric ? <UtilizationBadge value={metric.utilization} /> : '—'}
                 </TableCell>
                 <TableCell>
-                  {metric ? (
-                    <ClusterSparklineCell clusterId={cluster.id} metricKey={metric.metricTypeKey} />
-                  ) : null}
-                </TableCell>
-                <TableCell className="text-right">
-                  <Button asChild variant="ghost" size="sm">
-                    <Link to="/clusters/$id" params={{ id: cluster.id }}>
-                      Open
-                    </Link>
-                  </Button>
+                  {summary === undefined ? (
+                    '—'
+                  ) : (
+                    <RunwayPill
+                      summary={summary}
+                      {...(horizonMonths !== undefined && { horizonMonths })}
+                    />
+                  )}
                 </TableCell>
               </TableRow>
             );
@@ -123,17 +162,19 @@ export function ClusterTable({ clusters }: ClusterTableProps): React.JSX.Element
   );
 }
 
-function extractSortValue(cluster: ClusterResponse, key: SortKey): string | number {
-  const metric = cluster.metrics[0];
+function extractSortValue(row: Row, key: SortKey): string | number {
+  const metric = row.cluster.metrics[0];
   switch (key) {
     case 'name':
-      return cluster.name.toLowerCase();
+      return row.cluster.name.toLowerCase();
     case 'consumption':
       return metric?.currentConsumption ?? 0;
     case 'capacity':
       return metric?.currentCapacity ?? 0;
     case 'utilization':
       return metric?.utilization ?? 0;
+    case 'runway':
+      return row.sortRunway;
   }
 }
 
