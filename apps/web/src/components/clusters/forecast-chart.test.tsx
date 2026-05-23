@@ -35,6 +35,7 @@ vi.mock('recharts', () => {
     ReferenceDot: ({ x, y, fill }: { x: string; y: number; fill: string }): React.JSX.Element => (
       <div data-testid="reference-dot" data-x={x} data-y={y} data-fill={fill} />
     ),
+    ReferenceLine: () => null,
   };
 });
 
