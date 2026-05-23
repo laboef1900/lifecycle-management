@@ -27,6 +27,17 @@ test('create cluster, add host + application, chart reflects updates', async ({
         // localStorage may be unavailable in some contexts; ignore.
       }
     });
+
+    // Sanity-check the overview page renders gauges + runway pills on cluster cards
+    // (if any seeded clusters exist; skip silently when the DB is empty).
+    await page.goto('/');
+    const sampleGauge = page
+      .getByRole('img', { name: /, status: (ok|warning|critical|empty)/i })
+      .first();
+    if (await sampleGauge.count()) {
+      await expect(sampleGauge).toBeVisible();
+    }
+
     await page.goto('/clusters');
     await expect(page.getByRole('heading', { name: 'Clusters', level: 1 })).toBeVisible();
 
@@ -39,17 +50,28 @@ test('create cluster, add host + application, chart reflects updates', async ({
     await createDialog.getByRole('button', { name: 'Create cluster' }).click();
     await expect(createDialog).toBeHidden();
 
+    // Fleet KPI banner is now visible above the table.
+    await expect(page.getByText(/^Used$/)).toBeVisible();
+    await expect(page.getByText(/^Headroom$/)).toBeVisible();
+    await expect(page.getByText(/^Fleet runway$/)).toBeVisible();
+
+    // Runway column header is present; Actions column is gone.
+    await expect(page.getByRole('columnheader', { name: /^Runway/i })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: /^Actions/i })).toHaveCount(0);
+
     // Row should now appear in the dashboard table with the right utilization.
     const newRow = page.getByRole('row', { name: new RegExp(clusterName) });
     await expect(newRow).toBeVisible();
     await expect(newRow).toContainText('20.0%'); // 1000/5000
 
     // Open detail page.
-    await newRow.getByRole('link', { name: 'Open' }).click();
+    await newRow.getByRole('link', { name: clusterName }).click();
     await expect(page.getByRole('heading', { name: clusterName, level: 1 })).toBeVisible();
 
-    // Header utilization badge should agree.
+    // KPI strip below the title — 3 tiles (gauge, headroom, runway).
     await expect(page.getByText('Current utilization')).toBeVisible();
+    await expect(page.getByText('Headroom', { exact: true })).toBeVisible();
+    await expect(page.getByText('Runway', { exact: true })).toBeVisible();
 
     // Add a host.
     await page.getByRole('tab', { name: 'Hosts' }).click();
