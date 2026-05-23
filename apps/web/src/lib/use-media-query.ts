@@ -1,27 +1,28 @@
-import { useSyncExternalStore } from 'react';
-
-function subscribe(query: string): (callback: () => void) => () => void {
-  return (callback) => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return () => {};
-    }
-    const mql = window.matchMedia(query);
-    mql.addEventListener('change', callback);
-    return () => mql.removeEventListener('change', callback);
-  };
-}
-
-function getSnapshot(query: string): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    return false;
-  }
-  return window.matchMedia(query).matches;
-}
+import { useCallback, useSyncExternalStore } from 'react';
 
 function getServerSnapshot(): boolean {
   return false;
 }
 
 export function useMediaQuery(query: string): boolean {
-  return useSyncExternalStore(subscribe(query), () => getSnapshot(query), getServerSnapshot);
+  const subscribe = useCallback(
+    (callback: () => void) => {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+        return () => {};
+      }
+      const mql = window.matchMedia(query);
+      mql.addEventListener('change', callback);
+      return () => mql.removeEventListener('change', callback);
+    },
+    [query],
+  );
+
+  const getSnapshot = useCallback(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return false;
+    }
+    return window.matchMedia(query).matches;
+  }, [query]);
+
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
