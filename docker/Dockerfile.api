@@ -1,0 +1,53 @@
+# LCM API service — Fastify + Prisma on Node 22.
+#
+# Single-stage build: the runtime image includes pnpm and the api's
+# devDependencies (tsx is needed to run the TS sources directly). For a v1
+# internal deployment the few extra MB are worth the simplicity; if image
+# size becomes a concern we can revisit with tsup + pnpm deploy.
+
+FROM node:22-alpine
+
+# libc6-compat: prisma's native binaries.
+# openssl: prisma needs it for its query engine.
+# tini: PID 1 init that forwards SIGTERM cleanly to the Node process so
+#       Fastify can run its onClose hooks.
+RUN apk add --no-cache libc6-compat openssl tini
+
+RUN npm install -g pnpm@11.2.2
+
+WORKDIR /app
+
+# Install dependencies first — workspace packages need their package.json
+# files present at install time. Copy the lockfile + workspace metadata,
+# then every workspace's package.json so pnpm has a complete dependency
+# graph; only then install (caching deps until any package.json changes).
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY packages/shared/package.json packages/shared/
+RUN pnpm install --frozen-lockfile --filter @lcm/api...
+
+# Copy sources only after the install layer is cached.
+COPY tsconfig.base.json ./
+COPY packages/shared/src packages/shared/src
+COPY packages/shared/tsconfig.json packages/shared/
+COPY apps/api/src apps/api/src
+COPY apps/api/prisma apps/api/prisma
+COPY apps/api/tsconfig.json apps/api/tsconfig.build.json apps/api/
+
+# Generate the Prisma client (binaries) inside the image so we don't depend
+# on the host's platform.
+RUN pnpm --filter @lcm/api exec prisma generate
+
+WORKDIR /app/apps/api
+
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=8080
+
+EXPOSE 8080
+
+COPY docker/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
+RUN chmod +x /usr/local/bin/api-entrypoint.sh
+
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/api-entrypoint.sh"]
