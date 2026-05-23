@@ -27,14 +27,14 @@ function useClusterCrumb(clusterId: string | undefined): Crumb {
 export function Breadcrumbs(): React.JSX.Element | null {
   const matches = useMatches();
   const last = matches[matches.length - 1];
-  if (!last) return null;
-
-  const path = last.pathname;
+  const path = last?.pathname ?? '';
   const clusterId =
-    'id' in (last.params as Record<string, unknown>)
+    last && 'id' in (last.params as Record<string, unknown>)
       ? (last.params as { id?: string }).id
       : undefined;
   const clusterCrumb = useClusterCrumb(clusterId);
+
+  if (!last) return null;
 
   const crumbs: Crumb[] = (() => {
     if (path === '/' || path === '') {
