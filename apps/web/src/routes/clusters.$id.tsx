@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, createFileRoute } from '@tanstack/react-router';
-import { ArrowLeft } from 'lucide-react';
+import { createFileRoute } from '@tanstack/react-router';
+import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 
 import { ApplicationsTab } from '@/components/clusters/applications-tab';
@@ -14,7 +14,7 @@ import {
   resolveWindow,
   type ForecastWindow,
 } from '@/components/clusters/window-controls';
-import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api-client';
 
@@ -49,13 +49,6 @@ function ClusterDetailPage(): React.JSX.Element {
   return (
     <div className="space-y-6">
       <div>
-        <Button asChild variant="ghost" size="sm" className="-ml-3 mb-2 text-muted-foreground">
-          <Link to="/">
-            <ArrowLeft className="h-4 w-4" />
-            Back to dashboard
-          </Link>
-        </Button>
-
         {clusterQuery.isPending ? (
           <HeaderSkeleton />
         ) : clusterQuery.isError || !clusterQuery.data ? (
@@ -123,7 +116,7 @@ function HeaderSkeleton(): React.JSX.Element {
   return (
     <div className="space-y-2">
       <div className="h-7 w-48 animate-pulse rounded bg-muted" />
-      <div className="h-4 w-64 animate-pulse rounded bg-muted/60" />
+      <div className="h-4 w-64 animate-pulse rounded bg-muted" />
     </div>
   );
 }
@@ -131,16 +124,17 @@ function HeaderSkeleton(): React.JSX.Element {
 function ChartSkeleton(): React.JSX.Element {
   return (
     <div className="space-y-4">
-      <div className="h-[320px] animate-pulse rounded-lg bg-muted/60" />
-      <div className="h-[140px] animate-pulse rounded-lg bg-muted/40" />
+      <Card className="h-[320px] animate-pulse" />
+      <Card className="h-[140px] animate-pulse" />
     </div>
   );
 }
 
 function ErrorCard({ message }: { message: string }): React.JSX.Element {
   return (
-    <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
-      {message}
-    </div>
+    <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <span>{message}</span>
+    </Card>
   );
 }

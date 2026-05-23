@@ -1,28 +1,109 @@
 @import 'tailwindcss';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/600.css';
+
+:root {
+  --background: oklch(99% 0.005 257);
+  --foreground: oklch(15% 0.02 0);
+  --card: oklch(100% 0 0);
+  --card-foreground: oklch(15% 0.02 0);
+  --popover: oklch(100% 0 0);
+  --popover-foreground: oklch(15% 0.02 0);
+  --muted: oklch(96% 0.005 257);
+  --muted-foreground: oklch(50% 0.02 257);
+  --border: oklch(90% 0.01 257);
+  --input: oklch(90% 0.01 257);
+  --ring: oklch(50% 0.22 262);
+  --primary: oklch(50% 0.22 262);
+  --primary-foreground: oklch(99% 0.005 257);
+  --secondary: oklch(94% 0.01 257);
+  --secondary-foreground: oklch(15% 0.02 0);
+  --accent: oklch(94% 0.02 250);
+  --accent-foreground: oklch(15% 0.02 0);
+  --success: oklch(60% 0.18 142);
+  --success-foreground: oklch(99% 0.005 257);
+  --success-strong: oklch(35% 0.18 142);
+  --warning: oklch(70% 0.2 80);
+  --warning-foreground: oklch(15% 0.02 0);
+  --warning-strong: oklch(40% 0.18 80);
+  --destructive: oklch(58% 0.22 25);
+  --destructive-foreground: oklch(99% 0.005 257);
+  --destructive-strong: oklch(38% 0.22 25);
+  --radius: 0.5rem;
+}
+
+html.dark {
+  --background: oklch(13% 0.01 257);
+  --foreground: oklch(96% 0.005 257);
+  --card: oklch(18% 0.01 257);
+  --card-foreground: oklch(96% 0.005 257);
+  --popover: oklch(22% 0.01 257);
+  --popover-foreground: oklch(96% 0.005 257);
+  --muted: oklch(22% 0.01 257);
+  --muted-foreground: oklch(68% 0.02 257);
+  --border: oklch(28% 0.01 257);
+  --input: oklch(28% 0.01 257);
+  --ring: oklch(68% 0.18 262);
+  --primary: oklch(68% 0.18 262);
+  --primary-foreground: oklch(13% 0.01 257);
+  --secondary: oklch(24% 0.01 257);
+  --secondary-foreground: oklch(96% 0.005 257);
+  --accent: oklch(28% 0.02 250);
+  --accent-foreground: oklch(96% 0.005 257);
+  --success: oklch(72% 0.12 142);
+  --success-foreground: oklch(13% 0.01 257);
+  --success-strong: oklch(82% 0.13 142);
+  --warning: oklch(78% 0.14 80);
+  --warning-foreground: oklch(13% 0.01 257);
+  --warning-strong: oklch(86% 0.15 80);
+  --destructive: oklch(70% 0.18 25);
+  --destructive-foreground: oklch(13% 0.01 257);
+  --destructive-strong: oklch(82% 0.18 25);
+}
 
 @theme {
-  --color-background: oklch(99% 0 0);
-  --color-foreground: oklch(20% 0.02 260);
-  --color-card: oklch(100% 0 0);
-  --color-card-foreground: oklch(20% 0.02 260);
-  --color-muted: oklch(96% 0.005 260);
-  --color-muted-foreground: oklch(45% 0.02 260);
-  --color-border: oklch(90% 0.005 260);
-  --color-input: oklch(90% 0.005 260);
-  --color-ring: oklch(60% 0.15 250);
-  --color-primary: oklch(45% 0.15 250);
-  --color-primary-foreground: oklch(98% 0 0);
-  --color-secondary: oklch(94% 0.01 260);
-  --color-secondary-foreground: oklch(20% 0.02 260);
-  --color-destructive: oklch(55% 0.2 25);
-  --color-destructive-foreground: oklch(98% 0 0);
-  --color-accent: oklch(94% 0.02 250);
-  --color-accent-foreground: oklch(20% 0.02 260);
-  --radius: 0.5rem;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-strong: var(--success-strong);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-strong: var(--warning-strong);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-strong: var(--destructive-strong);
+  --radius: var(--radius);
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 html,
 body,
 #root {
   height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }

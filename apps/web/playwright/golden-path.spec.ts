@@ -20,6 +20,13 @@ test('create cluster, add host + application, chart reflects updates', async ({
   let clusterId: string | null = null;
 
   try {
+    await page.addInitScript(() => {
+      try {
+        localStorage.removeItem('theme');
+      } catch {
+        // localStorage may be unavailable in some contexts; ignore.
+      }
+    });
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
 
@@ -70,6 +77,17 @@ test('create cluster, add host + application, chart reflects updates', async ({
     // forecast query; that's our marker that the chart re-rendered cleanly.
     await expect(page.getByText('Consumption', { exact: true })).toBeVisible();
     await expect(page.getByText('Capacity ceiling')).toBeVisible();
+
+    // Theme toggle round-trip: cycle system → light → dark → system.
+    const toggle = page.getByRole('button', { name: /Theme:/ });
+    await toggle.click();
+    await expect(page.locator('html')).not.toHaveClass(/dark/);
+    await toggle.click();
+    await expect(page.locator('html')).toHaveClass(/dark/);
+    await toggle.click();
+    // Back to system — html class state depends on the host OS preference,
+    // so just assert the aria-label is back to "System".
+    await expect(toggle).toHaveAccessibleName(/Theme: System/);
 
     // Capture the cluster id for cleanup via the dashboard URL.
     const url = page.url();

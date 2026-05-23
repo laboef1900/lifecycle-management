@@ -11,16 +11,12 @@ import {
   YAxis,
 } from 'recharts';
 
+import { Card } from '@/components/ui/card';
+import { useChartColors } from '@/lib/use-chart-colors';
+
 interface ForecastChartProps {
   forecast: ForecastResponse;
 }
-
-const eventCategoryColor: Record<EventCategory, string> = {
-  growth: 'oklch(60% 0.15 50)',
-  hardware_change: 'oklch(55% 0.18 145)',
-  openshift: 'oklch(55% 0.20 290)',
-  note: 'oklch(55% 0.02 260)',
-};
 
 const numberFormat = new Intl.NumberFormat('en-US');
 
@@ -34,6 +30,7 @@ function formatMonth(month: string): string {
 }
 
 export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Element {
+  const colors = useChartColors();
   const data = forecast.months.map((point) => ({
     month: point.month,
     consumption: Math.round(point.consumption),
@@ -49,34 +46,34 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
   }
 
   return (
-    <div className="rounded-lg border bg-card p-4">
+    <Card className="p-4">
       <div className="h-[320px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 12, right: 16, bottom: 0, left: 8 }}>
             <defs>
               <linearGradient id="forecast-consumption" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="oklch(45% 0.15 250)" stopOpacity={0.45} />
-                <stop offset="100%" stopColor="oklch(45% 0.15 250)" stopOpacity={0.05} />
+                <stop offset="0%" stopColor={colors.consumption} stopOpacity={0.45} />
+                <stop offset="100%" stopColor={colors.consumption} stopOpacity={0.05} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="oklch(92% 0.005 260)" />
+            <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
             <XAxis
               dataKey="month"
               tickFormatter={formatMonth}
               tick={{ fontSize: 11 }}
-              stroke="oklch(45% 0.02 260)"
+              stroke={colors.axis}
               interval="preserveStartEnd"
               minTickGap={24}
             />
             <YAxis
               tick={{ fontSize: 11 }}
-              stroke="oklch(45% 0.02 260)"
+              stroke={colors.axis}
               tickFormatter={(v: number) => numberFormat.format(v)}
               label={{
                 value: 'GB',
                 angle: -90,
                 position: 'insideLeft',
-                style: { fontSize: 11, fill: 'oklch(45% 0.02 260)' },
+                style: { fontSize: 11, fill: colors.axis },
               }}
             />
             <Tooltip
@@ -89,31 +86,33 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
                 const utilization = capacity > 0 ? (consumption / capacity) * 100 : 0;
                 const monthEvents = eventsByMonth.get(label) ?? [];
                 return (
-                  <div className="rounded-md border bg-card p-3 text-xs shadow">
+                  <div className="rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md">
                     <div className="font-medium">{formatMonth(label)}</div>
                     <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
                       <dt className="text-muted-foreground">Consumption</dt>
-                      <dd className="text-right tabular-nums">
+                      <dd className="text-right font-mono tabular-nums">
                         {numberFormat.format(consumption)} GB
                       </dd>
                       <dt className="text-muted-foreground">Capacity</dt>
-                      <dd className="text-right tabular-nums">
+                      <dd className="text-right font-mono tabular-nums">
                         {numberFormat.format(capacity)} GB
                       </dd>
                       <dt className="text-muted-foreground">Utilization</dt>
-                      <dd className="text-right tabular-nums">{utilization.toFixed(1)}%</dd>
+                      <dd className="text-right font-mono tabular-nums">
+                        {utilization.toFixed(1)}%
+                      </dd>
                     </dl>
                     {monthEvents.length > 0 ? (
-                      <ul className="mt-2 space-y-1 border-t pt-2">
+                      <ul className="mt-2 space-y-1 border-t border-border pt-2">
                         {monthEvents.map((event) => (
                           <li key={event.id} className="flex items-center gap-2">
                             <span
                               aria-hidden
                               className="h-2 w-2 rounded-full"
-                              style={{ background: eventCategoryColor[event.category] }}
+                              style={{ background: colors.event[event.category] }}
                             />
                             <span className="flex-1 truncate">{event.title}</span>
-                            <span className="tabular-nums text-muted-foreground">
+                            <span className="font-mono tabular-nums text-muted-foreground">
                               {formatDelta(event.consumptionDelta, event.capacityDelta)}
                             </span>
                           </li>
@@ -128,7 +127,7 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
               type="monotone"
               dataKey="consumption"
               name="Consumption"
-              stroke="oklch(45% 0.15 250)"
+              stroke={colors.consumption}
               strokeWidth={2}
               fill="url(#forecast-consumption)"
               isAnimationActive={false}
@@ -137,7 +136,7 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
               type="stepAfter"
               dataKey="capacity"
               name="Capacity"
-              stroke="oklch(55% 0.20 25)"
+              stroke={colors.capacity}
               strokeWidth={1.75}
               strokeDasharray="4 3"
               dot={false}
@@ -153,8 +152,8 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
                   x={monthKey}
                   y={datum.consumption}
                   r={5}
-                  fill={eventCategoryColor[event.category]}
-                  stroke="white"
+                  fill={colors.event[event.category]}
+                  stroke="var(--card)"
                   strokeWidth={1.5}
                   isFront
                   ifOverflow="extendDomain"
@@ -165,8 +164,8 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
         </ResponsiveContainer>
       </div>
 
-      <ChartLegend events={forecast.events} />
-    </div>
+      <ChartLegend events={forecast.events} colors={colors} />
+    </Card>
   );
 }
 
@@ -181,12 +180,17 @@ function formatDelta(consumption: number | null, capacity: number | null): strin
   return parts.length === 0 ? '—' : parts.join(' · ');
 }
 
-function ChartLegend({ events }: { events: ForecastResponse['events'] }): React.JSX.Element {
+interface ChartLegendProps {
+  events: ForecastResponse['events'];
+  colors: ReturnType<typeof useChartColors>;
+}
+
+function ChartLegend({ events, colors }: ChartLegendProps): React.JSX.Element {
   const categories = Array.from(new Set(events.map((e) => e.category)));
   return (
     <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-      <LegendItem swatch="oklch(45% 0.15 250)" label="Consumption" />
-      <LegendItem swatch="oklch(55% 0.20 25)" label="Capacity ceiling" dashed />
+      <LegendItem swatch={colors.consumption} label="Consumption" />
+      <LegendItem swatch={colors.capacity} label="Capacity ceiling" dashed />
       {categories.length > 0 ? (
         <span aria-hidden className="mx-1">
           ·
@@ -195,7 +199,7 @@ function ChartLegend({ events }: { events: ForecastResponse['events'] }): React.
       {categories.map((category) => (
         <LegendItem
           key={category}
-          swatch={eventCategoryColor[category]}
+          swatch={colors.event[category]}
           label={categoryLabel(category)}
           dot
         />

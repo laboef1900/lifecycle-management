@@ -1,8 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Sparkles } from 'lucide-react';
+import { Database } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { api } from '@/lib/api-client';
 
 import { CreateClusterDialog } from './create-cluster-dialog';
@@ -40,8 +41,8 @@ export function ClustersEmptyState(): React.JSX.Element {
   });
 
   return (
-    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed bg-card p-12 text-center">
-      <Sparkles className="mb-3 h-8 w-8 text-muted-foreground" aria-hidden />
+    <Card className="flex flex-col items-center justify-center border-dashed p-12 text-center">
+      <Database className="mb-3 h-8 w-8 text-muted-foreground" aria-hidden />
       <h2 className="text-lg font-semibold">No clusters yet</h2>
       <p className="mt-1 max-w-sm text-sm text-muted-foreground">
         Add a cluster to start tracking memory capacity and forecasting growth.
@@ -58,6 +59,6 @@ export function ClustersEmptyState(): React.JSX.Element {
           </Button>
         ) : null}
       </div>
-    </div>
+    </Card>
   );
 }

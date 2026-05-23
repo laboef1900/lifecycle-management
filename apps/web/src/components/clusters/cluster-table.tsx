@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import {
   Table,
   TableBody,
@@ -56,7 +57,7 @@ export function ClusterTable({ clusters }: ClusterTableProps): React.JSX.Element
   };
 
   return (
-    <div className="rounded-lg border bg-card">
+    <Card className="overflow-hidden">
       <Table>
         <TableHeader>
           <TableRow>
@@ -90,12 +91,12 @@ export function ClusterTable({ clusters }: ClusterTableProps): React.JSX.Element
           {sorted.map((cluster) => {
             const metric = cluster.metrics[0];
             return (
-              <TableRow key={cluster.id}>
+              <TableRow key={cluster.id} className="hover:bg-muted/50">
                 <TableCell className="font-medium">{cluster.name}</TableCell>
-                <TableCell className="text-right tabular-nums">
+                <TableCell className="text-right font-mono tabular-nums">
                   {metric ? numberFormat.format(Math.round(metric.currentConsumption)) : '—'}
                 </TableCell>
-                <TableCell className="text-right tabular-nums">
+                <TableCell className="text-right font-mono tabular-nums">
                   {metric ? numberFormat.format(Math.round(metric.currentCapacity)) : '—'}
                 </TableCell>
                 <TableCell className="text-right">
@@ -118,7 +119,7 @@ export function ClusterTable({ clusters }: ClusterTableProps): React.JSX.Element
           })}
         </TableBody>
       </Table>
-    </div>
+    </Card>
   );
 }
 
