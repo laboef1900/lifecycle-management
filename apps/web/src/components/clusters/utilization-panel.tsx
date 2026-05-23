@@ -10,6 +10,9 @@ import {
   YAxis,
 } from 'recharts';
 
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useChartColors, type ChartColors } from '@/lib/use-chart-colors';
+
 interface UtilizationPanelProps {
   forecast: ForecastResponse;
 }
@@ -23,66 +26,71 @@ function formatMonth(month: string): string {
   });
 }
 
-function utilizationColor(value: number): string {
-  if (value >= 0.9) return 'oklch(55% 0.20 25)';
-  if (value >= 0.7) return 'oklch(70% 0.16 75)';
-  return 'oklch(55% 0.13 160)';
+function utilizationColor(value: number, colors: ChartColors): string {
+  if (value >= 0.9) return colors.utilizationCrit;
+  if (value >= 0.7) return colors.utilizationWarn;
+  return colors.utilizationOk;
 }
 
 export function UtilizationPanel({ forecast }: UtilizationPanelProps): React.JSX.Element {
+  const colors = useChartColors();
   const data = forecast.months.map((point) => ({
     month: point.month,
     pct: Number((point.utilization * 100).toFixed(1)),
   }));
 
   return (
-    <div className="rounded-lg border bg-card p-4">
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-medium">Monthly utilization</h3>
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0">
+        <CardTitle>Monthly utilization</CardTitle>
         <span className="text-xs text-muted-foreground">% capacity used</span>
-      </div>
-      <div className="h-[140px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 4, right: 16, bottom: 0, left: 8 }}>
-            <XAxis
-              dataKey="month"
-              tickFormatter={formatMonth}
-              tick={{ fontSize: 10 }}
-              stroke="oklch(45% 0.02 260)"
-              interval="preserveStartEnd"
-              minTickGap={24}
-            />
-            <YAxis
-              domain={[0, (max: number) => Math.max(100, Math.ceil(max / 10) * 10)]}
-              tick={{ fontSize: 10 }}
-              stroke="oklch(45% 0.02 260)"
-              tickFormatter={(v: number) => `${v}%`}
-              width={36}
-            />
-            <ReferenceLine y={70} stroke="oklch(70% 0.16 75)" strokeDasharray="2 2" />
-            <ReferenceLine y={90} stroke="oklch(55% 0.20 25)" strokeDasharray="2 2" />
-            <Tooltip
-              content={({ active, payload, label }) => {
-                if (!active || !payload || payload.length === 0 || typeof label !== 'string') {
-                  return null;
-                }
-                const pct = payload[0]?.value as number;
-                return (
-                  <div className="rounded-md border bg-card p-2 text-xs shadow">
-                    <div className="font-medium">{formatMonth(label)}</div>
-                    <div className="text-muted-foreground">{pct.toFixed(1)}%</div>
-                  </div>
-                );
-              }}
-            />
-            <Bar dataKey="pct" isAnimationActive={false} radius={[2, 2, 0, 0]}>
-              {data.map((entry) => (
-                <Cell key={entry.month} fill={utilizationColor(entry.pct / 100)} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
+      </CardHeader>
+      <CardContent className="pt-2">
+        <div className="h-[140px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} margin={{ top: 4, right: 16, bottom: 0, left: 8 }}>
+              <XAxis
+                dataKey="month"
+                tickFormatter={formatMonth}
+                tick={{ fontSize: 10 }}
+                stroke={colors.axis}
+                interval="preserveStartEnd"
+                minTickGap={24}
+              />
+              <YAxis
+                domain={[0, (max: number) => Math.max(100, Math.ceil(max / 10) * 10)]}
+                tick={{ fontSize: 10 }}
+                stroke={colors.axis}
+                tickFormatter={(v: number) => `${v}%`}
+                width={36}
+              />
+              <ReferenceLine y={70} stroke={colors.utilizationWarn} strokeDasharray="2 2" />
+              <ReferenceLine y={90} stroke={colors.utilizationCrit} strokeDasharray="2 2" />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload || payload.length === 0 || typeof label !== 'string') {
+                    return null;
+                  }
+                  const pct = payload[0]?.value as number;
+                  return (
+                    <div className="rounded-md border border-border bg-popover p-2 text-xs text-popover-foreground shadow-md">
+                      <div className="font-medium">{formatMonth(label)}</div>
+                      <div className="font-mono tabular-nums text-muted-foreground">
+                        {pct.toFixed(1)}%
+                      </div>
+                    </div>
+                  );
+                }}
+              />
+              <Bar dataKey="pct" isAnimationActive={false} radius={[2, 2, 0, 0]}>
+                {data.map((entry) => (
+                  <Cell key={entry.month} fill={utilizationColor(entry.pct / 100, colors)} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

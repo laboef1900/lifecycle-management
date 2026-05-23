@@ -1,3 +1,4 @@
+import { useChartColors } from '@/lib/use-chart-colors';
 import { cn } from '@/lib/utils';
 
 interface SparklineProps {
@@ -17,6 +18,7 @@ export function Sparkline({
   height = 28,
   className,
 }: SparklineProps): React.JSX.Element | null {
+  const colors = useChartColors();
   if (values.length < 2) return null;
 
   const allPoints = ceiling ? [...values, ...ceiling] : values;
@@ -50,7 +52,7 @@ export function Sparkline({
         <path
           d={project(ceiling)}
           fill="none"
-          stroke="oklch(55% 0.20 25)"
+          stroke={colors.capacity}
           strokeWidth="1.25"
           strokeDasharray="3 2"
           strokeLinecap="round"
@@ -59,7 +61,7 @@ export function Sparkline({
       <path
         d={project(values)}
         fill="none"
-        stroke="oklch(45% 0.15 250)"
+        stroke={colors.consumption}
         strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"

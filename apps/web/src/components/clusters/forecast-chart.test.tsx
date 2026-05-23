@@ -2,7 +2,17 @@ import type { ForecastResponse } from '@lcm/shared';
 import { render, screen } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { ThemeProvider } from '@/components/theme/theme-provider';
+
 import { ForecastChart } from './forecast-chart';
+
+function renderChart(forecast: ForecastResponse): ReturnType<typeof render> {
+  return render(
+    <ThemeProvider>
+      <ForecastChart forecast={forecast} />
+    </ThemeProvider>,
+  );
+}
 
 // Recharts components do heavy SVG rendering we don't need to assert on; replace
 // them with minimal pass-through stubs so we can verify props mapping without
@@ -67,7 +77,7 @@ describe('ForecastChart props mapping', () => {
 
   it('renders one month per forecast point with rounded values', () => {
     const forecast = makeForecast();
-    render(<ForecastChart forecast={forecast} />);
+    renderChart(forecast);
 
     expect(screen.getByTestId('chart').dataset.monthCount).toBe('3');
     expect(screen.getByTestId('area-consumption')).toBeInTheDocument();
@@ -97,7 +107,7 @@ describe('ForecastChart props mapping', () => {
         },
       ],
     });
-    render(<ForecastChart forecast={forecast} />);
+    renderChart(forecast);
 
     const dots = screen.getAllByTestId('reference-dot');
     expect(dots).toHaveLength(2);
@@ -123,7 +133,7 @@ describe('ForecastChart props mapping', () => {
         },
       ],
     });
-    render(<ForecastChart forecast={forecast} />);
+    renderChart(forecast);
 
     expect(screen.getByText('Consumption')).toBeInTheDocument();
     expect(screen.getByText('Capacity ceiling')).toBeInTheDocument();
