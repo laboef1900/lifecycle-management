@@ -38,18 +38,21 @@ export function Breadcrumbs(): React.JSX.Element | null {
 
   const crumbs: Crumb[] = (() => {
     if (path === '/' || path === '') {
-      return [{ label: 'Dashboard' }];
+      return [{ label: 'Overview' }];
     }
     if (path.startsWith('/clusters/new')) {
-      return [{ label: 'Dashboard', to: '/' }, { label: 'New cluster' }];
+      return [{ label: 'Clusters', to: '/clusters' }, { label: 'New cluster' }];
     }
     if (path.startsWith('/clusters/') && clusterId) {
-      return [{ label: 'Dashboard', to: '/' }, clusterCrumb];
+      return [{ label: 'Clusters', to: '/clusters' }, clusterCrumb];
+    }
+    if (path === '/clusters' || path.startsWith('/clusters')) {
+      return [{ label: 'Clusters' }];
     }
     if (path.startsWith('/settings')) {
       return [{ label: 'Settings' }];
     }
-    return [{ label: 'Dashboard', to: '/' }];
+    return [{ label: 'Overview', to: '/' }];
   })();
 
   return (

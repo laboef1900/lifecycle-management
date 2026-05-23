@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { ChevronsLeft, ChevronsRight, LayoutDashboard, Settings } from 'lucide-react';
+import { ChevronsLeft, ChevronsRight, Database, LayoutPanelLeft, Settings } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { cn } from '@/lib/utils';
@@ -7,7 +7,8 @@ import { cn } from '@/lib/utils';
 const STORAGE_KEY = 'sidebar';
 
 const navItems = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true },
+  { to: '/', label: 'Overview', icon: LayoutPanelLeft, exact: true },
+  { to: '/clusters', label: 'Clusters', icon: Database, exact: false },
   { to: '/settings', label: 'Settings', icon: Settings, exact: false },
 ] as const;
 
