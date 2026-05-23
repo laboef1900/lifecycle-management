@@ -17,8 +17,8 @@
   --muted-foreground: oklch(50% 0.02 257);
   --border: oklch(90% 0.01 257);
   --input: oklch(90% 0.01 257);
-  --ring: oklch(50% 0.22 262);
-  --primary: oklch(50% 0.22 262);
+  --ring: oklch(50% 0.13 262);
+  --primary: oklch(50% 0.13 262);
   --primary-foreground: oklch(99% 0.005 257);
   --secondary: oklch(94% 0.01 257);
   --secondary-foreground: oklch(15% 0.02 0);
@@ -37,26 +37,25 @@
   --radius-card: 0.75rem;
   --radius-modal: 1rem;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
-  --bg-gradient-bottom: oklch(97% 0.005 257);
 }
 
 html.dark {
-  --background: oklch(13% 0.01 257);
+  --background: oklch(13% 0.005 280);
   --foreground: oklch(96% 0.005 257);
-  --card: oklch(18% 0.01 257);
+  --card: oklch(16% 0.005 280);
   --card-foreground: oklch(96% 0.005 257);
-  --popover: oklch(22% 0.01 257);
+  --popover: oklch(20% 0.005 280);
   --popover-foreground: oklch(96% 0.005 257);
-  --muted: oklch(22% 0.01 257);
-  --muted-foreground: oklch(68% 0.02 257);
-  --border: oklch(28% 0.01 257);
-  --input: oklch(28% 0.01 257);
-  --ring: oklch(68% 0.18 262);
-  --primary: oklch(68% 0.18 262);
+  --muted: oklch(20% 0.005 280);
+  --muted-foreground: oklch(68% 0.01 280);
+  --border: oklch(26% 0.005 280);
+  --input: oklch(26% 0.005 280);
+  --ring: oklch(68% 0.13 262);
+  --primary: oklch(68% 0.13 262);
   --primary-foreground: oklch(13% 0.01 257);
-  --secondary: oklch(24% 0.01 257);
+  --secondary: oklch(22% 0.005 280);
   --secondary-foreground: oklch(96% 0.005 257);
-  --accent: oklch(28% 0.02 250);
+  --accent: oklch(26% 0.01 280);
   --accent-foreground: oklch(96% 0.005 257);
   --success: oklch(72% 0.12 142);
   --success-foreground: oklch(13% 0.01 257);
@@ -68,7 +67,6 @@ html.dark {
   --destructive-foreground: oklch(13% 0.01 257);
   --destructive-strong: oklch(82% 0.18 25);
   --shadow-card: none;
-  --bg-gradient-bottom: oklch(11% 0.01 257);
 }
 
 @theme {
@@ -113,8 +111,7 @@ body,
 }
 
 body {
-  background: linear-gradient(180deg, var(--background) 0%, var(--bg-gradient-bottom) 100%);
-  background-attachment: fixed;
+  background: var(--background);
   font-family: var(--font-sans);
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
