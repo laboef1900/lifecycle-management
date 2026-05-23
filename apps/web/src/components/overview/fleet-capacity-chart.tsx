@@ -56,7 +56,7 @@ export function FleetCapacityChart({
     <div className="w-full">
       <div className="h-[320px] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={enrichedRows} margin={{ top: 12, right: 16, bottom: 0, left: 8 }}>
+          <AreaChart data={enrichedRows} margin={{ top: 12, right: 56, bottom: 0, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
             <XAxis
               dataKey="month"

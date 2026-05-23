@@ -53,7 +53,7 @@ export function ForecastChart({ forecast }: ForecastChartProps): React.JSX.Eleme
     <Card className="p-4">
       <div className="h-[320px] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 12, right: 16, bottom: 0, left: 8 }}>
+          <ComposedChart data={data} margin={{ top: 12, right: 56, bottom: 0, left: 8 }}>
             <defs>
               <linearGradient id="forecast-consumption" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={colors.consumption} stopOpacity={0.45} />
