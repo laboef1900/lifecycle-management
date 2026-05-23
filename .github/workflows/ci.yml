@@ -33,6 +33,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Generate the Prisma client so its type stubs (Prisma.Decimal, model
+      # types, …) exist before any typecheck / test step that imports them.
+      - name: Generate Prisma client
+        run: pnpm --filter @lcm/api exec prisma generate
+
       - name: Lint
         run: pnpm lint
 
