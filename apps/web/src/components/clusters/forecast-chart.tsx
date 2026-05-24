@@ -103,7 +103,7 @@ export function ForecastChart({
                 const utilization = capacity > 0 ? (consumption / capacity) * 100 : 0;
                 const monthEvents = eventsByMonth.get(label) ?? [];
                 return (
-                  <div className="rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md">
+                  <div className="rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
                     <div className="font-medium">{formatMonth(label)}</div>
                     <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
                       <dt className="text-fg-muted">Consumption</dt>

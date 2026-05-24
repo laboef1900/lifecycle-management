@@ -93,7 +93,7 @@ export function UtilizationPanel({ forecast }: UtilizationPanelProps): React.JSX
                   }
                   const pct = payload[0]?.value as number;
                   return (
-                    <div className="rounded-md border border-border bg-popover p-2 text-xs text-popover-foreground shadow-md">
+                    <div className="rounded-md border border-border bg-popover p-2 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
                       <div className="font-medium">{formatMonth(label)}</div>
                       <div className="font-mono tabular-nums text-fg-muted">{pct.toFixed(1)}%</div>
                     </div>
