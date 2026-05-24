@@ -60,4 +60,9 @@ describe('<UtilizationGauge>', () => {
     const svg = container.querySelector('svg');
     expect(svg).toHaveAttribute('width', '28');
   });
+
+  it('uses custom warn/crit thresholds when provided', () => {
+    render(<UtilizationGauge value={0.65} warn={0.6} crit={0.8} />);
+    expect(screen.getByRole('img', { name: /, status: warning/i })).toBeInTheDocument();
+  });
 });

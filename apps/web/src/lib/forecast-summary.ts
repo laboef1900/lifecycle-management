@@ -1,10 +1,11 @@
 import type { ForecastMonthPoint } from '@lcm/shared';
+import { SYSTEM_DEFAULTS } from '@lcm/shared';
 
-export const WARN_THRESHOLD = 0.7;
-export const CRIT_THRESHOLD = 0.9;
+export const WARN_THRESHOLD = SYSTEM_DEFAULTS.warn;
+export const CRIT_THRESHOLD = SYSTEM_DEFAULTS.crit;
 
 export interface RunwaySummary {
-  /** Index of first month at or above WARN_THRESHOLD, else null. */
+  /** Index of first month at or above the warn threshold, else null. */
   months: number | null;
   /** 'warn' | 'crit' when months === 0 (the breach is the current month); false otherwise. */
   alreadyBreached: 'warn' | 'crit' | false;
@@ -15,30 +16,27 @@ const NO_BREACH: RunwaySummary = Object.freeze({
   alreadyBreached: false,
 }) as RunwaySummary;
 
-export function runwayToWarn(points: ForecastMonthPoint[]): RunwaySummary {
+export function runwayToWarn(
+  points: ForecastMonthPoint[],
+  thresholds: { warn: number; crit: number } = SYSTEM_DEFAULTS,
+): RunwaySummary {
+  const { warn, crit } = thresholds;
   for (let i = 0; i < points.length; i++) {
     const p = points[i]!;
     if (p.capacity <= 0) continue;
-    // Recompute rather than trusting p.utilization to avoid any server-side rounding skew.
     const u = p.consumption / p.capacity;
-    if (u >= WARN_THRESHOLD) {
-      const breached = i === 0 ? (u >= CRIT_THRESHOLD ? 'crit' : 'warn') : false;
+    if (u >= warn) {
+      const breached = i === 0 ? (u >= crit ? 'crit' : 'warn') : false;
       return { months: i, alreadyBreached: breached };
     }
   }
   return NO_BREACH;
 }
 
-/**
- * Aggregates per-month consumption and capacity across the supplied series,
- * then applies {@link runwayToWarn} to the merged sequence.
- *
- * Months that appear in some series but not others are aggregated using only
- * the data available — partial coverage is treated as "fleet utilization for
- * the clusters reporting that month". Callers that need apples-to-apples
- * comparison across the horizon must pre-align the series themselves.
- */
-export function fleetRunwayToWarn(series: ForecastMonthPoint[][]): RunwaySummary {
+export function fleetRunwayToWarn(
+  series: ForecastMonthPoint[][],
+  thresholds: { warn: number; crit: number } = SYSTEM_DEFAULTS,
+): RunwaySummary {
   if (series.length === 0) return NO_BREACH;
   const byMonth = new Map<string, { consumption: number; capacity: number }>();
   for (const points of series) {
@@ -57,22 +55,18 @@ export function fleetRunwayToWarn(series: ForecastMonthPoint[][]): RunwaySummary
       capacity: agg.capacity,
       utilization: agg.capacity > 0 ? agg.consumption / agg.capacity : 0,
     }));
-  return runwayToWarn(merged);
+  return runwayToWarn(merged, thresholds);
 }
 
 export type UtilStatus = 'ok' | 'warn' | 'crit';
 
-/** Maps a utilization ratio (0..1) to the KpiTile status band. */
-export function utilStatus(utilization: number): UtilStatus {
-  if (utilization >= CRIT_THRESHOLD) return 'crit';
-  if (utilization >= WARN_THRESHOLD) return 'warn';
+export function utilStatus(
+  utilization: number,
+  thresholds: { warn: number; crit: number } = SYSTEM_DEFAULTS,
+): UtilStatus {
+  if (utilization >= thresholds.crit) return 'crit';
+  if (utilization >= thresholds.warn) return 'warn';
   return 'ok';
 }
 
-/**
- * KPI tile status. Extends `UtilStatus` with a presentational `'attention'`
- * marker that callers apply to the single headline metric per view (e.g. the
- * fleet runway tile on the overview page). `utilStatus()` never returns
- * 'attention' — it is chosen by the caller, not derived from a threshold.
- */
 export type KpiStatus = UtilStatus | 'attention';

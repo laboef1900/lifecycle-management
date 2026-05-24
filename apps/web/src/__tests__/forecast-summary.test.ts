@@ -118,3 +118,25 @@ describe('KpiStatus type', () => {
     expect(fromUtil).toBe('warn');
   });
 });
+
+describe('utilStatus with custom thresholds', () => {
+  it('uses provided warn/crit instead of defaults', () => {
+    expect(utilStatus(0.65, { warn: 0.6, crit: 0.8 })).toBe('warn');
+    expect(utilStatus(0.55, { warn: 0.6, crit: 0.8 })).toBe('ok');
+    expect(utilStatus(0.85, { warn: 0.6, crit: 0.8 })).toBe('crit');
+  });
+});
+
+describe('runwayToWarn with custom thresholds', () => {
+  it('uses provided warn threshold', () => {
+    const points = [
+      { month: '2026-01', consumption: 50, capacity: 100, utilization: 0.5 },
+      { month: '2026-02', consumption: 65, capacity: 100, utilization: 0.65 },
+      { month: '2026-03', consumption: 80, capacity: 100, utilization: 0.8 },
+    ];
+    expect(runwayToWarn(points, { warn: 0.6, crit: 0.8 })).toEqual({
+      months: 1,
+      alreadyBreached: false,
+    });
+  });
+});
