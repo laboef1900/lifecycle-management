@@ -51,14 +51,14 @@ function MobileSidebarSheet(): React.JSX.Element {
 
 function Header(): React.JSX.Element {
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-card/70 px-4 backdrop-blur-xl sm:gap-4">
+    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4 sm:gap-4">
       <MobileNavTrigger />
       <Link to="/" className="flex items-center gap-2.5 font-semibold">
         <span
           aria-hidden
-          className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70 shadow-[var(--shadow-card)]"
+          className="flex h-7 w-7 items-center justify-center rounded-[var(--radius)] bg-accent"
         >
-          <Activity className="h-4 w-4 text-primary-foreground" />
+          <Activity className="h-4 w-4 text-accent-foreground" />
         </span>
         <span className="hidden sm:inline">Capacity Forecast</span>
       </Link>

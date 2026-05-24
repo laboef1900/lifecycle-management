@@ -41,7 +41,7 @@ export function SidebarNav({ collapsed = false, onNavigate }: SidebarNavProps): 
                 collapsed && 'justify-center px-0',
               )}
               activeProps={{
-                className: 'bg-muted text-foreground shadow-[inset_3px_0_0_0_var(--primary)]',
+                className: 'text-foreground border-l-2 border-l-accent bg-card-hover',
               }}
               activeOptions={{ exact: item.exact }}
               title={collapsed ? item.label : undefined}
@@ -72,7 +72,7 @@ export function Sidebar(): React.JSX.Element {
   return (
     <aside
       className={cn(
-        'hidden shrink-0 flex-col border-r border-border bg-card/60 backdrop-blur-xl transition-[width] duration-150 ease-out lg:flex',
+        'hidden shrink-0 flex-col border-r border-border bg-background transition-[width] duration-150 ease-out lg:flex',
         collapsed ? 'w-16' : 'w-60',
       )}
       aria-label="Primary navigation"
