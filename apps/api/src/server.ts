@@ -15,6 +15,7 @@ import { eventRoutes } from './routes/events.js';
 import { forecastRoutes } from './routes/forecast.js';
 import { healthRoutes } from './routes/health.js';
 import { hostRoutes } from './routes/hosts.js';
+import { settingsRoutes } from './routes/settings.js';
 
 export interface BuildServerOptions {
   env: Env;
@@ -42,6 +43,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(applicationRoutes, { prefix: '/api' });
   await server.register(eventRoutes, { prefix: '/api' });
   await server.register(forecastRoutes, { prefix: '/api' });
+  await server.register(settingsRoutes, { prefix: '/api' });
 
   return server;
 }
