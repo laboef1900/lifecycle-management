@@ -258,3 +258,152 @@ describe('DELETE /api/clusters/:id', () => {
     expect(response.statusCode).toBe(404);
   });
 });
+
+describe('POST /api/clusters/:id/archive', () => {
+  it('sets archivedAt and returns the cluster', async () => {
+    const createRes = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name: uniqueName('archive'),
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    const { id } = createRes.json() as { id: string };
+
+    const archiveRes = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${id}/archive`,
+    });
+    expect(archiveRes.statusCode).toBe(200);
+    const body = archiveRes.json() as { archivedAt: string | null };
+    expect(body.archivedAt).not.toBeNull();
+    expect(new Date(body.archivedAt!).getTime()).toBeGreaterThan(0);
+  });
+
+  it('is idempotent — re-archiving keeps the original timestamp', async () => {
+    const createRes = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name: uniqueName('archive-idem'),
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    const { id } = createRes.json() as { id: string };
+
+    const first = await server.inject({ method: 'POST', url: `/api/clusters/${id}/archive` });
+    const firstBody = first.json() as { archivedAt: string };
+    const second = await server.inject({ method: 'POST', url: `/api/clusters/${id}/archive` });
+    const secondBody = second.json() as { archivedAt: string };
+    expect(secondBody.archivedAt).toBe(firstBody.archivedAt);
+  });
+
+  it('returns 404 for unknown cluster', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/clusters/clbogusclubogusclubogus0/archive',
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('POST /api/clusters/:id/unarchive', () => {
+  it('clears archivedAt', async () => {
+    const createRes = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name: uniqueName('unarchive'),
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    const { id } = createRes.json() as { id: string };
+
+    await server.inject({ method: 'POST', url: `/api/clusters/${id}/archive` });
+    const res = await server.inject({ method: 'POST', url: `/api/clusters/${id}/unarchive` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { archivedAt: string | null };
+    expect(body.archivedAt).toBeNull();
+  });
+});
+
+describe('GET /api/clusters (archived filter)', () => {
+  it('hides archived clusters by default', async () => {
+    const createRes = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name: uniqueName('hidden-by-default'),
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    const { id } = createRes.json() as { id: string };
+    await server.inject({ method: 'POST', url: `/api/clusters/${id}/archive` });
+
+    const listRes = await server.inject({ method: 'GET', url: '/api/clusters' });
+    const body = listRes.json() as Array<{ id: string }>;
+    expect(body.some((c) => c.id === id)).toBe(false);
+  });
+
+  it('returns archived clusters when includeArchived=true', async () => {
+    const createRes = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name: uniqueName('shown-with-flag'),
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    const { id } = createRes.json() as { id: string };
+    await server.inject({ method: 'POST', url: `/api/clusters/${id}/archive` });
+
+    const listRes = await server.inject({
+      method: 'GET',
+      url: '/api/clusters?includeArchived=true',
+    });
+    const body = listRes.json() as Array<{ id: string; archivedAt: string | null }>;
+    const found = body.find((c) => c.id === id);
+    expect(found).toBeDefined();
+    expect(found!.archivedAt).not.toBeNull();
+  });
+});
+
+describe('GET /api/clusters/:id (archived)', () => {
+  it('returns archived clusters from the detail endpoint', async () => {
+    const createRes = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name: uniqueName('detail-archived'),
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    const { id } = createRes.json() as { id: string };
+    await server.inject({ method: 'POST', url: `/api/clusters/${id}/archive` });
+
+    const detailRes = await server.inject({ method: 'GET', url: `/api/clusters/${id}` });
+    expect(detailRes.statusCode).toBe(200);
+    const body = detailRes.json() as { id: string; archivedAt: string | null };
+    expect(body.id).toBe(id);
+    expect(body.archivedAt).not.toBeNull();
+  });
+});
