@@ -62,15 +62,18 @@ function ClusterDetailPage(): React.JSX.Element {
         ) : clusterQuery.isError || !clusterQuery.data ? (
           <ErrorCard message={clusterQuery.error?.message ?? 'Cluster not found'} />
         ) : (
-          <div>
-            <h1 className="text-[1.625rem] font-semibold tracking-tight [overflow-wrap:anywhere]">
+          <header>
+            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+              Cluster
+            </p>
+            <h1 className="mt-1 text-[26px] font-semibold leading-[1.1] tracking-[-0.02em] [overflow-wrap:anywhere]">
               {clusterQuery.data.name}
             </h1>
-            <p className="text-sm text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               Baseline {clusterQuery.data.baselineDate}
               {clusterQuery.data.description ? ` · ${clusterQuery.data.description}` : null}
             </p>
-          </div>
+          </header>
         )}
       </div>
 

@@ -29,7 +29,7 @@ export function WindowControls({ value, onChange }: WindowControlsProps): React.
           className={cn(
             'rounded px-3 py-1 transition-colors',
             value === option.value
-              ? 'bg-primary text-primary-foreground'
+              ? 'bg-accent text-accent-foreground'
               : 'text-muted-foreground hover:text-foreground',
           )}
         >
