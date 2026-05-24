@@ -25,8 +25,21 @@ model Tenant {
   applications   Application[]
   appAllocations ApplicationMetricAllocation[]
   events         Event[]
+  settings       TenantSettings?
 
   @@map("tenants")
+}
+
+model TenantSettings {
+  tenantId      String   @id @map("tenant_id")
+  warnThreshold Decimal  @default(0.70) @map("warn_threshold") @db.Decimal(4, 3)
+  critThreshold Decimal  @default(0.90) @map("crit_threshold") @db.Decimal(4, 3)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_settings")
 }
 
 model MetricType {
@@ -59,9 +72,21 @@ model Cluster {
   hosts        Host[]
   applications Application[]
   events       Event[]
+  settings     ClusterSettings?
 
   @@unique([tenantId, name], map: "clusters_tenant_name_unique")
   @@map("clusters")
+}
+
+model ClusterSettings {
+  clusterId     String   @id @map("cluster_id")
+  warnThreshold Decimal? @map("warn_threshold") @db.Decimal(4, 3)
+  critThreshold Decimal? @map("crit_threshold") @db.Decimal(4, 3)
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  cluster       Cluster  @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+
+  @@map("cluster_settings")
 }
 
 model ClusterMetricBaseline {

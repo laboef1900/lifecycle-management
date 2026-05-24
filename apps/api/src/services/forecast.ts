@@ -1,4 +1,4 @@
-import type { EventCategory } from '@lcm/shared';
+import type { EffectiveThresholds, EventCategory } from '@lcm/shared';
 
 import { formatDate } from '../lib/dates.js';
 
@@ -72,13 +72,16 @@ export interface ForecastResult {
   events: ForecastEventOutput[];
   hosts: ForecastEntityContribution[];
   applications: ForecastEntityContribution[];
+  effectiveThresholds: EffectiveThresholds;
 }
+
+export type ComputedForecast = Omit<ForecastResult, 'effectiveThresholds'>;
 
 export function computeForecast(
   input: ForecastInput,
   fromMonth: Date,
   toMonth: Date,
-): ForecastResult {
+): ComputedForecast {
   if (toMonth < fromMonth) {
     throw new Error('toMonth must be on or after fromMonth');
   }

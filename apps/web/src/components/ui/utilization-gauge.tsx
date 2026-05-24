@@ -8,6 +8,8 @@ interface UtilizationGaugeProps extends React.SVGAttributes<SVGSVGElement> {
   /** 0..1 ratio (consumption / capacity), or undefined when there is no data. */
   value: number | undefined;
   size?: GaugeSize;
+  warn?: number;
+  crit?: number;
 }
 
 const DIMENSIONS: Record<GaugeSize, { px: number; stroke: number; font: string }> = {
@@ -16,9 +18,9 @@ const DIMENSIONS: Record<GaugeSize, { px: number; stroke: number; font: string }
   lg: { px: 96, stroke: 9, font: 'text-base' },
 };
 
-function bandOf(value: number): 'ok' | 'warning' | 'critical' {
-  if (value >= 0.9) return 'critical';
-  if (value >= 0.7) return 'warning';
+function bandOf(value: number, warn: number, crit: number): 'ok' | 'warning' | 'critical' {
+  if (value >= crit) return 'critical';
+  if (value >= warn) return 'warning';
   return 'ok';
 }
 
@@ -35,6 +37,8 @@ const FILL: Record<'ok' | 'warning' | 'critical', string> = {
 export function UtilizationGauge({
   value,
   size = 'md',
+  warn = 0.7,
+  crit = 0.9,
   className,
   ...props
 }: UtilizationGaugeProps): React.JSX.Element {
@@ -46,7 +50,7 @@ export function UtilizationGauge({
 
   const hasValue = typeof value === 'number' && Number.isFinite(value);
   const clamped = hasValue ? Math.min(Math.max(value, 0), 1) : 0;
-  const band = hasValue ? bandOf(clamped) : null;
+  const band = hasValue ? bandOf(clamped, warn, crit) : null;
   const nextBand = band ? nextBandOf(band) : null;
 
   const label = hasValue ? `${(clamped * 100).toFixed(1)}%, status: ${band}` : '—, status: empty';

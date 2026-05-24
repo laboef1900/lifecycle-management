@@ -27,6 +27,7 @@ function makeForecast(rows: Array<[string, number, number]>): ForecastResponse {
       capacity,
       utilization: capacity > 0 ? consumption / capacity : 0,
     })),
+    effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'tenant' },
   };
 }
 

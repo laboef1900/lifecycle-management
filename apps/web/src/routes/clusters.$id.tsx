@@ -8,6 +8,7 @@ import { ApplicationsTab } from '@/components/clusters/applications-tab';
 import { EventsTab } from '@/components/clusters/events-tab';
 import { ForecastChart } from '@/components/clusters/forecast-chart';
 import { HostsTab } from '@/components/clusters/hosts-tab';
+import { SettingsTab } from '@/components/clusters/settings-tab';
 import {
   WindowControls,
   resolveWindow,
@@ -105,6 +106,7 @@ function ClusterDetailPage(): React.JSX.Element {
               <TabsTrigger value="hosts">Hosts</TabsTrigger>
               <TabsTrigger value="applications">Applications</TabsTrigger>
               <TabsTrigger value="events">Events</TabsTrigger>
+              <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>
             <TabsContent value="hosts">
               <HostsTab clusterId={id} />
@@ -114,6 +116,9 @@ function ClusterDetailPage(): React.JSX.Element {
             </TabsContent>
             <TabsContent value="events">
               <EventsTab clusterId={id} />
+            </TabsContent>
+            <TabsContent value="settings">
+              <SettingsTab clusterId={id} />
             </TabsContent>
           </Tabs>
         </>
@@ -130,11 +135,16 @@ function ClusterDetailKpiStrip({
   metric: NonNullable<ClusterResponse['metrics'][number]>;
 }): React.JSX.Element {
   const headroom = Math.max(0, metric.currentCapacity - metric.currentConsumption);
-  const summary = runwayToWarn(forecast.months);
+  const summary = runwayToWarn(forecast.months, forecast.effectiveThresholds);
   return (
     <div data-testid="kpi-strip" className="grid grid-cols-12 gap-2">
       <Card className="col-span-12 flex items-center gap-4 p-3.5 sm:col-span-4">
-        <UtilizationGauge value={metric.utilization} size="md" />
+        <UtilizationGauge
+          value={metric.utilization}
+          size="md"
+          warn={forecast.effectiveThresholds.warn}
+          crit={forecast.effectiveThresholds.crit}
+        />
         <div>
           <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
             Current utilization
@@ -149,7 +159,7 @@ function ClusterDetailKpiStrip({
         label="Headroom"
         value={`${numberFormat.format(Math.round(headroom))} GB`}
         caption={`of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`}
-        status={utilStatus(metric.utilization)}
+        status={utilStatus(metric.utilization, forecast.effectiveThresholds)}
       />
       <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-4">
         <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">Runway</p>

@@ -2,10 +2,13 @@ import type {
   ApplicationResponse,
   ClusterCreateInput,
   ClusterResponse,
+  ClusterSettingsInput,
+  ClusterSettingsResponse,
   EventCategory,
   EventResponse,
   ForecastResponse,
   HostResponse,
+  TenantSettings,
 } from '@lcm/shared';
 
 export interface ApiErrorBody {
@@ -35,13 +38,20 @@ export interface HealthResponse {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Only advertise a JSON body when we actually send one — Fastify rejects
+  // requests that declare content-type: application/json but have an empty
+  // body (e.g. a bodyless DELETE).
+  const hasBody = init?.body !== undefined && init.body !== null;
+  const headers: Record<string, string> = {
+    accept: 'application/json',
+    ...((init?.headers ?? {}) as Record<string, string>),
+  };
+  if (hasBody && !('content-type' in headers) && !('Content-Type' in headers)) {
+    headers['content-type'] = 'application/json';
+  }
   const response = await fetch(path, {
     ...init,
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      ...init?.headers,
-    },
+    headers,
   });
 
   if (response.status === 204) {
@@ -226,5 +236,27 @@ export const api = {
         body: JSON.stringify(input),
       }),
     delete: (id: string) => request<void>(`/api/events/${id}`, { method: 'DELETE' }),
+  },
+  settings: {
+    tenant: {
+      get: () => request<TenantSettings>('/api/settings/tenant'),
+      update: (input: TenantSettings) =>
+        request<TenantSettings>('/api/settings/tenant', {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+    },
+    cluster: {
+      get: (id: string) => request<ClusterSettingsResponse>(`/api/clusters/${id}/settings`),
+      update: (id: string, input: ClusterSettingsInput) =>
+        request<ClusterSettingsResponse>(`/api/clusters/${id}/settings`, {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+      reset: (id: string) =>
+        request<ClusterSettingsResponse>(`/api/clusters/${id}/settings`, {
+          method: 'DELETE',
+        }),
+    },
   },
 };

@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 
 import { useChartColors } from '@/lib/use-chart-colors';
+import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 import { cn } from '@/lib/utils';
 
 interface FleetMonthRow {
@@ -44,6 +45,7 @@ export function FleetCapacityChart({
   compact = false,
 }: FleetCapacityChartProps): React.JSX.Element {
   const colors = useChartColors();
+  const effectiveThresholds = useEffectiveThresholds();
   const [focusedCluster, setFocusedCluster] = React.useState<string | null>(null);
 
   const enrichedRows = fleetMonths.map((row) => {
@@ -194,12 +196,12 @@ export function FleetCapacityChart({
             ) : null}
             {maxCeiling > 0 ? (
               <ReferenceLine
-                y={maxCeiling * 0.7}
+                y={maxCeiling * effectiveThresholds.warn}
                 stroke={colors.utilizationWarn}
                 strokeDasharray="2 2"
                 {...(!compact && {
                   label: {
-                    value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
+                    value: `Warn ${Math.round(effectiveThresholds.warn * 100)}%`,
                     position: 'right' as const,
                     fontSize: 10,
                     fill: colors.utilizationWarn,
@@ -209,12 +211,12 @@ export function FleetCapacityChart({
             ) : null}
             {maxCeiling > 0 ? (
               <ReferenceLine
-                y={maxCeiling * 0.9}
+                y={maxCeiling * effectiveThresholds.crit}
                 stroke={colors.utilizationCrit}
                 strokeDasharray="2 2"
                 {...(!compact && {
                   label: {
-                    value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
+                    value: `Crit ${Math.round(effectiveThresholds.crit * 100)}%`,
                     position: 'right' as const,
                     fontSize: 10,
                     fill: colors.utilizationCrit,
