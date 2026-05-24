@@ -62,15 +62,18 @@ function ClusterDetailPage(): React.JSX.Element {
         ) : clusterQuery.isError || !clusterQuery.data ? (
           <ErrorCard message={clusterQuery.error?.message ?? 'Cluster not found'} />
         ) : (
-          <div>
-            <h1 className="text-[1.625rem] font-semibold tracking-tight [overflow-wrap:anywhere]">
+          <header>
+            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+              Cluster
+            </p>
+            <h1 className="mt-1 text-[26px] font-semibold leading-[1.1] tracking-[-0.02em] [overflow-wrap:anywhere]">
               {clusterQuery.data.name}
             </h1>
-            <p className="text-sm text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               Baseline {clusterQuery.data.baselineDate}
               {clusterQuery.data.description ? ` · ${clusterQuery.data.description}` : null}
             </p>
-          </div>
+          </header>
         )}
       </div>
 
@@ -133,14 +136,14 @@ function ClusterDetailKpiStrip({
   const headroom = Math.max(0, metric.currentCapacity - metric.currentConsumption);
   const summary = runwayToWarn(forecast.months);
   return (
-    <div className="grid grid-cols-12 gap-4">
-      <Card className="col-span-12 flex items-center gap-4 p-5 sm:col-span-4">
+    <div data-testid="kpi-strip" className="grid grid-cols-12 gap-2">
+      <Card className="col-span-12 flex items-center gap-4 p-3.5 sm:col-span-4">
         <UtilizationGauge value={metric.utilization} size="md" />
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
             Current utilization
           </p>
-          <p className="mt-1 font-mono text-sm tabular-nums text-muted-foreground">
+          <p className="mt-1.5 font-mono text-[11px] tabular-nums text-fg-muted">
             {numberFormat.format(Math.round(metric.currentConsumption))} GB used
           </p>
         </div>
@@ -152,11 +155,9 @@ function ClusterDetailKpiStrip({
         caption={`of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`}
         status={utilStatus(metric.utilization)}
       />
-      <Card className="col-span-12 flex flex-col justify-between p-5 sm:col-span-4">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Runway
-        </p>
-        <div className="mt-1">
+      <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-4">
+        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">Runway</p>
+        <div className="mt-1.5">
           <RunwayPill summary={summary} horizonMonths={forecast.months.length} />
         </div>
       </Card>

@@ -103,22 +103,22 @@ export function ForecastChart({
                 const utilization = capacity > 0 ? (consumption / capacity) * 100 : 0;
                 const monthEvents = eventsByMonth.get(label) ?? [];
                 return (
-                  <div className="rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md">
+                  <div className="rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
                     <div className="font-medium">{formatMonth(label)}</div>
                     <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
-                      <dt className="text-muted-foreground">Consumption</dt>
+                      <dt className="text-fg-muted">Consumption</dt>
                       <dd className="text-right font-mono tabular-nums">
                         {numberFormat.format(consumption)} GB
                       </dd>
-                      <dt className="text-muted-foreground">Capacity</dt>
+                      <dt className="text-fg-muted">Capacity</dt>
                       <dd className="text-right font-mono tabular-nums">
                         {numberFormat.format(capacity)} GB
                       </dd>
-                      <dt className="text-muted-foreground">Headroom</dt>
+                      <dt className="text-fg-muted">Headroom</dt>
                       <dd className="text-right font-mono tabular-nums">
                         {numberFormat.format(headroom)} GB
                       </dd>
-                      <dt className="text-muted-foreground">Utilization</dt>
+                      <dt className="text-fg-muted">Utilization</dt>
                       <dd className="text-right font-mono tabular-nums">
                         {utilization.toFixed(1)}%
                       </dd>
@@ -133,7 +133,7 @@ export function ForecastChart({
                               style={{ background: colors.event[event.category] }}
                             />
                             <span className="flex-1 truncate">{event.title}</span>
-                            <span className="font-mono tabular-nums text-muted-foreground">
+                            <span className="font-mono tabular-nums text-fg-muted">
                               {formatDelta(event.consumptionDelta, event.capacityDelta)}
                             </span>
                           </li>
@@ -254,7 +254,7 @@ interface ChartLegendProps {
 function ChartLegend({ events, colors }: ChartLegendProps): React.JSX.Element {
   const categories = Array.from(new Set(events.map((e) => e.category)));
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+    <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
       <LegendItem swatch={colors.consumption} label="Consumption" />
       <LegendItem swatch={colors.capacity} label="Capacity ceiling" dashed />
       <LegendItem swatch={colors.capacity} label="Headroom" dashed faint />

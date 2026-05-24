@@ -62,7 +62,7 @@ export function Breadcrumbs(): React.JSX.Element | null {
         return (
           <Fragment key={`${crumb.label}-${index}`}>
             {index > 0 && (
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" aria-hidden />
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-fg-muted/60" aria-hidden />
             )}
             {crumb.pending ? (
               <span
@@ -70,14 +70,11 @@ export function Breadcrumbs(): React.JSX.Element | null {
                 className="inline-block h-4 w-24 animate-pulse rounded bg-muted align-middle"
               />
             ) : crumb.to && !isLast ? (
-              <Link
-                to={crumb.to}
-                className="text-muted-foreground transition-colors hover:text-foreground"
-              >
+              <Link to={crumb.to} className="text-fg-muted transition-colors hover:text-foreground">
                 {crumb.label}
               </Link>
             ) : (
-              <span className={isLast ? 'font-medium text-foreground' : 'text-muted-foreground'}>
+              <span className={isLast ? 'font-medium text-foreground' : 'text-fg-muted'}>
                 {crumb.label}
               </span>
             )}

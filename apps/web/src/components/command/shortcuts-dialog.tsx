@@ -31,7 +31,7 @@ export function ShortcutsDialog(): React.JSX.Element {
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-background/70 backdrop-blur-sm" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-background/70" />
         <Dialog.Content className="fixed left-[50%] top-[50%] z-50 w-[92vw] max-w-md translate-x-[-50%] translate-y-[-50%] rounded-2xl border border-border bg-popover p-5 text-popover-foreground shadow-xl">
           <Dialog.Title className="text-base font-semibold">Keyboard shortcuts</Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-muted-foreground">

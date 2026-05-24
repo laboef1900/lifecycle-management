@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 
 import { useChartColors } from '@/lib/use-chart-colors';
+import { cn } from '@/lib/utils';
 
 interface FleetMonthRow {
   month: string;
@@ -43,6 +44,7 @@ export function FleetCapacityChart({
   compact = false,
 }: FleetCapacityChartProps): React.JSX.Element {
   const colors = useChartColors();
+  const [focusedCluster, setFocusedCluster] = React.useState<string | null>(null);
 
   const enrichedRows = fleetMonths.map((row) => {
     const consumed = clusters.reduce((sum, c) => {
@@ -97,27 +99,40 @@ export function FleetCapacityChart({
                 });
                 const total = clusterRows.reduce((sum, r) => sum + r.value, 0);
                 return (
-                  <div className="rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md">
+                  <div className="rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
                     <div className="font-medium">{formatMonth(label)}</div>
                     <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
-                      {clusterRows.map((r, idx) => (
-                        <React.Fragment key={r.clusterId}>
-                          <dt className="flex items-center gap-1.5 text-muted-foreground">
-                            <span
-                              aria-hidden
-                              className="h-2 w-2 rounded-full"
-                              style={{
-                                background:
-                                  colors.clusterPalette[idx % colors.clusterPalette.length],
-                              }}
-                            />
-                            {r.clusterName}
-                          </dt>
-                          <dd className="text-right font-mono tabular-nums">
-                            {numberFormat.format(r.value)}
-                          </dd>
-                        </React.Fragment>
-                      ))}
+                      {clusterRows.map((r, idx) => {
+                        const isFocused = focusedCluster === r.clusterId;
+                        const swatchColor = isFocused
+                          ? colors.consumption
+                          : colors.clusterPalette[idx % colors.clusterPalette.length];
+                        return (
+                          <React.Fragment key={r.clusterId}>
+                            <dt
+                              className={cn(
+                                'flex items-center gap-1.5 text-muted-foreground',
+                                isFocused && 'text-foreground',
+                              )}
+                            >
+                              <span
+                                aria-hidden
+                                className="h-2 w-2 rounded-full"
+                                style={{ background: swatchColor }}
+                              />
+                              {r.clusterName}
+                            </dt>
+                            <dd
+                              className={cn(
+                                'text-right font-mono tabular-nums',
+                                isFocused && 'font-semibold text-foreground',
+                              )}
+                            >
+                              {numberFormat.format(r.value)}
+                            </dd>
+                          </React.Fragment>
+                        );
+                      })}
                       <dt className="text-muted-foreground">Headroom</dt>
                       <dd className="text-right font-mono tabular-nums">
                         {numberFormat.format(
@@ -140,19 +155,29 @@ export function FleetCapacityChart({
                 );
               }}
             />
-            {clusters.map((c, idx) => (
-              <Area
-                key={c.clusterId}
-                type="monotone"
-                stackId="fleet"
-                dataKey={c.clusterId}
-                name={c.clusterName}
-                stroke={colors.clusterPalette[idx % colors.clusterPalette.length]}
-                fill={colors.clusterPalette[idx % colors.clusterPalette.length]}
-                fillOpacity={0.6}
-                isAnimationActive={false}
-              />
-            ))}
+            {clusters.map((c, idx) => {
+              const isFocused = focusedCluster === c.clusterId;
+              const isDimmed = focusedCluster !== null && !isFocused;
+              const baseColor = colors.clusterPalette[idx % colors.clusterPalette.length];
+              const stroke = isFocused ? colors.consumption : baseColor;
+              const fill = isFocused ? colors.consumption : baseColor;
+              return (
+                <Area
+                  key={c.clusterId}
+                  type="monotone"
+                  stackId="fleet"
+                  dataKey={c.clusterId}
+                  name={c.clusterName}
+                  stroke={stroke}
+                  strokeWidth={isFocused ? 2.5 : 1.5}
+                  fill={fill}
+                  fillOpacity={isFocused ? 0.75 : isDimmed ? 0.25 : 0.6}
+                  isAnimationActive={false}
+                  onMouseEnter={() => setFocusedCluster(c.clusterId)}
+                  onMouseLeave={() => setFocusedCluster(null)}
+                />
+              );
+            })}
             {maxCeiling > 0 ? (
               <Area
                 type="monotone"
@@ -210,25 +235,54 @@ export function FleetCapacityChart({
           </AreaChart>
         </ResponsiveContainer>
       </div>
-      <FleetChartLegend clusters={clusters} />
+      <FleetChartLegend
+        clusters={clusters}
+        focusedCluster={focusedCluster}
+        onFocus={setFocusedCluster}
+      />
     </div>
   );
 }
 
-function FleetChartLegend({ clusters }: { clusters: ClusterMeta[] }): React.JSX.Element {
+function FleetChartLegend({
+  clusters,
+  focusedCluster,
+  onFocus,
+}: {
+  clusters: ClusterMeta[];
+  focusedCluster: string | null;
+  onFocus: (id: string | null) => void;
+}): React.JSX.Element {
   const colors = useChartColors();
   return (
     <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-      {clusters.map((c, idx) => (
-        <span key={c.clusterId} className="flex items-center gap-1.5">
+      {clusters.map((c, idx) => {
+        const isFocused = focusedCluster === c.clusterId;
+        const isDimmed = focusedCluster !== null && !isFocused;
+        const baseColor = colors.clusterPalette[idx % colors.clusterPalette.length];
+        const swatchColor = isFocused ? colors.consumption : baseColor;
+        return (
           <span
-            aria-hidden
-            className="h-2 w-2 rounded-full"
-            style={{ background: colors.clusterPalette[idx % colors.clusterPalette.length] }}
-          />
-          <span>{c.clusterName}</span>
-        </span>
-      ))}
+            key={c.clusterId}
+            className={cn(
+              'flex cursor-default items-center gap-1.5 transition-opacity',
+              isDimmed && 'opacity-50',
+            )}
+            onMouseEnter={() => onFocus(c.clusterId)}
+            onMouseLeave={() => onFocus(null)}
+            onFocus={() => onFocus(c.clusterId)}
+            onBlur={() => onFocus(null)}
+            tabIndex={0}
+          >
+            <span
+              aria-hidden
+              className="h-2 w-2 rounded-full"
+              style={{ background: swatchColor }}
+            />
+            <span className={cn(isFocused && 'text-foreground')}>{c.clusterName}</span>
+          </span>
+        );
+      })}
       <span aria-hidden className="mx-1">
         ·
       </span>

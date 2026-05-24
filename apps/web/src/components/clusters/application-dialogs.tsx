@@ -187,7 +187,7 @@ export function CreateApplicationDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Adding…' : 'Add application'}
             </Button>
           </DialogFooter>
@@ -274,7 +274,7 @@ export function EditApplicationDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Saving…' : 'Save'}
             </Button>
           </DialogFooter>
@@ -372,7 +372,7 @@ export function ResizeApplicationDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Saving…' : 'Add resize'}
             </Button>
           </DialogFooter>
@@ -440,7 +440,7 @@ export function EndApplicationDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Saving…' : 'Save'}
             </Button>
           </DialogFooter>

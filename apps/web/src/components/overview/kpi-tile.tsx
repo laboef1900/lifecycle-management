@@ -4,18 +4,20 @@ import * as React from 'react';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
-const dotVariants = cva('h-1.5 w-1.5 rounded-full', {
+const tileVariants = cva('p-3.5 transition-colors', {
   variants: {
     status: {
-      ok: 'bg-success',
-      warn: 'bg-warning',
-      crit: 'bg-destructive',
+      ok: '',
+      attention: 'border-l-2 border-l-accent',
+      warn: 'border-l-2 border-l-warning',
+      crit: 'border-l-2 border-l-destructive',
     },
   },
+  defaultVariants: { status: 'ok' },
 });
 
 export interface KpiTileProps
-  extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof dotVariants> {
+  extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof tileVariants> {
   label: string;
   value: string;
   caption?: string;
@@ -30,18 +32,13 @@ export function KpiTile({
   ...props
 }: KpiTileProps): React.JSX.Element {
   return (
-    <Card className={cn('p-5', className)} {...props}>
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {label}
-      </p>
-      <p className="mt-1.5 text-2xl font-semibold tracking-tight [overflow-wrap:anywhere] sm:text-3xl">
+    <Card className={cn(tileVariants({ status }), className)} {...props}>
+      <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">{label}</p>
+      <p className="mt-2 font-mono text-xl font-medium tracking-tight tabular-nums text-foreground [overflow-wrap:anywhere] sm:text-2xl">
         {value}
       </p>
-      {caption || status ? (
-        <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-          {status ? <span aria-hidden className={dotVariants({ status })} /> : null}
-          {caption}
-        </p>
+      {caption ? (
+        <p className="mt-1.5 text-[11px] text-fg-muted [overflow-wrap:anywhere]">{caption}</p>
       ) : null}
     </Card>
   );

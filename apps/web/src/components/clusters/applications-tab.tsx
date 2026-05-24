@@ -120,7 +120,7 @@ export function ApplicationsTab({ clusterId }: ApplicationsTabProps): React.JSX.
                         ) : null}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary">{application.category}</Badge>
+                        <Badge variant="default">{application.category}</Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground tabular-nums">
                         {application.startedAt}

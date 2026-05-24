@@ -113,7 +113,9 @@ export function CreateClusterDialog({ trigger }: CreateClusterDialogProps): Reac
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger ?? <Button>+ Add cluster</Button>}</DialogTrigger>
+      <DialogTrigger asChild>
+        {trigger ?? <Button variant="accent">+ Add cluster</Button>}
+      </DialogTrigger>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>New cluster</DialogTitle>
@@ -171,7 +173,7 @@ export function CreateClusterDialog({ trigger }: CreateClusterDialogProps): Reac
             <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Creating…' : 'Create cluster'}
             </Button>
           </DialogFooter>

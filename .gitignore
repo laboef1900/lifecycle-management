@@ -4,6 +4,9 @@ docs/**/*.xlsx
 docs/**/*.xlsm
 docs/**/*.xls
 
+# Brainstorming companion mockups
+.superpowers/
+
 # Editor / OS
 .DS_Store
 Thumbs.db

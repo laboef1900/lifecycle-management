@@ -10,7 +10,7 @@ import { resolveWindow } from '@/components/clusters/window-controls';
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
-import { fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { type UtilStatus, fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
 import { api } from '@/lib/api-client';
 
 export const Route = createFileRoute('/clusters/')({
@@ -62,7 +62,7 @@ function ClustersPage(): React.JSX.Element {
   const headroom = Math.max(0, fleetSummary.totalCapacity - fleetSummary.totalConsumption);
 
   let runwayKpiValue: string;
-  let runwayKpiStatus: 'ok' | 'warn' | 'crit';
+  let runwayKpiStatus: UtilStatus;
   if (fleetRunway.alreadyBreached === 'crit') {
     runwayKpiValue = 'Over 90%';
     runwayKpiStatus = 'crit';
@@ -80,14 +80,19 @@ function ClustersPage(): React.JSX.Element {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-[1.625rem] font-semibold tracking-tight">Clusters</h1>
-          <p className="text-sm text-muted-foreground">
+        <header>
+          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+            Capacity Forecast
+          </p>
+          <h1 className="mt-1 text-[26px] font-semibold leading-[1.1] tracking-[-0.02em]">
+            Clusters
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             {clustersQuery.data?.length
               ? `${clustersQuery.data.length} clusters tracked`
               : 'Capacity forecasts across all tracked clusters.'}
           </p>
-        </div>
+        </header>
         {clustersQuery.data && clustersQuery.data.length > 0 ? <CreateClusterDialog /> : null}
       </div>
 

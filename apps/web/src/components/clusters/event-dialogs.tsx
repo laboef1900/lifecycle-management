@@ -227,7 +227,7 @@ export function CreateEventDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Adding…' : 'Add event'}
             </Button>
           </DialogFooter>
@@ -365,7 +365,7 @@ export function EditEventDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Saving…' : 'Save'}
             </Button>
           </DialogFooter>

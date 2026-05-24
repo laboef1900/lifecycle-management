@@ -30,22 +30,24 @@ export function ClusterTile({
       to="/clusters/$id"
       params={{ id: cluster.id }}
       className={cn(
-        'block rounded-xl transition-shadow duration-150 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        'block rounded-[var(--radius-card)] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         className,
       )}
       {...props}
     >
-      <Card className="flex h-[136px] items-center gap-4 p-4">
+      <Card className="flex h-[136px] items-center gap-4 p-3.5 transition-colors hover:border-fg-subtle/40">
         <UtilizationGauge value={metric?.utilization} size="lg" />
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-base font-semibold">{cluster.name}</h3>
+          <h3 className="truncate text-base font-semibold tracking-tight">{cluster.name}</h3>
           {metric ? (
-            <p className="mt-1 font-mono text-xs tabular-nums text-muted-foreground">
+            <p className="mt-1 font-mono text-xs tabular-nums text-foreground">
               {numberFormat.format(Math.round(metric.currentConsumption))} /{' '}
               {numberFormat.format(Math.round(metric.currentCapacity))} GB
             </p>
           ) : (
-            <p className="mt-1 text-xs text-muted-foreground">No baseline</p>
+            <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-fg-subtle">
+              No baseline
+            </p>
           )}
           <div className="mt-3">
             <RunwayPill summary={summary} horizonMonths={horizonMonths} />

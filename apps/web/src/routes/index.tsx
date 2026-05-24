@@ -10,7 +10,7 @@ import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
 import { api } from '@/lib/api-client';
-import { fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { type KpiStatus, fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
 import { useMediaQuery } from '@/lib/use-media-query';
 
 export const Route = createFileRoute('/')({
@@ -55,7 +55,7 @@ function OverviewPage(): React.JSX.Element {
 
   let runwayValue: string;
   let runwayCaption: string;
-  let runwayStatus: 'ok' | 'warn' | 'crit';
+  let runwayStatus: KpiStatus;
   if (fleetRunway.alreadyBreached === 'crit') {
     runwayValue = 'Over 90%';
     runwayCaption = 'fleet has breached crit';
@@ -67,7 +67,7 @@ function OverviewPage(): React.JSX.Element {
   } else if (fleetRunway.months === null) {
     runwayValue = horizonMonths > 0 ? `${horizonMonths}+ mo` : '—';
     runwayCaption = 'no projected breach';
-    runwayStatus = 'ok';
+    runwayStatus = 'attention';
   } else {
     runwayValue = `${fleetRunway.months} mo to 70%`;
     runwayCaption = summary.worstCluster
@@ -82,10 +82,10 @@ function OverviewPage(): React.JSX.Element {
   return (
     <div className="space-y-6">
       <header>
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Overview
+        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+          Capacity Forecast
         </p>
-        <h1 className="text-[1.625rem] font-semibold tracking-tight">Fleet</h1>
+        <h1 className="mt-1 text-[26px] font-semibold leading-[1.1] tracking-[-0.02em]">Fleet</h1>
       </header>
 
       {isLoading ? <OverviewSkeleton /> : null}
@@ -104,7 +104,7 @@ function OverviewPage(): React.JSX.Element {
       ) : null}
 
       {!isLoading && !isError && clusters.length > 0 ? (
-        <div className="grid grid-cols-12 gap-4">
+        <div className="grid grid-cols-12 gap-2">
           <KpiTile
             className="col-span-12 sm:col-span-4"
             label="Fleet utilization"
@@ -159,7 +159,7 @@ function OverviewPage(): React.JSX.Element {
 
 function OverviewSkeleton(): React.JSX.Element {
   return (
-    <div className="grid grid-cols-12 gap-4">
+    <div className="grid grid-cols-12 gap-2">
       <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
       <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
       <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />

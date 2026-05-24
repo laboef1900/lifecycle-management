@@ -32,10 +32,10 @@ const CATEGORY_LABEL: Record<EventCategory, string> = {
   note: 'Note',
 };
 
-const CATEGORY_VARIANT: Record<EventCategory, 'success' | 'warning' | 'secondary' | 'outline'> = {
+const CATEGORY_VARIANT: Record<EventCategory, 'success' | 'warning' | 'default' | 'outline'> = {
   growth: 'warning',
   hardware_change: 'success',
-  openshift: 'secondary',
+  openshift: 'default',
   note: 'outline',
 };
 
