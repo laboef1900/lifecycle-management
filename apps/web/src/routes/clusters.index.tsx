@@ -11,6 +11,7 @@ import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
 import { type UtilStatus, fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 import { api } from '@/lib/api-client';
 
 export const Route = createFileRoute('/clusters/')({
@@ -57,7 +58,11 @@ function ClustersPage(): React.JSX.Element {
   });
 
   const fleetSummary = aggregateFleet(clusters, forecastEntries);
-  const fleetRunway = fleetRunwayToWarn(fleetSummary.perClusterSeries.map((s) => s.months));
+  const thresholds = useEffectiveThresholds();
+  const fleetRunway = fleetRunwayToWarn(
+    fleetSummary.perClusterSeries.map((s) => s.months),
+    thresholds,
+  );
   const numberFormat = new Intl.NumberFormat('en-US');
   const headroom = Math.max(0, fleetSummary.totalCapacity - fleetSummary.totalConsumption);
 
@@ -114,14 +119,14 @@ function ClustersPage(): React.JSX.Element {
             label="Used"
             value={`${numberFormat.format(Math.round(fleetSummary.totalConsumption))} GB`}
             caption={`of ${numberFormat.format(Math.round(fleetSummary.totalCapacity))} GB capacity`}
-            status={utilStatus(fleetSummary.utilization)}
+            status={utilStatus(fleetSummary.utilization, thresholds)}
           />
           <KpiTile
             className="col-span-12 sm:col-span-4"
             label="Headroom"
             value={`${numberFormat.format(Math.round(headroom))} GB`}
             caption={`${((1 - fleetSummary.utilization) * 100).toFixed(1)}% available`}
-            status={utilStatus(fleetSummary.utilization)}
+            status={utilStatus(fleetSummary.utilization, thresholds)}
           />
           <KpiTile
             className="col-span-12 sm:col-span-4"

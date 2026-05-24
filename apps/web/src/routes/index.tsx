@@ -11,6 +11,7 @@ import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
 import { api } from '@/lib/api-client';
 import { type KpiStatus, fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 import { useMediaQuery } from '@/lib/use-media-query';
 
 export const Route = createFileRoute('/')({
@@ -49,8 +50,12 @@ function OverviewPage(): React.JSX.Element {
 
   const summary = aggregateFleet(clusters, forecastEntries);
   const isWide = useMediaQuery('(min-width: 640px)');
+  const thresholds = useEffectiveThresholds();
 
-  const fleetRunway = fleetRunwayToWarn(summary.perClusterSeries.map((s) => s.months));
+  const fleetRunway = fleetRunwayToWarn(
+    summary.perClusterSeries.map((s) => s.months),
+    thresholds,
+  );
   const horizonMonths = Math.max(0, ...summary.perClusterSeries.map((s) => s.months.length));
 
   let runwayValue: string;
@@ -110,7 +115,7 @@ function OverviewPage(): React.JSX.Element {
             label="Fleet utilization"
             value={`${(summary.utilization * 100).toFixed(1)}%`}
             caption="memory used"
-            status={utilStatus(summary.utilization)}
+            status={utilStatus(summary.utilization, thresholds)}
           />
           <KpiTile
             className="col-span-12 sm:col-span-4"
