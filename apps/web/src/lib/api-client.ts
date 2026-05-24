@@ -38,13 +38,20 @@ export interface HealthResponse {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Only advertise a JSON body when we actually send one — Fastify rejects
+  // requests that declare content-type: application/json but have an empty
+  // body (e.g. a bodyless DELETE).
+  const hasBody = init?.body !== undefined && init.body !== null;
+  const headers: Record<string, string> = {
+    accept: 'application/json',
+    ...((init?.headers ?? {}) as Record<string, string>),
+  };
+  if (hasBody && !('content-type' in headers) && !('Content-Type' in headers)) {
+    headers['content-type'] = 'application/json';
+  }
   const response = await fetch(path, {
     ...init,
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      ...init?.headers,
-    },
+    headers,
   });
 
   if (response.status === 204) {
