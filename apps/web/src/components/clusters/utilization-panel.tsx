@@ -43,7 +43,7 @@ export function UtilizationPanel({ forecast }: UtilizationPanelProps): React.JSX
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0">
         <CardTitle>Monthly utilization</CardTitle>
-        <span className="text-xs text-muted-foreground">% capacity used</span>
+        <span className="text-xs text-fg-muted">% capacity used</span>
       </CardHeader>
       <CardContent className="pt-2">
         <div className="h-[140px] w-full">
@@ -95,9 +95,7 @@ export function UtilizationPanel({ forecast }: UtilizationPanelProps): React.JSX
                   return (
                     <div className="rounded-md border border-border bg-popover p-2 text-xs text-popover-foreground shadow-md">
                       <div className="font-medium">{formatMonth(label)}</div>
-                      <div className="font-mono tabular-nums text-muted-foreground">
-                        {pct.toFixed(1)}%
-                      </div>
+                      <div className="font-mono tabular-nums text-fg-muted">{pct.toFixed(1)}%</div>
                     </div>
                   );
                 }}
