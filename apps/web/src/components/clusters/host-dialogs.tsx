@@ -173,7 +173,7 @@ export function CreateHostDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Adding…' : 'Add host'}
             </Button>
           </DialogFooter>
@@ -246,7 +246,7 @@ export function EditHostDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Saving…' : 'Save'}
             </Button>
           </DialogFooter>
@@ -344,7 +344,7 @@ export function ResizeHostDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Saving…' : 'Add resize'}
             </Button>
           </DialogFooter>
@@ -410,7 +410,7 @@ export function DecommissionHostDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button type="submit" variant="accent" disabled={mutation.isPending}>
               {mutation.isPending ? 'Saving…' : 'Save'}
             </Button>
           </DialogFooter>
