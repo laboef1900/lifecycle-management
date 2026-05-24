@@ -15,8 +15,8 @@
   --popover: #ffffff;
   --popover-foreground: #0a0a0a;
   --muted: #f5f5f5;
-  --muted-foreground: #525252;
   --fg-muted: #525252;
+  --muted-foreground: var(--fg-muted);
   --fg-subtle: #737373;
   --border: #e5e5e5;
   --input: #e5e5e5;
@@ -45,8 +45,8 @@ html.dark {
   --popover: #161616;
   --popover-foreground: #fafafa;
   --muted: #1a1a1a;
-  --muted-foreground: #a3a3a3;
   --fg-muted: #a3a3a3;
+  --muted-foreground: var(--fg-muted);
   --fg-subtle: #737373;
   --border: #262626;
   --input: #262626;
