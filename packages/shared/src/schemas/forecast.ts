@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { cuid, monthOnly } from './common.js';
 import type { EventCategory } from './event.js';
+import type { EffectiveThresholds } from './settings.js';
 
 export const forecastParamsSchema = z.object({ id: cuid });
 
@@ -43,4 +44,5 @@ export interface ForecastResponse {
   events: ForecastEventMarker[];
   hosts: ForecastEntityContribution[];
   applications: ForecastEntityContribution[];
+  effectiveThresholds: EffectiveThresholds;
 }
