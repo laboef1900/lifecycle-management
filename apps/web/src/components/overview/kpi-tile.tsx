@@ -10,6 +10,7 @@ const dotVariants = cva('h-1.5 w-1.5 rounded-full', {
       ok: 'bg-success',
       warn: 'bg-warning',
       crit: 'bg-destructive',
+      attention: 'bg-accent',
     },
   },
 });

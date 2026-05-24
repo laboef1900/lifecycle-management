@@ -10,7 +10,7 @@ import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
 import { api } from '@/lib/api-client';
-import { fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { type KpiStatus, fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
 import { useMediaQuery } from '@/lib/use-media-query';
 
 export const Route = createFileRoute('/')({
@@ -55,7 +55,7 @@ function OverviewPage(): React.JSX.Element {
 
   let runwayValue: string;
   let runwayCaption: string;
-  let runwayStatus: 'ok' | 'warn' | 'crit';
+  let runwayStatus: KpiStatus;
   if (fleetRunway.alreadyBreached === 'crit') {
     runwayValue = 'Over 90%';
     runwayCaption = 'fleet has breached crit';
@@ -67,7 +67,7 @@ function OverviewPage(): React.JSX.Element {
   } else if (fleetRunway.months === null) {
     runwayValue = horizonMonths > 0 ? `${horizonMonths}+ mo` : '—';
     runwayCaption = 'no projected breach';
-    runwayStatus = 'ok';
+    runwayStatus = 'attention';
   } else {
     runwayValue = `${fleetRunway.months} mo to 70%`;
     runwayCaption = summary.worstCluster

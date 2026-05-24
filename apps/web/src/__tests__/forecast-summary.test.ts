@@ -1,7 +1,13 @@
 import type { ForecastMonthPoint } from '@lcm/shared';
 import { describe, expect, it } from 'vitest';
 
-import { fleetRunwayToWarn, runwayToWarn, utilStatus } from '../lib/forecast-summary';
+import {
+  fleetRunwayToWarn,
+  type KpiStatus,
+  runwayToWarn,
+  type UtilStatus,
+  utilStatus,
+} from '../lib/forecast-summary';
 
 const point = (month: string, consumption: number, capacity: number): ForecastMonthPoint => ({
   month,
@@ -99,5 +105,16 @@ describe('utilStatus', () => {
     expect(utilStatus(0.9)).toBe('crit');
     expect(utilStatus(1)).toBe('crit');
     expect(utilStatus(1.5)).toBe('crit');
+  });
+});
+
+describe('KpiStatus type', () => {
+  it('extends UtilStatus with an attention variant', () => {
+    const attention: KpiStatus = 'attention';
+    const ok: KpiStatus = 'ok';
+    const fromUtil: KpiStatus = 'warn' satisfies UtilStatus;
+    expect(attention).toBe('attention');
+    expect(ok).toBe('ok');
+    expect(fromUtil).toBe('warn');
   });
 });

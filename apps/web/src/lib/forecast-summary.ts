@@ -68,3 +68,11 @@ export function utilStatus(utilization: number): UtilStatus {
   if (utilization >= WARN_THRESHOLD) return 'warn';
   return 'ok';
 }
+
+/**
+ * KPI tile status. Extends `UtilStatus` with a presentational `'attention'`
+ * marker that callers apply to the single headline metric per view (e.g. the
+ * fleet runway tile on the overview page). `utilStatus()` never returns
+ * 'attention' — it is chosen by the caller, not derived from a threshold.
+ */
+export type KpiStatus = UtilStatus | 'attention';
