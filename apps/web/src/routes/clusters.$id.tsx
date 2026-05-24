@@ -15,6 +15,7 @@ import {
   type ForecastWindow,
 } from '@/components/clusters/window-controls';
 import { KpiTile } from '@/components/overview/kpi-tile';
+import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { RunwayPill } from '@/components/ui/runway-pill';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -66,9 +67,16 @@ function ClusterDetailPage(): React.JSX.Element {
             <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
               Cluster
             </p>
-            <h1 className="mt-1 text-[26px] font-semibold leading-[1.1] tracking-[-0.02em] [overflow-wrap:anywhere]">
-              {clusterQuery.data.name}
-            </h1>
+            <div className="mt-1 flex flex-wrap items-baseline gap-2">
+              <h1 className="text-[26px] font-semibold leading-[1.1] tracking-[-0.02em] [overflow-wrap:anywhere]">
+                {clusterQuery.data.name}
+              </h1>
+              {clusterQuery.data.archivedAt ? (
+                <Badge variant="outline">
+                  Archived {clusterQuery.data.archivedAt.slice(0, 10)}
+                </Badge>
+              ) : null}
+            </div>
             <p className="mt-1 text-sm text-muted-foreground">
               Baseline {clusterQuery.data.baselineDate}
               {clusterQuery.data.description ? ` · ${clusterQuery.data.description}` : null}

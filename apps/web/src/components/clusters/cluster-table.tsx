@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
+import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { RunwayPill } from '@/components/ui/runway-pill';
 import {
@@ -142,13 +143,16 @@ export function ClusterTable({
                   className="cursor-pointer hover:bg-muted/60 focus-within:bg-muted/60"
                 >
                   <TableCell className="font-medium">
-                    <Link
-                      to="/clusters/$id"
-                      params={{ id: cluster.id }}
-                      className="block w-full focus-visible:outline-none"
-                    >
-                      {cluster.name}
-                    </Link>
+                    <span className="inline-flex items-center gap-2">
+                      <Link
+                        to="/clusters/$id"
+                        params={{ id: cluster.id }}
+                        className="focus-visible:outline-none"
+                      >
+                        {cluster.name}
+                      </Link>
+                      {cluster.archivedAt ? <Badge variant="outline">Archived</Badge> : null}
+                    </span>
                   </TableCell>
                   <TableCell className="text-right font-mono tabular-nums">
                     {metric ? numberFormat.format(Math.round(metric.currentConsumption)) : '—'}
