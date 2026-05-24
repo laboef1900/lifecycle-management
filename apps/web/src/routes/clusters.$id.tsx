@@ -8,7 +8,6 @@ import { ApplicationsTab } from '@/components/clusters/applications-tab';
 import { EventsTab } from '@/components/clusters/events-tab';
 import { ForecastChart } from '@/components/clusters/forecast-chart';
 import { HostsTab } from '@/components/clusters/hosts-tab';
-import { UtilizationPanel } from '@/components/clusters/utilization-panel';
 import {
   WindowControls,
   resolveWindow,
@@ -98,10 +97,7 @@ function ClusterDetailPage(): React.JSX.Element {
           ) : forecastQuery.isError || !forecastQuery.data ? (
             <ErrorCard message={forecastQuery.error?.message ?? 'Could not load forecast'} />
           ) : (
-            <>
-              <ForecastChart forecast={forecastQuery.data} compact={!isWide} />
-              <UtilizationPanel forecast={forecastQuery.data} />
-            </>
+            <ForecastChart forecast={forecastQuery.data} compact={!isWide} />
           )}
 
           <Tabs defaultValue="hosts" className="pt-2">
