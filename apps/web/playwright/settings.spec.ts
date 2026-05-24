@@ -101,3 +101,107 @@ test.describe('configurable thresholds', () => {
     await expect(page.getByText(/inherited from tenant defaults/i)).toBeVisible();
   });
 });
+
+test.describe('cluster identity + baseline edit', () => {
+  test('renames cluster — header updates immediately', async ({ page, request }) => {
+    const clustersRes = await request.get('/api/clusters');
+    const clusters = (await clustersRes.json()) as Array<{ id: string; name: string }>;
+    test.skip(clusters.length === 0, 'requires seeded clusters');
+    const cluster = clusters[0]!;
+    const originalName = cluster.name;
+    const newName = `${originalName}-renamed`;
+
+    try {
+      await page.goto(`/clusters/${cluster.id}`);
+      await expect(page.getByRole('heading', { name: originalName, level: 1 })).toBeVisible();
+
+      await page.getByRole('tab', { name: 'Settings' }).click();
+
+      const nameInput = page.getByLabel('Name');
+      await expect(nameInput).toHaveValue(originalName);
+      await nameInput.fill(newName);
+
+      const expectedPath = `/api/clusters/${cluster.id}`;
+      const putResponse = page.waitForResponse(
+        (r) => new URL(r.url()).pathname === expectedPath && r.request().method() === 'PUT',
+      );
+      // The "Cluster identity" heading lives in the Card's <header>, outside the
+      // <form>, so we can't filter by form text. The only button whose accessible
+      // name is exactly "Save" (no "override" / "baseline" suffix) is this form's
+      // submit, so an unscoped role lookup is unambiguous here.
+      await page.getByRole('button', { name: /^save$/i }).click();
+      await putResponse;
+
+      await expect(page.getByRole('heading', { name: newName, level: 1 })).toBeVisible();
+    } finally {
+      // Restore the cluster name so subsequent runs are deterministic.
+      await request.put(`/api/clusters/${cluster.id}`, { data: { name: originalName } });
+    }
+  });
+
+  test('confirm dialog gates baseline edits', async ({ page, request }) => {
+    const clustersRes = await request.get('/api/clusters');
+    const clusters = (await clustersRes.json()) as Array<{
+      id: string;
+      metrics: Array<{
+        metricTypeKey: string;
+        baselineConsumption: number;
+        baselineCapacity: number;
+      }>;
+    }>;
+    test.skip(clusters.length === 0, 'requires seeded clusters');
+    const cluster = clusters[0]!;
+    const memory = cluster.metrics.find((m) => m.metricTypeKey === 'memory_gb');
+    test.skip(!memory, 'requires memory_gb metric');
+    const originalConsumption = memory!.baselineConsumption;
+    const newConsumption = originalConsumption + 100;
+
+    try {
+      await page.goto(`/clusters/${cluster.id}`);
+      await page.getByRole('tab', { name: 'Settings' }).click();
+
+      const consumptionInput = page.getByLabel(/memory.*baseline consumption/i);
+      await consumptionInput.fill(String(newConsumption));
+      await page.getByRole('button', { name: /save baseline/i }).click();
+
+      await expect(page.getByRole('dialog', { name: /rewrite baseline/i })).toBeVisible();
+
+      // Cancel first — verify no PUT goes out.
+      await page.getByRole('button', { name: /cancel/i }).click();
+      await expect(page.getByRole('dialog', { name: /rewrite baseline/i })).not.toBeVisible();
+
+      // Now confirm.
+      await page.getByRole('button', { name: /save baseline/i }).click();
+      await expect(page.getByRole('dialog', { name: /rewrite baseline/i })).toBeVisible();
+
+      const expectedPath = `/api/clusters/${cluster.id}`;
+      const putResponse = page.waitForResponse(
+        (r) => new URL(r.url()).pathname === expectedPath && r.request().method() === 'PUT',
+      );
+      await page.getByRole('button', { name: /rewrite baseline/i }).click();
+      await putResponse;
+
+      // Dialog closes.
+      await expect(page.getByRole('dialog', { name: /rewrite baseline/i })).not.toBeVisible();
+
+      // Verify server now reports the new value.
+      const updated = await request.get(`/api/clusters/${cluster.id}`);
+      const updatedBody = (await updated.json()) as {
+        metrics: Array<{ metricTypeKey: string; baselineConsumption: number }>;
+      };
+      const updatedMemory = updatedBody.metrics.find((m) => m.metricTypeKey === 'memory_gb');
+      expect(updatedMemory?.baselineConsumption).toBeCloseTo(newConsumption);
+    } finally {
+      // Restore the original baselines so subsequent runs are deterministic.
+      await request.put(`/api/clusters/${cluster.id}`, {
+        data: {
+          baselines: cluster.metrics.map((m) => ({
+            metricTypeKey: m.metricTypeKey,
+            baselineConsumption: m.baselineConsumption,
+            baselineCapacity: m.baselineCapacity,
+          })),
+        },
+      });
+    }
+  });
+});

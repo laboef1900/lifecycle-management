@@ -4,6 +4,7 @@ import type {
   ClusterResponse,
   ClusterSettingsInput,
   ClusterSettingsResponse,
+  ClusterUpdateInput,
   EventCategory,
   EventResponse,
   ForecastResponse,
@@ -95,6 +96,15 @@ export type ClusterCreateInputWire = Omit<ClusterCreateInput, 'baselineDate'> & 
   baselineDate: string;
 };
 
+/**
+ * Wire shape of clusterUpdateInputSchema. Same Date→string translation as
+ * ClusterCreateInputWire. All fields optional; at least one must be present
+ * (server-side .refine enforces this).
+ */
+export type ClusterUpdateInputWire = Omit<ClusterUpdateInput, 'baselineDate'> & {
+  baselineDate?: string;
+};
+
 export interface HostCreateInputWire {
   name: string;
   description?: string;
@@ -172,6 +182,11 @@ export const api = {
     create: (input: ClusterCreateInputWire) =>
       request<ClusterResponse>('/api/clusters', {
         method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    update: (id: string, input: ClusterUpdateInputWire) =>
+      request<ClusterResponse>(`/api/clusters/${id}`, {
+        method: 'PUT',
         body: JSON.stringify(input),
       }),
     delete: (id: string) => request<void>(`/api/clusters/${id}`, { method: 'DELETE' }),
