@@ -136,7 +136,7 @@ function ClusterDetailKpiStrip({
   const headroom = Math.max(0, metric.currentCapacity - metric.currentConsumption);
   const summary = runwayToWarn(forecast.months);
   return (
-    <div className="grid grid-cols-12 gap-4">
+    <div data-testid="kpi-strip" className="grid grid-cols-12 gap-4">
       <Card className="col-span-12 flex items-center gap-4 p-5 sm:col-span-4">
         <UtilizationGauge value={metric.utilization} size="md" />
         <div>

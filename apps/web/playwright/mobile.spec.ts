@@ -49,9 +49,11 @@ test.describe('mobile layout at 390x844', () => {
     await page.goto('/clusters');
     await page.locator('a[href^="/clusters/"]').first().click();
 
-    // KPI strip labels visible.
-    await expect(page.getByText('Current utilization')).toBeVisible();
-    await expect(page.getByText('Headroom', { exact: true })).toBeVisible();
-    await expect(page.getByText('Runway', { exact: true })).toBeVisible();
+    // KPI strip labels visible — scope to the strip so we don't match the
+    // forecast-chart legend's "Headroom" series.
+    const kpiStrip = page.getByTestId('kpi-strip');
+    await expect(kpiStrip.getByText('Current utilization')).toBeVisible();
+    await expect(kpiStrip.getByText('Headroom', { exact: true })).toBeVisible();
+    await expect(kpiStrip.getByText('Runway', { exact: true })).toBeVisible();
   });
 });

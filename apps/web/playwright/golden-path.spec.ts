@@ -69,9 +69,11 @@ test('create cluster, add host + application, chart reflects updates', async ({
     await expect(page.getByRole('heading', { name: clusterName, level: 1 })).toBeVisible();
 
     // KPI strip below the title — 3 tiles (gauge, headroom, runway).
-    await expect(page.getByText('Current utilization')).toBeVisible();
-    await expect(page.getByText('Headroom', { exact: true })).toBeVisible();
-    await expect(page.getByText('Runway', { exact: true })).toBeVisible();
+    // Scope to the strip; "Headroom" also appears in the forecast-chart legend.
+    const kpiStrip = page.getByTestId('kpi-strip');
+    await expect(kpiStrip.getByText('Current utilization')).toBeVisible();
+    await expect(kpiStrip.getByText('Headroom', { exact: true })).toBeVisible();
+    await expect(kpiStrip.getByText('Runway', { exact: true })).toBeVisible();
 
     // Add a host.
     await page.getByRole('tab', { name: 'Hosts' }).click();
