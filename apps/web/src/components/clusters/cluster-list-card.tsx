@@ -1,6 +1,7 @@
 import type { ClusterResponse, ForecastMonthPoint } from '@lcm/shared';
 import { Link } from '@tanstack/react-router';
 
+import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { RunwayPill } from '@/components/ui/runway-pill';
 import { runwayToWarn } from '@/lib/forecast-summary';
@@ -31,9 +32,12 @@ export function ClusterListCard({
     >
       <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="min-w-0 truncate text-base font-semibold [overflow-wrap:anywhere]">
-            {cluster.name}
-          </h3>
+          <span className="inline-flex min-w-0 items-center gap-2">
+            <h3 className="min-w-0 truncate text-base font-semibold [overflow-wrap:anywhere]">
+              {cluster.name}
+            </h3>
+            {cluster.archivedAt ? <Badge variant="outline">Archived</Badge> : null}
+          </span>
           {metric ? <UtilizationBadge value={metric.utilization} /> : null}
         </div>
         {metric ? (

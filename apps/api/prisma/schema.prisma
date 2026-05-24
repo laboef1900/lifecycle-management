@@ -59,13 +59,14 @@ model MetricType {
 // ---------- Cluster + baselines ----------
 
 model Cluster {
-  id           String   @id @default(cuid())
-  tenantId     String   @default("default") @map("tenant_id")
+  id           String    @id @default(cuid())
+  tenantId     String    @default("default") @map("tenant_id")
   name         String
   description  String?
-  baselineDate DateTime @map("baseline_date") @db.Date
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  baselineDate DateTime  @map("baseline_date") @db.Date
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  archivedAt   DateTime? @map("archived_at")
 
   tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   baselines    ClusterMetricBaseline[]

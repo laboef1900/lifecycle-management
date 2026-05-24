@@ -2,6 +2,7 @@ import type { ForecastMonthPoint, ForecastResponse } from '@lcm/shared';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
+import { useState } from 'react';
 
 import { ClusterTable } from '@/components/clusters/cluster-table';
 import { CreateClusterDialog } from '@/components/clusters/create-cluster-dialog';
@@ -19,12 +20,24 @@ export const Route = createFileRoute('/clusters/')({
 });
 
 function ClustersPage(): React.JSX.Element {
-  const clustersQuery = useQuery({
-    queryKey: ['clusters'],
-    queryFn: () => api.clusters.list(),
+  const [showArchived, setShowArchived] = useState(false);
+
+  const activeClustersQuery = useQuery({
+    queryKey: ['clusters', { includeArchived: false }],
+    queryFn: () => api.clusters.list({ includeArchived: false }),
   });
 
-  const clusters = clustersQuery.data ?? [];
+  const allClustersQuery = useQuery({
+    queryKey: ['clusters', { includeArchived: true }],
+    queryFn: () => api.clusters.list({ includeArchived: true }),
+    enabled: showArchived,
+  });
+
+  const visibleClusters = showArchived
+    ? (allClustersQuery.data ?? activeClustersQuery.data ?? [])
+    : (activeClustersQuery.data ?? []);
+
+  const clusters = activeClustersQuery.data ?? [];
 
   const forecastQueries = useQueries({
     queries: clusters.map((cluster) => {
@@ -93,24 +106,40 @@ function ClustersPage(): React.JSX.Element {
             Clusters
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {clustersQuery.data?.length
-              ? `${clustersQuery.data.length} clusters tracked`
+            {activeClustersQuery.data?.length
+              ? `${activeClustersQuery.data.length} clusters tracked`
               : 'Capacity forecasts across all tracked clusters.'}
           </p>
         </header>
-        {clustersQuery.data && clustersQuery.data.length > 0 ? <CreateClusterDialog /> : null}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowArchived((v) => !v)}
+            className="inline-flex h-8 items-center gap-2 rounded-[var(--radius)] border border-border bg-background px-2.5 text-xs font-medium text-fg-muted transition-colors hover:bg-card-hover hover:text-foreground"
+            aria-pressed={showArchived}
+          >
+            <span
+              aria-hidden
+              className={`inline-block h-2 w-2 rounded-full ${showArchived ? 'bg-accent' : 'bg-border'}`}
+            />
+            {showArchived ? 'Hide archived' : 'Show archived'}
+          </button>
+          {activeClustersQuery.data && activeClustersQuery.data.length > 0 ? (
+            <CreateClusterDialog />
+          ) : null}
+        </div>
       </div>
 
-      {clustersQuery.isPending ? <ClusterTableSkeleton /> : null}
+      {activeClustersQuery.isPending ? <ClusterTableSkeleton /> : null}
 
-      {clustersQuery.isError ? (
+      {activeClustersQuery.isError ? (
         <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-          <span>Could not load clusters: {clustersQuery.error.message}</span>
+          <span>Could not load clusters: {activeClustersQuery.error.message}</span>
         </Card>
       ) : null}
 
-      {clustersQuery.data?.length === 0 ? <ClustersEmptyState /> : null}
+      {activeClustersQuery.data?.length === 0 ? <ClustersEmptyState /> : null}
 
       {clusters.length > 0 ? (
         <div className="grid grid-cols-12 gap-4">
@@ -142,9 +171,13 @@ function ClustersPage(): React.JSX.Element {
         </div>
       ) : null}
 
-      {clusters.length > 0 ? (
+      {clusters.length > 0 && showArchived ? (
+        <p className="text-xs text-fg-subtle">KPIs reflect active clusters only.</p>
+      ) : null}
+
+      {visibleClusters.length > 0 ? (
         <ClusterTable
-          clusters={clusters}
+          clusters={visibleClusters}
           forecastsById={forecastsById}
           {...(horizonMonths > 0 && { horizonMonths })}
         />

@@ -33,6 +33,12 @@ export const clusterUpdateInputSchema = z
 
 export const clusterIdParamsSchema = z.object({ id: cuid });
 
+export const clustersListQuerySchema = z.object({
+  includeArchived: z.coerce.boolean().optional(),
+});
+
+export type ClustersListQuery = z.infer<typeof clustersListQuerySchema>;
+
 export type ClusterCreateInput = z.infer<typeof clusterCreateInputSchema>;
 export type ClusterUpdateInput = z.infer<typeof clusterUpdateInputSchema>;
 
@@ -54,5 +60,6 @@ export interface ClusterResponse {
   baselineDate: string;
   createdAt: string;
   updatedAt: string;
+  archivedAt: string | null;
   metrics: MetricStateResponse[];
 }

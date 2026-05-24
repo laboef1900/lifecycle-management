@@ -1,5 +1,6 @@
 import { BaselineEditForm } from './baseline-edit-form';
 import { ClusterIdentityForm } from './cluster-identity-form';
+import { ClusterLifecycleCard } from './cluster-lifecycle-card';
 import { ThresholdOverridesForm } from './threshold-overrides-form';
 
 interface SettingsTabProps {
@@ -12,6 +13,7 @@ export function SettingsTab({ clusterId }: SettingsTabProps): React.JSX.Element 
       <ThresholdOverridesForm clusterId={clusterId} />
       <ClusterIdentityForm clusterId={clusterId} />
       <BaselineEditForm clusterId={clusterId} />
+      <ClusterLifecycleCard clusterId={clusterId} />
     </div>
   );
 }

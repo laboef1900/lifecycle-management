@@ -177,7 +177,10 @@ export const api = {
     ready: () => request<HealthResponse>('/readyz'),
   },
   clusters: {
-    list: () => request<ClusterResponse[]>('/api/clusters'),
+    list: (params?: { includeArchived?: boolean }) => {
+      const qs = params?.includeArchived ? '?includeArchived=true' : '';
+      return request<ClusterResponse[]>(`/api/clusters${qs}`);
+    },
     get: (id: string) => request<ClusterResponse>(`/api/clusters/${id}`),
     create: (input: ClusterCreateInputWire) =>
       request<ClusterResponse>('/api/clusters', {
@@ -190,6 +193,10 @@ export const api = {
         body: JSON.stringify(input),
       }),
     delete: (id: string) => request<void>(`/api/clusters/${id}`, { method: 'DELETE' }),
+    archive: (id: string) =>
+      request<ClusterResponse>(`/api/clusters/${id}/archive`, { method: 'POST' }),
+    unarchive: (id: string) =>
+      request<ClusterResponse>(`/api/clusters/${id}/unarchive`, { method: 'POST' }),
     forecast: (id: string, params: { metric: string; from?: string; to?: string }) => {
       const search = new URLSearchParams({ metric: params.metric });
       if (params.from) search.set('from', params.from);

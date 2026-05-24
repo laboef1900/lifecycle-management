@@ -205,3 +205,98 @@ test.describe('cluster identity + baseline edit', () => {
     }
   });
 });
+
+test.describe('cluster lifecycle', () => {
+  test('archive then unarchive a cluster', async ({ page, request }) => {
+    // Create a throwaway cluster so we don't mess with seeded data.
+    const suffix = Date.now().toString(36);
+    const name = `CL-LIFECYCLE-${suffix}`;
+    const createRes = await request.post('/api/clusters', {
+      data: {
+        name,
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    const { id } = (await createRes.json()) as { id: string };
+
+    try {
+      // Archive via UI.
+      await page.goto(`/clusters/${id}`);
+      await page.getByRole('tab', { name: 'Settings' }).click();
+      await page.getByRole('button', { name: /^archive$/i }).click();
+      const archiveResponse = page.waitForResponse(
+        (r) => r.url().endsWith(`/api/clusters/${id}/archive`) && r.request().method() === 'POST',
+      );
+      await page.getByRole('button', { name: /^archive cluster$/i }).click();
+      await archiveResponse;
+
+      // Detail page now shows the Archived badge.
+      await expect(page.getByText(/^Archived \d{4}-\d{2}-\d{2}$/)).toBeVisible();
+
+      // Cluster is hidden from /clusters list by default.
+      await page.goto('/clusters');
+      await expect(page.getByRole('row', { name: new RegExp(name) })).toHaveCount(0);
+
+      // Show archived toggle reveals the cluster.
+      await page.getByRole('button', { name: /show archived/i }).click();
+      await expect(page.getByRole('row', { name: new RegExp(name) })).toBeVisible();
+
+      // Unarchive via UI.
+      await page.goto(`/clusters/${id}`);
+      await page.getByRole('tab', { name: 'Settings' }).click();
+      await page.getByRole('button', { name: /^unarchive$/i }).click();
+      const unarchiveResponse = page.waitForResponse(
+        (r) => r.url().endsWith(`/api/clusters/${id}/unarchive`) && r.request().method() === 'POST',
+      );
+      await page.getByRole('button', { name: /^unarchive cluster$/i }).click();
+      await unarchiveResponse;
+
+      // Cluster reappears in the default /clusters list (toggle off).
+      await page.goto('/clusters');
+      await expect(page.getByRole('row', { name: new RegExp(name) })).toBeVisible();
+    } finally {
+      // Clean up the throwaway cluster.
+      await request.delete(`/api/clusters/${id}`);
+    }
+  });
+
+  test('delete permanently removes the cluster', async ({ page, request }) => {
+    const suffix = Date.now().toString(36);
+    const name = `CL-DELETE-${suffix}`;
+    const createRes = await request.post('/api/clusters', {
+      data: {
+        name,
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    const { id } = (await createRes.json()) as { id: string };
+
+    await page.goto(`/clusters/${id}`);
+    await page.getByRole('tab', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: /^delete$/i }).click();
+    const deleteResponse = page.waitForResponse(
+      (r) =>
+        new URL(r.url()).pathname === `/api/clusters/${id}` && r.request().method() === 'DELETE',
+    );
+    await page.getByRole('button', { name: /delete forever/i }).click();
+    await deleteResponse;
+
+    // Page navigated to /clusters.
+    await expect(page).toHaveURL(/\/clusters$/);
+
+    // Cluster gone from default and showArchived lists.
+    await expect(page.getByRole('row', { name: new RegExp(name) })).toHaveCount(0);
+    await page.getByRole('button', { name: /show archived/i }).click();
+    await expect(page.getByRole('row', { name: new RegExp(name) })).toHaveCount(0);
+
+    // API confirms 404.
+    const getRes = await request.get(`/api/clusters/${id}`);
+    expect(getRes.status()).toBe(404);
+  });
+});
