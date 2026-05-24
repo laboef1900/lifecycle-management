@@ -95,7 +95,7 @@ function ApiHealthPill(): React.JSX.Element {
     return (
       <>
         {compact('API: checking', 'bg-muted-foreground')}
-        <Badge variant="secondary" className="hidden sm:inline-flex">
+        <Badge variant="default" className="hidden sm:inline-flex">
           API: checking…
         </Badge>
       </>
