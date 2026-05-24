@@ -27,7 +27,7 @@ function nextBandOf(band: 'ok' | 'warning' | 'critical'): 'warning' | 'critical'
 }
 
 const FILL: Record<'ok' | 'warning' | 'critical', string> = {
-  ok: 'var(--success)',
+  ok: 'var(--fg-muted)',
   warning: 'var(--warning)',
   critical: 'var(--destructive)',
 };

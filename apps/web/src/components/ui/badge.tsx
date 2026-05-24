@@ -41,13 +41,15 @@ export function Badge({
   children,
   ...props
 }: BadgeProps): React.JSX.Element {
+  const resolvedVariant = variant ?? 'default';
   return (
-    <span className={cn(badgeVariants({ variant }), className)} {...props}>
+    <span
+      data-variant={resolvedVariant}
+      className={cn(`badge-${resolvedVariant}`, badgeVariants({ variant }), className)}
+      {...props}
+    >
       {dot ? (
-        <span
-          aria-hidden
-          className={cn('h-1.5 w-1.5 rounded-full', dotColor[variant ?? 'default'])}
-        />
+        <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', dotColor[resolvedVariant])} />
       ) : null}
       {children}
     </span>

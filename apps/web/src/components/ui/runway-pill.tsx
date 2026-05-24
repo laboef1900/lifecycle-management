@@ -34,7 +34,7 @@ export function RunwayPill({ summary, horizonMonths }: RunwayPillProps): React.J
   }
   if (summary.months === null) {
     return (
-      <Badge variant="success">
+      <Badge variant="accent">
         <span>
           {horizonMonths !== undefined && horizonMonths > 0
             ? `${horizonMonths}+ mo`
@@ -43,7 +43,7 @@ export function RunwayPill({ summary, horizonMonths }: RunwayPillProps): React.J
       </Badge>
     );
   }
-  const variant = summary.months < 3 ? 'danger' : summary.months < 12 ? 'warning' : 'success';
+  const variant = summary.months < 3 ? 'danger' : summary.months < 12 ? 'warning' : 'accent';
   return (
     <Badge variant={variant}>
       <span>{`${summary.months} mo to 70%`}</span>
