@@ -10,7 +10,7 @@ import { resolveWindow } from '@/components/clusters/window-controls';
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
-import { fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { type UtilStatus, fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
 import { api } from '@/lib/api-client';
 
 export const Route = createFileRoute('/clusters/')({
@@ -62,7 +62,7 @@ function ClustersPage(): React.JSX.Element {
   const headroom = Math.max(0, fleetSummary.totalCapacity - fleetSummary.totalConsumption);
 
   let runwayKpiValue: string;
-  let runwayKpiStatus: 'ok' | 'warn' | 'crit';
+  let runwayKpiStatus: UtilStatus;
   if (fleetRunway.alreadyBreached === 'crit') {
     runwayKpiValue = 'Over 90%';
     runwayKpiStatus = 'crit';
