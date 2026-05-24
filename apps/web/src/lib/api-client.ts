@@ -2,10 +2,13 @@ import type {
   ApplicationResponse,
   ClusterCreateInput,
   ClusterResponse,
+  ClusterSettingsInput,
+  ClusterSettingsResponse,
   EventCategory,
   EventResponse,
   ForecastResponse,
   HostResponse,
+  TenantSettings,
 } from '@lcm/shared';
 
 export interface ApiErrorBody {
@@ -226,5 +229,27 @@ export const api = {
         body: JSON.stringify(input),
       }),
     delete: (id: string) => request<void>(`/api/events/${id}`, { method: 'DELETE' }),
+  },
+  settings: {
+    tenant: {
+      get: () => request<TenantSettings>('/api/settings/tenant'),
+      update: (input: TenantSettings) =>
+        request<TenantSettings>('/api/settings/tenant', {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+    },
+    cluster: {
+      get: (id: string) => request<ClusterSettingsResponse>(`/api/clusters/${id}/settings`),
+      update: (id: string, input: ClusterSettingsInput) =>
+        request<ClusterSettingsResponse>(`/api/clusters/${id}/settings`, {
+          method: 'PUT',
+          body: JSON.stringify(input),
+        }),
+      reset: (id: string) =>
+        request<ClusterSettingsResponse>(`/api/clusters/${id}/settings`, {
+          method: 'DELETE',
+        }),
+    },
   },
 };
