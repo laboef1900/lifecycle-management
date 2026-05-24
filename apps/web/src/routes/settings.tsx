@@ -1,12 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router';
 
+import { ForecastThresholdsForm } from '@/components/settings/forecast-thresholds-form';
+
 export const Route = createFileRoute('/settings')({
   component: SettingsPage,
 });
 
 function SettingsPage(): React.JSX.Element {
   return (
-    <div className="space-y-2">
+    <div className="space-y-6">
       <header>
         <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
           Configuration
@@ -15,9 +17,7 @@ function SettingsPage(): React.JSX.Element {
           Settings
         </h1>
       </header>
-      <p className="text-sm text-muted-foreground">
-        Metric types (read-only in v1) will be listed here.
-      </p>
+      <ForecastThresholdsForm />
     </div>
   );
 }
