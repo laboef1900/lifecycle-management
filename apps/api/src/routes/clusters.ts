@@ -4,6 +4,7 @@ import {
   clusterCreateInputSchema,
   clusterIdParamsSchema,
   clusterUpdateInputSchema,
+  clustersListQuerySchema,
 } from '@lcm/shared';
 
 import { ClustersService } from '../services/clusters.js';
@@ -12,7 +13,8 @@ export const clusterRoutes: FastifyPluginAsync = async (fastify) => {
   const service = new ClustersService(fastify.prisma);
 
   fastify.get('/clusters', async (request) => {
-    return service.list(request.tenantId);
+    const query = clustersListQuerySchema.parse(request.query);
+    return service.list(request.tenantId, { includeArchived: query.includeArchived ?? false });
   });
 
   fastify.get('/clusters/:id', async (request) => {
@@ -38,5 +40,15 @@ export const clusterRoutes: FastifyPluginAsync = async (fastify) => {
     await service.delete(request.tenantId, id);
     reply.status(204);
     return null;
+  });
+
+  fastify.post('/clusters/:id/archive', async (request) => {
+    const { id } = clusterIdParamsSchema.parse(request.params);
+    return service.archive(request.tenantId, id);
+  });
+
+  fastify.post('/clusters/:id/unarchive', async (request) => {
+    const { id } = clusterIdParamsSchema.parse(request.params);
+    return service.unarchive(request.tenantId, id);
   });
 };

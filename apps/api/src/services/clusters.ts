@@ -29,9 +29,13 @@ type ClusterRow = Prisma.ClusterGetPayload<{ include: typeof clusterInclude }>;
 export class ClustersService {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async list(tenantId: string): Promise<ClusterResponse[]> {
+  async list(
+    tenantId: string,
+    options: { includeArchived?: boolean } = {},
+  ): Promise<ClusterResponse[]> {
+    const where = options.includeArchived ? { tenantId } : { tenantId, archivedAt: null };
     const rows = await this.prisma.cluster.findMany({
-      where: { tenantId },
+      where,
       include: clusterInclude,
       orderBy: { name: 'asc' },
     });
@@ -139,6 +143,40 @@ export class ClustersService {
     }
   }
 
+  async archive(tenantId: string, id: string): Promise<ClusterResponse> {
+    const existing = await this.prisma.cluster.findFirst({
+      where: { id, tenantId },
+      select: { id: true, archivedAt: true },
+    });
+    if (!existing) {
+      throw new NotFoundError('Cluster', id);
+    }
+    if (existing.archivedAt === null) {
+      await this.prisma.cluster.update({
+        where: { id },
+        data: { archivedAt: new Date() },
+      });
+    }
+    return this.getById(tenantId, id);
+  }
+
+  async unarchive(tenantId: string, id: string): Promise<ClusterResponse> {
+    const existing = await this.prisma.cluster.findFirst({
+      where: { id, tenantId },
+      select: { id: true, archivedAt: true },
+    });
+    if (!existing) {
+      throw new NotFoundError('Cluster', id);
+    }
+    if (existing.archivedAt !== null) {
+      await this.prisma.cluster.update({
+        where: { id },
+        data: { archivedAt: null },
+      });
+    }
+    return this.getById(tenantId, id);
+  }
+
   private async resolveMetricTypes(
     keys: string[],
   ): Promise<Map<string, { id: string; key: string; displayName: string; unit: string }>> {
@@ -223,6 +261,7 @@ export class ClustersService {
       baselineDate: formatDate(row.baselineDate),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
+      archivedAt: row.archivedAt?.toISOString() ?? null,
       metrics,
     };
   }

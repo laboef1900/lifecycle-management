@@ -17,6 +17,7 @@ const baseCluster: ClusterResponse = {
   baselineDate: '2026-05-01',
   createdAt: '2026-05-01T00:00:00Z',
   updatedAt: '2026-05-01T00:00:00Z',
+  archivedAt: null,
   metrics: [
     {
       metricTypeKey: 'memory_gb',
