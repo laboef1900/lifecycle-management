@@ -36,6 +36,7 @@ export function ForecastChart({
   compact = false,
 }: ForecastChartProps): React.JSX.Element {
   const colors = useChartColors();
+  const { warn, crit } = forecast.effectiveThresholds;
   const data = forecast.months.map((point) => ({
     month: point.month,
     consumption: Math.round(point.consumption),
@@ -170,12 +171,12 @@ export function ForecastChart({
             ) : null}
             {maxCeiling > 0 ? (
               <ReferenceLine
-                y={maxCeiling * 0.7}
+                y={maxCeiling * warn}
                 stroke={colors.utilizationWarn}
                 strokeDasharray="2 2"
                 {...(!compact && {
                   label: {
-                    value: `Warn ${numberFormat.format(Math.round(maxCeiling * 0.7))}`,
+                    value: `Warn ${Math.round(warn * 100)}%`,
                     position: 'right' as const,
                     fontSize: 10,
                     fill: colors.utilizationWarn,
@@ -185,12 +186,12 @@ export function ForecastChart({
             ) : null}
             {maxCeiling > 0 ? (
               <ReferenceLine
-                y={maxCeiling * 0.9}
+                y={maxCeiling * crit}
                 stroke={colors.utilizationCrit}
                 strokeDasharray="2 2"
                 {...(!compact && {
                   label: {
-                    value: `Crit ${numberFormat.format(Math.round(maxCeiling * 0.9))}`,
+                    value: `Crit ${Math.round(crit * 100)}%`,
                     position: 'right' as const,
                     fontSize: 10,
                     fill: colors.utilizationCrit,
