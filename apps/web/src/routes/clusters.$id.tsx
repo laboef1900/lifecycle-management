@@ -8,6 +8,7 @@ import { ApplicationsTab } from '@/components/clusters/applications-tab';
 import { EventsTab } from '@/components/clusters/events-tab';
 import { ForecastChart } from '@/components/clusters/forecast-chart';
 import { HostsTab } from '@/components/clusters/hosts-tab';
+import { SettingsTab } from '@/components/clusters/settings-tab';
 import {
   WindowControls,
   resolveWindow,
@@ -105,6 +106,7 @@ function ClusterDetailPage(): React.JSX.Element {
               <TabsTrigger value="hosts">Hosts</TabsTrigger>
               <TabsTrigger value="applications">Applications</TabsTrigger>
               <TabsTrigger value="events">Events</TabsTrigger>
+              <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>
             <TabsContent value="hosts">
               <HostsTab clusterId={id} />
@@ -114,6 +116,9 @@ function ClusterDetailPage(): React.JSX.Element {
             </TabsContent>
             <TabsContent value="events">
               <EventsTab clusterId={id} />
+            </TabsContent>
+            <TabsContent value="settings">
+              <SettingsTab clusterId={id} />
             </TabsContent>
           </Tabs>
         </>
