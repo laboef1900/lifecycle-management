@@ -36,11 +36,17 @@ describe('GET /api/clusters/:id/forecast', () => {
       fromMonth: string;
       toMonth: string;
       months: Array<{ month: string; consumption: number; capacity: number }>;
+      effectiveThresholds: { warn: number; crit: number; source: string };
     };
     expect(body.fromMonth).toBe('2026-05-01');
     expect(body.toMonth).toBe('2028-05-01');
     expect(body.months).toHaveLength(25);
     expect(body.months[0]).toMatchObject({ consumption: 3378, capacity: 7680 });
+    expect(body.effectiveThresholds).toEqual({
+      warn: 0.7,
+      crit: 0.9,
+      source: 'tenant',
+    });
   });
 
   it('honors from/to query parameters', async () => {

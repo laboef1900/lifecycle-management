@@ -9,6 +9,7 @@ import {
   type ForecastHost,
   type ForecastResult,
 } from './forecast.js';
+import { SettingsService } from './settings.js';
 
 const DEFAULT_HORIZON_MONTHS = 24;
 
@@ -53,6 +54,9 @@ export class ForecastService {
       throw new NotFoundError('Cluster', clusterId);
     }
 
+    const settingsService = new SettingsService(this.prisma);
+    const effectiveThresholds = await settingsService.effectiveFor(tenantId, clusterId);
+
     const baseline = cluster.baselines[0];
     if (!baseline) {
       throw new UnprocessableError(
@@ -96,7 +100,7 @@ export class ForecastService {
       capacityDelta: e.capacityDelta?.toNumber() ?? null,
     }));
 
-    return computeForecast(
+    const computed = computeForecast(
       {
         baselineDate: cluster.baselineDate,
         baselineConsumption: baseline.baselineConsumption.toNumber(),
@@ -108,6 +112,8 @@ export class ForecastService {
       fromMonth,
       toMonth,
     );
+
+    return { ...computed, effectiveThresholds };
   }
 }
 
