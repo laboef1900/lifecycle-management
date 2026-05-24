@@ -45,7 +45,7 @@ export function Badge({
   return (
     <span
       data-variant={resolvedVariant}
-      className={cn(`badge-${resolvedVariant}`, badgeVariants({ variant }), className)}
+      className={cn(badgeVariants({ variant }), className)}
       {...props}
     >
       {dot ? (
