@@ -4,3 +4,4 @@ export * from './schemas/host.js';
 export * from './schemas/application.js';
 export * from './schemas/event.js';
 export * from './schemas/forecast.js';
+export * from './settings/resolve-thresholds.js';
