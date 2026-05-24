@@ -16,54 +16,42 @@ export interface ChartColors {
   clusterPalette: string[];
 }
 
+// Honey is the focused/consumption color. Grayscale palette is used for
+// non-focused series in multi-cluster charts — one honey line at a time.
 const LIGHT: ChartColors = {
-  consumption: 'oklch(50% 0.22 262)',
-  consumptionFill: 'oklch(50% 0.22 262 / 0.18)',
-  capacity: 'oklch(58% 0.22 25)',
-  grid: 'oklch(90% 0.01 257)',
-  axis: 'oklch(50% 0.02 257)',
-  utilizationOk: 'oklch(60% 0.18 142)',
-  utilizationWarn: 'oklch(70% 0.2 80)',
-  utilizationCrit: 'oklch(58% 0.22 25)',
+  consumption: '#8a6016',
+  consumptionFill: 'rgba(138, 96, 22, 0.10)',
+  capacity: '#b91c1c',
+  grid: '#e5e5e5',
+  axis: '#737373',
+  utilizationOk: '#525252',
+  utilizationWarn: '#b45309',
+  utilizationCrit: '#b91c1c',
   event: {
-    growth: 'oklch(60% 0.15 50)',
-    hardware_change: 'oklch(55% 0.18 145)',
-    openshift: 'oklch(55% 0.2 290)',
-    note: 'oklch(55% 0.02 260)',
+    growth: '#171717',
+    hardware_change: '#525252',
+    openshift: '#737373',
+    note: '#a3a3a3',
   },
-  clusterPalette: [
-    'oklch(55% 0.18 262)',
-    'oklch(58% 0.18 195)',
-    'oklch(60% 0.17 145)',
-    'oklch(62% 0.19 60)',
-    'oklch(60% 0.22 25)',
-    'oklch(58% 0.20 305)',
-  ],
+  clusterPalette: ['#171717', '#404040', '#525252', '#737373', '#a3a3a3'],
 };
 
 const DARK: ChartColors = {
-  consumption: 'oklch(68% 0.18 262)',
-  consumptionFill: 'oklch(68% 0.18 262 / 0.22)',
-  capacity: 'oklch(70% 0.18 25)',
-  grid: 'oklch(28% 0.01 257)',
-  axis: 'oklch(68% 0.02 257)',
-  utilizationOk: 'oklch(72% 0.12 142)',
-  utilizationWarn: 'oklch(78% 0.14 80)',
-  utilizationCrit: 'oklch(70% 0.18 25)',
+  consumption: '#f9c74f',
+  consumptionFill: 'rgba(249, 199, 79, 0.15)',
+  capacity: '#f87171',
+  grid: '#262626',
+  axis: '#737373',
+  utilizationOk: '#a3a3a3',
+  utilizationWarn: '#f59e0b',
+  utilizationCrit: '#f87171',
   event: {
-    growth: 'oklch(75% 0.12 50)',
-    hardware_change: 'oklch(72% 0.13 145)',
-    openshift: 'oklch(72% 0.15 290)',
-    note: 'oklch(70% 0.02 260)',
+    growth: '#e5e5e5',
+    hardware_change: '#a3a3a3',
+    openshift: '#737373',
+    note: '#525252',
   },
-  clusterPalette: [
-    'oklch(72% 0.16 262)',
-    'oklch(74% 0.14 195)',
-    'oklch(75% 0.13 145)',
-    'oklch(78% 0.16 60)',
-    'oklch(75% 0.18 25)',
-    'oklch(74% 0.16 305)',
-  ],
+  clusterPalette: ['#e5e5e5', '#a3a3a3', '#737373', '#525252', '#404040'],
 };
 
 export function useChartColors(): ChartColors {
