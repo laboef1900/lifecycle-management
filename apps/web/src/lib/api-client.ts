@@ -34,10 +34,6 @@ export class ApiError extends Error {
   }
 }
 
-export interface HealthResponse {
-  status: 'ok';
-}
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Only advertise a JSON body when we actually send one — Fastify rejects
   // requests that declare content-type: application/json but have an empty
@@ -172,10 +168,6 @@ export interface EventUpdateInputWire {
 // ---------- API surface ----------
 
 export const api = {
-  health: {
-    live: () => request<HealthResponse>('/healthz'),
-    ready: () => request<HealthResponse>('/readyz'),
-  },
   clusters: {
     list: (params?: { includeArchived?: boolean }) => {
       const qs = params?.includeArchived ? '?includeArchived=true' : '';

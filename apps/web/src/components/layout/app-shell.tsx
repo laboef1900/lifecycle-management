@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import { Link, Outlet } from '@tanstack/react-router';
 import { Activity, Search } from 'lucide-react';
 
@@ -9,11 +8,9 @@ import { Breadcrumbs } from '@/components/layout/breadcrumbs';
 import { MobileNavProvider, MobileNavTrigger, useMobileNav } from '@/components/layout/mobile-nav';
 import { Sidebar, SidebarNav } from '@/components/layout/sidebar';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
-import { api } from '@/lib/api-client';
 
 export function AppShell(): React.JSX.Element {
   return (
@@ -67,57 +64,10 @@ function Header(): React.JSX.Element {
         <Breadcrumbs />
       </div>
       <div className="ml-auto flex items-center gap-2">
-        <ApiHealthPill />
         <CommandPaletteTrigger />
         <ThemeToggle />
       </div>
     </header>
-  );
-}
-
-function ApiHealthPill(): React.JSX.Element {
-  const healthQuery = useQuery({
-    queryKey: ['health'],
-    queryFn: () => api.health.live(),
-    refetchInterval: 30_000,
-  });
-
-  const compact = (label: string, dotClass: string): React.JSX.Element => (
-    <span
-      role="status"
-      aria-label={label}
-      title={label}
-      className={`inline-flex h-2.5 w-2.5 items-center justify-center rounded-full sm:hidden ${dotClass}`}
-    />
-  );
-
-  if (healthQuery.status === 'pending') {
-    return (
-      <>
-        {compact('API: checking', 'bg-muted-foreground')}
-        <Badge variant="default" className="hidden sm:inline-flex">
-          API: checking…
-        </Badge>
-      </>
-    );
-  }
-  if (healthQuery.status === 'error') {
-    return (
-      <>
-        {compact('API: unreachable', 'bg-destructive')}
-        <Badge variant="danger" dot className="hidden sm:inline-flex">
-          API: unreachable
-        </Badge>
-      </>
-    );
-  }
-  return (
-    <>
-      {compact(`API: ${healthQuery.data?.status ?? 'ok'}`, 'bg-success')}
-      <Badge variant="success" dot className="hidden sm:inline-flex">
-        API: {healthQuery.data?.status}
-      </Badge>
-    </>
   );
 }
 
