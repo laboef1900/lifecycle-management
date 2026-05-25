@@ -13,15 +13,11 @@ import {
 import { Card } from '@/components/ui/card';
 import { RunwayPill } from '@/components/ui/runway-pill';
 import type { ClusterForecastEntry } from '@/lib/forecast-summary';
+import { formatMonthShort } from '@/lib/format-month';
 import { useChartColors } from '@/lib/use-chart-colors';
 
 interface FleetClusterTileChartProps {
   entry: ClusterForecastEntry;
-}
-
-function formatMonth(month: string): string {
-  const date = new Date(`${month}T00:00:00Z`);
-  return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' });
 }
 
 export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): React.JSX.Element {
@@ -85,7 +81,7 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
                         const util = (payload[0]?.value as number) ?? 0;
                         return (
                           <div className="rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
-                            <span className="font-medium">{formatMonth(label)}</span>
+                            <span className="font-medium">{formatMonthShort(label)}</span>
                             <span className="ml-2 font-mono tabular-nums">
                               {(util * 100).toFixed(1)}%
                             </span>
