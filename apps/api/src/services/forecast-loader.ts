@@ -13,6 +13,21 @@ import { SettingsService } from './settings.js';
 
 const DEFAULT_HORIZON_MONTHS = 24;
 
+const ACTIVE = ['in_service', 'degraded'] as const;
+type ActiveState = (typeof ACTIVE)[number];
+
+function projectedDecom(host: {
+  state: string;
+  eolAt: Date | null;
+  runPastEol: boolean;
+  replacedByLinks: Array<{ new: { commissionedAt: Date } }>;
+}): Date | null {
+  if (!host.eolAt || host.runPastEol) return null;
+  if (!ACTIVE.includes(host.state as ActiveState)) return null;
+  const covered = host.replacedByLinks.some((r) => r.new.commissionedAt <= host.eolAt!);
+  return covered ? null : host.eolAt;
+}
+
 interface LoadOptions {
   fromMonth?: Date;
   toMonth?: Date;
@@ -39,6 +54,7 @@ export class ForecastService {
         hosts: {
           include: {
             capacities: { where: { metricTypeId: metricType.id } },
+            replacedByLinks: { include: { new: { select: { commissionedAt: true } } } },
           },
         },
         applications: {
@@ -73,6 +89,7 @@ export class ForecastService {
       name: host.name,
       commissionedAt: host.commissionedAt,
       decommissionedAt: host.decommissionedAt,
+      projectedDecommissionAt: projectedDecom(host),
       capacities: host.capacities.map((c) => ({
         effectiveFrom: c.effectiveFrom,
         amount: c.amount.toNumber(),

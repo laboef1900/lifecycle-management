@@ -14,12 +14,32 @@ import { computeForecast } from './forecast.js';
 
 const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
 
+const ACTIVE = ['in_service', 'degraded'] as const;
+type ActiveState = (typeof ACTIVE)[number];
+
+function projectedDecom(host: {
+  state: string;
+  eolAt: Date | null;
+  runPastEol: boolean;
+  replacedByLinks: Array<{ new: { commissionedAt: Date } }>;
+}): Date | null {
+  if (!host.eolAt || host.runPastEol) return null;
+  if (!ACTIVE.includes(host.state as ActiveState)) return null;
+  const covered = host.replacedByLinks.some((r) => r.new.commissionedAt <= host.eolAt!);
+  return covered ? null : host.eolAt;
+}
+
 const clusterInclude = {
   baselines: {
     include: { metricType: true },
     orderBy: { metricType: { key: 'asc' as const } },
   },
-  hosts: { include: { capacities: true } },
+  hosts: {
+    include: {
+      capacities: true,
+      replacedByLinks: { include: { new: { select: { commissionedAt: true } } } },
+    },
+  },
   applications: { include: { allocations: true } },
   events: true,
 } satisfies Prisma.ClusterInclude;
@@ -209,6 +229,7 @@ export class ClustersService {
             name: h.name,
             commissionedAt: h.commissionedAt,
             decommissionedAt: h.decommissionedAt,
+            projectedDecommissionAt: projectedDecom(h),
             capacities: h.capacities
               .filter((c) => c.metricTypeId === b.metricTypeId)
               .map((c) => ({ effectiveFrom: c.effectiveFrom, amount: c.amount.toNumber() })),

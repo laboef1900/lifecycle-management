@@ -12,6 +12,7 @@ export interface ForecastHost {
   name: string;
   commissionedAt: Date;
   decommissionedAt: Date | null;
+  projectedDecommissionAt: Date | null;
   capacities: ForecastCapacityRow[];
 }
 
@@ -169,7 +170,15 @@ export function computeForecast(
 
 function effectiveCapacityAt(host: ForecastHost, date: Date): number {
   if (date < host.commissionedAt) return 0;
-  if (host.decommissionedAt !== null && date >= host.decommissionedAt) return 0;
+  const realDecom = host.decommissionedAt;
+  const projDecom = host.projectedDecommissionAt;
+  const effective =
+    realDecom && projDecom
+      ? realDecom < projDecom
+        ? realDecom
+        : projDecom
+      : (realDecom ?? projDecom);
+  if (effective !== null && date >= effective) return 0;
   let amount = 0;
   for (const row of host.capacities) {
     if (row.effectiveFrom <= date) amount = row.amount;
