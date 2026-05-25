@@ -8,6 +8,7 @@ import { ApplicationsTab } from '@/components/clusters/applications-tab';
 import { EventsTab } from '@/components/clusters/events-tab';
 import { ForecastChart } from '@/components/clusters/forecast-chart';
 import { HostsTab } from '@/components/clusters/hosts-tab';
+import { ScenarioControls, describeScenario } from '@/components/clusters/scenario-controls';
 import { SettingsTab } from '@/components/clusters/settings-tab';
 import {
   WindowControls,
@@ -20,7 +21,7 @@ import { Card } from '@/components/ui/card';
 import { RunwayPill } from '@/components/ui/runway-pill';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { UtilizationGauge } from '@/components/ui/utilization-gauge';
-import { api } from '@/lib/api-client';
+import { api, type ScenarioWire } from '@/lib/api-client';
 import { runwayToWarn, utilStatus } from '@/lib/forecast-summary';
 import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 import { useMediaQuery } from '@/lib/use-media-query';
@@ -34,6 +35,7 @@ export const Route = createFileRoute('/clusters/$id')({
 function ClusterDetailPage(): React.JSX.Element {
   const { id } = Route.useParams();
   const [windowSelection, setWindowSelection] = useState<ForecastWindow>('24mo');
+  const [scenario, setScenario] = useState<ScenarioWire | null>(null);
   const isWide = useMediaQuery('(min-width: 640px)');
 
   const clusterQuery = useQuery({
@@ -54,6 +56,21 @@ function ClusterDetailPage(): React.JSX.Element {
         to: range!.to,
       }),
     enabled: Boolean(metric && range),
+  });
+
+  const scenarioQuery = useQuery({
+    queryKey: ['forecast', id, metric?.metricTypeKey, range?.from, range?.to, 'scenario', scenario],
+    queryFn: () =>
+      api.clusters.forecastScenario(
+        id,
+        {
+          metric: metric!.metricTypeKey,
+          from: range!.from,
+          to: range!.to,
+        },
+        scenario!,
+      ),
+    enabled: Boolean(metric && range && scenario),
   });
 
   return (
@@ -89,7 +106,11 @@ function ClusterDetailPage(): React.JSX.Element {
       {clusterQuery.data && metric ? (
         <>
           {forecastQuery.data ? (
-            <ClusterDetailKpiStrip forecast={forecastQuery.data} metric={metric} />
+            <ClusterDetailKpiStrip
+              forecast={scenarioQuery.data ?? forecastQuery.data}
+              metric={metric}
+              isScenario={Boolean(scenario && scenarioQuery.data)}
+            />
           ) : null}
 
           <div className="flex items-center justify-between">
@@ -107,8 +128,21 @@ function ClusterDetailPage(): React.JSX.Element {
           ) : forecastQuery.isError || !forecastQuery.data ? (
             <ErrorCard message={forecastQuery.error?.message ?? 'Could not load forecast'} />
           ) : (
-            <ForecastChart forecast={forecastQuery.data} compact={!isWide} />
+            <ForecastChart
+              forecast={forecastQuery.data}
+              compact={!isWide}
+              scenario={
+                scenario && scenarioQuery.data
+                  ? {
+                      label: describeScenario(scenario),
+                      months: scenarioQuery.data.months,
+                    }
+                  : null
+              }
+            />
           )}
+
+          <ScenarioControls active={scenario} onChange={setScenario} />
 
           <Tabs defaultValue="hosts" className="pt-2">
             <TabsList>
@@ -139,55 +173,66 @@ function ClusterDetailPage(): React.JSX.Element {
 function ClusterDetailKpiStrip({
   forecast,
   metric,
+  isScenario = false,
 }: {
   forecast: ForecastResponse;
   metric: NonNullable<ClusterResponse['metrics'][number]>;
+  isScenario?: boolean;
 }): React.JSX.Element {
   const headroom = Math.max(0, metric.currentCapacity - metric.currentConsumption);
   const summary = runwayToWarn(forecast.months, forecast.effectiveThresholds);
   const procurementKpi = deriveProcurementKpi(forecast.procurement);
   return (
-    <div data-testid="kpi-strip" className="grid grid-cols-12 gap-2">
-      <Card className="col-span-12 flex items-center gap-4 p-3.5 sm:col-span-6 lg:col-span-3">
-        <UtilizationGauge
-          value={metric.utilization}
-          size="md"
-          warn={forecast.effectiveThresholds.warn}
-          crit={forecast.effectiveThresholds.crit}
-        />
-        <div>
-          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            Current utilization
-          </p>
-          <p className="mt-1.5 font-mono text-[11px] tabular-nums text-fg-muted">
-            {numberFormat.format(Math.round(metric.currentConsumption))} GB used
-          </p>
-        </div>
-      </Card>
-      <KpiTile
-        className="col-span-12 sm:col-span-6 lg:col-span-3"
-        label="Headroom"
-        value={`${numberFormat.format(Math.round(headroom))} GB`}
-        caption={`of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`}
-        status={utilStatus(metric.utilization, forecast.effectiveThresholds)}
-      />
-      <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-6 lg:col-span-3">
-        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">Runway</p>
-        <div className="mt-1.5">
-          <RunwayPill
-            summary={summary}
-            horizonMonths={forecast.months.length}
-            thresholds={forecast.effectiveThresholds}
+    <div data-testid="kpi-strip" className="space-y-2">
+      {isScenario ? (
+        <Badge variant="outline" data-testid="scenario-badge">
+          Scenario active — KPIs reflect the hypothetical forecast
+        </Badge>
+      ) : null}
+      <div className="grid grid-cols-12 gap-2">
+        <Card className="col-span-12 flex items-center gap-4 p-3.5 sm:col-span-6 lg:col-span-3">
+          <UtilizationGauge
+            value={metric.utilization}
+            size="md"
+            warn={forecast.effectiveThresholds.warn}
+            crit={forecast.effectiveThresholds.crit}
           />
-        </div>
-      </Card>
-      <KpiTile
-        className="col-span-12 sm:col-span-6 lg:col-span-3"
-        label="Order by"
-        value={procurementKpi.value}
-        caption={procurementKpi.caption}
-        status={procurementKpi.status}
-      />
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+              Current utilization
+            </p>
+            <p className="mt-1.5 font-mono text-[11px] tabular-nums text-fg-muted">
+              {numberFormat.format(Math.round(metric.currentConsumption))} GB used
+            </p>
+          </div>
+        </Card>
+        <KpiTile
+          className="col-span-12 sm:col-span-6 lg:col-span-3"
+          label="Headroom"
+          value={`${numberFormat.format(Math.round(headroom))} GB`}
+          caption={`of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`}
+          status={utilStatus(metric.utilization, forecast.effectiveThresholds)}
+        />
+        <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-6 lg:col-span-3">
+          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+            Runway
+          </p>
+          <div className="mt-1.5">
+            <RunwayPill
+              summary={summary}
+              horizonMonths={forecast.months.length}
+              thresholds={forecast.effectiveThresholds}
+            />
+          </div>
+        </Card>
+        <KpiTile
+          className="col-span-12 sm:col-span-6 lg:col-span-3"
+          label="Order by"
+          value={procurementKpi.value}
+          caption={procurementKpi.caption}
+          status={procurementKpi.status}
+        />
+      </div>
     </div>
   );
 }

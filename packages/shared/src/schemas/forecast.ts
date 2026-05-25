@@ -56,3 +56,33 @@ export interface ForecastResponse {
   effectiveThresholds: EffectiveThresholds;
   procurement: ProcurementInfo;
 }
+
+// ---------- What-if scenarios ----------
+
+export const loseHostsScenarioSchema = z.object({
+  kind: z.literal('lose_hosts'),
+  count: z.number().int().min(1),
+});
+
+export const addVmsScenarioSchema = z.object({
+  kind: z.literal('add_vms'),
+  count: z.number().int().min(1),
+  sizeGb: z.number().positive(),
+  startMonth: monthOnly.optional(),
+});
+
+export const delayProcurementScenarioSchema = z.object({
+  kind: z.literal('delay_procurement'),
+  months: z.number().int().min(1),
+});
+
+export const scenarioSchema = z.discriminatedUnion('kind', [
+  loseHostsScenarioSchema,
+  addVmsScenarioSchema,
+  delayProcurementScenarioSchema,
+]);
+
+export type LoseHostsScenario = z.infer<typeof loseHostsScenarioSchema>;
+export type AddVmsScenario = z.infer<typeof addVmsScenarioSchema>;
+export type DelayProcurementScenario = z.infer<typeof delayProcurementScenarioSchema>;
+export type Scenario = z.infer<typeof scenarioSchema>;
