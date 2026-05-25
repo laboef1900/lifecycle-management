@@ -22,7 +22,11 @@ vi.mock('recharts', () => {
   return {
     ResponsiveContainer: Pass,
     ComposedChart: ({ data, children }: { data: unknown; children?: React.ReactNode }) => (
-      <div data-testid="chart" data-month-count={(data as unknown[]).length}>
+      <div
+        data-testid="chart"
+        data-month-count={(data as unknown[]).length}
+        data-rows={JSON.stringify(data)}
+      >
         {children}
       </div>
     ),
@@ -32,6 +36,7 @@ vi.mock('recharts', () => {
     Tooltip: () => null,
     Area: ({ dataKey }: { dataKey: string }) => <div data-testid={`area-${dataKey}`} />,
     Line: ({ dataKey }: { dataKey: string }) => <div data-testid={`line-${dataKey}`} />,
+    LabelList: () => null,
     ReferenceDot: ({ x, y, fill }: { x: string; y: number; fill: string }): React.JSX.Element => (
       <div data-testid="reference-dot" data-x={x} data-y={y} data-fill={fill} />
     ),
@@ -119,6 +124,38 @@ describe('ForecastChart props mapping', () => {
     expect(dots[1]?.dataset.y).toBe('200');
 
     expect(dots[0]?.dataset.fill).not.toBe(dots[1]?.dataset.fill);
+  });
+
+  it('emits per-month warn/crit levels that step with capacity', () => {
+    // Capacity steps up at the third month (e.g. +4096 GB added on 2026-07-01),
+    // so warn (70%) and crit (90%) must step alongside it instead of staying
+    // flat at the maximum capacity for the whole window.
+    const forecast = makeForecast({
+      months: [
+        { month: '2026-05-01', consumption: 3378, capacity: 7680, utilization: 0.44 },
+        { month: '2026-06-01', consumption: 3500, capacity: 7680, utilization: 0.456 },
+        { month: '2026-07-01', consumption: 3700, capacity: 11776, utilization: 0.314 },
+      ],
+    });
+    renderChart(forecast);
+
+    expect(screen.getByTestId('line-warnLevel')).toBeInTheDocument();
+    expect(screen.getByTestId('line-critLevel')).toBeInTheDocument();
+
+    const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+      warnLevel: number;
+      critLevel: number;
+    }>;
+    expect(rows.map((r) => r.warnLevel)).toEqual([
+      Math.round(7680 * 0.7),
+      Math.round(7680 * 0.7),
+      Math.round(11776 * 0.7),
+    ]);
+    expect(rows.map((r) => r.critLevel)).toEqual([
+      Math.round(7680 * 0.9),
+      Math.round(7680 * 0.9),
+      Math.round(11776 * 0.9),
+    ]);
   });
 
   it('shows category legend chips for the event categories present', () => {

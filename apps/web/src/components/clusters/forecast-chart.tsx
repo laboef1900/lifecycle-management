@@ -3,9 +3,9 @@ import {
   Area,
   CartesianGrid,
   ComposedChart,
+  LabelList,
   Line,
   ReferenceDot,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -37,14 +37,20 @@ export function ForecastChart({
 }: ForecastChartProps): React.JSX.Element {
   const colors = useChartColors();
   const { warn, crit } = forecast.effectiveThresholds;
-  const data = forecast.months.map((point) => ({
-    month: point.month,
-    consumption: Math.round(point.consumption),
-    headroom: Math.max(0, Math.round(point.capacity - point.consumption)),
-    capacity: Math.round(point.capacity),
-  }));
+  const data = forecast.months.map((point) => {
+    const capacity = Math.round(point.capacity);
+    return {
+      month: point.month,
+      consumption: Math.round(point.consumption),
+      headroom: Math.max(0, Math.round(point.capacity - point.consumption)),
+      capacity,
+      warnLevel: Math.round(point.capacity * warn),
+      critLevel: Math.round(point.capacity * crit),
+    };
+  });
   const maxCeiling = data.reduce((max, d) => Math.max(max, d.capacity), 0);
   const ceilingForDomain = maxCeiling > 0 ? maxCeiling * 1.05 : undefined;
+  const lastIndex = data.length - 1;
 
   const eventsByMonth = new Map<string, ForecastResponse['events']>();
   for (const event of forecast.events) {
@@ -170,34 +176,54 @@ export function ForecastChart({
               />
             ) : null}
             {maxCeiling > 0 ? (
-              <ReferenceLine
-                y={maxCeiling * warn}
+              <Line
+                type="stepAfter"
+                dataKey="warnLevel"
+                name="Warn"
                 stroke={colors.utilizationWarn}
+                strokeWidth={1}
                 strokeDasharray="2 2"
-                {...(!compact && {
-                  label: {
-                    value: `Warn ${Math.round(warn * 100)}%`,
-                    position: 'right' as const,
-                    fontSize: 10,
-                    fill: colors.utilizationWarn,
-                  },
-                })}
-              />
+                dot={false}
+                activeDot={false}
+                isAnimationActive={false}
+                legendType="none"
+              >
+                {!compact ? (
+                  <LabelList
+                    dataKey="warnLevel"
+                    content={renderEndLabel(
+                      lastIndex,
+                      `Warn ${Math.round(warn * 100)}%`,
+                      colors.utilizationWarn,
+                    )}
+                  />
+                ) : null}
+              </Line>
             ) : null}
             {maxCeiling > 0 ? (
-              <ReferenceLine
-                y={maxCeiling * crit}
+              <Line
+                type="stepAfter"
+                dataKey="critLevel"
+                name="Crit"
                 stroke={colors.utilizationCrit}
+                strokeWidth={1}
                 strokeDasharray="2 2"
-                {...(!compact && {
-                  label: {
-                    value: `Crit ${Math.round(crit * 100)}%`,
-                    position: 'right' as const,
-                    fontSize: 10,
-                    fill: colors.utilizationCrit,
-                  },
-                })}
-              />
+                dot={false}
+                activeDot={false}
+                isAnimationActive={false}
+                legendType="none"
+              >
+                {!compact ? (
+                  <LabelList
+                    dataKey="critLevel"
+                    content={renderEndLabel(
+                      lastIndex,
+                      `Crit ${Math.round(crit * 100)}%`,
+                      colors.utilizationCrit,
+                    )}
+                  />
+                ) : null}
+              </Line>
             ) : null}
             <Line
               type="stepAfter"
@@ -234,6 +260,24 @@ export function ForecastChart({
       <ChartLegend events={forecast.events} colors={colors} />
     </Card>
   );
+}
+
+// Recharts types its LabelList `content` callback with the same broad shape
+// as its own ImplicitLabelType, so we accept any and validate the fields we
+// actually use at runtime.
+function renderEndLabel(lastIndex: number, text: string, fill: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (props: any): React.JSX.Element | null => {
+    if (props?.index !== lastIndex) return null;
+    const numericX = Number(props.x);
+    const numericY = Number(props.y);
+    if (!Number.isFinite(numericX) || !Number.isFinite(numericY)) return null;
+    return (
+      <text x={numericX + 4} y={numericY} dy={3} fontSize={10} fill={fill}>
+        {text}
+      </text>
+    );
+  };
 }
 
 function formatDelta(consumption: number | null, capacity: number | null): string {
