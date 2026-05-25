@@ -160,4 +160,35 @@ describe('HostLifecycleService.transition', () => {
     const updated = await prisma.host.findUniqueOrThrow({ where: { id: host.id } });
     expect(updated.commissionedAt.toISOString()).toBe(new Date('2024-01-01').toISOString());
   });
+
+  it('does NOT back-date commissionedAt on degraded -> in_service recovery', async () => {
+    // Set up a host that's currently degraded with original commission 2024-01-01
+    const host = await prisma.host.create({
+      data: {
+        tenantId: 'default',
+        clusterId,
+        name: `h-${Math.random().toString(36).slice(2, 8)}`,
+        commissionedAt: new Date('2024-01-01'),
+        state: 'degraded',
+        capacities: {
+          create: {
+            tenantId: 'default',
+            metricTypeId,
+            effectiveFrom: new Date('2024-01-01'),
+            amount: new Prisma.Decimal(100),
+          },
+        },
+      },
+    });
+    // Recovery transition with an earlier occurredAt should NOT rewrite commissionedAt
+    await service.transition({
+      tenantId: 'default',
+      hostId: host.id,
+      toState: 'in_service',
+      occurredAt: new Date('2023-06-01'),
+    });
+    const updated = await prisma.host.findUniqueOrThrow({ where: { id: host.id } });
+    expect(updated.commissionedAt.toISOString()).toBe(new Date('2024-01-01').toISOString());
+    expect(updated.state).toBe('in_service');
+  });
 });

@@ -54,7 +54,11 @@ export class HostLifecycleService {
       });
 
       const patch: Prisma.HostUpdateInput = { state: input.toState };
-      if (input.toState === 'in_service' && host.commissionedAt > input.occurredAt) {
+      if (
+        input.toState === 'in_service' &&
+        host.state === 'racked' &&
+        host.commissionedAt > input.occurredAt
+      ) {
         patch.commissionedAt = input.occurredAt;
       }
       if (input.toState === 'decommissioned') {
