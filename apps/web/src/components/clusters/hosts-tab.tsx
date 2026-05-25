@@ -4,6 +4,7 @@ import {
   ArrowRightLeft,
   ChevronDown,
   ChevronRight,
+  History,
   MoreVertical,
   Pencil,
   Plus,
@@ -34,6 +35,7 @@ import {
   DecommissionHostDialog,
   DeleteHostDialog,
   EditHostDialog,
+  HostHistoryDialog,
   HostReplaceDialog,
   HostTransitionDialog,
   ResizeHostDialog,
@@ -43,7 +45,14 @@ interface HostsTabProps {
   clusterId: string;
 }
 
-type DialogKind = 'edit' | 'resize' | 'decommission' | 'delete' | 'transition' | 'replace';
+type DialogKind =
+  | 'edit'
+  | 'resize'
+  | 'decommission'
+  | 'delete'
+  | 'transition'
+  | 'replace'
+  | 'history';
 
 export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
@@ -162,6 +171,7 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                           onDecommission={() => setTarget({ host, kind: 'decommission' })}
                           onTransition={() => setTarget({ host, kind: 'transition' })}
                           onReplace={() => setTarget({ host, kind: 'replace' })}
+                          onHistory={() => setTarget({ host, kind: 'history' })}
                           onDelete={() => setTarget({ host, kind: 'delete' })}
                           isDecommissioned={Boolean(host.decommissionedAt)}
                           canTransition={host.state !== 'disposed'}
@@ -238,6 +248,14 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
           candidates={hosts}
         />
       ) : null}
+      {target?.kind === 'history' ? (
+        <HostHistoryDialog
+          key={target.host.id}
+          open
+          onOpenChange={(open) => !open && setTarget(null)}
+          host={target.host}
+        />
+      ) : null}
     </div>
   );
 }
@@ -248,6 +266,7 @@ interface RowActionsProps {
   onDecommission: () => void;
   onTransition: () => void;
   onReplace: () => void;
+  onHistory: () => void;
   onDelete: () => void;
   isDecommissioned: boolean;
   canTransition: boolean;
@@ -260,6 +279,7 @@ function RowActions({
   onDecommission,
   onTransition,
   onReplace,
+  onHistory,
   onDelete,
   isDecommissioned,
   canTransition,
@@ -279,6 +299,9 @@ function RowActions({
           <Replace className="h-3.5 w-3.5" />
         </IconButton>
       ) : null}
+      <IconButton onClick={onHistory} title="View history">
+        <History className="h-3.5 w-3.5" />
+      </IconButton>
       <IconButton onClick={onResize} title="Resize">
         <Plus className="h-3.5 w-3.5" />
       </IconButton>
