@@ -4,9 +4,12 @@ A few conventions to keep the repo coherent while it's small.
 
 ## Branches
 
-- Name feature branches `<issue-number>-<short-slug>`, e.g. `13-dashboard-cluster-list`.
+- Name feature branches `feat/<short-slug>` (e.g. `feat/xlsx-import`) or
+  `fix/<short-slug>` / `chore/<short-slug>` to match the conventional commit
+  prefix. If a GitHub issue drives the branch, prefixing the slug with the
+  issue number is fine too (e.g. `feat/13-dashboard-cluster-list`).
 - Branch off `main`. Don't merge `main` back in mid-PR; rebase if needed.
-- One branch per issue; one PR per branch.
+- One branch per concern; one PR per branch.
 
 ## Commits
 
@@ -26,8 +29,9 @@ timeline`.
 - CI must be green before merging; the workflow runs lint, typecheck, the
   full test suite (api uses Testcontainers — needs Docker, ubuntu-latest has
   it), and the web build.
-- Squash-merge to keep `main` history linear, unless the branch has
-  meaningful intermediate commits worth keeping.
+- Merge with `--merge` (default; preserves the per-task TDD history of feature
+  branches). Squash-merge is fine for branches with churn that nobody will
+  ever want to bisect (typo fixes, lint sweeps, dependency bumps).
 
 ### Merging stacked PRs
 
@@ -71,12 +75,17 @@ merge is clean.
 ## What lives where
 
 - `apps/api` — Fastify + Prisma. Tests run with Testcontainers (`docker required`).
+- `apps/api/scripts/` — one-time data tools (e.g. `db:import-xlsx`). Each is a
+  thin CLI in `scripts/` backed by a pure module in `scripts/lib/` with its
+  own Vitest unit tests; not part of the runtime image.
 - `apps/web` — Vite + React. Vitest for unit tests, Playwright for e2e.
 - `packages/shared` — Zod schemas + inferred types. Anything used by both
   api and web must live here (single source of truth).
 - `docker/` and the root `docker-compose.yml` — production deployment;
   `docker-compose.dev.yml` is dev DB only.
-- `docs/` — vision, design specs, operations runbook.
+- `docs/` — vision, design specs, operations runbook, and the reference
+  capacity-planning spreadsheet (`Capacity_Forecast_vSphere.xlsx`) the import
+  script consumes.
 
 ## Running the dev loop
 
@@ -85,7 +94,8 @@ pnpm install
 docker compose -f docker-compose.dev.yml up -d db
 pnpm --filter @lcm/api exec prisma migrate deploy
 pnpm seed
-pnpm dev   # api on :8090, web on :5173 with HMR
+pnpm --filter @lcm/api db:import-xlsx   # optional — adds realistic forecast events
+pnpm dev                                # api on :8090, web on :5173 with HMR
 ```
 
 For full background see [`README.md`](README.md).
