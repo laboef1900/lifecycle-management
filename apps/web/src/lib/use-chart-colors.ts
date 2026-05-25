@@ -40,7 +40,7 @@ const DARK: ChartColors = {
   consumption: '#f9c74f',
   consumptionFill: 'rgba(249, 199, 79, 0.15)',
   capacity: '#f87171',
-  grid: '#262626',
+  grid: '#333333',
   axis: '#737373',
   utilizationOk: '#a3a3a3',
   utilizationWarn: '#f59e0b',
