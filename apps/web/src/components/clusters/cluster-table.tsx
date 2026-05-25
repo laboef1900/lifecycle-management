@@ -1,5 +1,5 @@
 import type { ClusterResponse, ForecastMonthPoint } from '@lcm/shared';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
@@ -57,6 +57,7 @@ export function ClusterTable({
   horizonMonths,
 }: ClusterTableProps): React.JSX.Element {
   const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' });
+  const navigate = useNavigate();
 
   const rows = useMemo<Row[]>(
     () =>
@@ -147,6 +148,12 @@ export function ClusterTable({
               return (
                 <TableRow
                   key={cluster.id}
+                  onClick={(event) => {
+                    // Let the inner <Link> handle its own click so cmd/ctrl-click,
+                    // middle-click, and right-click "open in new tab" still work.
+                    if ((event.target as HTMLElement).closest('a, button')) return;
+                    void navigate({ to: '/clusters/$id', params: { id: cluster.id } });
+                  }}
                   className="cursor-pointer hover:bg-muted/60 focus-within:bg-muted/60"
                 >
                   <TableCell className="font-medium">

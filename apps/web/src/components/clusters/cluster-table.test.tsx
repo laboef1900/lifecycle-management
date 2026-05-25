@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { ClusterTable } from './cluster-table';
 
 // Avoid bringing the entire TanStack Router runtime into a unit test; the
-// table only needs Link to render an anchor.
+// table only needs Link to render an anchor and useNavigate for row clicks.
+const navigateSpy = vi.fn();
 vi.mock('@tanstack/react-router', () => ({
   Link: ({
     children,
@@ -18,6 +19,7 @@ vi.mock('@tanstack/react-router', () => ({
     to: string;
     params?: Record<string, string>;
   }) => <a href={renderHref(to, params)}>{children}</a>,
+  useNavigate: () => navigateSpy,
 }));
 
 function renderHref(to: string, params?: Record<string, string>): string {
@@ -129,6 +131,29 @@ describe('ClusterTable runway + navigation', () => {
     const row = screen.getAllByRole('row')[1]!;
     const link = within(row).getByRole('link');
     expect(link).toHaveAttribute('href', '/clusters/c-Cluster-A');
+  });
+
+  it('navigates to the cluster detail page when a non-link cell is clicked', async () => {
+    const user = userEvent.setup();
+    navigateSpy.mockClear();
+    renderTable(clusters);
+    const row = screen.getAllByRole('row')[1]!;
+    // Click a non-link cell (the consumption number) — should still navigate.
+    const cells = within(row).getAllByRole('cell');
+    await user.click(cells[1]!);
+    expect(navigateSpy).toHaveBeenCalledWith({
+      to: '/clusters/$id',
+      params: { id: 'c-Cluster-A' },
+    });
+  });
+
+  it('does not double-fire navigation when the inner link is clicked', async () => {
+    const user = userEvent.setup();
+    navigateSpy.mockClear();
+    renderTable(clusters);
+    const row = screen.getAllByRole('row')[1]!;
+    await user.click(within(row).getByRole('link'));
+    expect(navigateSpy).not.toHaveBeenCalled();
   });
 
   it('no longer renders the Actions column', () => {
