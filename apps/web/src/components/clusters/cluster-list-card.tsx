@@ -12,6 +12,7 @@ interface ClusterListCardProps {
   cluster: ClusterResponse;
   months: ForecastMonthPoint[];
   horizonMonths: number;
+  thresholds?: { warn: number; crit: number };
 }
 
 const numberFormat = new Intl.NumberFormat('en-US');
@@ -20,9 +21,10 @@ export function ClusterListCard({
   cluster,
   months,
   horizonMonths,
+  thresholds,
 }: ClusterListCardProps): React.JSX.Element {
   const metric = cluster.metrics[0];
-  const summary = metric && months.length > 0 ? runwayToWarn(months) : undefined;
+  const summary = metric && months.length > 0 ? runwayToWarn(months, thresholds) : undefined;
 
   return (
     <Link
@@ -49,7 +51,11 @@ export function ClusterListCard({
           <p className="text-xs text-muted-foreground">No baseline</p>
         )}
         {summary ? (
-          <RunwayPill summary={summary} {...(horizonMonths > 0 && { horizonMonths })} />
+          <RunwayPill
+            summary={summary}
+            {...(horizonMonths > 0 && { horizonMonths })}
+            {...(thresholds && { thresholds })}
+          />
         ) : null}
       </Card>
     </Link>

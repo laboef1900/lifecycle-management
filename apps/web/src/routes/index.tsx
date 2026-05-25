@@ -58,15 +58,18 @@ function OverviewPage(): React.JSX.Element {
   );
   const horizonMonths = Math.max(0, ...summary.perClusterSeries.map((s) => s.months.length));
 
+  const warnPct = Math.round(thresholds.warn * 100);
+  const critPct = Math.round(thresholds.crit * 100);
+
   let runwayValue: string;
   let runwayCaption: string;
   let runwayStatus: KpiStatus;
   if (fleetRunway.alreadyBreached === 'crit') {
-    runwayValue = 'Over 90%';
+    runwayValue = `Over ${critPct}%`;
     runwayCaption = 'fleet has breached crit';
     runwayStatus = 'crit';
   } else if (fleetRunway.alreadyBreached === 'warn') {
-    runwayValue = 'Over 70%';
+    runwayValue = `Over ${warnPct}%`;
     runwayCaption = 'fleet has breached warn';
     runwayStatus = 'warn';
   } else if (fleetRunway.months === null) {
@@ -74,12 +77,23 @@ function OverviewPage(): React.JSX.Element {
     runwayCaption = 'no projected breach';
     runwayStatus = 'attention';
   } else {
-    runwayValue = `${fleetRunway.months} mo to 70%`;
+    runwayValue = `${fleetRunway.months} mo to ${warnPct}%`;
     runwayCaption = summary.worstCluster
       ? `limited by ${summary.worstCluster.name}`
       : 'fleet projection';
     runwayStatus = fleetRunway.months < 3 ? 'crit' : fleetRunway.months < 12 ? 'warn' : 'ok';
   }
+
+  const thresholdsByCluster = new Map<string, { warn: number; crit: number }>();
+  clusters.forEach((cluster, i) => {
+    const data = forecastQueries[i]?.data as ForecastResponse | undefined;
+    if (data) {
+      thresholdsByCluster.set(cluster.id, {
+        warn: data.effectiveThresholds.warn,
+        crit: data.effectiveThresholds.crit,
+      });
+    }
+  });
 
   const isLoading = clustersQuery.isPending;
   const isError = clustersQuery.isError;
@@ -153,6 +167,9 @@ function OverviewPage(): React.JSX.Element {
                 cluster={cluster}
                 forecastMonths={series.months}
                 horizonMonths={series.months.length}
+                {...(thresholdsByCluster.get(series.clusterId) && {
+                  thresholds: thresholdsByCluster.get(series.clusterId)!,
+                })}
               />
             );
           })}

@@ -172,7 +172,11 @@ function ClusterDetailKpiStrip({
       <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-4">
         <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">Runway</p>
         <div className="mt-1.5">
-          <RunwayPill summary={summary} horizonMonths={forecast.months.length} />
+          <RunwayPill
+            summary={summary}
+            horizonMonths={forecast.months.length}
+            thresholds={forecast.effectiveThresholds}
+          />
         </div>
       </Card>
     </div>

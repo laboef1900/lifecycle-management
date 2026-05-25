@@ -12,6 +12,7 @@ interface ClusterTileProps extends React.HTMLAttributes<HTMLAnchorElement> {
   cluster: ClusterResponse;
   forecastMonths: ForecastMonthPoint[];
   horizonMonths: number;
+  thresholds?: { warn: number; crit: number };
 }
 
 const numberFormat = new Intl.NumberFormat('en-US');
@@ -20,11 +21,12 @@ export function ClusterTile({
   cluster,
   forecastMonths,
   horizonMonths,
+  thresholds,
   className,
   ...props
 }: ClusterTileProps): React.JSX.Element {
   const metric = cluster.metrics[0];
-  const summary = metric ? runwayToWarn(forecastMonths) : undefined;
+  const summary = metric ? runwayToWarn(forecastMonths, thresholds) : undefined;
   return (
     <Link
       to="/clusters/$id"
@@ -50,7 +52,11 @@ export function ClusterTile({
             </p>
           )}
           <div className="mt-3">
-            <RunwayPill summary={summary} horizonMonths={horizonMonths} />
+            <RunwayPill
+              summary={summary}
+              horizonMonths={horizonMonths}
+              {...(thresholds && { thresholds })}
+            />
           </div>
         </div>
       </Card>

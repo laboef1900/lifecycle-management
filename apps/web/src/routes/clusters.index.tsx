@@ -1,4 +1,6 @@
-import type { ForecastMonthPoint, ForecastResponse } from '@lcm/shared';
+import type { ForecastResponse } from '@lcm/shared';
+
+import type { ClusterForecastEntry } from '@/components/clusters/cluster-table';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
@@ -60,12 +62,18 @@ function ClustersPage(): React.JSX.Element {
     clusterId: c.id,
     data: forecastQueries[i]?.data as ForecastResponse | undefined,
   }));
-  const forecastsById: Record<string, ForecastMonthPoint[]> = {};
+  const forecastsById: Record<string, ClusterForecastEntry> = {};
   let horizonMonths = 0;
   clusters.forEach((cluster, i) => {
     const data = forecastQueries[i]?.data as ForecastResponse | undefined;
     if (data) {
-      forecastsById[cluster.id] = data.months;
+      forecastsById[cluster.id] = {
+        months: data.months,
+        thresholds: {
+          warn: data.effectiveThresholds.warn,
+          crit: data.effectiveThresholds.crit,
+        },
+      };
       horizonMonths = Math.max(horizonMonths, data.months.length);
     }
   });
@@ -79,19 +87,22 @@ function ClustersPage(): React.JSX.Element {
   const numberFormat = new Intl.NumberFormat('en-US');
   const headroom = Math.max(0, fleetSummary.totalCapacity - fleetSummary.totalConsumption);
 
+  const warnPct = Math.round(thresholds.warn * 100);
+  const critPct = Math.round(thresholds.crit * 100);
+
   let runwayKpiValue: string;
   let runwayKpiStatus: UtilStatus;
   if (fleetRunway.alreadyBreached === 'crit') {
-    runwayKpiValue = 'Over 90%';
+    runwayKpiValue = `Over ${critPct}%`;
     runwayKpiStatus = 'crit';
   } else if (fleetRunway.alreadyBreached === 'warn') {
-    runwayKpiValue = 'Over 70%';
+    runwayKpiValue = `Over ${warnPct}%`;
     runwayKpiStatus = 'warn';
   } else if (fleetRunway.months === null) {
     runwayKpiValue = horizonMonths > 0 ? `${horizonMonths}+ mo` : '—';
     runwayKpiStatus = 'ok';
   } else {
-    runwayKpiValue = `${fleetRunway.months} mo to 70%`;
+    runwayKpiValue = `${fleetRunway.months} mo to ${warnPct}%`;
     runwayKpiStatus = fleetRunway.months < 3 ? 'crit' : fleetRunway.months < 12 ? 'warn' : 'ok';
   }
 

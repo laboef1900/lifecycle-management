@@ -20,10 +20,15 @@ import { cn } from '@/lib/utils';
 import { ClusterListCard } from './cluster-list-card';
 import { UtilizationBadge } from './utilization-badge';
 
+export interface ClusterForecastEntry {
+  months: ForecastMonthPoint[];
+  thresholds: { warn: number; crit: number };
+}
+
 interface ClusterTableProps {
   clusters: ClusterResponse[];
-  /** Per-cluster forecast months, keyed by cluster id. Optional — runway shows '—' when missing. */
-  forecastsById?: Record<string, ForecastMonthPoint[]>;
+  /** Per-cluster forecast months + effective thresholds, keyed by cluster id. Runway shows '—' when missing. */
+  forecastsById?: Record<string, ClusterForecastEntry>;
   horizonMonths?: number;
 }
 
@@ -42,6 +47,7 @@ const RUNWAY_NONE = Number.POSITIVE_INFINITY;
 interface Row {
   cluster: ClusterResponse;
   summary: ReturnType<typeof runwayToWarn> | undefined;
+  thresholds: { warn: number; crit: number } | undefined;
   sortRunway: number;
 }
 
@@ -55,15 +61,15 @@ export function ClusterTable({
   const rows = useMemo<Row[]>(
     () =>
       clusters.map((cluster) => {
-        const months = forecastsById?.[cluster.id];
-        const summary = months ? runwayToWarn(months) : undefined;
+        const entry = forecastsById?.[cluster.id];
+        const summary = entry ? runwayToWarn(entry.months, entry.thresholds) : undefined;
         const sortRunway =
           summary === undefined
             ? RUNWAY_NONE
             : summary.alreadyBreached !== false
               ? 0
               : (summary.months ?? RUNWAY_NONE);
-        return { cluster, summary, sortRunway };
+        return { cluster, summary, thresholds: entry?.thresholds, sortRunway };
       }),
     [clusters, forecastsById],
   );
@@ -93,14 +99,15 @@ export function ClusterTable({
   return (
     <>
       <div className="space-y-2 md:hidden">
-        {sorted.map(({ cluster }) => {
-          const months = forecastsById?.[cluster.id] ?? [];
+        {sorted.map(({ cluster, thresholds }) => {
+          const entry = forecastsById?.[cluster.id];
           return (
             <ClusterListCard
               key={cluster.id}
               cluster={cluster}
-              months={months}
+              months={entry?.months ?? []}
               horizonMonths={horizonMonths ?? 0}
+              {...(thresholds && { thresholds })}
             />
           );
         })}
@@ -135,7 +142,7 @@ export function ClusterTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {sorted.map(({ cluster, summary }) => {
+            {sorted.map(({ cluster, summary, thresholds }) => {
               const metric = cluster.metrics[0];
               return (
                 <TableRow
@@ -170,6 +177,7 @@ export function ClusterTable({
                       <RunwayPill
                         summary={summary}
                         {...(horizonMonths !== undefined && { horizonMonths })}
+                        {...(thresholds && { thresholds })}
                       />
                     )}
                   </TableCell>

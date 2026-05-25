@@ -51,4 +51,23 @@ describe('<RunwayPill>', () => {
     render(<RunwayPill summary={{ months: null, alreadyBreached: false }} />);
     expect(screen.getByText(/No breach in horizon/i)).toBeInTheDocument();
   });
+
+  describe('with custom cluster thresholds', () => {
+    const custom = { warn: 0.45, crit: 0.48 };
+
+    it('labels the runway with the custom warn percentage', () => {
+      render(<RunwayPill summary={{ months: 4, alreadyBreached: false }} thresholds={custom} />);
+      expect(screen.getByText(/4 mo to 45%/i)).toBeInTheDocument();
+    });
+
+    it('uses the custom crit percentage in the breached-crit label', () => {
+      render(<RunwayPill summary={{ months: 0, alreadyBreached: 'crit' }} thresholds={custom} />);
+      expect(screen.getByText(/Over 48%/i)).toBeInTheDocument();
+    });
+
+    it('uses the custom warn percentage in the breached-warn label', () => {
+      render(<RunwayPill summary={{ months: 0, alreadyBreached: 'warn' }} thresholds={custom} />);
+      expect(screen.getByText(/Over 45%/i)).toBeInTheDocument();
+    });
+  });
 });

@@ -1,3 +1,4 @@
+import { SYSTEM_DEFAULTS } from '@lcm/shared';
 import * as React from 'react';
 
 import { Badge } from '@/components/ui/badge';
@@ -8,9 +9,15 @@ interface RunwayPillProps {
   summary: RunwaySummary | undefined;
   /** Forecast horizon length in months, used to display "N+ mo" when no breach. */
   horizonMonths?: number;
+  /** Effective warn/crit thresholds. Defaults to system 70/90. */
+  thresholds?: { warn: number; crit: number };
 }
 
-export function RunwayPill({ summary, horizonMonths }: RunwayPillProps): React.JSX.Element {
+export function RunwayPill({
+  summary,
+  horizonMonths,
+  thresholds = SYSTEM_DEFAULTS,
+}: RunwayPillProps): React.JSX.Element {
   if (!summary) {
     return (
       <Badge variant="outline">
@@ -18,17 +25,19 @@ export function RunwayPill({ summary, horizonMonths }: RunwayPillProps): React.J
       </Badge>
     );
   }
+  const warnPct = Math.round(thresholds.warn * 100);
+  const critPct = Math.round(thresholds.crit * 100);
   if (summary.alreadyBreached === 'crit') {
     return (
       <Badge variant="danger">
-        <span>Over 90%</span>
+        <span>{`Over ${critPct}%`}</span>
       </Badge>
     );
   }
   if (summary.alreadyBreached === 'warn') {
     return (
       <Badge variant="warning">
-        <span>Over 70%</span>
+        <span>{`Over ${warnPct}%`}</span>
       </Badge>
     );
   }
@@ -46,7 +55,7 @@ export function RunwayPill({ summary, horizonMonths }: RunwayPillProps): React.J
   const variant = summary.months < 3 ? 'danger' : summary.months < 12 ? 'warning' : 'accent';
   return (
     <Badge variant={variant}>
-      <span>{`${summary.months} mo to 70%`}</span>
+      <span>{`${summary.months} mo to ${warnPct}%`}</span>
     </Badge>
   );
 }
