@@ -1,4 +1,3 @@
-import type { ForecastMonthPoint, ForecastResponse } from '@lcm/shared';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
@@ -7,8 +6,8 @@ import { FleetClusterGrid } from '@/components/overview/fleet-cluster-grid';
 import { FleetUtilizationHeatmap } from '@/components/overview/fleet-utilization-heatmap';
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
-import { aggregateFleet } from '@/lib/aggregate-fleet';
 import { api } from '@/lib/api-client';
+import { collectForecastState } from '@/lib/collect-forecast-state';
 import {
   type KpiStatus,
   buildClusterForecastEntries,
@@ -46,42 +45,10 @@ function OverviewPage(): React.JSX.Element {
     }),
   });
 
-  const forecastEntries = clusters.map((c, i) => ({
-    clusterId: c.id,
-    data: forecastQueries[i]?.data as ForecastResponse | undefined,
-  }));
-
-  const summary = aggregateFleet(clusters, forecastEntries);
+  const { summary, forecastsById, errorsById, forecastsLoading, responsiveCount } =
+    collectForecastState(clusters, forecastQueries);
   const thresholds = useEffectiveThresholds();
-
-  const forecastsById: Record<
-    string,
-    { months: ForecastMonthPoint[]; thresholds: { warn: number; crit: number } }
-  > = {};
-  clusters.forEach((cluster, i) => {
-    const data = forecastQueries[i]?.data as ForecastResponse | undefined;
-    if (data) {
-      forecastsById[cluster.id] = {
-        months: data.months,
-        thresholds: {
-          warn: data.effectiveThresholds.warn,
-          crit: data.effectiveThresholds.crit,
-        },
-      };
-    }
-  });
-
-  const errorsById: Record<string, string | undefined> = {};
-  clusters.forEach((cluster, i) => {
-    const q = forecastQueries[i];
-    if (q?.isError && q.error) {
-      errorsById[cluster.id] =
-        q.error instanceof Error ? q.error.message : 'Failed to load forecast';
-    }
-  });
-
   const clusterEntries = buildClusterForecastEntries(clusters, forecastsById, errorsById);
-  const forecastsLoading = forecastQueries.some((q) => q.isPending);
 
   const fleetRunway = fleetRunwayToWarn(
     summary.perClusterSeries.map((s) => s.months),
@@ -155,7 +122,7 @@ function OverviewPage(): React.JSX.Element {
             className="col-span-12 sm:col-span-4"
             label="Clusters tracked"
             value={String(summary.clusterCount)}
-            caption={`${forecastQueries.filter((q) => q.isSuccess).length} responsive`}
+            caption={`${responsiveCount} responsive`}
             status="ok"
           />
           <KpiTile
