@@ -3,6 +3,7 @@ import * as React from 'react';
 import { Card } from '@/components/ui/card';
 import type { ClusterForecastEntry } from '@/lib/forecast-summary';
 import { utilStatus, type UtilStatus } from '@/lib/forecast-summary';
+import { formatMonthLong, formatMonthShort } from '@/lib/format-month';
 
 interface FleetUtilizationHeatmapProps {
   entries: ClusterForecastEntry[];
@@ -24,16 +25,6 @@ const STATUS_CLASS: Record<UtilStatus | 'empty', string> = {
   crit: 'bg-destructive',
   empty: 'bg-muted',
 };
-
-function formatMonthShort(month: string): string {
-  const date = new Date(`${month}T00:00:00Z`);
-  return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' });
-}
-
-function formatMonthLong(month: string): string {
-  const date = new Date(`${month}T00:00:00Z`);
-  return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-}
 
 function currentUtilization(entry: ClusterForecastEntry): number {
   return entry.cluster.metrics[0]?.utilization ?? 0;

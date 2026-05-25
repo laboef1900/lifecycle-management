@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 
 import { Card } from '@/components/ui/card';
+import { formatMonthShort } from '@/lib/format-month';
 import { useChartColors } from '@/lib/use-chart-colors';
 
 interface ForecastChartProps {
@@ -22,15 +23,6 @@ interface ForecastChartProps {
 }
 
 const numberFormat = new Intl.NumberFormat('en-US');
-
-function formatMonth(month: string): string {
-  const date = new Date(`${month}T00:00:00Z`);
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    year: '2-digit',
-    timeZone: 'UTC',
-  });
-}
 
 export function ForecastChart({
   forecast,
@@ -93,7 +85,7 @@ export function ForecastChart({
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
             <XAxis
               dataKey="month"
-              tickFormatter={formatMonth}
+              tickFormatter={formatMonthShort}
               tick={{ fontSize: compact ? 10 : 11 }}
               stroke={colors.axis}
               interval="preserveStartEnd"
@@ -127,7 +119,7 @@ export function ForecastChart({
                 const monthEvents = eventsByMonth.get(label) ?? [];
                 return (
                   <div className="rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
-                    <div className="font-medium">{formatMonth(label)}</div>
+                    <div className="font-medium">{formatMonthShort(label)}</div>
                     <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
                       <dt className="text-fg-muted">Consumption</dt>
                       <dd className="text-right font-mono tabular-nums">
