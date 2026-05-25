@@ -6,6 +6,7 @@ import {
   LabelList,
   Line,
   ReferenceDot,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -59,6 +60,21 @@ export function ForecastChart({
     bucket.push(event);
     eventsByMonth.set(monthKey, bucket);
   }
+
+  // Earliest projected end-of-life across all hosts in this forecast. The
+  // chart X-axis is categorical (month strings), so snap the EOL date to the
+  // first day of its month and only render if that month is within the
+  // visible window.
+  const earliestEolHost = forecast.hosts
+    .filter(
+      (h): h is typeof h & { projectedDecommissionAt: string } =>
+        typeof h.projectedDecommissionAt === 'string' && h.projectedDecommissionAt.length > 0,
+    )
+    .sort((a, b) => a.projectedDecommissionAt.localeCompare(b.projectedDecommissionAt))[0];
+  const eolMonthKey = earliestEolHost
+    ? `${earliestEolHost.projectedDecommissionAt.slice(0, 7)}-01`
+    : null;
+  const eolMonthInRange = eolMonthKey && data.some((d) => d.month === eolMonthKey);
 
   return (
     <Card className="p-4">
@@ -235,6 +251,20 @@ export function ForecastChart({
               dot={false}
               isAnimationActive={false}
             />
+            {eolMonthInRange && earliestEolHost ? (
+              <ReferenceLine
+                x={eolMonthKey ?? undefined}
+                stroke="#d97706"
+                strokeDasharray="4 4"
+                ifOverflow="extendDomain"
+                label={{
+                  value: `EOL: ${earliestEolHost.name}`,
+                  position: 'top',
+                  fontSize: 11,
+                  fill: '#b45309',
+                }}
+              />
+            ) : null}
             {forecast.events.map((event) => {
               const monthKey = `${event.effectiveDate.slice(0, 7)}-01`;
               const datum = data.find((d) => d.month === monthKey);

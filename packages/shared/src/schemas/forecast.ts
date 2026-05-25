@@ -34,6 +34,7 @@ export interface ForecastEventMarker {
 export interface ForecastEntityContribution {
   id: string;
   name: string;
+  projectedDecommissionAt?: string | null;
   contributions: Array<{ month: string; amount: number }>;
 }
 
