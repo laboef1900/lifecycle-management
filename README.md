@@ -41,7 +41,11 @@ docker compose -f docker-compose.dev.yml up -d db
 pnpm --filter @lcm/api exec prisma migrate deploy
 pnpm seed
 
-# 4. start api (port 8090) and web (port 5173) in watch mode
+# 4. (optional) import the events the reference spreadsheet records,
+#    giving every cluster a realistic 18-month forecast
+pnpm --filter @lcm/api db:import-xlsx
+
+# 5. start api (port 8090) and web (port 5173) in watch mode
 pnpm dev
 ```
 
@@ -98,6 +102,14 @@ pnpm format         # prettier --write .
 pnpm --filter @lcm/api dev
 pnpm --filter @lcm/web test
 pnpm --filter @lcm/web test:e2e   # Playwright golden-path (needs dev API up)
+
+# one-time data tools
+pnpm --filter @lcm/api db:import-xlsx [path]
+                    # Replace events + hosts on the four reference clusters with
+                    # the events recorded in docs/Capacity_Forecast_vSphere.xlsx.
+                    # Defaults to that path; pass an alternate xlsx to override.
+                    # Wipe-and-replace, scoped to the four reference clusters
+                    # by name — other clusters are untouched.
 ```
 
 ## Repository layout
