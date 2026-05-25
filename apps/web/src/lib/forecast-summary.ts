@@ -1,4 +1,4 @@
-import type { ForecastMonthPoint } from '@lcm/shared';
+import type { ClusterResponse, ForecastMonthPoint } from '@lcm/shared';
 import { SYSTEM_DEFAULTS } from '@lcm/shared';
 
 export const WARN_THRESHOLD = SYSTEM_DEFAULTS.warn;
@@ -70,3 +70,33 @@ export function utilStatus(
 }
 
 export type KpiStatus = UtilStatus | 'attention';
+
+export interface ClusterForecastEntry {
+  cluster: ClusterResponse;
+  months: ForecastMonthPoint[];
+  thresholds: { warn: number; crit: number };
+  summary: RunwaySummary;
+}
+
+export interface ClusterForecastSource {
+  months: ForecastMonthPoint[];
+  thresholds: { warn: number; crit: number };
+}
+
+export function buildClusterForecastEntries(
+  clusters: ClusterResponse[],
+  forecastsById: Record<string, ClusterForecastSource | undefined>,
+): ClusterForecastEntry[] {
+  const entries: ClusterForecastEntry[] = [];
+  for (const cluster of clusters) {
+    const source = forecastsById[cluster.id];
+    if (!source) continue;
+    entries.push({
+      cluster,
+      months: source.months,
+      thresholds: source.thresholds,
+      summary: runwayToWarn(source.months, source.thresholds),
+    });
+  }
+  return entries;
+}
