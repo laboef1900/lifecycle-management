@@ -112,6 +112,12 @@ describe('<FleetClusterTileChart>', () => {
     expect(screen.queryByTestId('tile-y-axis-label')).toBeNull();
   });
 
+  it('omits axis labels when the entry failed to load', () => {
+    render(<FleetClusterTileChart entry={entry({ months: [], error: 'timeout' })} />);
+    expect(screen.queryByTestId('tile-x-axis-label')).toBeNull();
+    expect(screen.queryByTestId('tile-y-axis-label')).toBeNull();
+  });
+
   it('uses the cluster-specific thresholds for the runway pill label', () => {
     render(
       <FleetClusterTileChart

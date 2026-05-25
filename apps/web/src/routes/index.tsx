@@ -186,10 +186,10 @@ function OverviewSkeleton(): React.JSX.Element {
       <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
       <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
       <div className="col-span-12 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        <Card className="h-[180px] animate-pulse" />
-        <Card className="h-[180px] animate-pulse" />
-        <Card className="h-[180px] animate-pulse" />
-        <Card className="h-[180px] animate-pulse" />
+        <Card className="h-[196px] animate-pulse" />
+        <Card className="h-[196px] animate-pulse" />
+        <Card className="h-[196px] animate-pulse" />
+        <Card className="h-[196px] animate-pulse" />
       </div>
       <Card className="col-span-12 h-32 animate-pulse" />
     </div>

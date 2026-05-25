@@ -30,7 +30,7 @@ export function FleetClusterGrid({
         className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
       >
         {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
-          <Card key={i} className="h-[180px] animate-pulse" />
+          <Card key={i} className="h-[196px] animate-pulse" />
         ))}
       </div>
     );

@@ -39,15 +39,15 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
       params={{ id: cluster.id }}
       className="block rounded-[var(--radius-card)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
     >
-      <Card className="flex h-[180px] flex-col gap-2 p-3.5 transition-colors hover:border-fg-subtle/40">
+      <Card className="flex h-[196px] flex-col gap-2 p-3.5 transition-colors hover:border-fg-subtle/40">
         <div className="flex items-start justify-between gap-2">
           <h3 className="min-w-0 truncate text-sm font-semibold tracking-tight">{cluster.name}</h3>
           <RunwayPill summary={summary} horizonMonths={months.length} thresholds={thresholds} />
         </div>
         {hasData ? (
-          <div className="flex h-[110px] w-full gap-1">
+          <div className="flex h-[126px] w-full gap-1">
             <span
-              className="flex items-center justify-center text-[9px] uppercase tracking-wide text-fg-muted [writing-mode:vertical-rl] rotate-180"
+              className="flex w-4 flex-none items-center justify-center text-[9px] uppercase tracking-wide text-fg-muted [writing-mode:vertical-rl] rotate-180"
               data-testid="tile-y-axis-label"
             >
               Utilization (%)
@@ -113,11 +113,11 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
             </div>
           </div>
         ) : entry.error ? (
-          <div className="flex h-[110px] items-center justify-center text-xs text-destructive">
+          <div className="flex h-[126px] items-center justify-center text-xs text-destructive">
             Failed to load
           </div>
         ) : (
-          <div className="flex h-[110px] items-center justify-center text-xs text-fg-muted">
+          <div className="flex h-[126px] items-center justify-center text-xs text-fg-muted">
             No forecast
           </div>
         )}
