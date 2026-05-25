@@ -5,6 +5,7 @@ import { Fragment, useState } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import {
   Table,
   TableBody,
@@ -53,27 +54,30 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
   const hosts = hostsQuery.data ?? [];
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {hosts.length > 0
-            ? `${hosts.length} ${hosts.length === 1 ? 'host' : 'hosts'} providing capacity`
-            : 'No hosts yet.'}
-        </p>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          Add host
-        </Button>
-      </div>
+    <div className="space-y-3 py-4">
+      <Card className="p-4">
+        <header className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">Hosts</h2>
+            <p className="text-sm text-fg-muted">
+              {hosts.length > 0
+                ? `${hosts.length} ${hosts.length === 1 ? 'host' : 'hosts'} providing capacity`
+                : 'No hosts yet.'}
+            </p>
+          </div>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Add host
+          </Button>
+        </header>
 
-      {hostsQuery.isPending ? (
-        <Skeleton />
-      ) : hostsQuery.isError ? (
-        <ErrorRow message={hostsQuery.error.message} />
-      ) : hosts.length === 0 ? (
-        <EmptyRow message="Add a host to start contributing capacity." />
-      ) : (
-        <div className="rounded-lg border bg-card">
+        {hostsQuery.isPending ? (
+          <Skeleton />
+        ) : hostsQuery.isError ? (
+          <ErrorRow message={hostsQuery.error.message} />
+        ) : hosts.length === 0 ? (
+          <EmptyRow message="Add a host to start contributing capacity." />
+        ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -149,8 +153,8 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
               })}
             </TableBody>
           </Table>
-        </div>
-      )}
+        )}
+      </Card>
 
       <CreateHostDialog open={createOpen} onOpenChange={setCreateOpen} clusterId={clusterId} />
 
@@ -288,19 +292,17 @@ function CapacityTimeline({ rows }: { rows: HostResponse['capacities'] }): React
 
 function Skeleton(): React.JSX.Element {
   return (
-    <div className="rounded-lg border bg-card p-4">
-      <div className="space-y-2">
-        {Array.from({ length: 2 }).map((_, i) => (
-          <div key={i} className="h-12 animate-pulse rounded bg-muted/60" />
-        ))}
-      </div>
+    <div className="space-y-2">
+      {Array.from({ length: 2 }).map((_, i) => (
+        <div key={i} className="h-12 animate-pulse rounded bg-muted/60" />
+      ))}
     </div>
   );
 }
 
 function EmptyRow({ message }: { message: string }): React.JSX.Element {
   return (
-    <div className="rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
+    <div className="rounded-[var(--radius)] border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
       {message}
     </div>
   );
@@ -308,7 +310,7 @@ function EmptyRow({ message }: { message: string }): React.JSX.Element {
 
 function ErrorRow({ message }: { message: string }): React.JSX.Element {
   return (
-    <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+    <div className="rounded-[var(--radius)] border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
       {message}
     </div>
   );

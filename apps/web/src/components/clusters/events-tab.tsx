@@ -5,6 +5,7 @@ import { useState } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import {
   Table,
   TableBody,
@@ -51,27 +52,30 @@ export function EventsTab({ clusterId }: EventsTabProps): React.JSX.Element {
   const events = query.data ?? [];
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {events.length > 0
-            ? `${events.length} ${events.length === 1 ? 'event' : 'events'} on the forecast`
-            : 'No events yet.'}
-        </p>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          Add event
-        </Button>
-      </div>
+    <div className="space-y-3 py-4">
+      <Card className="p-4">
+        <header className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">Events</h2>
+            <p className="text-sm text-fg-muted">
+              {events.length > 0
+                ? `${events.length} ${events.length === 1 ? 'event' : 'events'} on the forecast`
+                : 'No events yet.'}
+            </p>
+          </div>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Add event
+          </Button>
+        </header>
 
-      {query.isPending ? (
-        <Skeleton />
-      ) : query.isError ? (
-        <ErrorRow message={query.error.message} />
-      ) : events.length === 0 ? (
-        <EmptyRow message="Add an event to annotate a growth period or hardware change." />
-      ) : (
-        <div className="rounded-lg border bg-card">
+        {query.isPending ? (
+          <Skeleton />
+        ) : query.isError ? (
+          <ErrorRow message={query.error.message} />
+        ) : events.length === 0 ? (
+          <EmptyRow message="Add an event to annotate a growth period or hardware change." />
+        ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -148,8 +152,8 @@ export function EventsTab({ clusterId }: EventsTabProps): React.JSX.Element {
               ))}
             </TableBody>
           </Table>
-        </div>
-      )}
+        )}
+      </Card>
 
       <CreateEventDialog open={createOpen} onOpenChange={setCreateOpen} clusterId={clusterId} />
 
@@ -204,19 +208,17 @@ function IconButton({
 
 function Skeleton(): React.JSX.Element {
   return (
-    <div className="rounded-lg border bg-card p-4">
-      <div className="space-y-2">
-        {Array.from({ length: 2 }).map((_, i) => (
-          <div key={i} className="h-12 animate-pulse rounded bg-muted/60" />
-        ))}
-      </div>
+    <div className="space-y-2">
+      {Array.from({ length: 2 }).map((_, i) => (
+        <div key={i} className="h-12 animate-pulse rounded bg-muted/60" />
+      ))}
     </div>
   );
 }
 
 function EmptyRow({ message }: { message: string }): React.JSX.Element {
   return (
-    <div className="rounded-lg border border-dashed bg-card p-8 text-center text-sm text-muted-foreground">
+    <div className="rounded-[var(--radius)] border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
       {message}
     </div>
   );
@@ -224,7 +226,7 @@ function EmptyRow({ message }: { message: string }): React.JSX.Element {
 
 function ErrorRow({ message }: { message: string }): React.JSX.Element {
   return (
-    <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+    <div className="rounded-[var(--radius)] border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
       {message}
     </div>
   );
