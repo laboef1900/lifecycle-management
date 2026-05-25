@@ -27,6 +27,9 @@ export class HostLifecycleService {
 
   async transition(input: TransitionInput): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
+      // TODO(v2): use SELECT ... FOR UPDATE to serialize concurrent transitions.
+      // Under READ COMMITTED two concurrent transitions can produce duplicate
+      // from->to events. Acceptable for v1 (single-user-per-host operationally).
       const host = await tx.host.findFirst({
         where: { id: input.hostId, tenantId: input.tenantId },
       });
