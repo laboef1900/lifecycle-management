@@ -13,11 +13,9 @@ export interface ChartColors {
   utilizationWarn: string;
   utilizationCrit: string;
   event: Record<EventCategory, string>;
-  clusterPalette: string[];
 }
 
-// Honey is the focused/consumption color. Grayscale palette is used for
-// non-focused series in multi-cluster charts — one honey line at a time.
+// Honey is the focused/consumption color.
 const LIGHT: ChartColors = {
   consumption: '#8a6016',
   consumptionFill: 'rgba(138, 96, 22, 0.10)',
@@ -33,7 +31,6 @@ const LIGHT: ChartColors = {
     openshift: '#737373',
     note: '#a3a3a3',
   },
-  clusterPalette: ['#171717', '#404040', '#525252', '#737373', '#a3a3a3'],
 };
 
 const DARK: ChartColors = {
@@ -51,7 +48,6 @@ const DARK: ChartColors = {
     openshift: '#737373',
     note: '#525252',
   },
-  clusterPalette: ['#e5e5e5', '#a3a3a3', '#737373', '#525252', '#404040'],
 };
 
 export function useChartColors(): ChartColors {

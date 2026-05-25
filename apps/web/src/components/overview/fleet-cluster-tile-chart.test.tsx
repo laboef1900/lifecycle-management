@@ -17,7 +17,6 @@ vi.mock('@/lib/use-chart-colors', () => ({
     utilizationWarn: '#b45309',
     utilizationCrit: '#b91c1c',
     event: { growth: '#171717', hardware_change: '#525252', openshift: '#737373', note: '#a3a3a3' },
-    clusterPalette: ['#171717', '#404040', '#525252', '#737373', '#a3a3a3'],
   }),
 }));
 
