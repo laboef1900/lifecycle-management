@@ -5,13 +5,16 @@ import {
   clusterIdHostsParamsSchema,
   hostCreateInputSchema,
   hostIdParamsSchema,
+  hostTransitionInputSchema,
   hostUpdateInputSchema,
 } from '@lcm/shared';
 
+import { HostLifecycleService } from '../services/host-lifecycle.js';
 import { HostsService } from '../services/hosts.js';
 
 export const hostRoutes: FastifyPluginAsync = async (fastify) => {
   const service = new HostsService(fastify.prisma);
+  const lifecycle = new HostLifecycleService(fastify.prisma);
 
   fastify.get('/clusters/:clusterId/hosts', async (request) => {
     const { clusterId } = clusterIdHostsParamsSchema.parse(request.params);
@@ -50,5 +53,24 @@ export const hostRoutes: FastifyPluginAsync = async (fastify) => {
     await service.delete(request.tenantId, id);
     reply.status(204);
     return null;
+  });
+
+  fastify.post('/hosts/:id/transitions', async (request, reply) => {
+    const { id } = hostIdParamsSchema.parse(request.params);
+    const input = hostTransitionInputSchema.parse(request.body);
+    await lifecycle.transition({
+      tenantId: request.tenantId,
+      hostId: id,
+      toState: input.toState,
+      occurredAt: input.occurredAt,
+      ...(input.note !== undefined ? { note: input.note } : {}),
+    });
+    reply.status(204);
+    return null;
+  });
+
+  fastify.get('/hosts/:id/lifecycle', async (request) => {
+    const { id } = hostIdParamsSchema.parse(request.params);
+    return lifecycle.listEvents(request.tenantId, id);
   });
 };

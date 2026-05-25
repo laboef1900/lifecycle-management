@@ -379,3 +379,58 @@ describe('asset attributes', () => {
     });
   });
 });
+
+describe('POST /api/hosts/:id/transitions', () => {
+  it('transitions in_service -> degraded and returns 204', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/hosts/${id}/transitions`,
+      payload: { toState: 'degraded', occurredAt: '2026-05-25', note: 'fan noise' },
+    });
+    expect(res.statusCode).toBe(204);
+
+    const fetched = await server.inject({ method: 'GET', url: `/api/hosts/${id}` });
+    expect((fetched.json() as { state: string }).state).toBe('degraded');
+  });
+
+  it('returns 422 on a disallowed edge', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/hosts/${id}/transitions`,
+      payload: { toState: 'disposed', occurredAt: '2026-05-25' },
+    });
+    expect(res.statusCode).toBe(422);
+  });
+});
+
+describe('GET /api/hosts/:id/lifecycle', () => {
+  it('returns the lifecycle history after a transition', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    await server.inject({
+      method: 'POST',
+      url: `/api/hosts/${id}/transitions`,
+      payload: { toState: 'degraded', occurredAt: '2026-05-25' },
+    });
+    const res = await server.inject({ method: 'GET', url: `/api/hosts/${id}/lifecycle` });
+    expect(res.statusCode).toBe(200);
+    const events = res.json() as Array<{ fromState: string | null; toState: string }>;
+    expect(events.at(-1)).toMatchObject({ fromState: 'in_service', toState: 'degraded' });
+  });
+});
