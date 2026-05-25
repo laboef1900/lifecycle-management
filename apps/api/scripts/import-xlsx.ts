@@ -69,9 +69,9 @@ async function main(): Promise<void> {
           const deletedHosts = await tx.host.deleteMany({
             where: { clusterId: dbCluster.id },
           });
-          for (const ev of parsedCluster.events) {
-            await tx.event.create({
-              data: {
+          if (parsedCluster.events.length > 0) {
+            await tx.event.createMany({
+              data: parsedCluster.events.map((ev) => ({
                 tenantId: TENANT_ID,
                 clusterId: dbCluster.id,
                 metricTypeId: metric.id,
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
                 title: ev.title,
                 consumptionDelta: ev.consumptionDelta,
                 capacityDelta: ev.capacityDelta,
-              },
+              })),
             });
           }
           lines.push(

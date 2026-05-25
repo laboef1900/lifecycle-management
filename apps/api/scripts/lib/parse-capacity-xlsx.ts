@@ -82,7 +82,10 @@ function buildMonthByColumn(ws: XLSX.WorkSheet): MonthByColumn {
     }
   }
 
-  // Second pass: sub-event columns inherit parent's next month
+  // Second pass: sub-event columns inherit parent's next month.
+  // These are appended to the iteration order (L and P land after AA in
+  // Object.keys()), but `parseCapacityXlsx` sorts events by effectiveDate
+  // afterwards, so the column-iteration order does not affect output order.
   for (const [sub, parent] of Object.entries(SUB_EVENT_PARENT_MAP)) {
     const parentCell = ws[`${parent}${HEADER_ROW}`];
     if (parentCell && parentCell.v instanceof Date) {
