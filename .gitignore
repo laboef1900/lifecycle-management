@@ -1,8 +1,9 @@
-# Reference spreadsheet — kept locally for design reference only, not versioned
-docs/Capacity_Forecast_vSphere.xlsx
+# Office files dropped in docs/ are not versioned by default — except the
+# reference spreadsheet, which the xlsx import script + its tests depend on.
 docs/**/*.xlsx
 docs/**/*.xlsm
 docs/**/*.xls
+!docs/Capacity_Forecast_vSphere.xlsx
 
 # Brainstorming companion mockups
 .superpowers/
