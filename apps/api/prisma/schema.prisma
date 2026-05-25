@@ -135,7 +135,10 @@ model Host {
   replacedByLinks HostReplacement[]    @relation("HostReplacementOld")
   replacesLinks   HostReplacement[]    @relation("HostReplacementNew")
 
-  @@unique([tenantId, serialNumber], map: "hosts_tenant_serial_unique")
+  /// Uniqueness is enforced via a partial unique index in the migration —
+  /// Prisma can't express `WHERE serial_number IS NOT NULL` natively, so we
+  /// declare a non-unique index here just to reserve the name.
+  @@index([tenantId, serialNumber], map: "hosts_tenant_serial_unique")
   @@index([clusterId])
   @@index([state])
   @@index([eolAt])

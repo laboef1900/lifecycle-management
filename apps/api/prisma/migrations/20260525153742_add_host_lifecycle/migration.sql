@@ -60,7 +60,7 @@ CREATE INDEX "hosts_state_idx" ON "hosts"("state");
 CREATE INDEX "hosts_eol_at_idx" ON "hosts"("eol_at");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "hosts_tenant_serial_unique" ON "hosts"("tenant_id", "serial_number");
+CREATE UNIQUE INDEX "hosts_tenant_serial_unique" ON "hosts"("tenant_id", "serial_number") WHERE "serial_number" IS NOT NULL;
 
 -- AddForeignKey
 ALTER TABLE "host_lifecycle_events" ADD CONSTRAINT "host_lifecycle_events_host_id_fkey" FOREIGN KEY ("host_id") REFERENCES "hosts"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -96,7 +96,8 @@ SELECT
   commissioned_at,
   'Backfilled from commissioned_at',
   NOW()
-FROM "hosts";
+FROM "hosts"
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO "host_lifecycle_events" (id, tenant_id, host_id, from_state, to_state, occurred_at, note, created_at)
 SELECT
@@ -109,4 +110,5 @@ SELECT
   'Backfilled from decommissioned_at',
   NOW()
 FROM "hosts"
-WHERE decommissioned_at IS NOT NULL;
+WHERE decommissioned_at IS NOT NULL
+ON CONFLICT (id) DO NOTHING;
