@@ -7,6 +7,7 @@ import {
   MoreVertical,
   Pencil,
   Plus,
+  Replace,
   Trash2,
 } from 'lucide-react';
 import { Fragment, useState } from 'react';
@@ -33,6 +34,7 @@ import {
   DecommissionHostDialog,
   DeleteHostDialog,
   EditHostDialog,
+  HostReplaceDialog,
   HostTransitionDialog,
   ResizeHostDialog,
 } from './host-dialogs';
@@ -41,7 +43,7 @@ interface HostsTabProps {
   clusterId: string;
 }
 
-type DialogKind = 'edit' | 'resize' | 'decommission' | 'delete' | 'transition';
+type DialogKind = 'edit' | 'resize' | 'decommission' | 'delete' | 'transition' | 'replace';
 
 export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
@@ -159,9 +161,11 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                           onResize={() => setTarget({ host, kind: 'resize' })}
                           onDecommission={() => setTarget({ host, kind: 'decommission' })}
                           onTransition={() => setTarget({ host, kind: 'transition' })}
+                          onReplace={() => setTarget({ host, kind: 'replace' })}
                           onDelete={() => setTarget({ host, kind: 'delete' })}
                           isDecommissioned={Boolean(host.decommissionedAt)}
                           canTransition={host.state !== 'disposed'}
+                          canReplace={host.state === 'decommissioned'}
                         />
                       </TableCell>
                     </TableRow>
@@ -224,6 +228,16 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
           host={target.host}
         />
       ) : null}
+      {target?.kind === 'replace' ? (
+        <HostReplaceDialog
+          key={target.host.id}
+          open
+          onOpenChange={(open) => !open && setTarget(null)}
+          clusterId={clusterId}
+          host={target.host}
+          candidates={hosts}
+        />
+      ) : null}
     </div>
   );
 }
@@ -233,9 +247,11 @@ interface RowActionsProps {
   onResize: () => void;
   onDecommission: () => void;
   onTransition: () => void;
+  onReplace: () => void;
   onDelete: () => void;
   isDecommissioned: boolean;
   canTransition: boolean;
+  canReplace: boolean;
 }
 
 function RowActions({
@@ -243,9 +259,11 @@ function RowActions({
   onResize,
   onDecommission,
   onTransition,
+  onReplace,
   onDelete,
   isDecommissioned,
   canTransition,
+  canReplace,
 }: RowActionsProps): React.JSX.Element {
   return (
     <div className="flex items-center justify-end gap-1">
@@ -256,6 +274,11 @@ function RowActions({
       >
         <ArrowRightLeft className="h-3.5 w-3.5" />
       </IconButton>
+      {canReplace ? (
+        <IconButton onClick={onReplace} title="Replace…">
+          <Replace className="h-3.5 w-3.5" />
+        </IconButton>
+      ) : null}
       <IconButton onClick={onResize} title="Resize">
         <Plus className="h-3.5 w-3.5" />
       </IconButton>
