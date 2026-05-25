@@ -1,6 +1,14 @@
 import type { HostResponse } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  ArrowRightLeft,
+  ChevronDown,
+  ChevronRight,
+  MoreVertical,
+  Pencil,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 import { Fragment, useState } from 'react';
 
 import { Badge } from '@/components/ui/badge';
@@ -25,6 +33,7 @@ import {
   DecommissionHostDialog,
   DeleteHostDialog,
   EditHostDialog,
+  HostTransitionDialog,
   ResizeHostDialog,
 } from './host-dialogs';
 
@@ -32,7 +41,7 @@ interface HostsTabProps {
   clusterId: string;
 }
 
-type DialogKind = 'edit' | 'resize' | 'decommission' | 'delete';
+type DialogKind = 'edit' | 'resize' | 'decommission' | 'delete' | 'transition';
 
 export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
@@ -149,8 +158,10 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                           onEdit={() => setTarget({ host, kind: 'edit' })}
                           onResize={() => setTarget({ host, kind: 'resize' })}
                           onDecommission={() => setTarget({ host, kind: 'decommission' })}
+                          onTransition={() => setTarget({ host, kind: 'transition' })}
                           onDelete={() => setTarget({ host, kind: 'delete' })}
                           isDecommissioned={Boolean(host.decommissionedAt)}
+                          canTransition={host.state !== 'disposed'}
                         />
                       </TableCell>
                     </TableRow>
@@ -204,6 +215,15 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
           host={target.host}
         />
       ) : null}
+      {target?.kind === 'transition' ? (
+        <HostTransitionDialog
+          key={target.host.id}
+          open
+          onOpenChange={(open) => !open && setTarget(null)}
+          clusterId={clusterId}
+          host={target.host}
+        />
+      ) : null}
     </div>
   );
 }
@@ -212,19 +232,30 @@ interface RowActionsProps {
   onEdit: () => void;
   onResize: () => void;
   onDecommission: () => void;
+  onTransition: () => void;
   onDelete: () => void;
   isDecommissioned: boolean;
+  canTransition: boolean;
 }
 
 function RowActions({
   onEdit,
   onResize,
   onDecommission,
+  onTransition,
   onDelete,
   isDecommissioned,
+  canTransition,
 }: RowActionsProps): React.JSX.Element {
   return (
     <div className="flex items-center justify-end gap-1">
+      <IconButton
+        onClick={onTransition}
+        title={canTransition ? 'Transition…' : 'No further transitions'}
+        disabled={!canTransition}
+      >
+        <ArrowRightLeft className="h-3.5 w-3.5" />
+      </IconButton>
       <IconButton onClick={onResize} title="Resize">
         <Plus className="h-3.5 w-3.5" />
       </IconButton>
@@ -248,11 +279,13 @@ function IconButton({
   children,
   title,
   destructive,
+  disabled,
   onClick,
 }: {
   children: React.ReactNode;
   title: string;
   destructive?: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }): React.JSX.Element {
   return (
@@ -261,8 +294,10 @@ function IconButton({
       onClick={onClick}
       title={title}
       aria-label={title}
+      disabled={disabled}
       className={cn(
         'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
+        'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
         destructive
           ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
           : 'text-muted-foreground hover:bg-accent hover:text-foreground',
