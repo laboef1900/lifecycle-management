@@ -112,6 +112,14 @@ export function FleetUtilizationHeatmap({
             <tr key={entry.cluster.id}>
               <th scope="row" className="whitespace-nowrap text-left font-medium text-foreground">
                 {entry.cluster.name}
+                {entry.error ? (
+                  <span
+                    className="ml-1.5 text-[10px] font-normal text-destructive"
+                    title={`Forecast load failed: ${entry.error}`}
+                  >
+                    (failed)
+                  </span>
+                ) : null}
               </th>
               {cells.map((cell, i) => {
                 const pct = cell.util === null ? null : (cell.util * 100).toFixed(1);

@@ -113,4 +113,11 @@ describe('<FleetUtilizationHeatmap>', () => {
     const { container } = render(<FleetUtilizationHeatmap entries={[]} />);
     expect(container.firstChild).toBeNull();
   });
+
+  it('shows a "(failed)" marker next to the cluster name when the entry has an error', () => {
+    const entries: ClusterForecastEntry[] = [entry('Errored', [], undefined, 0)];
+    entries[0]!.error = 'timeout';
+    render(<FleetUtilizationHeatmap entries={entries} />);
+    expect(screen.getByText(/\(failed\)/i)).toBeInTheDocument();
+  });
 });

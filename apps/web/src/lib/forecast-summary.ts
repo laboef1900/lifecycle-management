@@ -76,6 +76,8 @@ export interface ClusterForecastEntry {
   months: ForecastMonthPoint[];
   thresholds: { warn: number; crit: number };
   summary: RunwaySummary;
+  /** Set when the cluster's forecast query failed. */
+  error?: string;
 }
 
 export interface ClusterForecastSource {
@@ -86,17 +88,28 @@ export interface ClusterForecastSource {
 export function buildClusterForecastEntries(
   clusters: ClusterResponse[],
   forecastsById: Record<string, ClusterForecastSource | undefined>,
+  errorsById?: Record<string, string | undefined>,
 ): ClusterForecastEntry[] {
   const entries: ClusterForecastEntry[] = [];
   for (const cluster of clusters) {
     const source = forecastsById[cluster.id];
-    if (!source) continue;
-    entries.push({
-      cluster,
-      months: source.months,
-      thresholds: source.thresholds,
-      summary: runwayToWarn(source.months, source.thresholds),
-    });
+    const error = errorsById?.[cluster.id];
+    if (source) {
+      entries.push({
+        cluster,
+        months: source.months,
+        thresholds: source.thresholds,
+        summary: runwayToWarn(source.months, source.thresholds),
+      });
+    } else if (error) {
+      entries.push({
+        cluster,
+        months: [],
+        thresholds: { warn: WARN_THRESHOLD, crit: CRIT_THRESHOLD },
+        summary: { months: null, alreadyBreached: false },
+        error,
+      });
+    }
   }
   return entries;
 }

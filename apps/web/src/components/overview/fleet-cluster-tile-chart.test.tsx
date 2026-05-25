@@ -145,4 +145,11 @@ describe('<FleetClusterTileChart>', () => {
     expect(screen.getByText(/No forecast/i)).toBeInTheDocument();
     expect(screen.queryByTestId('chart')).toBeNull();
   });
+
+  it('renders "Failed to load" when the entry has an error', () => {
+    render(<FleetClusterTileChart entry={entry({ months: [], error: 'timeout' })} />);
+    expect(screen.getByText('CL-Test')).toBeInTheDocument();
+    expect(screen.getByText(/Failed to load/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No forecast/i)).toBeNull();
+  });
 });

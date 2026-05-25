@@ -91,6 +91,10 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
               </LineChart>
             </ResponsiveContainer>
           </div>
+        ) : entry.error ? (
+          <div className="flex h-[110px] items-center justify-center text-xs text-destructive">
+            Failed to load
+          </div>
         ) : (
           <div className="flex h-[110px] items-center justify-center text-xs text-fg-muted">
             No forecast

@@ -68,3 +68,29 @@ describe('buildClusterForecastEntries', () => {
     expect(entries[0]?.summary).toEqual({ months: 0, alreadyBreached: 'warn' });
   });
 });
+
+describe('buildClusterForecastEntries — errors', () => {
+  it('includes errored clusters with the error message and empty months', () => {
+    const cluster = makeCluster('Errored');
+    const entries = buildClusterForecastEntries([cluster], {}, { [cluster.id]: 'timeout' });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.error).toBe('timeout');
+    expect(entries[0]?.months).toEqual([]);
+  });
+
+  it('prefers a successful forecast over an error for the same cluster', () => {
+    const cluster = makeCluster('A');
+    const entries = buildClusterForecastEntries(
+      [cluster],
+      {
+        [cluster.id]: {
+          months: [{ month: '2026-05-01', consumption: 400, capacity: 1000, utilization: 0.4 }],
+          thresholds: { warn: 0.7, crit: 0.9 },
+        },
+      },
+      { [cluster.id]: 'this should be ignored' },
+    );
+    expect(entries[0]?.error).toBeUndefined();
+    expect(entries[0]?.months).toHaveLength(1);
+  });
+});

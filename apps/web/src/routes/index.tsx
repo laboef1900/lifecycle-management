@@ -71,7 +71,16 @@ function OverviewPage(): React.JSX.Element {
     }
   });
 
-  const clusterEntries = buildClusterForecastEntries(clusters, forecastsById);
+  const errorsById: Record<string, string | undefined> = {};
+  clusters.forEach((cluster, i) => {
+    const q = forecastQueries[i];
+    if (q?.isError && q.error) {
+      errorsById[cluster.id] =
+        q.error instanceof Error ? q.error.message : 'Failed to load forecast';
+    }
+  });
+
+  const clusterEntries = buildClusterForecastEntries(clusters, forecastsById, errorsById);
   const forecastsLoading = forecastQueries.some((q) => q.isPending);
 
   const fleetRunway = fleetRunwayToWarn(
@@ -176,9 +185,13 @@ function OverviewSkeleton(): React.JSX.Element {
       <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
       <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
       <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
-      <Card className="col-span-12 h-[320px] animate-pulse" />
-      <Card className="col-span-12 h-32 animate-pulse md:col-span-6" />
-      <Card className="col-span-12 h-32 animate-pulse md:col-span-6" />
+      <div className="col-span-12 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <Card className="h-[180px] animate-pulse" />
+        <Card className="h-[180px] animate-pulse" />
+        <Card className="h-[180px] animate-pulse" />
+        <Card className="h-[180px] animate-pulse" />
+      </div>
+      <Card className="col-span-12 h-32 animate-pulse" />
     </div>
   );
 }
