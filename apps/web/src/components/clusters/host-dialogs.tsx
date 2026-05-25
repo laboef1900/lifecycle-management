@@ -57,6 +57,13 @@ interface HostFormState {
   description: string;
   commissionedAt: string;
   capacityAmount: string;
+  serialNumber: string;
+  vendor: string;
+  model: string;
+  purchasedAt: string;
+  warrantyEndsAt: string;
+  eolAt: string;
+  runPastEol: boolean;
 }
 
 const blankHostForm = (): HostFormState => ({
@@ -64,7 +71,32 @@ const blankHostForm = (): HostFormState => ({
   description: '',
   commissionedAt: todayIso(),
   capacityAmount: '0',
+  serialNumber: '',
+  vendor: '',
+  model: '',
+  purchasedAt: '',
+  warrantyEndsAt: '',
+  eolAt: '',
+  runPastEol: false,
 });
+
+/**
+ * Trim a string field and return it for wire submission, or `null` to clear it
+ * if blank. Used by both CreateHostDialog and EditHostDialog when serializing
+ * the Asset section's optional text fields.
+ */
+function optionalText(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Same helper for date inputs — empty string means "no date" and serializes to
+ * null on the wire (matches dateOnly.nullable() in shared schemas).
+ */
+function optionalDate(value: string): string | null {
+  return value.length > 0 ? value : null;
+}
 
 export function CreateHostDialog({
   open,
@@ -102,6 +134,13 @@ export function CreateHostDialog({
         },
       ],
       ...(description.length > 0 && { description }),
+      serialNumber: optionalText(form.serialNumber),
+      vendor: optionalText(form.vendor),
+      model: optionalText(form.model),
+      purchasedAt: optionalDate(form.purchasedAt),
+      warrantyEndsAt: optionalDate(form.warrantyEndsAt),
+      eolAt: optionalDate(form.eolAt),
+      runPastEol: form.runPastEol,
     };
     const parsed = hostCreateInputSchema.safeParse(payload);
     if (!parsed.success) {
@@ -129,7 +168,7 @@ export function CreateHostDialog({
         }
       }}
     >
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Add host</DialogTitle>
           <DialogDescription>
@@ -169,6 +208,18 @@ export function CreateHostDialog({
             error={errors.capacityAmount}
             required
           />
+          <AssetFieldset
+            values={{
+              serialNumber: form.serialNumber,
+              vendor: form.vendor,
+              model: form.model,
+              purchasedAt: form.purchasedAt,
+              warrantyEndsAt: form.warrantyEndsAt,
+              eolAt: form.eolAt,
+              runPastEol: form.runPastEol,
+            }}
+            onChange={(patch) => setForm({ ...form, ...patch })}
+          />
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
@@ -183,6 +234,86 @@ export function CreateHostDialog({
   );
 }
 
+// ---------- Asset fieldset (shared by Create + Edit) ----------
+
+interface AssetValues {
+  serialNumber: string;
+  vendor: string;
+  model: string;
+  purchasedAt: string;
+  warrantyEndsAt: string;
+  eolAt: string;
+  runPastEol: boolean;
+}
+
+interface AssetFieldsetProps {
+  values: AssetValues;
+  onChange: (patch: Partial<AssetValues>) => void;
+}
+
+/**
+ * Shared "Asset" fieldset used by both CreateHostDialog and EditHostDialog so
+ * the optional asset-tracking fields (serial, vendor, model, purchase/warranty
+ * /EOL dates, runPastEol opt-out) stay in sync between the two forms.
+ */
+function AssetFieldset({ values, onChange }: AssetFieldsetProps): React.JSX.Element {
+  return (
+    <fieldset className="mt-2 border-t border-border pt-4">
+      <legend className="text-sm font-medium">Asset</legend>
+      <p className="mt-1 text-xs text-fg-muted">
+        Optional hardware metadata used for warranty and EOL reporting.
+      </p>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field
+          label="Serial number"
+          value={values.serialNumber}
+          onChange={(e) => onChange({ serialNumber: e.target.value })}
+          placeholder="Optional"
+        />
+        <Field
+          label="Vendor"
+          value={values.vendor}
+          onChange={(e) => onChange({ vendor: e.target.value })}
+          placeholder="e.g. HPE"
+        />
+        <Field
+          label="Model"
+          value={values.model}
+          onChange={(e) => onChange({ model: e.target.value })}
+          placeholder="e.g. ProLiant DL380"
+        />
+        <Field
+          label="Purchased at"
+          type="date"
+          value={values.purchasedAt}
+          onChange={(e) => onChange({ purchasedAt: e.target.value })}
+        />
+        <Field
+          label="Warranty ends"
+          type="date"
+          value={values.warrantyEndsAt}
+          onChange={(e) => onChange({ warrantyEndsAt: e.target.value })}
+        />
+        <Field
+          label="End of life"
+          type="date"
+          value={values.eolAt}
+          onChange={(e) => onChange({ eolAt: e.target.value })}
+        />
+      </div>
+      <label className="mt-3 flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5 h-4 w-4 rounded border-input"
+          checked={values.runPastEol}
+          onChange={(e) => onChange({ runPastEol: e.target.checked })}
+        />
+        <span>Plan to run past EOL (don&rsquo;t drop from forecast)</span>
+      </label>
+    </fieldset>
+  );
+}
+
 // ---------- Edit host (name + description) ----------
 
 export function EditHostDialog({
@@ -194,6 +325,15 @@ export function EditHostDialog({
   const { invalidate } = useHostMutations(clusterId);
   const [name, setName] = useState(host.name);
   const [description, setDescription] = useState(host.description ?? '');
+  const [asset, setAsset] = useState<AssetValues>({
+    serialNumber: host.serialNumber ?? '',
+    vendor: host.vendor ?? '',
+    model: host.model ?? '',
+    purchasedAt: host.purchasedAt ?? '',
+    warrantyEndsAt: host.warrantyEndsAt ?? '',
+    eolAt: host.eolAt ?? '',
+    runPastEol: host.runPastEol,
+  });
   const [errors, setErrors] = useState<{ name?: string }>({});
 
   const mutation = useMutation({
@@ -213,6 +353,13 @@ export function EditHostDialog({
     const payload: HostUpdateInputWire = {
       name,
       description: trimmed.length > 0 ? trimmed : null,
+      serialNumber: optionalText(asset.serialNumber),
+      vendor: optionalText(asset.vendor),
+      model: optionalText(asset.model),
+      purchasedAt: optionalDate(asset.purchasedAt),
+      warrantyEndsAt: optionalDate(asset.warrantyEndsAt),
+      eolAt: optionalDate(asset.eolAt),
+      runPastEol: asset.runPastEol,
     };
     const parsed = hostUpdateInputSchema.safeParse(payload);
     if (!parsed.success) {
@@ -225,7 +372,7 @@ export function EditHostDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit host</DialogTitle>
         </DialogHeader>
@@ -241,6 +388,10 @@ export function EditHostDialog({
             label="Description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+          />
+          <AssetFieldset
+            values={asset}
+            onChange={(patch) => setAsset((prev) => ({ ...prev, ...patch }))}
           />
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>

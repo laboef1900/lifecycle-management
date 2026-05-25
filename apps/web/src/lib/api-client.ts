@@ -110,6 +110,13 @@ export interface HostCreateInputWire {
   commissionedAt: string;
   decommissionedAt?: string | null;
   capacities: Array<{ metricTypeKey: string; effectiveFrom: string; amount: number }>;
+  serialNumber?: string | null;
+  vendor?: string | null;
+  model?: string | null;
+  purchasedAt?: string | null;
+  warrantyEndsAt?: string | null;
+  eolAt?: string | null;
+  runPastEol?: boolean;
 }
 
 export interface HostUpdateInputWire {
@@ -117,6 +124,13 @@ export interface HostUpdateInputWire {
   description?: string | null;
   commissionedAt?: string;
   decommissionedAt?: string | null;
+  serialNumber?: string | null;
+  vendor?: string | null;
+  model?: string | null;
+  purchasedAt?: string | null;
+  warrantyEndsAt?: string | null;
+  eolAt?: string | null;
+  runPastEol?: boolean;
 }
 
 export interface CapacityAppendInputWire {
