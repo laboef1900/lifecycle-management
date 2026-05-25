@@ -40,7 +40,9 @@ export class ForecastService {
         hosts: {
           include: {
             capacities: { where: { metricTypeId: metricType.id } },
-            replacedByLinks: { include: { new: { select: { commissionedAt: true } } } },
+            replacedByLinks: {
+              include: { new: { select: { commissionedAt: true, state: true } } },
+            },
           },
         },
         applications: {

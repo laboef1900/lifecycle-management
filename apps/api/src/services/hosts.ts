@@ -19,7 +19,7 @@ const hostInclude = {
     include: { metricType: true },
     orderBy: [{ metricType: { key: 'asc' as const } }, { effectiveFrom: 'asc' as const }],
   },
-  replacedByLinks: { include: { new: { select: { commissionedAt: true } } } },
+  replacedByLinks: { include: { new: { select: { commissionedAt: true, state: true } } } },
 } satisfies Prisma.HostInclude;
 
 type HostRow = Prisma.HostGetPayload<{ include: typeof hostInclude }>;

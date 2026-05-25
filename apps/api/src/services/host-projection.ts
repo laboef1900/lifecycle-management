@@ -1,7 +1,7 @@
 import type { HostState } from '@prisma/client';
 
 interface MinimalReplacement {
-  new: { commissionedAt: Date };
+  new: { commissionedAt: Date; state: HostState };
 }
 
 export interface ProjectableHost {
@@ -17,6 +17,8 @@ export function projectedDecommissionDate(host: ProjectableHost): Date | null {
   if (!host.eolAt || host.runPastEol) return null;
   if (!ACTIVE.includes(host.state)) return null;
   const eol = host.eolAt;
-  const covered = host.replacedByLinks.some((r) => r.new.commissionedAt <= eol);
+  const covered = host.replacedByLinks.some(
+    (r) => r.new.commissionedAt <= eol && ACTIVE.includes(r.new.state),
+  );
   return covered ? null : eol;
 }

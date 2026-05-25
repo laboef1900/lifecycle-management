@@ -23,7 +23,7 @@ const clusterInclude = {
   hosts: {
     include: {
       capacities: true,
-      replacedByLinks: { include: { new: { select: { commissionedAt: true } } } },
+      replacedByLinks: { include: { new: { select: { commissionedAt: true, state: true } } } },
     },
   },
   applications: { include: { allocations: true } },
