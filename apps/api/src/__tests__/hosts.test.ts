@@ -314,3 +314,68 @@ describe('POST /api/hosts/:id/capacity', () => {
     expect(response.statusCode).toBe(404);
   });
 });
+
+describe('asset attributes', () => {
+  it('round-trips serial/vendor/model/warranty/eol on create', async () => {
+    const response = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload({
+        serialNumber: 'SN-001',
+        vendor: 'Dell',
+        model: 'R760',
+        purchasedAt: '2024-01-15',
+        warrantyEndsAt: '2027-01-15',
+        eolAt: '2029-01-15',
+      }),
+    });
+    expect(response.statusCode).toBe(201);
+    const body = response.json() as Record<string, unknown>;
+    expect(body).toMatchObject({
+      serialNumber: 'SN-001',
+      vendor: 'Dell',
+      model: 'R760',
+      purchasedAt: '2024-01-15',
+      warrantyEndsAt: '2027-01-15',
+      eolAt: '2029-01-15',
+      runPastEol: false,
+      state: 'in_service',
+    });
+  });
+
+  it('rejects updates that try to set state via PUT', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    const response = await server.inject({
+      method: 'PUT',
+      url: `/api/hosts/${id}`,
+      payload: { state: 'degraded' },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('round-trips asset attributes on PUT update', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    const update = await server.inject({
+      method: 'PUT',
+      url: `/api/hosts/${id}`,
+      payload: { serialNumber: 'SN-999', vendor: 'HPE', eolAt: '2030-06-01', runPastEol: true },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(update.json()).toMatchObject({
+      serialNumber: 'SN-999',
+      vendor: 'HPE',
+      eolAt: '2030-06-01',
+      runPastEol: true,
+    });
+  });
+});

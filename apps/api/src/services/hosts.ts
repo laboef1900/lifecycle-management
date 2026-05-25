@@ -61,6 +61,13 @@ export class HostsService {
           description: input.description ?? null,
           commissionedAt: input.commissionedAt,
           decommissionedAt: input.decommissionedAt ?? null,
+          serialNumber: input.serialNumber ?? null,
+          vendor: input.vendor ?? null,
+          model: input.model ?? null,
+          purchasedAt: input.purchasedAt ?? null,
+          warrantyEndsAt: input.warrantyEndsAt ?? null,
+          eolAt: input.eolAt ?? null,
+          runPastEol: input.runPastEol ?? false,
           capacities: {
             create: input.capacities.map((c) => {
               const metricType = metricTypes.get(c.metricTypeKey);
@@ -113,6 +120,13 @@ export class HostsService {
     if (input.decommissionedAt !== undefined) {
       data.decommissionedAt = input.decommissionedAt;
     }
+    if (input.serialNumber !== undefined) data.serialNumber = input.serialNumber ?? null;
+    if (input.vendor !== undefined) data.vendor = input.vendor ?? null;
+    if (input.model !== undefined) data.model = input.model ?? null;
+    if (input.purchasedAt !== undefined) data.purchasedAt = input.purchasedAt ?? null;
+    if (input.warrantyEndsAt !== undefined) data.warrantyEndsAt = input.warrantyEndsAt ?? null;
+    if (input.eolAt !== undefined) data.eolAt = input.eolAt ?? null;
+    if (input.runPastEol !== undefined) data.runPastEol = input.runPastEol;
 
     await this.prisma.host.update({ where: { id }, data });
     return this.getById(tenantId, id);
