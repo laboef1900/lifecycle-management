@@ -22,6 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { UtilizationGauge } from '@/components/ui/utilization-gauge';
 import { api } from '@/lib/api-client';
 import { runwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 import { useMediaQuery } from '@/lib/use-media-query';
 
 const numberFormat = new Intl.NumberFormat('en-US');
@@ -144,9 +145,10 @@ function ClusterDetailKpiStrip({
 }): React.JSX.Element {
   const headroom = Math.max(0, metric.currentCapacity - metric.currentConsumption);
   const summary = runwayToWarn(forecast.months, forecast.effectiveThresholds);
+  const procurementKpi = deriveProcurementKpi(forecast.procurement);
   return (
     <div data-testid="kpi-strip" className="grid grid-cols-12 gap-2">
-      <Card className="col-span-12 flex items-center gap-4 p-3.5 sm:col-span-4">
+      <Card className="col-span-12 flex items-center gap-4 p-3.5 sm:col-span-6 lg:col-span-3">
         <UtilizationGauge
           value={metric.utilization}
           size="md"
@@ -163,13 +165,13 @@ function ClusterDetailKpiStrip({
         </div>
       </Card>
       <KpiTile
-        className="col-span-12 sm:col-span-4"
+        className="col-span-12 sm:col-span-6 lg:col-span-3"
         label="Headroom"
         value={`${numberFormat.format(Math.round(headroom))} GB`}
         caption={`of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`}
         status={utilStatus(metric.utilization, forecast.effectiveThresholds)}
       />
-      <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-4">
+      <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-6 lg:col-span-3">
         <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">Runway</p>
         <div className="mt-1.5">
           <RunwayPill
@@ -179,6 +181,13 @@ function ClusterDetailKpiStrip({
           />
         </div>
       </Card>
+      <KpiTile
+        className="col-span-12 sm:col-span-6 lg:col-span-3"
+        label="Order by"
+        value={procurementKpi.value}
+        caption={procurementKpi.caption}
+        status={procurementKpi.status}
+      />
     </div>
   );
 }

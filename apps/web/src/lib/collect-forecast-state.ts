@@ -1,4 +1,9 @@
-import type { ClusterResponse, ForecastMonthPoint, ForecastResponse } from '@lcm/shared';
+import type {
+  ClusterResponse,
+  ForecastMonthPoint,
+  ForecastResponse,
+  ProcurementInfo,
+} from '@lcm/shared';
 
 import { aggregateFleet, type FleetSummary } from './aggregate-fleet';
 import type { ClusterForecastSource } from './forecast-summary';
@@ -15,6 +20,7 @@ export interface ForecastState {
   summary: FleetSummary;
   forecastsById: Record<string, ClusterForecastSource>;
   errorsById: Record<string, string | undefined>;
+  procurementByClusterId: Record<string, ProcurementInfo>;
   forecastsLoading: boolean;
   responsiveCount: number;
 }
@@ -26,6 +32,7 @@ export function collectForecastState(
   const forecastEntries: Array<{ clusterId: string; data: ForecastResponse | undefined }> = [];
   const forecastsById: Record<string, ClusterForecastSource> = {};
   const errorsById: Record<string, string | undefined> = {};
+  const procurementByClusterId: Record<string, ProcurementInfo> = {};
   let forecastsLoading = false;
   let responsiveCount = 0;
 
@@ -44,6 +51,7 @@ export function collectForecastState(
           crit: data.effectiveThresholds.crit,
         },
       };
+      procurementByClusterId[cluster.id] = data.procurement;
     }
 
     if (q?.isError && q.error !== undefined && q.error !== null) {
@@ -57,5 +65,31 @@ export function collectForecastState(
 
   const summary = aggregateFleet(clusters, forecastEntries);
 
-  return { summary, forecastsById, errorsById, forecastsLoading, responsiveCount };
+  return {
+    summary,
+    forecastsById,
+    errorsById,
+    procurementByClusterId,
+    forecastsLoading,
+    responsiveCount,
+  };
+}
+
+/**
+ * Pick the cluster whose `orderByDate` is earliest (= most urgent procurement
+ * deadline across the fleet). Clusters with no projected breach are skipped.
+ */
+export function earliestOrderByFromFleet(
+  clusters: ClusterResponse[],
+  procurementByClusterId: Record<string, ProcurementInfo>,
+): { cluster: ClusterResponse; procurement: ProcurementInfo } | null {
+  let best: { cluster: ClusterResponse; procurement: ProcurementInfo } | null = null;
+  for (const cluster of clusters) {
+    const info = procurementByClusterId[cluster.id];
+    if (!info || info.orderByDate === null) continue;
+    if (!best || info.orderByDate < best.procurement.orderByDate!) {
+      best = { cluster, procurement: info };
+    }
+  }
+  return best;
 }

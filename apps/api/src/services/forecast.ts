@@ -1,4 +1,4 @@
-import type { EffectiveThresholds, EventCategory } from '@lcm/shared';
+import type { EffectiveThresholds, EventCategory, ProcurementInfo } from '@lcm/shared';
 
 import { formatDate } from '../lib/dates.js';
 
@@ -75,9 +75,10 @@ export interface ForecastResult {
   hosts: ForecastEntityContribution[];
   applications: ForecastEntityContribution[];
   effectiveThresholds: EffectiveThresholds;
+  procurement: ProcurementInfo;
 }
 
-export type ComputedForecast = Omit<ForecastResult, 'effectiveThresholds'>;
+export type ComputedForecast = Omit<ForecastResult, 'effectiveThresholds' | 'procurement'>;
 
 export function computeForecast(
   input: ForecastInput,

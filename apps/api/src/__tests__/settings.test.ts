@@ -39,9 +39,14 @@ describe('GET /api/settings/tenant', () => {
   it('returns defaults on first read', async () => {
     const res = await server.inject({ method: 'GET', url: '/api/settings/tenant' });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { warnThreshold: number; critThreshold: number };
+    const body = res.json() as {
+      warnThreshold: number;
+      critThreshold: number;
+      procurementLeadTimeWeeks: number;
+    };
     expect(body.warnThreshold).toBeCloseTo(0.7);
     expect(body.critThreshold).toBeCloseTo(0.9);
+    expect(body.procurementLeadTimeWeeks).toBe(8);
   });
 });
 
@@ -50,18 +55,64 @@ describe('PUT /api/settings/tenant', () => {
     const res = await server.inject({
       method: 'PUT',
       url: '/api/settings/tenant',
-      payload: { warnThreshold: 0.65, critThreshold: 0.85 },
+      payload: { warnThreshold: 0.65, critThreshold: 0.85, procurementLeadTimeWeeks: 10 },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { warnThreshold: number };
+    const body = res.json() as { warnThreshold: number; procurementLeadTimeWeeks: number };
     expect(body.warnThreshold).toBeCloseTo(0.65);
+    expect(body.procurementLeadTimeWeeks).toBe(10);
   });
 
   it('rejects warn >= crit', async () => {
     const res = await server.inject({
       method: 'PUT',
       url: '/api/settings/tenant',
-      payload: { warnThreshold: 0.9, critThreshold: 0.7 },
+      payload: { warnThreshold: 0.9, critThreshold: 0.7, procurementLeadTimeWeeks: 8 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts procurementLeadTimeWeeks at the 0 boundary (disables lead-time KPI)', async () => {
+    const res = await server.inject({
+      method: 'PUT',
+      url: '/api/settings/tenant',
+      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 0 },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('accepts procurementLeadTimeWeeks at the 104 boundary (two years)', async () => {
+    const res = await server.inject({
+      method: 'PUT',
+      url: '/api/settings/tenant',
+      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 104 },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects procurementLeadTimeWeeks above 104', async () => {
+    const res = await server.inject({
+      method: 'PUT',
+      url: '/api/settings/tenant',
+      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 105 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects negative procurementLeadTimeWeeks', async () => {
+    const res = await server.inject({
+      method: 'PUT',
+      url: '/api/settings/tenant',
+      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: -1 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects non-integer procurementLeadTimeWeeks', async () => {
+    const res = await server.inject({
+      method: 'PUT',
+      url: '/api/settings/tenant',
+      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 4.5 },
     });
     expect(res.statusCode).toBe(400);
   });

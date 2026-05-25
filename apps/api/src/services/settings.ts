@@ -38,6 +38,7 @@ export class SettingsService {
     return {
       warnThreshold: decimalToNumber(row.warnThreshold),
       critThreshold: decimalToNumber(row.critThreshold),
+      procurementLeadTimeWeeks: row.procurementLeadTimeWeeks,
     };
   }
 
@@ -48,15 +49,18 @@ export class SettingsService {
         tenantId,
         warnThreshold: input.warnThreshold,
         critThreshold: input.critThreshold,
+        procurementLeadTimeWeeks: input.procurementLeadTimeWeeks,
       },
       update: {
         warnThreshold: input.warnThreshold,
         critThreshold: input.critThreshold,
+        procurementLeadTimeWeeks: input.procurementLeadTimeWeeks,
       },
     });
     return {
       warnThreshold: decimalToNumber(row.warnThreshold),
       critThreshold: decimalToNumber(row.critThreshold),
+      procurementLeadTimeWeeks: row.procurementLeadTimeWeeks,
     };
   }
 

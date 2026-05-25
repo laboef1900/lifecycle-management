@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { api } from '@/lib/api-client';
 
-type PctInput = number | '';
+type NumInput = number | '';
 
 export function ForecastThresholdsForm(): React.JSX.Element {
   const queryClient = useQueryClient();
@@ -18,8 +18,9 @@ export function ForecastThresholdsForm(): React.JSX.Element {
   // Local edits override the server-derived defaults. `null` means "not edited
   // — use the server value". Keeping edits decoupled from server data avoids
   // the setState-in-effect anti-pattern.
-  const [warnEdit, setWarnEdit] = React.useState<PctInput | null>(null);
-  const [critEdit, setCritEdit] = React.useState<PctInput | null>(null);
+  const [warnEdit, setWarnEdit] = React.useState<NumInput | null>(null);
+  const [critEdit, setCritEdit] = React.useState<NumInput | null>(null);
+  const [leadEdit, setLeadEdit] = React.useState<NumInput | null>(null);
   const [validationError, setValidationError] = React.useState<string | null>(null);
 
   const initialWarn = settingsQuery.data
@@ -28,41 +29,58 @@ export function ForecastThresholdsForm(): React.JSX.Element {
   const initialCrit = settingsQuery.data
     ? Math.round(settingsQuery.data.critThreshold * 100)
     : null;
+  const initialLead = settingsQuery.data?.procurementLeadTimeWeeks ?? null;
 
-  const warnPct: PctInput = warnEdit ?? initialWarn ?? '';
-  const critPct: PctInput = critEdit ?? initialCrit ?? '';
+  const warnPct: NumInput = warnEdit ?? initialWarn ?? '';
+  const critPct: NumInput = critEdit ?? initialCrit ?? '';
+  const leadWeeks: NumInput = leadEdit ?? initialLead ?? '';
 
   const mutation = useMutation({
-    mutationFn: (input: { warnThreshold: number; critThreshold: number }) =>
-      api.settings.tenant.update(input),
+    mutationFn: (input: {
+      warnThreshold: number;
+      critThreshold: number;
+      procurementLeadTimeWeeks: number;
+    }) => api.settings.tenant.update(input),
     onSuccess: (data) => {
       queryClient.setQueryData(['tenant-settings'], data);
       // After save succeeds the server values now match; clear local edits so
       // the dirty check resets.
       setWarnEdit(null);
       setCritEdit(null);
+      setLeadEdit(null);
     },
   });
 
   const dirty =
     typeof warnPct === 'number' &&
     typeof critPct === 'number' &&
+    typeof leadWeeks === 'number' &&
     initialWarn !== null &&
     initialCrit !== null &&
-    (warnPct !== initialWarn || critPct !== initialCrit);
+    initialLead !== null &&
+    (warnPct !== initialWarn || critPct !== initialCrit || leadWeeks !== initialLead);
 
   const handleSubmit = (e: React.FormEvent): void => {
     e.preventDefault();
     setValidationError(null);
     if (typeof warnPct !== 'number' || typeof critPct !== 'number') return;
+    if (typeof leadWeeks !== 'number') return;
     if (warnPct >= critPct) {
       setValidationError('Warn must be less than crit.');
       return;
     }
-    mutation.mutate({ warnThreshold: warnPct / 100, critThreshold: critPct / 100 });
+    if (!Number.isInteger(leadWeeks) || leadWeeks < 0 || leadWeeks > 104) {
+      setValidationError('Procurement lead time must be a whole number from 0 to 104 weeks.');
+      return;
+    }
+    mutation.mutate({
+      warnThreshold: warnPct / 100,
+      critThreshold: critPct / 100,
+      procurementLeadTimeWeeks: leadWeeks,
+    });
   };
 
-  const parseInput = (raw: string): PctInput => (raw === '' ? '' : Number(raw));
+  const parseInput = (raw: string): NumInput => (raw === '' ? '' : Number(raw));
 
   return (
     <Card className="p-4">
@@ -72,7 +90,7 @@ export function ForecastThresholdsForm(): React.JSX.Element {
           Default warn/crit bands. Per-cluster overrides apply on the cluster's Settings tab.
         </p>
       </header>
-      <form onSubmit={handleSubmit} className="space-y-3">
+      <form onSubmit={handleSubmit} className="space-y-3" noValidate>
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
@@ -103,6 +121,24 @@ export function ForecastThresholdsForm(): React.JSX.Element {
             />
           </label>
         </div>
+        <label className="block">
+          <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+            Procurement lead time (weeks)
+          </span>
+          <Input
+            type="number"
+            min={0}
+            max={104}
+            step={1}
+            aria-label="Procurement lead time (weeks)"
+            value={leadWeeks}
+            onChange={(e) => setLeadEdit(parseInput(e.target.value))}
+            className="mt-1"
+          />
+          <span className="mt-1 block text-[11px] text-fg-subtle">
+            How long from PO to racked + in-service. Set to 0 to hide the lead-time KPI.
+          </span>
+        </label>
         {validationError ? (
           <p className="text-sm text-destructive" role="alert">
             {validationError}
