@@ -1,18 +1,21 @@
-import type { ForecastResponse } from '@lcm/shared';
+import type { ForecastMonthPoint, ForecastResponse } from '@lcm/shared';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
-
 import { resolveWindow } from '@/components/clusters/window-controls';
-import { ClusterTile } from '@/components/overview/cluster-tile';
-import { FleetCapacityChart } from '@/components/overview/fleet-capacity-chart';
+import { FleetClusterGrid } from '@/components/overview/fleet-cluster-grid';
+import { FleetUtilizationHeatmap } from '@/components/overview/fleet-utilization-heatmap';
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
 import { api } from '@/lib/api-client';
-import { type KpiStatus, fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import {
+  type KpiStatus,
+  buildClusterForecastEntries,
+  fleetRunwayToWarn,
+  utilStatus,
+} from '@/lib/forecast-summary';
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
-import { useMediaQuery } from '@/lib/use-media-query';
 
 export const Route = createFileRoute('/')({
   component: OverviewPage,
@@ -49,8 +52,27 @@ function OverviewPage(): React.JSX.Element {
   }));
 
   const summary = aggregateFleet(clusters, forecastEntries);
-  const isWide = useMediaQuery('(min-width: 640px)');
   const thresholds = useEffectiveThresholds();
+
+  const forecastsById: Record<
+    string,
+    { months: ForecastMonthPoint[]; thresholds: { warn: number; crit: number } }
+  > = {};
+  clusters.forEach((cluster, i) => {
+    const data = forecastQueries[i]?.data as ForecastResponse | undefined;
+    if (data) {
+      forecastsById[cluster.id] = {
+        months: data.months,
+        thresholds: {
+          warn: data.effectiveThresholds.warn,
+          crit: data.effectiveThresholds.crit,
+        },
+      };
+    }
+  });
+
+  const clusterEntries = buildClusterForecastEntries(clusters, forecastsById);
+  const forecastsLoading = forecastQueries.some((q) => q.isPending);
 
   const fleetRunway = fleetRunwayToWarn(
     summary.perClusterSeries.map((s) => s.months),
@@ -83,17 +105,6 @@ function OverviewPage(): React.JSX.Element {
       : 'fleet projection';
     runwayStatus = fleetRunway.months < 3 ? 'crit' : fleetRunway.months < 12 ? 'warn' : 'ok';
   }
-
-  const thresholdsByCluster = new Map<string, { warn: number; crit: number }>();
-  clusters.forEach((cluster, i) => {
-    const data = forecastQueries[i]?.data as ForecastResponse | undefined;
-    if (data) {
-      thresholdsByCluster.set(cluster.id, {
-        warn: data.effectiveThresholds.warn,
-        crit: data.effectiveThresholds.crit,
-      });
-    }
-  });
 
   const isLoading = clustersQuery.isPending;
   const isError = clustersQuery.isError;
@@ -146,33 +157,13 @@ function OverviewPage(): React.JSX.Element {
             status={runwayStatus}
           />
 
-          <Card className="col-span-12 p-4">
-            <FleetCapacityChart
-              fleetMonths={summary.fleetMonths}
-              clusters={summary.perClusterSeries.map((s) => ({
-                clusterId: s.clusterId,
-                clusterName: s.clusterName,
-              }))}
-              compact={!isWide}
-            />
-          </Card>
+          <div className="col-span-12">
+            <FleetClusterGrid entries={clusterEntries} isLoading={forecastsLoading} />
+          </div>
 
-          {summary.perClusterSeries.map((series) => {
-            const cluster = clusters.find((c) => c.id === series.clusterId);
-            if (!cluster) return null;
-            return (
-              <ClusterTile
-                key={series.clusterId}
-                className="col-span-12 md:col-span-6"
-                cluster={cluster}
-                forecastMonths={series.months}
-                horizonMonths={series.months.length}
-                {...(thresholdsByCluster.get(series.clusterId) && {
-                  thresholds: thresholdsByCluster.get(series.clusterId)!,
-                })}
-              />
-            );
-          })}
+          <div className="col-span-12">
+            <FleetUtilizationHeatmap entries={clusterEntries} isLoading={forecastsLoading} />
+          </div>
         </div>
       ) : null}
     </div>
