@@ -10,6 +10,7 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { formatDate } from '../lib/dates.js';
 
 import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
+import { projectedDecommissionDate } from './host-projection.js';
 
 const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
 
@@ -18,6 +19,7 @@ const hostInclude = {
     include: { metricType: true },
     orderBy: [{ metricType: { key: 'asc' as const } }, { effectiveFrom: 'asc' as const }],
   },
+  replacedByLinks: { include: { new: { select: { commissionedAt: true } } } },
 } satisfies Prisma.HostInclude;
 
 type HostRow = Prisma.HostGetPayload<{ include: typeof hostInclude }>;
@@ -262,6 +264,8 @@ export class HostsService {
       amount: c.amount.toNumber(),
     }));
 
+    const projDecom = projectedDecommissionDate(row);
+
     return {
       id: row.id,
       clusterId: row.clusterId,
@@ -277,7 +281,7 @@ export class HostsService {
       eolAt: row.eolAt ? formatDate(row.eolAt) : null,
       runPastEol: row.runPastEol,
       state: row.state,
-      projectedDecommissionAt: null,
+      projectedDecommissionAt: projDecom ? formatDate(projDecom) : null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       capacities,

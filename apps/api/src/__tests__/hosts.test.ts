@@ -434,3 +434,27 @@ describe('GET /api/hosts/:id/lifecycle', () => {
     expect(events.at(-1)).toMatchObject({ fromState: 'in_service', toState: 'degraded' });
   });
 });
+
+describe('projectedDecommissionAt on host response', () => {
+  it('returns the EOL date when no replacement is scheduled and runPastEol=false', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload({ eolAt: '2028-01-15' }),
+    });
+    expect(
+      (created.json() as { projectedDecommissionAt: string | null }).projectedDecommissionAt,
+    ).toBe('2028-01-15');
+  });
+
+  it('is null when runPastEol is true', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload({ eolAt: '2028-01-15', runPastEol: true }),
+    });
+    expect(
+      (created.json() as { projectedDecommissionAt: string | null }).projectedDecommissionAt,
+    ).toBeNull();
+  });
+});

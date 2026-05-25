@@ -63,6 +63,7 @@ export interface ForecastEventOutput {
 export interface ForecastEntityContribution {
   id: string;
   name: string;
+  projectedDecommissionAt?: string | null;
   contributions: Array<{ month: string; amount: number }>;
 }
 
@@ -158,6 +159,9 @@ export function computeForecast(
     hosts: hosts.map((host) => ({
       id: host.id,
       name: host.name,
+      projectedDecommissionAt: host.projectedDecommissionAt
+        ? formatDate(host.projectedDecommissionAt)
+        : null,
       contributions: hostContributions.get(host.id) ?? [],
     })),
     applications: applications.map((app) => ({
