@@ -113,12 +113,13 @@ export function FleetUtilizationHeatmap({
               <th scope="row" className="whitespace-nowrap text-left font-medium text-foreground">
                 {entry.cluster.name}
               </th>
-              {cells.map((cell) => {
+              {cells.map((cell, i) => {
                 const pct = cell.util === null ? null : (cell.util * 100).toFixed(1);
                 const label =
                   pct === null
                     ? `${formatMonthLong(cell.month)} — no data`
                     : `${formatMonthLong(cell.month)} — ${pct}% (${cell.status})`;
+                const hideOnMobile = i % 3 !== 0;
                 return (
                   <td
                     key={cell.month}
@@ -126,11 +127,11 @@ export function FleetUtilizationHeatmap({
                     data-status={cell.status}
                     aria-label={label}
                     title={label}
-                    className="p-0"
+                    className={hideOnMobile ? 'hidden p-0 md:table-cell' : 'p-0'}
                   >
                     <span
                       aria-hidden
-                      className={`block h-3 w-3 rounded-sm md:h-3 md:w-3 ${STATUS_CLASS[cell.status]}`}
+                      className={`block h-3 w-3 rounded-sm ${STATUS_CLASS[cell.status]}`}
                     />
                   </td>
                 );
