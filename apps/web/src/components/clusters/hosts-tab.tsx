@@ -1,6 +1,16 @@
 import type { HostResponse } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  ArrowRightLeft,
+  ChevronDown,
+  ChevronRight,
+  History,
+  MoreVertical,
+  Pencil,
+  Plus,
+  Replace,
+  Trash2,
+} from 'lucide-react';
 import { Fragment, useState } from 'react';
 
 import { Badge } from '@/components/ui/badge';
@@ -18,11 +28,16 @@ import { api } from '@/lib/api-client';
 import { formatGb, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
+import { HostEolPill } from './host-eol-pill';
+import { HostStateBadge } from './host-state-badge';
 import {
   CreateHostDialog,
   DecommissionHostDialog,
   DeleteHostDialog,
   EditHostDialog,
+  HostHistoryDialog,
+  HostReplaceDialog,
+  HostTransitionDialog,
   ResizeHostDialog,
 } from './host-dialogs';
 
@@ -30,7 +45,14 @@ interface HostsTabProps {
   clusterId: string;
 }
 
-type DialogKind = 'edit' | 'resize' | 'decommission' | 'delete';
+type DialogKind =
+  | 'edit'
+  | 'resize'
+  | 'decommission'
+  | 'delete'
+  | 'transition'
+  | 'replace'
+  | 'history';
 
 export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
@@ -83,8 +105,11 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
               <TableRow>
                 <TableHead className="w-8" />
                 <TableHead>Name</TableHead>
+                <TableHead>State</TableHead>
                 <TableHead>Commissioned</TableHead>
                 <TableHead>Decommissioned</TableHead>
+                <TableHead>Warranty</TableHead>
+                <TableHead>EOL</TableHead>
                 <TableHead className="text-right">Current capacity</TableHead>
                 <TableHead className="w-24 text-right">Actions</TableHead>
               </TableRow>
@@ -117,6 +142,9 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                           <div className="text-xs text-muted-foreground">{host.description}</div>
                         ) : null}
                       </TableCell>
+                      <TableCell>
+                        <HostStateBadge state={host.state} />
+                      </TableCell>
                       <TableCell className="text-muted-foreground tabular-nums">
                         {host.commissionedAt}
                       </TableCell>
@@ -127,6 +155,12 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                           '—'
                         )}
                       </TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums">
+                        {host.warrantyEndsAt ?? '—'}
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {host.eolAt ? <HostEolPill eolAt={host.eolAt} /> : '—'}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {latest ? formatGb(latest.amount) : '—'}
                       </TableCell>
@@ -135,15 +169,20 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                           onEdit={() => setTarget({ host, kind: 'edit' })}
                           onResize={() => setTarget({ host, kind: 'resize' })}
                           onDecommission={() => setTarget({ host, kind: 'decommission' })}
+                          onTransition={() => setTarget({ host, kind: 'transition' })}
+                          onReplace={() => setTarget({ host, kind: 'replace' })}
+                          onHistory={() => setTarget({ host, kind: 'history' })}
                           onDelete={() => setTarget({ host, kind: 'delete' })}
                           isDecommissioned={Boolean(host.decommissionedAt)}
+                          canTransition={host.state !== 'disposed'}
+                          canReplace={host.state === 'decommissioned'}
                         />
                       </TableCell>
                     </TableRow>
                     {isOpen ? (
                       <TableRow className="bg-muted/20 hover:bg-muted/20">
                         <TableCell />
-                        <TableCell colSpan={5} className="py-3">
+                        <TableCell colSpan={8} className="py-3">
                           <CapacityTimeline rows={host.capacities} />
                         </TableCell>
                       </TableRow>
@@ -190,6 +229,33 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
           host={target.host}
         />
       ) : null}
+      {target?.kind === 'transition' ? (
+        <HostTransitionDialog
+          key={target.host.id}
+          open
+          onOpenChange={(open) => !open && setTarget(null)}
+          clusterId={clusterId}
+          host={target.host}
+        />
+      ) : null}
+      {target?.kind === 'replace' ? (
+        <HostReplaceDialog
+          key={target.host.id}
+          open
+          onOpenChange={(open) => !open && setTarget(null)}
+          clusterId={clusterId}
+          host={target.host}
+          candidates={hosts}
+        />
+      ) : null}
+      {target?.kind === 'history' ? (
+        <HostHistoryDialog
+          key={target.host.id}
+          open
+          onOpenChange={(open) => !open && setTarget(null)}
+          host={target.host}
+        />
+      ) : null}
     </div>
   );
 }
@@ -198,19 +264,44 @@ interface RowActionsProps {
   onEdit: () => void;
   onResize: () => void;
   onDecommission: () => void;
+  onTransition: () => void;
+  onReplace: () => void;
+  onHistory: () => void;
   onDelete: () => void;
   isDecommissioned: boolean;
+  canTransition: boolean;
+  canReplace: boolean;
 }
 
 function RowActions({
   onEdit,
   onResize,
   onDecommission,
+  onTransition,
+  onReplace,
+  onHistory,
   onDelete,
   isDecommissioned,
+  canTransition,
+  canReplace,
 }: RowActionsProps): React.JSX.Element {
   return (
     <div className="flex items-center justify-end gap-1">
+      <IconButton
+        onClick={onTransition}
+        title={canTransition ? 'Transition…' : 'No further transitions'}
+        disabled={!canTransition}
+      >
+        <ArrowRightLeft className="h-3.5 w-3.5" />
+      </IconButton>
+      {canReplace ? (
+        <IconButton onClick={onReplace} title="Replace…">
+          <Replace className="h-3.5 w-3.5" />
+        </IconButton>
+      ) : null}
+      <IconButton onClick={onHistory} title="View history">
+        <History className="h-3.5 w-3.5" />
+      </IconButton>
       <IconButton onClick={onResize} title="Resize">
         <Plus className="h-3.5 w-3.5" />
       </IconButton>
@@ -234,11 +325,13 @@ function IconButton({
   children,
   title,
   destructive,
+  disabled,
   onClick,
 }: {
   children: React.ReactNode;
   title: string;
   destructive?: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }): React.JSX.Element {
   return (
@@ -247,8 +340,10 @@ function IconButton({
       onClick={onClick}
       title={title}
       aria-label={title}
+      disabled={disabled}
       className={cn(
         'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
+        'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
         destructive
           ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
           : 'text-muted-foreground hover:bg-accent hover:text-foreground',

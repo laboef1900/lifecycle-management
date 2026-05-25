@@ -114,6 +114,7 @@ describe('computeForecast — hosts and applications', () => {
       name: 'HPE-01',
       commissionedAt: d('2026-03-01'),
       decommissionedAt: null,
+      projectedDecommissionAt: null,
       capacities: [{ effectiveFrom: d('2026-03-01'), amount: 512 }],
     };
     const result = computeForecast(
@@ -131,6 +132,7 @@ describe('computeForecast — hosts and applications', () => {
       name: 'HPE-01',
       commissionedAt: d('2026-01-01'),
       decommissionedAt: null,
+      projectedDecommissionAt: null,
       capacities: [
         { effectiveFrom: d('2026-01-01'), amount: 256 },
         { effectiveFrom: d('2026-04-01'), amount: 512 },
@@ -150,6 +152,7 @@ describe('computeForecast — hosts and applications', () => {
       name: 'HPE-01',
       commissionedAt: d('2026-01-01'),
       decommissionedAt: d('2026-04-01'),
+      projectedDecommissionAt: null,
       capacities: [{ effectiveFrom: d('2026-01-01'), amount: 256 }],
     };
     const result = computeForecast(
@@ -182,6 +185,7 @@ describe('computeForecast — hosts and applications', () => {
       name: 'HPE-01',
       commissionedAt: d('2026-01-01'),
       decommissionedAt: null,
+      projectedDecommissionAt: null,
       capacities: [{ effectiveFrom: d('2026-01-01'), amount: 256 }],
     };
     const app: ForecastApplication = {
@@ -217,6 +221,7 @@ describe('computeForecast — perf', () => {
       name: `host-${i}`,
       commissionedAt: d('2026-01-01'),
       decommissionedAt: null,
+      projectedDecommissionAt: null,
       capacities: [
         { effectiveFrom: d('2026-01-01'), amount: 256 },
         { effectiveFrom: d('2026-07-01'), amount: 512 },

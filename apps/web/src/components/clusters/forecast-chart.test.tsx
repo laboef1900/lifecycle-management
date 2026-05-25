@@ -40,7 +40,15 @@ vi.mock('recharts', () => {
     ReferenceDot: ({ x, y, fill }: { x: string; y: number; fill: string }): React.JSX.Element => (
       <div data-testid="reference-dot" data-x={x} data-y={y} data-fill={fill} />
     ),
-    ReferenceLine: () => null,
+    ReferenceLine: ({
+      x,
+      label,
+    }: {
+      x?: string;
+      label?: { value?: string };
+    }): React.JSX.Element => (
+      <div data-testid="reference-line" data-x={x} data-label={label?.value ?? ''} />
+    ),
   };
 });
 
@@ -156,6 +164,73 @@ describe('ForecastChart props mapping', () => {
       Math.round(7680 * 0.9),
       Math.round(11776 * 0.9),
     ]);
+  });
+
+  it('renders an EOL reference line at the month of the earliest projected host decommission', () => {
+    const forecast = makeForecast({
+      months: [
+        { month: '2026-05-01', consumption: 100, capacity: 1000, utilization: 0.1 },
+        { month: '2026-06-01', consumption: 150, capacity: 1000, utilization: 0.15 },
+        { month: '2026-07-01', consumption: 200, capacity: 1000, utilization: 0.2 },
+      ],
+      hosts: [
+        {
+          id: 'h1',
+          name: 'host-late',
+          projectedDecommissionAt: '2026-12-20',
+          contributions: [],
+        },
+        {
+          id: 'h2',
+          name: 'host-early',
+          projectedDecommissionAt: '2026-06-15',
+          contributions: [],
+        },
+        {
+          id: 'h3',
+          name: 'host-no-eol',
+          projectedDecommissionAt: null,
+          contributions: [],
+        },
+      ],
+    });
+    renderChart(forecast);
+
+    const lines = screen.getAllByTestId('reference-line');
+    expect(lines).toHaveLength(1);
+    // Earliest EOL is 2026-06-15, snapped to month-start 2026-06-01 (which is
+    // inside the visible window).
+    expect(lines[0]?.dataset.x).toBe('2026-06-01');
+    expect(lines[0]?.dataset.label).toBe('EOL: host-early');
+  });
+
+  it('does not render an EOL line when no host has a projected decommission date', () => {
+    const forecast = makeForecast({
+      hosts: [
+        { id: 'h1', name: 'h1', projectedDecommissionAt: null, contributions: [] },
+        { id: 'h2', name: 'h2', contributions: [] },
+      ],
+    });
+    renderChart(forecast);
+
+    expect(screen.queryByTestId('reference-line')).not.toBeInTheDocument();
+  });
+
+  it('does not render an EOL line when the earliest EOL falls outside the visible window', () => {
+    const forecast = makeForecast({
+      // visible window is May–July 2026
+      hosts: [
+        {
+          id: 'h1',
+          name: 'future-host',
+          projectedDecommissionAt: '2027-04-01',
+          contributions: [],
+        },
+      ],
+    });
+    renderChart(forecast);
+
+    expect(screen.queryByTestId('reference-line')).not.toBeInTheDocument();
   });
 
   it('shows category legend chips for the event categories present', () => {

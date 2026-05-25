@@ -10,6 +10,7 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { formatDate } from '../lib/dates.js';
 
 import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
+import { projectedDecommissionDate } from './host-projection.js';
 
 const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
 
@@ -18,6 +19,7 @@ const hostInclude = {
     include: { metricType: true },
     orderBy: [{ metricType: { key: 'asc' as const } }, { effectiveFrom: 'asc' as const }],
   },
+  replacedByLinks: { include: { new: { select: { commissionedAt: true, state: true } } } },
 } satisfies Prisma.HostInclude;
 
 type HostRow = Prisma.HostGetPayload<{ include: typeof hostInclude }>;
@@ -61,6 +63,13 @@ export class HostsService {
           description: input.description ?? null,
           commissionedAt: input.commissionedAt,
           decommissionedAt: input.decommissionedAt ?? null,
+          serialNumber: input.serialNumber ?? null,
+          vendor: input.vendor ?? null,
+          model: input.model ?? null,
+          purchasedAt: input.purchasedAt ?? null,
+          warrantyEndsAt: input.warrantyEndsAt ?? null,
+          eolAt: input.eolAt ?? null,
+          runPastEol: input.runPastEol ?? false,
           capacities: {
             create: input.capacities.map((c) => {
               const metricType = metricTypes.get(c.metricTypeKey);
@@ -113,6 +122,13 @@ export class HostsService {
     if (input.decommissionedAt !== undefined) {
       data.decommissionedAt = input.decommissionedAt;
     }
+    if (input.serialNumber !== undefined) data.serialNumber = input.serialNumber ?? null;
+    if (input.vendor !== undefined) data.vendor = input.vendor ?? null;
+    if (input.model !== undefined) data.model = input.model ?? null;
+    if (input.purchasedAt !== undefined) data.purchasedAt = input.purchasedAt ?? null;
+    if (input.warrantyEndsAt !== undefined) data.warrantyEndsAt = input.warrantyEndsAt ?? null;
+    if (input.eolAt !== undefined) data.eolAt = input.eolAt ?? null;
+    if (input.runPastEol !== undefined) data.runPastEol = input.runPastEol;
 
     await this.prisma.host.update({ where: { id }, data });
     return this.getById(tenantId, id);
@@ -248,6 +264,8 @@ export class HostsService {
       amount: c.amount.toNumber(),
     }));
 
+    const projDecom = projectedDecommissionDate(row);
+
     return {
       id: row.id,
       clusterId: row.clusterId,
@@ -255,6 +273,15 @@ export class HostsService {
       description: row.description,
       commissionedAt: formatDate(row.commissionedAt),
       decommissionedAt: row.decommissionedAt ? formatDate(row.decommissionedAt) : null,
+      serialNumber: row.serialNumber,
+      vendor: row.vendor,
+      model: row.model,
+      purchasedAt: row.purchasedAt ? formatDate(row.purchasedAt) : null,
+      warrantyEndsAt: row.warrantyEndsAt ? formatDate(row.warrantyEndsAt) : null,
+      eolAt: row.eolAt ? formatDate(row.eolAt) : null,
+      runPastEol: row.runPastEol,
+      state: row.state,
+      projectedDecommissionAt: projDecom ? formatDate(projDecom) : null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       capacities,

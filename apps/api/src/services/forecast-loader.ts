@@ -9,6 +9,7 @@ import {
   type ForecastHost,
   type ForecastResult,
 } from './forecast.js';
+import { projectedDecommissionDate } from './host-projection.js';
 import { SettingsService } from './settings.js';
 
 const DEFAULT_HORIZON_MONTHS = 24;
@@ -39,6 +40,9 @@ export class ForecastService {
         hosts: {
           include: {
             capacities: { where: { metricTypeId: metricType.id } },
+            replacedByLinks: {
+              include: { new: { select: { commissionedAt: true, state: true } } },
+            },
           },
         },
         applications: {
@@ -73,6 +77,7 @@ export class ForecastService {
       name: host.name,
       commissionedAt: host.commissionedAt,
       decommissionedAt: host.decommissionedAt,
+      projectedDecommissionAt: projectedDecommissionDate(host),
       capacities: host.capacities.map((c) => ({
         effectiveFrom: c.effectiveFrom,
         amount: c.amount.toNumber(),

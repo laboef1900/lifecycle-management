@@ -18,14 +18,16 @@ model Tenant {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  clusters       Cluster[]
-  baselines      ClusterMetricBaseline[]
-  hosts          Host[]
-  hostCapacities HostMetricCapacity[]
-  applications   Application[]
-  appAllocations ApplicationMetricAllocation[]
-  events         Event[]
-  settings       TenantSettings?
+  clusters            Cluster[]
+  baselines           ClusterMetricBaseline[]
+  hosts               Host[]
+  hostCapacities      HostMetricCapacity[]
+  hostLifecycleEvents HostLifecycleEvent[]
+  hostReplacements    HostReplacement[]
+  applications        Application[]
+  appAllocations      ApplicationMetricAllocation[]
+  events              Event[]
+  settings            TenantSettings?
 
   @@map("tenants")
 }
@@ -37,7 +39,7 @@ model TenantSettings {
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("tenant_settings")
 }
@@ -85,7 +87,7 @@ model ClusterSettings {
   critThreshold Decimal? @map("crit_threshold") @db.Decimal(4, 3)
   updatedAt     DateTime @updatedAt @map("updated_at")
 
-  cluster       Cluster  @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  cluster Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
 
   @@map("cluster_settings")
 }
@@ -115,15 +117,78 @@ model Host {
   description      String?
   commissionedAt   DateTime  @map("commissioned_at") @db.Date
   decommissionedAt DateTime? @map("decommissioned_at") @db.Date
+  serialNumber     String?   @map("serial_number")
+  vendor           String?
+  model            String?
+  purchasedAt      DateTime? @map("purchased_at") @db.Date
+  warrantyEndsAt   DateTime? @map("warranty_ends_at") @db.Date
+  eolAt            DateTime? @map("eol_at") @db.Date
+  runPastEol       Boolean   @default(false) @map("run_past_eol")
+  state            HostState @default(in_service)
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
-  tenant     Tenant               @relation(fields: [tenantId], references: [id])
-  cluster    Cluster              @relation(fields: [clusterId], references: [id], onDelete: Cascade)
-  capacities HostMetricCapacity[]
+  tenant          Tenant               @relation(fields: [tenantId], references: [id])
+  cluster         Cluster              @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  capacities      HostMetricCapacity[]
+  lifecycleEvents HostLifecycleEvent[]
+  replacedByLinks HostReplacement[]    @relation("HostReplacementOld")
+  replacesLinks   HostReplacement[]    @relation("HostReplacementNew")
 
+  /// Uniqueness is enforced via a partial unique index in the migration —
+  /// Prisma can't express `WHERE serial_number IS NOT NULL` natively, so we
+  /// declare a non-unique index here just to reserve the name.
+  @@index([tenantId, serialNumber], map: "hosts_tenant_serial_unique")
   @@index([clusterId])
+  @@index([state])
+  @@index([eolAt])
   @@map("hosts")
+}
+
+enum HostState {
+  ordered
+  racked
+  in_service
+  degraded
+  decommissioned
+  disposed
+
+  @@map("host_state")
+}
+
+model HostLifecycleEvent {
+  id         String     @id @default(cuid())
+  tenantId   String     @default("default") @map("tenant_id")
+  hostId     String     @map("host_id")
+  fromState  HostState? @map("from_state")
+  toState    HostState  @map("to_state")
+  occurredAt DateTime   @map("occurred_at") @db.Date
+  note       String?
+  createdAt  DateTime   @default(now()) @map("created_at")
+
+  host   Host   @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([hostId, occurredAt])
+  @@map("host_lifecycle_events")
+}
+
+model HostReplacement {
+  id        String   @id @default(cuid())
+  tenantId  String   @default("default") @map("tenant_id")
+  oldHostId String   @map("old_host_id")
+  newHostId String   @map("new_host_id")
+  swappedAt DateTime @map("swapped_at") @db.Date
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  old    Host   @relation("HostReplacementOld", fields: [oldHostId], references: [id], onDelete: Cascade)
+  new    Host   @relation("HostReplacementNew", fields: [newHostId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([oldHostId, newHostId])
+  @@index([swappedAt])
+  @@map("host_replacements")
 }
 
 model HostMetricCapacity {

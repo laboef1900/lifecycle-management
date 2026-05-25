@@ -314,3 +314,147 @@ describe('POST /api/hosts/:id/capacity', () => {
     expect(response.statusCode).toBe(404);
   });
 });
+
+describe('asset attributes', () => {
+  it('round-trips serial/vendor/model/warranty/eol on create', async () => {
+    const response = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload({
+        serialNumber: 'SN-001',
+        vendor: 'Dell',
+        model: 'R760',
+        purchasedAt: '2024-01-15',
+        warrantyEndsAt: '2027-01-15',
+        eolAt: '2029-01-15',
+      }),
+    });
+    expect(response.statusCode).toBe(201);
+    const body = response.json() as Record<string, unknown>;
+    expect(body).toMatchObject({
+      serialNumber: 'SN-001',
+      vendor: 'Dell',
+      model: 'R760',
+      purchasedAt: '2024-01-15',
+      warrantyEndsAt: '2027-01-15',
+      eolAt: '2029-01-15',
+      runPastEol: false,
+      state: 'in_service',
+    });
+  });
+
+  it('rejects updates that try to set state via PUT', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    const response = await server.inject({
+      method: 'PUT',
+      url: `/api/hosts/${id}`,
+      payload: { state: 'degraded' },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('round-trips asset attributes on PUT update', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    const update = await server.inject({
+      method: 'PUT',
+      url: `/api/hosts/${id}`,
+      payload: { serialNumber: 'SN-999', vendor: 'HPE', eolAt: '2030-06-01', runPastEol: true },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(update.json()).toMatchObject({
+      serialNumber: 'SN-999',
+      vendor: 'HPE',
+      eolAt: '2030-06-01',
+      runPastEol: true,
+    });
+  });
+});
+
+describe('POST /api/hosts/:id/transitions', () => {
+  it('transitions in_service -> degraded and returns 204', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/hosts/${id}/transitions`,
+      payload: { toState: 'degraded', occurredAt: '2026-05-25', note: 'fan noise' },
+    });
+    expect(res.statusCode).toBe(204);
+
+    const fetched = await server.inject({ method: 'GET', url: `/api/hosts/${id}` });
+    expect((fetched.json() as { state: string }).state).toBe('degraded');
+  });
+
+  it('returns 422 on a disallowed edge', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/hosts/${id}/transitions`,
+      payload: { toState: 'disposed', occurredAt: '2026-05-25' },
+    });
+    expect(res.statusCode).toBe(422);
+  });
+});
+
+describe('GET /api/hosts/:id/lifecycle', () => {
+  it('returns the lifecycle history after a transition', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload(),
+    });
+    const { id } = created.json() as { id: string };
+    await server.inject({
+      method: 'POST',
+      url: `/api/hosts/${id}/transitions`,
+      payload: { toState: 'degraded', occurredAt: '2026-05-25' },
+    });
+    const res = await server.inject({ method: 'GET', url: `/api/hosts/${id}/lifecycle` });
+    expect(res.statusCode).toBe(200);
+    const events = res.json() as Array<{ fromState: string | null; toState: string }>;
+    expect(events.at(-1)).toMatchObject({ fromState: 'in_service', toState: 'degraded' });
+  });
+});
+
+describe('projectedDecommissionAt on host response', () => {
+  it('returns the EOL date when no replacement is scheduled and runPastEol=false', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload({ eolAt: '2028-01-15' }),
+    });
+    expect(
+      (created.json() as { projectedDecommissionAt: string | null }).projectedDecommissionAt,
+    ).toBe('2028-01-15');
+  });
+
+  it('is null when runPastEol is true', async () => {
+    const created = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: hostPayload({ eolAt: '2028-01-15', runPastEol: true }),
+    });
+    expect(
+      (created.json() as { projectedDecommissionAt: string | null }).projectedDecommissionAt,
+    ).toBeNull();
+  });
+});

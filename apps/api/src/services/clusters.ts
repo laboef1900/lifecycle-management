@@ -11,6 +11,7 @@ import { formatDate } from '../lib/dates.js';
 
 import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
 import { computeForecast } from './forecast.js';
+import { projectedDecommissionDate } from './host-projection.js';
 
 const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
 
@@ -19,7 +20,12 @@ const clusterInclude = {
     include: { metricType: true },
     orderBy: { metricType: { key: 'asc' as const } },
   },
-  hosts: { include: { capacities: true } },
+  hosts: {
+    include: {
+      capacities: true,
+      replacedByLinks: { include: { new: { select: { commissionedAt: true, state: true } } } },
+    },
+  },
   applications: { include: { allocations: true } },
   events: true,
 } satisfies Prisma.ClusterInclude;
@@ -209,6 +215,7 @@ export class ClustersService {
             name: h.name,
             commissionedAt: h.commissionedAt,
             decommissionedAt: h.decommissionedAt,
+            projectedDecommissionAt: projectedDecommissionDate(h),
             capacities: h.capacities
               .filter((c) => c.metricTypeId === b.metricTypeId)
               .map((c) => ({ effectiveFrom: c.effectiveFrom, amount: c.amount.toNumber() })),

@@ -8,7 +8,10 @@ import type {
   EventCategory,
   EventResponse,
   ForecastResponse,
+  HostLifecycleEventResponse,
+  HostReplacementResponse,
   HostResponse,
+  HostState,
   TenantSettings,
 } from '@lcm/shared';
 
@@ -107,6 +110,13 @@ export interface HostCreateInputWire {
   commissionedAt: string;
   decommissionedAt?: string | null;
   capacities: Array<{ metricTypeKey: string; effectiveFrom: string; amount: number }>;
+  serialNumber?: string | null;
+  vendor?: string | null;
+  model?: string | null;
+  purchasedAt?: string | null;
+  warrantyEndsAt?: string | null;
+  eolAt?: string | null;
+  runPastEol?: boolean;
 }
 
 export interface HostUpdateInputWire {
@@ -114,6 +124,13 @@ export interface HostUpdateInputWire {
   description?: string | null;
   commissionedAt?: string;
   decommissionedAt?: string | null;
+  serialNumber?: string | null;
+  vendor?: string | null;
+  model?: string | null;
+  purchasedAt?: string | null;
+  warrantyEndsAt?: string | null;
+  eolAt?: string | null;
+  runPastEol?: boolean;
 }
 
 export interface CapacityAppendInputWire {
@@ -163,6 +180,28 @@ export interface EventUpdateInputWire {
   description?: string | null;
   consumptionDelta?: number | null;
   capacityDelta?: number | null;
+}
+
+/**
+ * Wire shape of hostTransitionInputSchema. The parsed type has a Date for
+ * occurredAt, but the server's dateOnly schema expects 'YYYY-MM-DD' on the
+ * wire — matches HostCreateInputWire.commissionedAt handling.
+ */
+export interface HostTransitionInputWire {
+  toState: HostState;
+  occurredAt: string;
+  note?: string;
+}
+
+/**
+ * Wire shape of hostReplacementCreateInputSchema. Same Date→string translation
+ * for swappedAt.
+ */
+export interface HostReplacementCreateInputWire {
+  oldHostId: string;
+  newHostId: string;
+  swappedAt: string;
+  reason?: string;
 }
 
 // ---------- API surface ----------
@@ -215,6 +254,21 @@ export const api = {
         body: JSON.stringify(input),
       }),
     delete: (id: string) => request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
+    transition: (id: string, input: HostTransitionInputWire) =>
+      request<void>(`/api/hosts/${id}/transitions`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    listLifecycle: (id: string) =>
+      request<HostLifecycleEventResponse[]>(`/api/hosts/${id}/lifecycle`),
+  },
+  hostReplacements: {
+    create: (input: HostReplacementCreateInputWire) =>
+      request<HostReplacementResponse>('/api/host-replacements', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    delete: (id: string) => request<void>(`/api/host-replacements/${id}`, { method: 'DELETE' }),
   },
   applications: {
     listByCluster: (clusterId: string) =>

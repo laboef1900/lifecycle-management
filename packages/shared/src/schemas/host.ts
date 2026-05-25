@@ -14,6 +14,13 @@ export const hostCreateInputSchema = z.object({
   commissionedAt: dateOnly,
   decommissionedAt: dateOnly.nullable().optional(),
   capacities: z.array(capacityRowInputSchema).min(1),
+  serialNumber: z.string().trim().max(120).nullish(),
+  vendor: z.string().trim().max(120).nullish(),
+  model: z.string().trim().max(120).nullish(),
+  purchasedAt: dateOnly.nullable().optional(),
+  warrantyEndsAt: dateOnly.nullable().optional(),
+  eolAt: dateOnly.nullable().optional(),
+  runPastEol: z.boolean().optional(),
 });
 
 export const hostUpdateInputSchema = z
@@ -22,13 +29,28 @@ export const hostUpdateInputSchema = z
     description: z.string().trim().max(2000).nullish(),
     commissionedAt: dateOnly.optional(),
     decommissionedAt: dateOnly.nullable().optional(),
+    serialNumber: z.string().trim().max(120).nullish(),
+    vendor: z.string().trim().max(120).nullish(),
+    model: z.string().trim().max(120).nullish(),
+    purchasedAt: dateOnly.nullable().optional(),
+    warrantyEndsAt: dateOnly.nullable().optional(),
+    eolAt: dateOnly.nullable().optional(),
+    runPastEol: z.boolean().optional(),
   })
+  .strict()
   .refine(
     (data) =>
       data.name !== undefined ||
       data.description !== undefined ||
       data.commissionedAt !== undefined ||
-      data.decommissionedAt !== undefined,
+      data.decommissionedAt !== undefined ||
+      data.serialNumber !== undefined ||
+      data.vendor !== undefined ||
+      data.model !== undefined ||
+      data.purchasedAt !== undefined ||
+      data.warrantyEndsAt !== undefined ||
+      data.eolAt !== undefined ||
+      data.runPastEol !== undefined,
     { message: 'At least one field must be provided' },
   );
 
@@ -55,6 +77,15 @@ export interface HostResponse {
   description: string | null;
   commissionedAt: string;
   decommissionedAt: string | null;
+  serialNumber: string | null;
+  vendor: string | null;
+  model: string | null;
+  purchasedAt: string | null;
+  warrantyEndsAt: string | null;
+  eolAt: string | null;
+  runPastEol: boolean;
+  state: import('./host-lifecycle.js').HostState;
+  projectedDecommissionAt: string | null;
   createdAt: string;
   updatedAt: string;
   capacities: CapacityResponseRow[];

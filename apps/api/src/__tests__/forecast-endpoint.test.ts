@@ -143,6 +143,31 @@ describe('GET /api/clusters/:id/forecast', () => {
     expect((response.json() as { error: { code: string } }).error.code).toBe('UNKNOWN_METRIC');
   });
 
+  it('exposes projectedDecommissionAt on each forecast host entry', async () => {
+    const createRes = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/hosts`,
+      payload: {
+        name: 'h-eol',
+        commissionedAt: '2024-01-01',
+        eolAt: '2027-06-01',
+        capacities: [{ metricTypeKey: 'memory_gb', effectiveFrom: '2024-01-01', amount: 256 }],
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+
+    const forecast = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&from=2026-01&to=2028-01`,
+    });
+    expect(forecast.statusCode).toBe(200);
+    const body = forecast.json() as {
+      hosts: Array<{ name: string; projectedDecommissionAt: string | null }>;
+    };
+    const hEol = body.hosts.find((h) => h.name === 'h-eol');
+    expect(hEol?.projectedDecommissionAt).toBe('2027-06-01');
+  });
+
   it('returns 422 when the cluster does not track that metric', async () => {
     // The seed cluster only has memory_gb. Add a new metric type and ask for it.
     await prisma.metricType.upsert({
