@@ -14,6 +14,7 @@ import { clusterRoutes } from './routes/clusters.js';
 import { eventRoutes } from './routes/events.js';
 import { forecastRoutes } from './routes/forecast.js';
 import { healthRoutes } from './routes/health.js';
+import { hostReplacementRoutes } from './routes/host-replacements.js';
 import { hostRoutes } from './routes/hosts.js';
 import { settingsRoutes } from './routes/settings.js';
 
@@ -40,6 +41,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(healthRoutes);
   await server.register(clusterRoutes, { prefix: '/api' });
   await server.register(hostRoutes, { prefix: '/api' });
+  await server.register(hostReplacementRoutes, { prefix: '/api' });
   await server.register(applicationRoutes, { prefix: '/api' });
   await server.register(eventRoutes, { prefix: '/api' });
   await server.register(forecastRoutes, { prefix: '/api' });
