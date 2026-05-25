@@ -28,6 +28,11 @@ async function main(): Promise<void> {
   console.log(`Importing from ${filePath}`);
 
   const parsed = parseCapacityXlsx(filePath);
+  if (parsed.length === 0) {
+    throw new Error(
+      `Parser returned 0 clusters from ${filePath}. The sheet may be renamed or its layout changed; aborting before any DB write.`,
+    );
+  }
   for (const c of parsed) {
     console.log(`  ${c.name}: ${c.events.length} events`);
   }
