@@ -167,7 +167,11 @@ function OverviewPage(): React.JSX.Element {
           />
 
           <div className="col-span-12">
-            <FleetClusterGrid entries={clusterEntries} isLoading={forecastsLoading} />
+            <FleetClusterGrid
+              entries={clusterEntries}
+              isLoading={forecastsLoading}
+              total={clusters.length}
+            />
           </div>
 
           <div className="col-span-12">

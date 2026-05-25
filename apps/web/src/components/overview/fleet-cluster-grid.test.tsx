@@ -133,4 +133,43 @@ describe('<FleetClusterGrid>', () => {
     const { container } = render(<FleetClusterGrid entries={[]} />);
     expect(container.firstChild).toBeNull();
   });
+
+  it('shows a "loading more" chip when isLoading and some but not all forecasts have arrived', () => {
+    const entries: ClusterForecastEntry[] = [
+      entry('Alpha', { months: null, alreadyBreached: false }),
+      entry('Beta', { months: null, alreadyBreached: false }),
+    ];
+    render(<FleetClusterGrid entries={entries} isLoading total={4} />);
+    const chip = screen.getByTestId('grid-loading-more');
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveTextContent(/Loading 2 more clusters/);
+    // Real tiles still render alongside the chip.
+    expect(visibleNamesInOrder()).toEqual(['Alpha', 'Beta']);
+  });
+
+  it('uses singular wording when only one cluster is still loading', () => {
+    const entries: ClusterForecastEntry[] = [
+      entry('Alpha', { months: null, alreadyBreached: false }),
+      entry('Beta', { months: null, alreadyBreached: false }),
+    ];
+    render(<FleetClusterGrid entries={entries} isLoading total={3} />);
+    expect(screen.getByTestId('grid-loading-more')).toHaveTextContent(/Loading 1 more cluster…/);
+  });
+
+  it('does not show the chip once all forecasts have arrived', () => {
+    const entries: ClusterForecastEntry[] = [
+      entry('Alpha', { months: null, alreadyBreached: false }),
+      entry('Beta', { months: null, alreadyBreached: false }),
+    ];
+    render(<FleetClusterGrid entries={entries} isLoading total={2} />);
+    expect(screen.queryByTestId('grid-loading-more')).not.toBeInTheDocument();
+  });
+
+  it('does not show the chip when nothing is loading', () => {
+    const entries: ClusterForecastEntry[] = [
+      entry('Alpha', { months: null, alreadyBreached: false }),
+    ];
+    render(<FleetClusterGrid entries={entries} total={4} />);
+    expect(screen.queryByTestId('grid-loading-more')).not.toBeInTheDocument();
+  });
 });
