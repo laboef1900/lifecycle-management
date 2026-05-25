@@ -18,6 +18,8 @@ import { api } from '@/lib/api-client';
 import { formatGb, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
+import { HostEolPill } from './host-eol-pill';
+import { HostStateBadge } from './host-state-badge';
 import {
   CreateHostDialog,
   DecommissionHostDialog,
@@ -83,8 +85,11 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
               <TableRow>
                 <TableHead className="w-8" />
                 <TableHead>Name</TableHead>
+                <TableHead>State</TableHead>
                 <TableHead>Commissioned</TableHead>
                 <TableHead>Decommissioned</TableHead>
+                <TableHead>Warranty</TableHead>
+                <TableHead>EOL</TableHead>
                 <TableHead className="text-right">Current capacity</TableHead>
                 <TableHead className="w-24 text-right">Actions</TableHead>
               </TableRow>
@@ -117,6 +122,9 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                           <div className="text-xs text-muted-foreground">{host.description}</div>
                         ) : null}
                       </TableCell>
+                      <TableCell>
+                        <HostStateBadge state={host.state} />
+                      </TableCell>
                       <TableCell className="text-muted-foreground tabular-nums">
                         {host.commissionedAt}
                       </TableCell>
@@ -126,6 +134,12 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                         ) : (
                           '—'
                         )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums">
+                        {host.warrantyEndsAt ?? '—'}
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {host.eolAt ? <HostEolPill eolAt={host.eolAt} /> : '—'}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {latest ? formatGb(latest.amount) : '—'}
@@ -143,7 +157,7 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                     {isOpen ? (
                       <TableRow className="bg-muted/20 hover:bg-muted/20">
                         <TableCell />
-                        <TableCell colSpan={5} className="py-3">
+                        <TableCell colSpan={8} className="py-3">
                           <CapacityTimeline rows={host.capacities} />
                         </TableCell>
                       </TableRow>
