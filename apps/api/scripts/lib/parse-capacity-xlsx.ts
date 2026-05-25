@@ -20,12 +20,12 @@ export interface ParsedCluster {
 }
 
 const SHEET_NAME = 'Forecast';
-const HEADER_ROW = 7; // 1-indexed; row 7 carries the month dates (month-end)
+const HEADER_ROW = 7; // 1-indexed; row 7 carries the month dates
 const FIRST_DATA_COL = 'F'; // first month column
 const LAST_DATA_COL = 'AA'; // last month column
 
-// Sub-event columns that have no date in the header row; they inherit the next
-// calendar month after their parent column's date (L→K+1month, P→O+1month).
+// Sub-event columns have no date in the header row; they share the calendar
+// month of the immediately-preceding column (L belongs to K's month, P to O's).
 const SUB_EVENT_PARENT_MAP: Record<string, string> = {
   L: 'K',
   P: 'O',
@@ -50,17 +50,22 @@ export function inferCategory(title: string): ParsedEventCategory {
   );
 }
 
-/** Convert a month-end Date (or any date in the month) to 'YYYY-MM-01'. */
-function toFirstOfMonth(d: Date): string {
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+/**
+ * Convert a Date returned by xlsx (`cellDates: true`) into 'YYYY-MM-01' for
+ * the month the spreadsheet author wrote.
+ *
+ * `xlsx` applies the host timezone offset when producing Date objects (it
+ * preserves the "wall-clock" value of the Excel cell as a local-TZ instant).
+ * So a cell stored as 2026-05-01 comes back as `Date(2026-04-30T22:00:00Z)`
+ * in UTC+2 and as `Date(2026-05-01T00:00:00Z)` in UTC. Re-anchor by adding
+ * the local offset back so getUTC* returns the original wall-clock fields
+ * regardless of where the test runs.
+ */
+function cellDateToMonthStart(d: Date): string {
+  const reanchored = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
+  const yyyy = reanchored.getUTCFullYear();
+  const mm = String(reanchored.getUTCMonth() + 1).padStart(2, '0');
   return `${yyyy}-${mm}-01`;
-}
-
-/** Return the first-of-month string for the month following the given date. */
-function nextMonthFirstOfMonth(d: Date): string {
-  const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
-  return toFirstOfMonth(next);
 }
 
 interface MonthByColumn {
@@ -78,19 +83,16 @@ function buildMonthByColumn(ws: XLSX.WorkSheet): MonthByColumn {
     const addr = `${col}${HEADER_ROW}`;
     const cell = ws[addr];
     if (cell && cell.v instanceof Date) {
-      map[col] = toFirstOfMonth(cell.v);
+      map[col] = cellDateToMonthStart(cell.v);
     }
   }
 
-  // Second pass: sub-event columns inherit parent's next month.
+  // Second pass: sub-event columns inherit their parent's month as-is.
   // These are appended to the iteration order (L and P land after AA in
   // Object.keys()), but `parseCapacityXlsx` sorts events by effectiveDate
   // afterwards, so the column-iteration order does not affect output order.
   for (const [sub, parent] of Object.entries(SUB_EVENT_PARENT_MAP)) {
-    const parentCell = ws[`${parent}${HEADER_ROW}`];
-    if (parentCell && parentCell.v instanceof Date) {
-      map[sub] = nextMonthFirstOfMonth(parentCell.v);
-    }
+    if (map[parent]) map[sub] = map[parent];
   }
 
   return map;
