@@ -47,6 +47,7 @@ vi.mock('recharts', () => {
   return {
     ResponsiveContainer: Pass,
     LineChart: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+    CartesianGrid: () => null,
     XAxis: () => null,
     YAxis: () => null,
     Tooltip: () => null,

@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import * as React from 'react';
 import {
+  CartesianGrid,
   Line,
   LineChart,
   ReferenceArea,
@@ -20,6 +21,25 @@ interface FleetClusterTileChartProps {
   entry: ClusterForecastEntry;
 }
 
+/**
+ * Pick a Y-axis range that zooms in around the actual data + the warn/crit
+ * band, instead of always spanning [0, 1]. Snaps to 5% intervals with ~5%
+ * padding so the tick labels read as round percentages.
+ */
+export function tileYDomain(
+  utilValues: number[],
+  thresholds: { warn: number; crit: number },
+): { domain: [number, number]; ticks: number[] } {
+  if (utilValues.length === 0) {
+    return { domain: [0, 1], ticks: [0, 1] };
+  }
+  const lo = Math.min(...utilValues, thresholds.warn);
+  const hi = Math.max(...utilValues, thresholds.crit);
+  const yMin = Math.max(0, Math.floor(lo * 20) / 20 - 0.05);
+  const yMax = Math.min(1, Math.ceil(hi * 20) / 20 + 0.05);
+  return { domain: [yMin, yMax], ticks: [yMin, yMax] };
+}
+
 export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): React.JSX.Element {
   const { cluster, months, thresholds, summary } = entry;
   const colors = useChartColors();
@@ -28,6 +48,10 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
     util: m.capacity > 0 ? m.consumption / m.capacity : 0,
   }));
   const hasData = data.length > 0;
+  const { domain: yDomain, ticks: yTicks } = tileYDomain(
+    data.map((d) => d.util),
+    thresholds,
+  );
 
   return (
     <Link
@@ -51,8 +75,18 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
             <div className="flex min-w-0 flex-1 flex-col">
               <div className="min-h-0 flex-1">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                    <YAxis hide domain={[0, 1]} />
+                  <LineChart data={data} margin={{ top: 4, right: 4, bottom: 6, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
+                    <YAxis
+                      domain={yDomain}
+                      ticks={yTicks}
+                      interval={0}
+                      tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
+                      tick={{ fontSize: 9, fill: colors.axis }}
+                      width={26}
+                      axisLine={false}
+                      tickLine={false}
+                    />
                     <XAxis dataKey="month" hide />
                     <ReferenceArea
                       y1={thresholds.warn}
