@@ -18,10 +18,14 @@ architecture context start with the [`README`](../README.md).
    # at minimum, set POSTGRES_PASSWORD; optionally LOG_LEVEL, HTTP_PORT
    chmod 600 .env  # the file holds DB credentials
    ```
-4. **Build** the two application images:
+4. **Pull** the published images:
    ```bash
-   docker compose build
+   docker compose pull
    ```
+   The `server` and `web` containers run pre-built images from
+   `ghcr.io/laboef1900/lcm-{server,web}:latest` — there is no local build
+   step. To pin a specific release, set `LCM_IMAGE_TAG=0.1` (or `dev`) in
+   `.env`.
 5. **First boot** with seed data:
    ```bash
    SEED_ON_BOOT=true docker compose up -d
@@ -91,20 +95,21 @@ After restoring, restart the server so it re-verifies migrations: `docker compos
 
 ```bash
 cd /opt/lcm
-git fetch && git checkout <new-tag-or-sha>
+git fetch && git checkout <new-tag-or-sha>   # pulls updated compose + docs
 
-docker compose build              # pulls latest base layers and re-bakes the images
+docker compose pull               # pulls the matching :latest images from GHCR
 docker compose up -d              # recreates server + web, leaves db untouched
-docker compose logs -f server        # watch for migrations being applied
+docker compose logs -f server     # watch for migrations being applied
 ```
 
 If the new release adds a Prisma migration, you'll see it apply once and
 then continue. The DB volume persists, so the upgrade is non-destructive.
 
-To roll back: `git checkout <previous-sha>` + `docker compose build` +
-`docker compose up -d`. **Caveat:** if the bad release applied a schema
-migration, rolling back the code won't undo the schema change — restore the
-DB from backup before rolling back if the schema diverges.
+To pin a specific release, set `LCM_IMAGE_TAG=0.2` (etc.) in `.env` instead
+of relying on `:latest`. To roll back, set `LCM_IMAGE_TAG` to the prior tag
+and `docker compose up -d`. **Caveat:** if the bad release applied a schema
+migration, rolling back the image won't undo the schema change — restore
+the DB from backup before rolling back if the schema diverges.
 
 ## Troubleshooting
 

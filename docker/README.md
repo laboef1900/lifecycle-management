@@ -11,7 +11,7 @@ the repo root finds it without `-f`.
 cp .env.example .env
 # edit .env — at least set POSTGRES_PASSWORD
 
-docker compose build
+docker compose pull
 SEED_ON_BOOT=true docker compose up -d
 # first boot: server applies migrations + seeds reference clusters
 
@@ -19,9 +19,19 @@ SEED_ON_BOOT=true docker compose up -d
 docker compose up -d
 ```
 
+The compose file pulls `ghcr.io/laboef1900/lcm-server` and `lcm-web` from
+the GitHub container registry; there are no `build:` blocks. Set
+`LCM_IMAGE_TAG=0.1` (or `dev`) in `.env` to pin a release / track the dev
+channel instead of `:latest`.
+
 The web container listens on `${HTTP_PORT:-80}` and serves both the SPA at
 `/` and a reverse proxy to the server at `/api/*`, `/healthz`, `/readyz`.
 The server container listens on 8080 inside the compose network only.
+
+The `db` service runs `dhi.io/postgres:18` (Docker Hardened Image).
+`PGDATA=/var/lib/postgresql/18/data`, so the named volume `lcm-postgres-18-data`
+is mounted there — not at the older `/var/lib/postgresql/data` path that
+the official postgres image uses.
 
 ## What ships in each image
 
@@ -29,11 +39,20 @@ The server container listens on 8080 inside the compose network only.
   (`server-entrypoint.sh`) runs `prisma migrate deploy` on every start
   (idempotent — already-applied migrations are skipped), conditionally
   runs `prisma db seed`, then execs `tsx src/index.ts` as the long-lived
-  Fastify server.
+  Fastify server. Built and published by
+  `.github/workflows/publish-images.yml` on push to main/dev/release.
 - `Dockerfile.web`: multi-stage build. Stage 1 installs the pnpm workspace
   and runs `vite build`. Stage 2 is `nginx:alpine` serving the static
   bundle with `nginx.conf` here that handles SPA fallback + the API
   reverse proxy.
+
+## Building locally (for testing un-published changes)
+
+```sh
+docker build -f docker/Dockerfile.server -t ghcr.io/laboef1900/lcm-server:latest ..
+docker build -f docker/Dockerfile.web    -t ghcr.io/laboef1900/lcm-web:latest    ..
+docker compose up -d
+```
 
 ## Restart behaviour
 

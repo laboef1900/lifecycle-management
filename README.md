@@ -59,7 +59,7 @@ Open <http://localhost:5173>. The Vite dev server proxies `/api/*`,
 cp .env.example .env
 # edit .env — at least set POSTGRES_PASSWORD
 
-docker compose build
+docker compose pull
 SEED_ON_BOOT=true docker compose up -d
 # first boot: server applies migrations + seeds reference clusters
 ```
@@ -67,6 +67,9 @@ SEED_ON_BOOT=true docker compose up -d
 `.env` sets `COMPOSE_FILE=docker/docker-compose.yml`, so the standard
 `docker compose ...` commands above pick up the production file from
 `docker/` without needing `-f`. Run all commands from the repo root.
+
+The compose file pulls `lcm-server` and `lcm-web` from GHCR; set
+`LCM_IMAGE_TAG=0.1` in `.env` to pin a release instead of `:latest`.
 
 The web container listens on `${HTTP_PORT:-80}` and serves both the SPA and a
 reverse proxy to the server at `/api/*`. After the first successful boot,
@@ -77,18 +80,19 @@ Full deploy / backup / upgrade notes: [`docs/operations.md`](docs/operations.md)
 
 ## Environment variables
 
-| Variable            | Default                                   | Used by               | Purpose                                  |
-| ------------------- | ----------------------------------------- | --------------------- | ---------------------------------------- |
-| `DATABASE_URL`      | `postgresql://lcm:lcm@localhost:5432/lcm` | server                | Prisma connection string                 |
-| `PORT`              | `8080` (prod), `8090` (dev)               | server                | Server listen port                       |
-| `HOST`              | `0.0.0.0`                                 | server                | Server listen host                       |
-| `LOG_LEVEL`         | `info`                                    | server                | Pino log level (`trace`–`silent`)        |
-| `NODE_ENV`          | `development`                             | server                | Switches log format + features           |
-| `SEED_ON_BOOT`      | `false`                                   | server (compose)      | Runs `prisma db seed` on container start |
-| `POSTGRES_USER`     | `lcm`                                     | db (compose)          | Postgres role                            |
-| `POSTGRES_PASSWORD` | `lcm`                                     | db + server (compose) | Postgres password                        |
-| `POSTGRES_DB`       | `lcm`                                     | db (compose)          | Postgres database name                   |
-| `HTTP_PORT`         | `80`                                      | web (compose)         | Host port mapped to Nginx 80             |
+| Variable            | Default                                   | Used by                | Purpose                                  |
+| ------------------- | ----------------------------------------- | ---------------------- | ---------------------------------------- |
+| `DATABASE_URL`      | `postgresql://lcm:lcm@localhost:5432/lcm` | server                 | Prisma connection string                 |
+| `PORT`              | `8080` (prod), `8090` (dev)               | server                 | Server listen port                       |
+| `HOST`              | `0.0.0.0`                                 | server                 | Server listen host                       |
+| `LOG_LEVEL`         | `info`                                    | server                 | Pino log level (`trace`–`silent`)        |
+| `NODE_ENV`          | `development`                             | server                 | Switches log format + features           |
+| `SEED_ON_BOOT`      | `false`                                   | server (compose)       | Runs `prisma db seed` on container start |
+| `POSTGRES_USER`     | `lcm`                                     | db (compose)           | Postgres role                            |
+| `POSTGRES_PASSWORD` | `lcm`                                     | db + server (compose)  | Postgres password                        |
+| `POSTGRES_DB`       | `lcm`                                     | db (compose)           | Postgres database name                   |
+| `HTTP_PORT`         | `80`                                      | web (compose)          | Host port mapped to Nginx 80             |
+| `LCM_IMAGE_TAG`     | `latest`                                  | server + web (compose) | GHCR image tag (e.g. `0.1`, `dev`)       |
 
 ## Day-to-day commands
 
