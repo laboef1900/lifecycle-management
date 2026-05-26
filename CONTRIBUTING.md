@@ -55,8 +55,9 @@ merge is clean.
   `exactOptionalPropertyTypes`. New code must typecheck without comments
   suppressing errors.
 - ESLint flat config + Prettier are wired via `pnpm lint` / `pnpm format`.
-  The Husky pre-commit hook runs lint-staged + a project-wide typecheck on
-  every commit; don't disable it.
+  The Husky pre-commit hook runs `lint-staged` on every commit (eslint +
+  prettier on the changed files); don't disable it. Typecheck and the full
+  test suite run in CI on the PR.
 - No new files that simply describe what code does. Reserve comments for
   the non-obvious "why".
 
