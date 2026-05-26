@@ -45,10 +45,14 @@ the official postgres image uses.
   `await import('./index.js')` starts the Fastify server. Built and
   published by `.github/workflows/publish-images.yml` on push to
   main/dev/release.
-- `Dockerfile.web`: multi-stage build. Stage 1 installs the pnpm workspace
-  and runs `vite build`. Stage 2 is `nginx:alpine` serving the static
-  bundle with `nginx.conf` here that handles SPA fallback + the API
-  reverse proxy.
+- `Dockerfile.web`: multi-stage build on Docker Hardened Images. The
+  builder stage uses `dhi.io/node:22-alpine-dev` and runs `vite build`;
+  the runtime stage uses `dhi.io/nginx:1` (distroless: nginx + libs
+  only, runs as uid 65532 nonroot, listens on **:8080** — privileged
+  ports require root). Compose maps host `${HTTP_PORT:-80}` to the
+  container's 8080. No in-container healthcheck (distroless has no
+  wget/curl/shell); compose's `depends_on` chain handles startup
+  ordering.
 
 ## Building locally (for testing un-published changes)
 

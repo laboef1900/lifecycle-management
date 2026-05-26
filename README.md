@@ -91,7 +91,7 @@ Full deploy / backup / upgrade notes: [`docs/operations.md`](docs/operations.md)
 | `POSTGRES_USER`     | `lcm`                                     | db (compose)           | Postgres role                            |
 | `POSTGRES_PASSWORD` | `lcm`                                     | db + server (compose)  | Postgres password                        |
 | `POSTGRES_DB`       | `lcm`                                     | db (compose)           | Postgres database name                   |
-| `HTTP_PORT`         | `80`                                      | web (compose)          | Host port mapped to Nginx 80             |
+| `HTTP_PORT`         | `80`                                      | web (compose)          | Host port mapped to nginx :8080          |
 | `LCM_IMAGE_TAG`     | `latest`                                  | server + web (compose) | GHCR image tag (e.g. `0.1`, `dev`)       |
 
 ## Day-to-day commands
