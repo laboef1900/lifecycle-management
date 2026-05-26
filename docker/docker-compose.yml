@@ -53,12 +53,13 @@ services:
       db:
         condition: service_healthy
     healthcheck:
+      # The distroless runtime image has no wget/curl/shell — only `node`.
+      # Use Node 22's built-in fetch for the readiness probe.
       test:
         - CMD
-        - wget
-        - -q
-        - --spider
-        - http://127.0.0.1:8080/readyz
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 10s
       timeout: 5s
       retries: 6
