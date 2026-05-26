@@ -22,18 +22,60 @@ describe('percentSchema', () => {
 
 describe('tenantSettingsSchema', () => {
   it('accepts warn < crit', () => {
-    expect(tenantSettingsSchema.parse({ warnThreshold: 0.7, critThreshold: 0.9 })).toEqual({
+    expect(
+      tenantSettingsSchema.parse({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+      }),
+    ).toEqual({
       warnThreshold: 0.7,
       critThreshold: 0.9,
+      procurementLeadTimeWeeks: 8,
     });
   });
 
   it('rejects warn === crit', () => {
-    expect(() => tenantSettingsSchema.parse({ warnThreshold: 0.8, critThreshold: 0.8 })).toThrow();
+    expect(() =>
+      tenantSettingsSchema.parse({
+        warnThreshold: 0.8,
+        critThreshold: 0.8,
+        procurementLeadTimeWeeks: 8,
+      }),
+    ).toThrow();
   });
 
   it('rejects warn > crit', () => {
-    expect(() => tenantSettingsSchema.parse({ warnThreshold: 0.9, critThreshold: 0.7 })).toThrow();
+    expect(() =>
+      tenantSettingsSchema.parse({
+        warnThreshold: 0.9,
+        critThreshold: 0.7,
+        procurementLeadTimeWeeks: 8,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects missing procurementLeadTimeWeeks', () => {
+    expect(() =>
+      tenantSettingsSchema.parse({ warnThreshold: 0.7, critThreshold: 0.9 }),
+    ).toThrow();
+  });
+
+  it('rejects procurementLeadTimeWeeks outside 0..104', () => {
+    expect(() =>
+      tenantSettingsSchema.parse({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 105,
+      }),
+    ).toThrow();
+    expect(() =>
+      tenantSettingsSchema.parse({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: -1,
+      }),
+    ).toThrow();
   });
 });
 
