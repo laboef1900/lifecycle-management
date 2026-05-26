@@ -2,10 +2,13 @@ import { z } from 'zod';
 
 export const percentSchema = z.number().min(0.01).max(0.99);
 
+export const procurementLeadTimeWeeksSchema = z.number().int().min(0).max(104);
+
 export const tenantSettingsSchema = z
   .object({
     warnThreshold: percentSchema,
     critThreshold: percentSchema,
+    procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
   })
   .refine((s) => s.warnThreshold < s.critThreshold, {
     message: 'warnThreshold must be less than critThreshold',

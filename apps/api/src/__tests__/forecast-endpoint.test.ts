@@ -37,6 +37,7 @@ describe('GET /api/clusters/:id/forecast', () => {
       toMonth: string;
       months: Array<{ month: string; consumption: number; capacity: number }>;
       effectiveThresholds: { warn: number; crit: number; source: string };
+      procurement: { leadTimeWeeks: number; orderByDate: string | null; breachMonth: string | null };
     };
     expect(body.fromMonth).toBe('2026-05-01');
     expect(body.toMonth).toBe('2028-05-01');
@@ -46,6 +47,14 @@ describe('GET /api/clusters/:id/forecast', () => {
       warn: 0.7,
       crit: 0.9,
       source: 'tenant',
+    });
+    // The seeded cluster's forecast never crosses warn within the default
+    // window, so orderByDate/breachMonth are null; leadTimeWeeks falls back to
+    // the tenant default (8).
+    expect(body.procurement).toEqual({
+      leadTimeWeeks: 8,
+      orderByDate: null,
+      breachMonth: null,
     });
   });
 

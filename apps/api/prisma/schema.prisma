@@ -33,11 +33,12 @@ model Tenant {
 }
 
 model TenantSettings {
-  tenantId      String   @id @map("tenant_id")
-  warnThreshold Decimal  @default(0.70) @map("warn_threshold") @db.Decimal(4, 3)
-  critThreshold Decimal  @default(0.90) @map("crit_threshold") @db.Decimal(4, 3)
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  tenantId                 String   @id @map("tenant_id")
+  warnThreshold            Decimal  @default(0.70) @map("warn_threshold") @db.Decimal(4, 3)
+  critThreshold            Decimal  @default(0.90) @map("crit_threshold") @db.Decimal(4, 3)
+  procurementLeadTimeWeeks Int      @default(8) @map("procurement_lead_time_weeks")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

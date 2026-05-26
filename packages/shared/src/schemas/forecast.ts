@@ -38,6 +38,14 @@ export interface ForecastEntityContribution {
   contributions: Array<{ month: string; amount: number }>;
 }
 
+export interface ProcurementInfo {
+  leadTimeWeeks: number;
+  /** null when no projected warn breach in the forecast window. */
+  orderByDate: string | null;
+  /** First month at or above warn; null when no breach. */
+  breachMonth: string | null;
+}
+
 export interface ForecastResponse {
   fromMonth: string;
   toMonth: string;
@@ -46,4 +54,5 @@ export interface ForecastResponse {
   hosts: ForecastEntityContribution[];
   applications: ForecastEntityContribution[];
   effectiveThresholds: EffectiveThresholds;
+  procurement: ProcurementInfo;
 }

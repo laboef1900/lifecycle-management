@@ -38,9 +38,22 @@ describe('SettingsService.updateTenant', () => {
     const result = await svc.updateTenant(TENANT_ID, {
       warnThreshold: 0.65,
       critThreshold: 0.85,
+      procurementLeadTimeWeeks: 6,
     });
     expect(result.warnThreshold).toBeCloseTo(0.65);
     expect(result.critThreshold).toBeCloseTo(0.85);
+    expect(result.procurementLeadTimeWeeks).toBe(6);
+  });
+
+  it('persists procurementLeadTimeWeeks separately from thresholds', async () => {
+    const svc = new SettingsService(prisma);
+    await svc.updateTenant(TENANT_ID, {
+      warnThreshold: 0.7,
+      critThreshold: 0.9,
+      procurementLeadTimeWeeks: 12,
+    });
+    const result = await svc.getTenant(TENANT_ID);
+    expect(result.procurementLeadTimeWeeks).toBe(12);
   });
 });
 
@@ -74,7 +87,11 @@ describe('SettingsService.updateCluster', () => {
   it('rejects when effective warn >= crit (partial override + tenant default)', async () => {
     const svc = new SettingsService(prisma);
     const clusterId = await makeCluster('bad-override');
-    await svc.updateTenant(TENANT_ID, { warnThreshold: 0.7, critThreshold: 0.9 });
+    await svc.updateTenant(TENANT_ID, {
+      warnThreshold: 0.7,
+      critThreshold: 0.9,
+      procurementLeadTimeWeeks: 8,
+    });
     await expect(
       svc.updateCluster(TENANT_ID, clusterId, {
         warnThreshold: 0.95,

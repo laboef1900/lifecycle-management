@@ -19,10 +19,12 @@ describe('<ForecastThresholdsForm>', () => {
     vi.spyOn(api.settings.tenant, 'get').mockResolvedValue({
       warnThreshold: 0.7,
       critThreshold: 0.9,
+      procurementLeadTimeWeeks: 8,
     });
     vi.spyOn(api.settings.tenant, 'update').mockResolvedValue({
       warnThreshold: 0.65,
       critThreshold: 0.85,
+      procurementLeadTimeWeeks: 6,
     });
   });
 
@@ -59,6 +61,7 @@ describe('<ForecastThresholdsForm>', () => {
       expect(api.settings.tenant.update).toHaveBeenCalledWith({
         warnThreshold: 0.65,
         critThreshold: 0.85,
+        procurementLeadTimeWeeks: 8,
       });
     });
   });
@@ -70,5 +73,47 @@ describe('<ForecastThresholdsForm>', () => {
     await userEvent.type(screen.getByLabelText(/warn %/i), '95');
     await userEvent.click(screen.getByRole('button', { name: /save/i }));
     expect(screen.getByText(/warn.*less than.*crit/i)).toBeInTheDocument();
+  });
+
+  it('loads and displays the procurement lead time', async () => {
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() => {
+      expect(screen.getByLabelText(/procurement lead time/i)).toHaveValue(8);
+    });
+  });
+
+  it('submits the changed procurement lead time alongside thresholds', async () => {
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() => expect(screen.getByLabelText(/procurement lead time/i)).toHaveValue(8));
+    await userEvent.clear(screen.getByLabelText(/procurement lead time/i));
+    await userEvent.type(screen.getByLabelText(/procurement lead time/i), '12');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => {
+      expect(api.settings.tenant.update).toHaveBeenCalledWith({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 12,
+      });
+    });
+  });
+
+  it('rejects out-of-range lead time with an inline error', async () => {
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() => expect(screen.getByLabelText(/procurement lead time/i)).toHaveValue(8));
+    await userEvent.clear(screen.getByLabelText(/procurement lead time/i));
+    await userEvent.type(screen.getByLabelText(/procurement lead time/i), '200');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    expect(screen.getByText(/lead time.*0 to 104/i)).toBeInTheDocument();
+    expect(api.settings.tenant.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-integer lead time with an inline error', async () => {
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() => expect(screen.getByLabelText(/procurement lead time/i)).toHaveValue(8));
+    await userEvent.clear(screen.getByLabelText(/procurement lead time/i));
+    await userEvent.type(screen.getByLabelText(/procurement lead time/i), '4.5');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    expect(screen.getByText(/whole number/i)).toBeInTheDocument();
+    expect(api.settings.tenant.update).not.toHaveBeenCalled();
   });
 });

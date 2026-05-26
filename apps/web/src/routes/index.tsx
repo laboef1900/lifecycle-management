@@ -7,13 +7,14 @@ import { FleetUtilizationHeatmap } from '@/components/overview/fleet-utilization
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { api } from '@/lib/api-client';
-import { collectForecastState } from '@/lib/collect-forecast-state';
+import { collectForecastState, earliestOrderByFromFleet } from '@/lib/collect-forecast-state';
 import {
   type KpiStatus,
   buildClusterForecastEntries,
   fleetRunwayToWarn,
   utilStatus,
 } from '@/lib/forecast-summary';
+import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 
 export const Route = createFileRoute('/')({
@@ -45,10 +46,23 @@ function OverviewPage(): React.JSX.Element {
     }),
   });
 
-  const { summary, forecastsById, errorsById, forecastsLoading, responsiveCount } =
-    collectForecastState(clusters, forecastQueries);
+  const {
+    summary,
+    forecastsById,
+    errorsById,
+    procurementByClusterId,
+    forecastsLoading,
+    responsiveCount,
+  } = collectForecastState(clusters, forecastQueries);
   const thresholds = useEffectiveThresholds();
   const clusterEntries = buildClusterForecastEntries(clusters, forecastsById, errorsById);
+  const earliestOrderBy = earliestOrderByFromFleet(clusters, procurementByClusterId);
+  const earliestKpi = earliestOrderBy
+    ? deriveProcurementKpi(earliestOrderBy.procurement)
+    : { value: '—', caption: 'no projected breach in fleet', status: 'ok' as const };
+  const earliestCaption = earliestOrderBy
+    ? `limited by ${earliestOrderBy.cluster.name}`
+    : earliestKpi.caption;
 
   const fleetRunway = fleetRunwayToWarn(
     summary.perClusterSeries.map((s) => s.months),
@@ -112,25 +126,32 @@ function OverviewPage(): React.JSX.Element {
       {!isLoading && !isError && clusters.length > 0 ? (
         <div className="grid grid-cols-12 gap-2">
           <KpiTile
-            className="col-span-12 sm:col-span-4"
+            className="col-span-12 sm:col-span-6 lg:col-span-3"
             label="Fleet utilization"
             value={`${(summary.utilization * 100).toFixed(1)}%`}
             caption="memory used"
             status={utilStatus(summary.utilization, thresholds)}
           />
           <KpiTile
-            className="col-span-12 sm:col-span-4"
+            className="col-span-12 sm:col-span-6 lg:col-span-3"
             label="Clusters tracked"
             value={String(summary.clusterCount)}
             caption={`${responsiveCount} responsive`}
             status="ok"
           />
           <KpiTile
-            className="col-span-12 sm:col-span-4"
+            className="col-span-12 sm:col-span-6 lg:col-span-3"
             label="Fleet runway"
             value={runwayValue}
             caption={runwayCaption}
             status={runwayStatus}
+          />
+          <KpiTile
+            className="col-span-12 sm:col-span-6 lg:col-span-3"
+            label="Earliest order-by"
+            value={earliestKpi.value}
+            caption={earliestCaption}
+            status={earliestKpi.status}
           />
 
           <div className="col-span-12">
@@ -153,9 +174,10 @@ function OverviewPage(): React.JSX.Element {
 function OverviewSkeleton(): React.JSX.Element {
   return (
     <div className="grid grid-cols-12 gap-2">
-      <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
-      <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
-      <Card className="col-span-12 h-24 animate-pulse sm:col-span-4" />
+      <Card className="col-span-12 h-24 animate-pulse sm:col-span-6 lg:col-span-3" />
+      <Card className="col-span-12 h-24 animate-pulse sm:col-span-6 lg:col-span-3" />
+      <Card className="col-span-12 h-24 animate-pulse sm:col-span-6 lg:col-span-3" />
+      <Card className="col-span-12 h-24 animate-pulse sm:col-span-6 lg:col-span-3" />
       <div className="col-span-12 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <Card className="h-[196px] animate-pulse" />
         <Card className="h-[196px] animate-pulse" />

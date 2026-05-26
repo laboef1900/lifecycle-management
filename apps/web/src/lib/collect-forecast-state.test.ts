@@ -1,7 +1,11 @@
-import type { ClusterResponse, ForecastResponse } from '@lcm/shared';
+import type { ClusterResponse, ForecastResponse, ProcurementInfo } from '@lcm/shared';
 import { describe, expect, it } from 'vitest';
 
-import { collectForecastState, type ForecastQueryLike } from './collect-forecast-state';
+import {
+  collectForecastState,
+  earliestOrderByFromFleet,
+  type ForecastQueryLike,
+} from './collect-forecast-state';
 
 function makeCluster(id: string, name: string = id): ClusterResponse {
   return {
@@ -27,7 +31,11 @@ function makeCluster(id: string, name: string = id): ClusterResponse {
   };
 }
 
-function makeForecast(consumption: number, capacity: number): ForecastResponse {
+function makeForecast(
+  consumption: number,
+  capacity: number,
+  procurement: ProcurementInfo = { leadTimeWeeks: 8, orderByDate: null, breachMonth: null },
+): ForecastResponse {
   return {
     fromMonth: '2026-05-01',
     toMonth: '2026-05-01',
@@ -38,6 +46,7 @@ function makeForecast(consumption: number, capacity: number): ForecastResponse {
       { month: '2026-05-01', consumption, capacity, utilization: capacity > 0 ? consumption / capacity : 0 },
     ],
     effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'tenant' },
+    procurement,
   } as unknown as ForecastResponse;
 }
 
@@ -126,5 +135,65 @@ describe('collectForecastState', () => {
     expect(state.summary.totalConsumption).toBe(1200);
     expect(state.summary.totalCapacity).toBe(2000);
     expect(state.summary.worstCluster?.id).toBe('b');
+  });
+
+  it('gathers per-cluster procurement info for clusters with data', () => {
+    const a = makeCluster('a');
+    const b = makeCluster('b');
+    const state = collectForecastState(
+      [a, b],
+      [
+        q({
+          data: makeForecast(400, 1000, {
+            leadTimeWeeks: 8,
+            orderByDate: '2026-06-01',
+            breachMonth: '2026-08-01',
+          }),
+          isSuccess: true,
+        }),
+        q({ isPending: true }),
+      ],
+    );
+    expect(state.procurementByClusterId.a).toEqual({
+      leadTimeWeeks: 8,
+      orderByDate: '2026-06-01',
+      breachMonth: '2026-08-01',
+    });
+    expect(state.procurementByClusterId.b).toBeUndefined();
+  });
+});
+
+describe('earliestOrderByFromFleet', () => {
+  it('returns null when no cluster has a projected breach', () => {
+    const a = makeCluster('a');
+    const b = makeCluster('b');
+    expect(earliestOrderByFromFleet([a, b], {})).toBeNull();
+    expect(
+      earliestOrderByFromFleet([a], {
+        a: { leadTimeWeeks: 8, orderByDate: null, breachMonth: null },
+      }),
+    ).toBeNull();
+  });
+
+  it('picks the cluster with the lexicographically-earliest orderByDate', () => {
+    const a = makeCluster('a');
+    const b = makeCluster('b');
+    const c = makeCluster('c');
+    const result = earliestOrderByFromFleet([a, b, c], {
+      a: { leadTimeWeeks: 8, orderByDate: '2026-09-01', breachMonth: '2026-11-01' },
+      b: { leadTimeWeeks: 8, orderByDate: '2026-07-15', breachMonth: '2026-09-09' },
+      c: { leadTimeWeeks: 8, orderByDate: null, breachMonth: null },
+    });
+    expect(result?.cluster.id).toBe('b');
+    expect(result?.procurement.orderByDate).toBe('2026-07-15');
+  });
+
+  it('skips clusters whose procurement entry is missing entirely', () => {
+    const a = makeCluster('a');
+    const b = makeCluster('b');
+    const result = earliestOrderByFromFleet([a, b], {
+      b: { leadTimeWeeks: 4, orderByDate: '2026-08-10', breachMonth: '2026-09-07' },
+    });
+    expect(result?.cluster.id).toBe('b');
   });
 });

@@ -10,6 +10,7 @@ import {
   type ForecastResult,
 } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
+import { computeProcurementInfo } from './procurement.js';
 import { SettingsService } from './settings.js';
 
 const DEFAULT_HORIZON_MONTHS = 24;
@@ -60,6 +61,7 @@ export class ForecastService {
 
     const settingsService = new SettingsService(this.prisma);
     const effectiveThresholds = await settingsService.effectiveFor(tenantId, clusterId);
+    const tenantSettings = await settingsService.getTenant(tenantId);
 
     const baseline = cluster.baselines[0];
     if (!baseline) {
@@ -118,7 +120,13 @@ export class ForecastService {
       toMonth,
     );
 
-    return { ...computed, effectiveThresholds };
+    const procurement = computeProcurementInfo({
+      months: computed.months,
+      warnFraction: effectiveThresholds.warn,
+      leadTimeWeeks: tenantSettings.procurementLeadTimeWeeks,
+    });
+
+    return { ...computed, effectiveThresholds, procurement };
   }
 }
 
