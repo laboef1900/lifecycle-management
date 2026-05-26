@@ -72,8 +72,11 @@ services:
     depends_on:
       server:
         condition: service_healthy
+    # Container listens on 8080 — DHI's distroless nginx runs as nonroot
+    # and can't bind privileged ports. Host-side HTTP_PORT (default 80)
+    # is unchanged.
     ports:
-      - '${HTTP_PORT:-80}:80'
+      - '${HTTP_PORT:-80}:8080'
     restart: unless-stopped
 
 volumes:

@@ -1,29 +1,36 @@
 # LCM web app — Vite-built React SPA served by nginx, with /api/* reverse
-# proxied to the server.
+# proxied to the server. Uses Docker Hardened Images (DHI):
+#
+#   builder = dhi.io/node:22-alpine-dev (full shell + apk + corepack)
+#   runtime = dhi.io/nginx:1            (distroless: only nginx + libs,
+#                                        runs as uid 65532 nonroot,
+#                                        listens on :8080)
 
 # ----- builder -----
-FROM node:22-alpine AS builder
+FROM dhi.io/node:22-alpine-dev AS builder
 
-RUN apk add --no-cache libc6-compat
-RUN npm install -g pnpm@11.2.2
+USER root
+RUN corepack enable
+USER nonroot
 
 WORKDIR /repo
 
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-COPY apps/server/package.json apps/server/
-COPY apps/web/package.json apps/web/
-COPY packages/shared/package.json packages/shared/
+COPY --chown=nonroot:nonroot pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY --chown=nonroot:nonroot apps/server/package.json apps/server/
+COPY --chown=nonroot:nonroot apps/web/package.json apps/web/
+COPY --chown=nonroot:nonroot packages/shared/package.json packages/shared/
+
 # --ignore-scripts skips @lcm/shared's `prepare` hook, which would try
 # to tsc before we've copied sources. We build shared explicitly below
 # once sources are in place.
 RUN pnpm install --frozen-lockfile --ignore-scripts --filter @lcm/web...
 
-COPY tsconfig.base.json ./
-COPY packages/shared/src packages/shared/src
-COPY packages/shared/tsconfig.json packages/shared/tsconfig.build.json packages/shared/
-COPY apps/web/src apps/web/src
-COPY apps/web/index.html apps/web/vite.config.ts apps/web/tsconfig.json apps/web/
-COPY apps/web/public apps/web/public
+COPY --chown=nonroot:nonroot tsconfig.base.json ./
+COPY --chown=nonroot:nonroot packages/shared/src packages/shared/src
+COPY --chown=nonroot:nonroot packages/shared/tsconfig.json packages/shared/tsconfig.build.json packages/shared/
+COPY --chown=nonroot:nonroot apps/web/src apps/web/src
+COPY --chown=nonroot:nonroot apps/web/index.html apps/web/vite.config.ts apps/web/tsconfig.json apps/web/
+COPY --chown=nonroot:nonroot apps/web/public apps/web/public
 
 # Vite resolves @lcm/shared via its package.json "exports" (→ dist/), so
 # build shared first.
@@ -31,12 +38,15 @@ RUN pnpm --filter @lcm/shared build
 RUN pnpm --filter @lcm/web build
 
 # ----- runtime -----
-FROM nginx:alpine AS runtime
+FROM dhi.io/nginx:1 AS runtime
 
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /repo/apps/web/dist /usr/share/nginx/html
 
-EXPOSE 80
+# Listening port matches the `listen 8080` in nginx.conf — DHI's nginx
+# can't bind privileged ports as nonroot.
+EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD wget -q --spider http://127.0.0.1/ || exit 1
+# No HEALTHCHECK: the distroless runtime has no wget/curl/shell to probe
+# itself. Compose's `depends_on` chain handles startup ordering;
+# upstream liveness is the server container's responsibility.
