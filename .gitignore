@@ -54,6 +54,9 @@ apps/web/src/routeTree.gen.ts
 # Playwright MCP scratch
 .playwright-mcp/
 
+# Claude Code session-local state
+.claude/
+
 # Playwright test artefacts
 apps/web/playwright-report/
 apps/web/test-results/

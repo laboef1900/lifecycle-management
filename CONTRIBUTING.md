@@ -26,7 +26,7 @@ timeline`.
 - PR body links the issue (`Closes #N`) and includes a short test plan or
   evidence (screenshots for UI work, commands run for backend work).
 - CI must be green before merging; the workflow runs lint, typecheck, the
-  full test suite (api uses Testcontainers — needs Docker, ubuntu-latest has
+  full test suite (server uses Testcontainers — needs Docker, ubuntu-latest has
   it), and the web build.
 - Merge with `--merge` (default; preserves the per-task TDD history of feature
   branches). Squash-merge is fine for branches with churn that nobody will
@@ -64,7 +64,7 @@ merge is clean.
 ## Tests
 
 - New backend behaviour gets at least one integration test in the matching
-  `apps/api/src/__tests__/*.test.ts` file. Factories in `factories.ts` are
+  `apps/server/src/__tests__/*.test.ts` file. Factories in `factories.ts` are
   preferred over hand-rolled fixtures.
 - New frontend components that have non-trivial logic (sorting, validation,
   prop mapping) get a Vitest + React Testing Library unit test next to the
@@ -74,13 +74,13 @@ merge is clean.
 
 ## What lives where
 
-- `apps/api` — Fastify + Prisma. Tests run with Testcontainers (`docker required`).
-- `apps/api/scripts/` — one-time data tools (e.g. `db:import-xlsx`). Each is a
+- `apps/server` — Fastify + Prisma. Tests run with Testcontainers (`docker required`).
+- `apps/server/scripts/` — one-time data tools (e.g. `db:import-xlsx`). Each is a
   thin CLI in `scripts/` backed by a pure module in `scripts/lib/` with its
   own Vitest unit tests; not part of the runtime image.
 - `apps/web` — Vite + React. Vitest for unit tests, Playwright for e2e.
 - `packages/shared` — Zod schemas + inferred types. Anything used by both
-  api and web must live here (single source of truth).
+  server and web must live here (single source of truth).
 - `docker/` — production Dockerfiles + compose files. `docker/docker-compose.yml`
   is the production stack; `docker/docker-compose.dev.yml` is dev DB only.
 - `docs/` — vision, design specs, operations runbook, and the reference

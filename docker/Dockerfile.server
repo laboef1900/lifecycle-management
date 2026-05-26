@@ -1,6 +1,6 @@
-# LCM API service — Fastify + Prisma on Node 22.
+# LCM server — Fastify + Prisma on Node 22.
 #
-# Single-stage build: the runtime image includes pnpm and the api's
+# Single-stage build: the runtime image includes pnpm and the server's
 # devDependencies (tsx is needed to run the TS sources directly). For a v1
 # internal deployment the few extra MB are worth the simplicity; if image
 # size becomes a concern we can revisit with tsup + pnpm deploy.
@@ -22,24 +22,24 @@ WORKDIR /app
 # then every workspace's package.json so pnpm has a complete dependency
 # graph; only then install (caching deps until any package.json changes).
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-COPY apps/api/package.json apps/api/
+COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
-RUN pnpm install --frozen-lockfile --filter @lcm/api...
+RUN pnpm install --frozen-lockfile --filter @lcm/server...
 
 # Copy sources only after the install layer is cached.
 COPY tsconfig.base.json ./
 COPY packages/shared/src packages/shared/src
 COPY packages/shared/tsconfig.json packages/shared/
-COPY apps/api/src apps/api/src
-COPY apps/api/prisma apps/api/prisma
-COPY apps/api/tsconfig.json apps/api/tsconfig.build.json apps/api/
+COPY apps/server/src apps/server/src
+COPY apps/server/prisma apps/server/prisma
+COPY apps/server/tsconfig.json apps/server/tsconfig.build.json apps/server/
 
 # Generate the Prisma client (binaries) inside the image so we don't depend
 # on the host's platform.
-RUN pnpm --filter @lcm/api exec prisma generate
+RUN pnpm --filter @lcm/server exec prisma generate
 
-WORKDIR /app/apps/api
+WORKDIR /app/apps/server
 
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
@@ -47,7 +47,7 @@ ENV PORT=8080
 
 EXPOSE 8080
 
-COPY docker/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
-RUN chmod +x /usr/local/bin/api-entrypoint.sh
+COPY docker/server-entrypoint.sh /usr/local/bin/server-entrypoint.sh
+RUN chmod +x /usr/local/bin/server-entrypoint.sh
 
-ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/api-entrypoint.sh"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/server-entrypoint.sh"]

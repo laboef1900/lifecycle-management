@@ -1,12 +1,15 @@
 # Production compose for self-hosted deployment.
 #
-# Run from the repo root; .env at the root carries `COMPOSE_FILE=docker/docker-compose.yml`
-# so the standard `docker compose ...` invocations find this file automatically:
-#   docker compose build
-#   SEED_ON_BOOT=true docker compose up -d
+# Pulls pre-built images from GHCR — there are no `build:` blocks here. To
+# publish new images, push to `main`/`dev` or cut a release; the
+# `.github/workflows/publish-images.yml` workflow builds and pushes them.
+# To test an unpublished change locally, build the image by hand:
+#   docker build -f docker/Dockerfile.server -t ghcr.io/laboef1900/lcm-server:latest ..
 #
-# The build context is `..` (repo root) because the Dockerfiles COPY from
-# apps/, packages/, and the root lockfile.
+# Run from the repo root; .env at the root carries
+# `COMPOSE_FILE=docker/docker-compose.yml` so the standard
+# `docker compose ...` invocations find this file automatically:
+#   SEED_ON_BOOT=true docker compose up -d
 #
 # For local dev (Postgres only), see `docker/docker-compose.dev.yml` —
 # `pnpm db:dev:up` is the convenience wrapper.
@@ -15,14 +18,18 @@ name: lcm
 
 services:
   db:
-    image: postgres:16-alpine
+    image: dhi.io/postgres:18
     container_name: lcm-db
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lcm}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lcm}
       POSTGRES_DB: ${POSTGRES_DB:-lcm}
     volumes:
-      - lcm-postgres:/var/lib/postgresql/data
+      # DHI postgres:18 sets PGDATA=/var/lib/postgresql/18/data (note the
+      # major-version segment), not /var/lib/postgresql/data as the official
+      # postgres image does. The volume must be mounted at the right path or
+      # the DB initializes inside an ephemeral container layer.
+      - lcm-postgres-18:/var/lib/postgresql/18/data
     healthcheck:
       test:
         - CMD-SHELL
@@ -32,11 +39,9 @@ services:
       retries: 10
     restart: unless-stopped
 
-  api:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.api
-    container_name: lcm-api
+  server:
+    image: ghcr.io/laboef1900/lcm-server:${LCM_IMAGE_TAG:-latest}
+    container_name: lcm-server
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-lcm}:${POSTGRES_PASSWORD:-lcm}@db:5432/${POSTGRES_DB:-lcm}
       NODE_ENV: production
@@ -61,17 +66,15 @@ services:
     restart: unless-stopped
 
   web:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.web
+    image: ghcr.io/laboef1900/lcm-web:${LCM_IMAGE_TAG:-latest}
     container_name: lcm-web
     depends_on:
-      api:
+      server:
         condition: service_healthy
     ports:
       - '${HTTP_PORT:-80}:80'
     restart: unless-stopped
 
 volumes:
-  lcm-postgres:
-    name: lcm-postgres-data
+  lcm-postgres-18:
+    name: lcm-postgres-18-data

@@ -16,7 +16,7 @@
     "typecheck": "pnpm -r typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "seed": "pnpm --filter @lcm/api seed",
+    "seed": "pnpm --filter @lcm/server seed",
     "db:dev:up": "docker compose -f docker/docker-compose.dev.yml up -d db",
     "db:dev:down": "docker compose -f docker/docker-compose.dev.yml down",
     "prepare": "husky"
