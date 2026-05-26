@@ -19,10 +19,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.2.2
+      # Use Corepack (bundled with Node 22) to provision pnpm at the version
+      # pinned in package.json's `packageManager` field. Replaces
+      # pnpm/action-setup, which was hitting persistent codeload.github.com
+      # download failures (2026-05-26).
+      - name: Enable Corepack
+        run: corepack enable
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
