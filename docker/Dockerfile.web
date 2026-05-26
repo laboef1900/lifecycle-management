@@ -1,5 +1,5 @@
 # LCM web app — Vite-built React SPA served by nginx, with /api/* reverse
-# proxied to the api service.
+# proxied to the server.
 
 # ----- builder -----
 FROM node:22-alpine AS builder
@@ -10,7 +10,7 @@ RUN npm install -g pnpm@11.2.2
 WORKDIR /repo
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-COPY apps/api/package.json apps/api/
+COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
 RUN pnpm install --frozen-lockfile --filter @lcm/web...
