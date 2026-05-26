@@ -1,45 +1,81 @@
-# LCM server — Fastify + Prisma on Node 22.
+# Multi-stage build for the Fastify server using Docker Hardened Images.
 #
-# Single-stage build: the runtime image includes pnpm and the server's
-# devDependencies (tsx is needed to run the TS sources directly). For a v1
-# internal deployment the few extra MB are worth the simplicity; if image
-# size becomes a concern we can revisit with tsup + pnpm deploy.
+# Builder = dhi.io/node:22-alpine-dev (full shell + apk + npm + corepack).
+#           Compiles TS → JS, generates Prisma client, then packages a
+#           self-contained deploy bundle via `pnpm deploy`.
+#
+# Runtime = dhi.io/node:22-alpine (distroless: only `node` + /usr/bin/env,
+#           runs as uid 65532 nonroot, ENTRYPOINT is `node`). The Node
+#           entrypoint module at dist/src/entrypoint.js handles
+#           migrate + optional seed + server boot — there is no shell to
+#           run server-entrypoint.sh against.
 
-FROM node:22-alpine
+# ----- builder -----
+FROM dhi.io/node:22-alpine-dev AS builder
 
-# libc6-compat: prisma's native binaries.
-# openssl: prisma needs it for its query engine.
-# tini: PID 1 init that forwards SIGTERM cleanly to the Node process so
-#       Fastify can run its onClose hooks.
-RUN apk add --no-cache libc6-compat openssl tini
-
-RUN npm install -g pnpm@11.2.2
+# DHI images default to nonroot. We need root briefly to enable corepack
+# (which writes pnpm/yarn shims into a system path).
+USER root
+RUN corepack enable
+USER nonroot
 
 WORKDIR /app
 
-# Install dependencies first — workspace packages need their package.json
-# files present at install time. Copy the lockfile + workspace metadata,
-# then every workspace's package.json so pnpm has a complete dependency
-# graph; only then install (caching deps until any package.json changes).
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-COPY apps/server/package.json apps/server/
-COPY apps/web/package.json apps/web/
-COPY packages/shared/package.json packages/shared/
-RUN pnpm install --frozen-lockfile --filter @lcm/server...
+# Workspace metadata first so the install layer caches until a
+# package.json or the lockfile changes.
+COPY --chown=nonroot:nonroot pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY --chown=nonroot:nonroot apps/server/package.json apps/server/
+COPY --chown=nonroot:nonroot apps/web/package.json apps/web/
+COPY --chown=nonroot:nonroot packages/shared/package.json packages/shared/
 
-# Copy sources only after the install layer is cached.
-COPY tsconfig.base.json ./
-COPY packages/shared/src packages/shared/src
-COPY packages/shared/tsconfig.json packages/shared/
-COPY apps/server/src apps/server/src
-COPY apps/server/prisma apps/server/prisma
-COPY apps/server/tsconfig.json apps/server/tsconfig.build.json apps/server/
+# Install the server's full dep graph (incl. devDeps — needed for tsc).
+# --ignore-scripts skips the @lcm/shared `prepare` (which tries to tsc
+# before we've copied sources) and husky `prepare` (no .git in the build
+# context). We explicitly invoke `prisma generate` and `@lcm/shared build`
+# below once sources are in place.
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter @lcm/server...
 
-# Generate the Prisma client (binaries) inside the image so we don't depend
-# on the host's platform.
+# Sources.
+COPY --chown=nonroot:nonroot tsconfig.base.json ./
+COPY --chown=nonroot:nonroot packages/shared packages/shared
+COPY --chown=nonroot:nonroot apps/server apps/server
+
+# Compile shared first (its dist/ becomes what node imports), then the
+# Prisma client (native query engine binary lands in
+# node_modules/.prisma/client/), then the server itself.
+RUN pnpm --filter @lcm/shared build
 RUN pnpm --filter @lcm/server exec prisma generate
+RUN pnpm --filter @lcm/server build
 
-WORKDIR /app/apps/server
+# Produce a self-contained, prod-only deploy bundle. `pnpm deploy`
+# flattens workspace symlinks into hard files and strips devDeps, which
+# matters for a distroless runtime that has no pnpm to follow links.
+# Target /home/nonroot/deploy because the nonroot user can't mkdir /deploy.
+RUN pnpm --filter @lcm/server deploy --legacy --prod /home/nonroot/deploy
+
+# Re-run `prisma generate` inside the deploy bundle. The generated client
+# (node_modules/.pnpm/.../node_modules/.prisma/client/) gets replaced when
+# pnpm deploy re-installs node_modules, so the client created earlier is
+# gone — without this step, the runtime image hits
+# "@prisma/client did not initialize" on the first query.
+WORKDIR /home/nonroot/deploy
+RUN node node_modules/prisma/build/index.js generate
+WORKDIR /app
+
+# ----- runtime -----
+FROM dhi.io/node:22-alpine AS runtime
+
+# DHI distroless: nonroot uid 65532, ENTRYPOINT=["node"], no /bin, no apk.
+WORKDIR /app
+
+COPY --from=builder --chown=65532:65532 /home/nonroot/deploy /app
+
+# Prisma's native query engine links to libssl/libcrypto. The DHI distroless
+# runtime ships only `node` + /usr/bin/env — no system libs — so copy the
+# two OpenSSL .so files from the builder. Without these, Prisma's openssl
+# detection fails and falls back to "openssl-1.1.x" (which we don't and
+# can't generate engines for).
+COPY --from=builder /usr/lib/libssl.so.3 /usr/lib/libcrypto.so.3 /usr/lib/
 
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
@@ -47,7 +83,6 @@ ENV PORT=8080
 
 EXPOSE 8080
 
-COPY docker/server-entrypoint.sh /usr/local/bin/server-entrypoint.sh
-RUN chmod +x /usr/local/bin/server-entrypoint.sh
-
-ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/server-entrypoint.sh"]
+# ENTRYPOINT inherits from the base image as ["node"]; CMD names the
+# module that `node` runs.
+CMD ["dist/src/entrypoint.js"]

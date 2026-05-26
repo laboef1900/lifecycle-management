@@ -35,12 +35,16 @@ the official postgres image uses.
 
 ## What ships in each image
 
-- `Dockerfile.server`: Node 22 alpine + pnpm + tini. Entrypoint
-  (`server-entrypoint.sh`) runs `prisma migrate deploy` on every start
-  (idempotent — already-applied migrations are skipped), conditionally
-  runs `prisma db seed`, then execs `tsx src/index.ts` as the long-lived
-  Fastify server. Built and published by
-  `.github/workflows/publish-images.yml` on push to main/dev/release.
+- `Dockerfile.server`: multi-stage build on Docker Hardened Images. The
+  builder stage uses `dhi.io/node:22-alpine-dev` (full shell + apk +
+  corepack); the runtime stage uses `dhi.io/node:22-alpine` (distroless:
+  only the `node` binary, runs as uid 65532). `pnpm deploy` flattens
+  workspace symlinks into a self-contained `/deploy` bundle. The Node
+  entrypoint module at `dist/src/entrypoint.js` runs `prisma migrate deploy`
+  on every start (idempotent), conditionally runs the seed, then
+  `await import('./index.js')` starts the Fastify server. Built and
+  published by `.github/workflows/publish-images.yml` on push to
+  main/dev/release.
 - `Dockerfile.web`: multi-stage build. Stage 1 installs the pnpm workspace
   and runs `vite build`. Stage 2 is `nginx:alpine` serving the static
   bundle with `nginx.conf` here that handles SPA fallback + the API
