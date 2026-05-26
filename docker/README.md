@@ -1,7 +1,9 @@
 # Production deployment
 
-This directory holds the Docker assets for self-hosted deployment. The
-repo's root `docker-compose.yml` wires them together.
+This directory holds the Docker assets for self-hosted deployment.
+`docker-compose.yml` here wires them together; the root `.env.example`
+sets `COMPOSE_FILE=docker/docker-compose.yml` so `docker compose ...` from
+the repo root finds it without `-f`.
 
 ## Quickstart
 
@@ -41,5 +43,6 @@ restarting `api` is cheap. `prisma db seed` only runs when
 
 ## Local dev (no Docker beyond Postgres)
 
-`docker-compose.dev.yml` at the repo root brings up just Postgres; the
-api and web run on the host via `pnpm dev` so HMR + watch mode work.
+`docker-compose.dev.yml` (also in this directory) brings up just Postgres;
+the api and web run on the host via `pnpm dev` so HMR + watch mode work.
+Use `pnpm db:dev:up` / `pnpm db:dev:down` as convenience wrappers.

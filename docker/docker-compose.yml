@@ -1,10 +1,17 @@
 # Production compose for self-hosted deployment.
-# Build: docker compose build
-# Start: docker compose up -d
-# First-run seed: SEED_ON_BOOT=true docker compose up -d api
 #
-# `docker-compose.dev.yml` (this repo, separate file) brings up just Postgres
-# for local development — `pnpm dev` runs api/web outside containers.
+# Run from the repo root; .env at the root carries `COMPOSE_FILE=docker/docker-compose.yml`
+# so the standard `docker compose ...` invocations find this file automatically:
+#   docker compose build
+#   SEED_ON_BOOT=true docker compose up -d
+#
+# The build context is `..` (repo root) because the Dockerfiles COPY from
+# apps/, packages/, and the root lockfile.
+#
+# For local dev (Postgres only), see `docker/docker-compose.dev.yml` —
+# `pnpm db:dev:up` is the convenience wrapper.
+
+name: lcm
 
 services:
   db:
@@ -27,7 +34,7 @@ services:
 
   api:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile.api
     container_name: lcm-api
     environment:
@@ -55,7 +62,7 @@ services:
 
   web:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile.web
     container_name: lcm-web
     depends_on:

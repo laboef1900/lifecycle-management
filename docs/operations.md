@@ -134,10 +134,11 @@ anything free) in `.env` and re-run `docker compose up -d`.
 
 ### Dev DB collides with production DB
 
-`docker-compose.dev.yml` publishes Postgres on host port `5432`. The
+`docker/docker-compose.dev.yml` publishes Postgres on host port `5432`. The
 production `db` service keeps Postgres inside the compose network only. Don't
-run both at once on the same host; `docker compose -f docker-compose.dev.yml down`
-before launching the production stack.
+run both at once on the same host; `pnpm db:dev:down` (or
+`docker compose -f docker/docker-compose.dev.yml down`) before launching the
+production stack.
 
 ### Seed re-ran by accident, duplicating data
 
