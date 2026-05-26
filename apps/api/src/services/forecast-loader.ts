@@ -1,4 +1,4 @@
-import type { EventCategory } from '@lcm/shared';
+import type { EventCategory, Scenario } from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
 
 import { NotFoundError, UnprocessableError } from './errors.js';
@@ -7,10 +7,12 @@ import {
   type ForecastApplication,
   type ForecastEvent,
   type ForecastHost,
+  type ForecastInput,
   type ForecastResult,
 } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import { computeProcurementInfo } from './procurement.js';
+import { applyScenario } from './scenario.js';
 import { SettingsService } from './settings.js';
 
 const DEFAULT_HORIZON_MONTHS = 24;
@@ -18,6 +20,14 @@ const DEFAULT_HORIZON_MONTHS = 24;
 interface LoadOptions {
   fromMonth?: Date;
   toMonth?: Date;
+}
+
+interface PreparedForecastInput {
+  input: ForecastInput;
+  fromMonth: Date;
+  toMonth: Date;
+  effectiveThresholds: Awaited<ReturnType<SettingsService['effectiveFor']>>;
+  procurementLeadTimeWeeks: number;
 }
 
 export class ForecastService {
@@ -29,6 +39,33 @@ export class ForecastService {
     metricKey: string,
     options: LoadOptions = {},
   ): Promise<ForecastResult> {
+    const prepared = await this.prepare(tenantId, clusterId, metricKey, options);
+    return this.finalize(prepared, prepared.input);
+  }
+
+  /**
+   * Same as forCluster but applies a what-if transform between loading and
+   * computing. The baseline DB state is never modified — the scenario forecast
+   * lives only in this response.
+   */
+  async forClusterWithScenario(
+    tenantId: string,
+    clusterId: string,
+    metricKey: string,
+    scenario: Scenario,
+    options: LoadOptions = {},
+  ): Promise<ForecastResult> {
+    const prepared = await this.prepare(tenantId, clusterId, metricKey, options);
+    const scenarioInput = applyScenario(prepared.input, scenario);
+    return this.finalize(prepared, scenarioInput);
+  }
+
+  private async prepare(
+    tenantId: string,
+    clusterId: string,
+    metricKey: string,
+    options: LoadOptions,
+  ): Promise<PreparedForecastInput> {
     const metricType = await this.prisma.metricType.findUnique({ where: { key: metricKey } });
     if (!metricType) {
       throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${metricKey}`);
@@ -107,8 +144,8 @@ export class ForecastService {
       capacityDelta: e.capacityDelta?.toNumber() ?? null,
     }));
 
-    const computed = computeForecast(
-      {
+    return {
+      input: {
         baselineDate: cluster.baselineDate,
         baselineConsumption: baseline.baselineConsumption.toNumber(),
         baselineCapacity: baseline.baselineCapacity.toNumber(),
@@ -118,15 +155,23 @@ export class ForecastService {
       },
       fromMonth,
       toMonth,
-    );
+      effectiveThresholds,
+      procurementLeadTimeWeeks: tenantSettings.procurementLeadTimeWeeks,
+    };
+  }
 
+  private finalize(prepared: PreparedForecastInput, input: ForecastInput): ForecastResult {
+    const computed = computeForecast(input, prepared.fromMonth, prepared.toMonth);
     const procurement = computeProcurementInfo({
       months: computed.months,
-      warnFraction: effectiveThresholds.warn,
-      leadTimeWeeks: tenantSettings.procurementLeadTimeWeeks,
+      warnFraction: prepared.effectiveThresholds.warn,
+      leadTimeWeeks: prepared.procurementLeadTimeWeeks,
     });
-
-    return { ...computed, effectiveThresholds, procurement };
+    return {
+      ...computed,
+      effectiveThresholds: prepared.effectiveThresholds,
+      procurement,
+    };
   }
 }
 

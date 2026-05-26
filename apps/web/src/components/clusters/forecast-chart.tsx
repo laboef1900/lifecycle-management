@@ -20,6 +20,8 @@ import { useChartColors } from '@/lib/use-chart-colors';
 interface ForecastChartProps {
   forecast: ForecastResponse;
   compact?: boolean;
+  /** Optional scenario overlay — consumption line drawn dashed on top of baseline. */
+  scenario?: { label: string; months: ForecastResponse['months'] } | null;
 }
 
 const numberFormat = new Intl.NumberFormat('en-US');
@@ -27,9 +29,14 @@ const numberFormat = new Intl.NumberFormat('en-US');
 export function ForecastChart({
   forecast,
   compact = false,
+  scenario,
 }: ForecastChartProps): React.JSX.Element {
   const colors = useChartColors();
   const { warn, crit } = forecast.effectiveThresholds;
+  const scenarioByMonth = new Map<string, number>();
+  if (scenario) {
+    for (const p of scenario.months) scenarioByMonth.set(p.month, Math.round(p.consumption));
+  }
   const data = forecast.months.map((point) => {
     const capacity = Math.round(point.capacity);
     return {
@@ -39,6 +46,7 @@ export function ForecastChart({
       capacity,
       warnLevel: Math.round(point.capacity * warn),
       critLevel: Math.round(point.capacity * crit),
+      scenarioConsumption: scenarioByMonth.get(point.month) ?? null,
     };
   });
   const maxCeiling = data.reduce((max, d) => Math.max(max, d.capacity), 0);
@@ -243,6 +251,20 @@ export function ForecastChart({
               dot={false}
               isAnimationActive={false}
             />
+            {scenario ? (
+              <Line
+                type="monotone"
+                dataKey="scenarioConsumption"
+                name="Scenario"
+                stroke={colors.consumption}
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                dot={false}
+                activeDot={{ r: 3 }}
+                isAnimationActive={false}
+                connectNulls
+              />
+            ) : null}
             {eolMonthInRange && earliestEolHost ? (
               <ReferenceLine
                 x={eolMonthKey ?? undefined}
@@ -279,7 +301,7 @@ export function ForecastChart({
         </ResponsiveContainer>
       </div>
 
-      <ChartLegend events={forecast.events} colors={colors} />
+      <ChartLegend events={forecast.events} colors={colors} scenarioLabel={scenario?.label ?? null} />
     </Card>
   );
 }
@@ -316,15 +338,19 @@ function formatDelta(consumption: number | null, capacity: number | null): strin
 interface ChartLegendProps {
   events: ForecastResponse['events'];
   colors: ReturnType<typeof useChartColors>;
+  scenarioLabel: string | null;
 }
 
-function ChartLegend({ events, colors }: ChartLegendProps): React.JSX.Element {
+function ChartLegend({ events, colors, scenarioLabel }: ChartLegendProps): React.JSX.Element {
   const categories = Array.from(new Set(events.map((e) => e.category)));
   return (
     <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
       <LegendItem swatch={colors.consumption} label="Consumption" />
       <LegendItem swatch={colors.capacity} label="Capacity ceiling" dashed />
       <LegendItem swatch={colors.capacity} label="Headroom" dashed faint />
+      {scenarioLabel ? (
+        <LegendItem swatch={colors.consumption} label={`Scenario: ${scenarioLabel}`} dashed />
+      ) : null}
       {categories.length > 0 ? (
         <span aria-hidden className="mx-1">
           ·

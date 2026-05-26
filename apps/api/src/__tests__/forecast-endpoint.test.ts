@@ -198,3 +198,56 @@ describe('GET /api/clusters/:id/forecast', () => {
     }
   });
 });
+
+describe('POST /api/clusters/:id/forecast/scenario', () => {
+  it('applies an add_vms scenario and returns higher consumption than the baseline', async () => {
+    const base = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&from=2026-06&to=2026-08`,
+    });
+    const baseBody = base.json() as {
+      months: Array<{ month: string; consumption: number }>;
+    };
+    const baselineLast = baseBody.months[baseBody.months.length - 1]!.consumption;
+
+    const scenario = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb&from=2026-06&to=2026-08`,
+      payload: { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2026-06' },
+    });
+    expect(scenario.statusCode).toBe(200);
+    const scenarioBody = scenario.json() as {
+      months: Array<{ month: string; consumption: number }>;
+    };
+    const scenarioLast = scenarioBody.months[scenarioBody.months.length - 1]!.consumption;
+    // 50 × 16 GB = 800 GB added every month starting 2026-06.
+    expect(scenarioLast - baselineLast).toBe(800);
+  });
+
+  it('rejects an invalid scenario kind with 400', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      payload: { kind: 'nope' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 404 when the cluster does not exist', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/clusters/clbogusclubogusclubogus0/forecast/scenario?metric=memory_gb',
+      payload: { kind: 'lose_hosts', count: 1 },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('rejects lose_hosts with count < 1', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      payload: { kind: 'lose_hosts', count: 0 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});

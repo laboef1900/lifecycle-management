@@ -15,6 +15,16 @@ import type {
   TenantSettings,
 } from '@lcm/shared';
 
+/**
+ * Wire shape of scenarioSchema: Zod's `monthOnly.optional()` transforms a
+ * `YYYY-MM` string to a Date, so the inferred type's `startMonth` is `Date`.
+ * On the wire we send the original `YYYY-MM` string.
+ */
+export type ScenarioWire =
+  | { kind: 'lose_hosts'; count: number }
+  | { kind: 'add_vms'; count: number; sizeGb: number; startMonth?: string }
+  | { kind: 'delay_procurement'; months: number };
+
 export interface ApiErrorBody {
   error: {
     code: string;
@@ -233,6 +243,19 @@ export const api = {
       if (params.from) search.set('from', params.from);
       if (params.to) search.set('to', params.to);
       return request<ForecastResponse>(`/api/clusters/${id}/forecast?${search.toString()}`);
+    },
+    forecastScenario: (
+      id: string,
+      params: { metric: string; from?: string; to?: string },
+      scenario: ScenarioWire,
+    ) => {
+      const search = new URLSearchParams({ metric: params.metric });
+      if (params.from) search.set('from', params.from);
+      if (params.to) search.set('to', params.to);
+      return request<ForecastResponse>(
+        `/api/clusters/${id}/forecast/scenario?${search.toString()}`,
+        { method: 'POST', body: JSON.stringify(scenario) },
+      );
     },
   },
   hosts: {
