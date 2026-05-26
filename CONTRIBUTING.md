@@ -17,8 +17,7 @@ A few conventions to keep the repo coherent while it's small.
   commit _does_, not what you did. Example: `Add Hosts REST API with capacity
 timeline`.
 - Body explains _why_, mentions the issue (`Closes #6`), and notes any
-  caveats a future reader needs (e.g. "Prisma `migrate reset` was blocked by
-  the AI guard, so verification ran against a throwaway DB instead").
+  caveats a future reader needs.
 - Co-author trailers are added by the harness when relevant.
 
 ## Pull requests
@@ -89,13 +88,4 @@ merge is clean.
 
 ## Running the dev loop
 
-```bash
-pnpm install
-docker compose -f docker-compose.dev.yml up -d db
-pnpm --filter @lcm/api exec prisma migrate deploy
-pnpm seed
-pnpm --filter @lcm/api db:import-xlsx   # optional — adds realistic forecast events
-pnpm dev                                # api on :8090, web on :5173 with HMR
-```
-
-For full background see [`README.md`](README.md).
+See [`README.md`](README.md#run-locally-for-development).

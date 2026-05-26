@@ -1,8 +1,7 @@
 # Operations runbook
 
 Day-to-day operations for the self-hosted production deployment. For
-architecture context start with the [`README`](../README.md); for the data
-model + API shape read the [v1 design spec](superpowers/specs/2026-05-22-lcm-v1-design.md).
+architecture context start with the [`README`](../README.md).
 
 ## Deploy a new host from zero
 
@@ -162,5 +161,4 @@ error — typically a constraint added by a future migration.
 - Audit log
 - Alerting / thresholds
 
-See the [vision](vision.md) and [v1 design spec](superpowers/specs/2026-05-22-lcm-v1-design.md)
-for the rationale and roadmap.
+See the [vision](vision.md) for the rationale and roadmap.

@@ -1,7 +1,5 @@
 # Vision — laboef1900/LCM
 
-*Last refined: 2026-05-21T13:30:16.629386+00:00 via Claude Station*
-
 ## Problem
 
 The team had no structured way to track vSphere memory capacity forecasts — before last week, it was pure chaos. A manually maintained Excel file was introduced as a first step, but it breaks down the moment multiple people need to contribute: adding a new cluster, host, or memory-consuming application requires understanding fragile formulas and row structures. The tool replaces the Excel entirely and becomes the single source of truth for capacity planning.
@@ -40,6 +38,6 @@ The tool becomes as cumbersome to use as the Excel it replaced — complex forms
 
 ## References
 
-Reference files for this vision are in [`vision-refs/`](vision-refs/):
-
-- [`Capacity_Forecast_vSphere.xlsx`](vision-refs/Capacity_Forecast_vSphere.xlsx) — 18 KB
+- [`Capacity_Forecast_vSphere.xlsx`](Capacity_Forecast_vSphere.xlsx) — the
+  original spreadsheet this tool replaces; also consumed by the
+  `db:import-xlsx` script as the seed of historical events.

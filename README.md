@@ -4,9 +4,7 @@ Replace the spreadsheet that tracks vSphere memory capacity with a browser-based
 app that is the single source of truth for capacity planning. Built for a small
 internal infrastructure team; self-hosted via Docker Compose.
 
-See [`docs/vision.md`](docs/vision.md) for the full product context and
-[`docs/superpowers/specs/2026-05-22-lcm-v1-design.md`](docs/superpowers/specs/2026-05-22-lcm-v1-design.md)
-for the v1 design.
+See [`docs/vision.md`](docs/vision.md) for the full product context.
 
 ## Architecture
 
@@ -103,13 +101,10 @@ pnpm --filter @lcm/api dev
 pnpm --filter @lcm/web test
 pnpm --filter @lcm/web test:e2e   # Playwright golden-path (needs dev API up)
 
-# one-time data tools
+# one-time data tools — wipe-and-replace events + hosts on the four reference
+# clusters from docs/Capacity_Forecast_vSphere.xlsx (or pass a path to override).
+# Other clusters are untouched.
 pnpm --filter @lcm/api db:import-xlsx [path]
-                    # Replace events + hosts on the four reference clusters with
-                    # the events recorded in docs/Capacity_Forecast_vSphere.xlsx.
-                    # Defaults to that path; pass an alternate xlsx to override.
-                    # Wipe-and-replace, scoped to the four reference clusters
-                    # by name — other clusters are untouched.
 ```
 
 ## Repository layout
@@ -122,7 +117,7 @@ pnpm --filter @lcm/api db:import-xlsx [path]
 ├─ packages/
 │  └─ shared/             Zod schemas + types (consumed by api + web)
 ├─ docker/                Production Dockerfiles, nginx config, entrypoint
-├─ docs/                  Vision, specs, operations runbook
+├─ docs/                  Vision, operations runbook, reference spreadsheet
 ├─ docker-compose.yml     Production stack (db + api + web)
 ├─ docker-compose.dev.yml Dev DB only
 └─ .github/workflows/ci.yml   Lint · typecheck · test · build
