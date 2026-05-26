@@ -13,15 +13,21 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
-RUN pnpm install --frozen-lockfile --filter @lcm/web...
+# --ignore-scripts skips @lcm/shared's `prepare` hook, which would try
+# to tsc before we've copied sources. We build shared explicitly below
+# once sources are in place.
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter @lcm/web...
 
 COPY tsconfig.base.json ./
 COPY packages/shared/src packages/shared/src
-COPY packages/shared/tsconfig.json packages/shared/
+COPY packages/shared/tsconfig.json packages/shared/tsconfig.build.json packages/shared/
 COPY apps/web/src apps/web/src
 COPY apps/web/index.html apps/web/vite.config.ts apps/web/tsconfig.json apps/web/
 COPY apps/web/public apps/web/public
 
+# Vite resolves @lcm/shared via its package.json "exports" (→ dist/), so
+# build shared first.
+RUN pnpm --filter @lcm/shared build
 RUN pnpm --filter @lcm/web build
 
 # ----- runtime -----
