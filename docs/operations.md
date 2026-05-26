@@ -25,7 +25,7 @@ architecture context start with the [`README`](../README.md).
 5. **First boot** with seed data:
    ```bash
    SEED_ON_BOOT=true docker compose up -d
-   docker compose logs -f api   # confirm "No pending migrations to apply"
+   docker compose logs -f server   # confirm "No pending migrations to apply"
                                 # and "Server listening at http://..."
    ```
 6. **Disable the seed flag** in `.env` (set `SEED_ON_BOOT=false`) so future
@@ -41,16 +41,16 @@ architecture context start with the [`README`](../README.md).
 
 ## Daily operation
 
-| Action                                       | Command                                     |
-| -------------------------------------------- | ------------------------------------------- |
-| Start stack                                  | `docker compose up -d`                      |
-| Stop stack                                   | `docker compose down`                       |
-| Restart only the api (e.g. after env change) | `docker compose restart api`                |
-| Tail api logs                                | `docker compose logs -f api`                |
-| Check container health                       | `docker compose ps`                         |
-| Open psql against the live DB                | `docker compose exec db psql -U lcm -d lcm` |
+| Action                                          | Command                                     |
+| ----------------------------------------------- | ------------------------------------------- |
+| Start stack                                     | `docker compose up -d`                      |
+| Stop stack                                      | `docker compose down`                       |
+| Restart only the server (e.g. after env change) | `docker compose restart server`             |
+| Tail server logs                                | `docker compose logs -f server`             |
+| Check container health                          | `docker compose ps`                         |
+| Open psql against the live DB                   | `docker compose exec db psql -U lcm -d lcm` |
 
-The api image's entrypoint always runs `prisma migrate deploy` on start. It's
+The server image's entrypoint always runs `prisma migrate deploy` on start. It's
 idempotent — already-applied migrations log `No pending migrations to apply`,
 so restarting is cheap.
 
@@ -85,7 +85,7 @@ docker compose exec -T db pg_restore -U lcm -d lcm --no-owner --no-acl \
   < /var/backups/lcm/lcm-20260601.dump
 ```
 
-After restoring, restart the api so it re-verifies migrations: `docker compose restart api`.
+After restoring, restart the server so it re-verifies migrations: `docker compose restart server`.
 
 ## Upgrade
 
@@ -94,8 +94,8 @@ cd /opt/lcm
 git fetch && git checkout <new-tag-or-sha>
 
 docker compose build              # pulls latest base layers and re-bakes the images
-docker compose up -d              # recreates api + web, leaves db untouched
-docker compose logs -f api        # watch for migrations being applied
+docker compose up -d              # recreates server + web, leaves db untouched
+docker compose logs -f server        # watch for migrations being applied
 ```
 
 If the new release adds a Prisma migration, you'll see it apply once and
@@ -108,7 +108,7 @@ DB from backup before rolling back if the schema diverges.
 
 ## Troubleshooting
 
-### `api` won't start, logs show migration errors
+### `server` won't start, logs show migration errors
 
 Most likely a hand-edited migration file or a DB drift. Connect to the DB
 and inspect:
@@ -123,9 +123,9 @@ retry, or restore from backup.
 
 ### `web` is healthy but `/api/*` returns 502
 
-The Nginx upstream `api:8080` is unreachable. Check that the `api` container
-is `(healthy)` in `docker compose ps`. If it's restarting, tail its logs:
-`docker compose logs api`.
+The Nginx upstream `server:8080` is unreachable. Check that the `server`
+container is `(healthy)` in `docker compose ps`. If it's restarting, tail
+its logs: `docker compose logs server`.
 
 ### Port conflict on `:80`
 
@@ -149,7 +149,7 @@ are untouched.
 ### Stuck cluster won't delete
 
 Cluster delete cascades to hosts/applications/events at the DB level (FK
-`ON DELETE CASCADE`). If a delete fails, check `api` logs for the underlying
+`ON DELETE CASCADE`). If a delete fails, check `server` logs for the underlying
 error — typically a constraint added by a future migration.
 
 ## What's not in v1

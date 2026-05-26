@@ -1,6 +1,6 @@
 name: Publish images
 
-# Builds and pushes lcm-api + lcm-web images to GHCR.
+# Builds and pushes lcm-server + lcm-web images to GHCR.
 #
 # Tagging policy:
 #   - push to main      → :latest
@@ -29,7 +29,7 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - { name: lcm-api, dockerfile: docker/Dockerfile.api }
+          - { name: lcm-server, dockerfile: docker/Dockerfile.server }
           - { name: lcm-web, dockerfile: docker/Dockerfile.web }
 
     steps:
