@@ -101,21 +101,18 @@ describe('<FleetClusterTileChart>', () => {
     expect(screen.getByTestId('line-util')).toBeInTheDocument();
   });
 
-  it('labels the chart axes (Month on X, Utilization (%) on Y)', () => {
+  it('labels the Y axis as Utilization (%)', () => {
     render(<FleetClusterTileChart entry={entry()} />);
-    expect(screen.getByTestId('tile-x-axis-label')).toHaveTextContent('Month');
     expect(screen.getByTestId('tile-y-axis-label')).toHaveTextContent('Utilization (%)');
   });
 
-  it('omits axis labels when there is no chart to label', () => {
+  it('omits the Y axis label when there is no chart to label', () => {
     render(<FleetClusterTileChart entry={entry({ months: [] })} />);
-    expect(screen.queryByTestId('tile-x-axis-label')).toBeNull();
     expect(screen.queryByTestId('tile-y-axis-label')).toBeNull();
   });
 
-  it('omits axis labels when the entry failed to load', () => {
+  it('omits the Y axis label when the entry failed to load', () => {
     render(<FleetClusterTileChart entry={entry({ months: [], error: 'timeout' })} />);
-    expect(screen.queryByTestId('tile-x-axis-label')).toBeNull();
     expect(screen.queryByTestId('tile-y-axis-label')).toBeNull();
   });
 

@@ -72,74 +72,75 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
             >
               Utilization (%)
             </span>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <div className="min-h-0 flex-1">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data} margin={{ top: 4, right: 4, bottom: 6, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
-                    <YAxis
-                      domain={yDomain}
-                      ticks={yTicks}
-                      interval={0}
-                      tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
-                      tick={{ fontSize: 9, fill: colors.axis }}
-                      width={26}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <XAxis dataKey="month" hide />
-                    <ReferenceArea
-                      y1={thresholds.warn}
-                      y2={thresholds.crit}
-                      fill={colors.utilizationWarn}
-                      fillOpacity={0.1}
-                      stroke="none"
-                    />
-                    <ReferenceArea
-                      y1={thresholds.crit}
-                      y2={1}
-                      fill={colors.utilizationCrit}
-                      fillOpacity={0.12}
-                      stroke="none"
-                    />
-                    <Tooltip
-                      content={({ active, payload, label }) => {
-                        if (
-                          !active ||
-                          !payload ||
-                          payload.length === 0 ||
-                          typeof label !== 'string'
-                        ) {
-                          return null;
-                        }
-                        const util = (payload[0]?.value as number) ?? 0;
-                        return (
-                          <div className="rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
-                            <span className="font-medium">{formatMonthShort(label)}</span>
-                            <span className="ml-2 font-mono tabular-nums">
-                              {(util * 100).toFixed(1)}%
-                            </span>
-                          </div>
-                        );
-                      }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="util"
-                      stroke={colors.consumption}
-                      strokeWidth={2}
-                      dot={false}
-                      isAnimationActive={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-              <span
-                className="pt-0.5 text-center text-[9px] uppercase tracking-wide text-fg-muted"
-                data-testid="tile-x-axis-label"
-              >
-                Month
-              </span>
+            <div className="min-w-0 flex-1">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
+                  <YAxis
+                    domain={yDomain}
+                    ticks={yTicks}
+                    interval={0}
+                    tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
+                    tick={{ fontSize: 9, fill: colors.axis }}
+                    width={26}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <XAxis
+                    dataKey="month"
+                    tickFormatter={formatMonthShort}
+                    tick={{ fontSize: 9, fill: colors.axis }}
+                    interval="preserveStartEnd"
+                    minTickGap={16}
+                    axisLine={false}
+                    tickLine={false}
+                    height={14}
+                  />
+                  <ReferenceArea
+                    y1={thresholds.warn}
+                    y2={thresholds.crit}
+                    fill={colors.utilizationWarn}
+                    fillOpacity={0.1}
+                    stroke="none"
+                  />
+                  <ReferenceArea
+                    y1={thresholds.crit}
+                    y2={1}
+                    fill={colors.utilizationCrit}
+                    fillOpacity={0.12}
+                    stroke="none"
+                  />
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (
+                        !active ||
+                        !payload ||
+                        payload.length === 0 ||
+                        typeof label !== 'string'
+                      ) {
+                        return null;
+                      }
+                      const util = (payload[0]?.value as number) ?? 0;
+                      return (
+                        <div className="rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
+                          <span className="font-medium">{formatMonthShort(label)}</span>
+                          <span className="ml-2 font-mono tabular-nums">
+                            {(util * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="util"
+                    stroke={colors.consumption}
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </div>
         ) : entry.error ? (
