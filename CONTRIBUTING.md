@@ -80,8 +80,8 @@ merge is clean.
 - `apps/web` — Vite + React. Vitest for unit tests, Playwright for e2e.
 - `packages/shared` — Zod schemas + inferred types. Anything used by both
   api and web must live here (single source of truth).
-- `docker/` and the root `docker-compose.yml` — production deployment;
-  `docker-compose.dev.yml` is dev DB only.
+- `docker/` — production Dockerfiles + compose files. `docker/docker-compose.yml`
+  is the production stack; `docker/docker-compose.dev.yml` is dev DB only.
 - `docs/` — vision, design specs, operations runbook, and the reference
   capacity-planning spreadsheet (`Capacity_Forecast_vSphere.xlsx`) the import
   script consumes.

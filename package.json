@@ -17,6 +17,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "seed": "pnpm --filter @lcm/api seed",
+    "db:dev:up": "docker compose -f docker/docker-compose.dev.yml up -d db",
+    "db:dev:down": "docker compose -f docker/docker-compose.dev.yml down",
     "prepare": "husky"
   },
   "devDependencies": {
@@ -40,5 +42,14 @@
     "*.{json,md,yml,yaml,css,html}": [
       "prettier --write"
     ]
+  },
+  "prettier": {
+    "semi": true,
+    "singleQuote": true,
+    "trailingComma": "all",
+    "printWidth": 100,
+    "arrowParens": "always",
+    "tabWidth": 2,
+    "endOfLine": "lf"
   }
 }

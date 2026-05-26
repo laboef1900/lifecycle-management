@@ -33,7 +33,7 @@ A pnpm monorepo with three runtime services:
 pnpm install
 
 # 2. bring up the dev DB (Postgres 16 with a named volume)
-docker compose -f docker-compose.dev.yml up -d db
+pnpm db:dev:up
 
 # 3. apply migrations and seed the four reference clusters
 pnpm --filter @lcm/api exec prisma migrate deploy
@@ -63,6 +63,10 @@ docker compose build
 SEED_ON_BOOT=true docker compose up -d
 # first boot: api applies migrations + seeds reference clusters
 ```
+
+`.env` sets `COMPOSE_FILE=docker/docker-compose.yml`, so the standard
+`docker compose ...` commands above pick up the production file from
+`docker/` without needing `-f`. Run all commands from the repo root.
 
 The web container listens on `${HTTP_PORT:-80}` and serves both the SPA and a
 reverse proxy to the api at `/api/*`. After the first successful boot, flip
@@ -116,10 +120,10 @@ pnpm --filter @lcm/api db:import-xlsx [path]
 │  └─ web/                React + Vite SPA
 ├─ packages/
 │  └─ shared/             Zod schemas + types (consumed by api + web)
-├─ docker/                Production Dockerfiles, nginx config, entrypoint
+├─ docker/                Dockerfiles, nginx config, entrypoint, compose files
+│  ├─ docker-compose.yml      Production stack (db + api + web)
+│  └─ docker-compose.dev.yml  Dev DB only
 ├─ docs/                  Vision, operations runbook, reference spreadsheet
-├─ docker-compose.yml     Production stack (db + api + web)
-├─ docker-compose.dev.yml Dev DB only
 └─ .github/workflows/ci.yml   Lint · typecheck · test · build
 ```
 

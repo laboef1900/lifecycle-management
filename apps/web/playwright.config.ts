@@ -2,9 +2,8 @@ import { defineConfig } from '@playwright/test';
 
 /**
  * Smoke E2E. Assumes the dev API is reachable at http://localhost:8090 and
- * the dev DB has been seeded (docker compose -f docker-compose.dev.yml up db
- * + prisma db seed). The webServer block boots Vite for the duration of the
- * run.
+ * the dev DB has been seeded (`pnpm db:dev:up` + `pnpm seed`). The webServer
+ * block boots Vite for the duration of the run.
  */
 export default defineConfig({
   testDir: './playwright',
