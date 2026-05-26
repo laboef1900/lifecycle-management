@@ -56,9 +56,7 @@ describe('tenantSettingsSchema', () => {
   });
 
   it('rejects missing procurementLeadTimeWeeks', () => {
-    expect(() =>
-      tenantSettingsSchema.parse({ warnThreshold: 0.7, critThreshold: 0.9 }),
-    ).toThrow();
+    expect(() => tenantSettingsSchema.parse({ warnThreshold: 0.7, critThreshold: 0.9 })).toThrow();
   });
 
   it('rejects procurementLeadTimeWeeks outside 0..104', () => {

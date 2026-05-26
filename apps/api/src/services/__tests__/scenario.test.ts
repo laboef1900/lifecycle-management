@@ -45,11 +45,7 @@ function makeInput(
 
 describe('applyScenario — lose_hosts', () => {
   it('drops the N largest hosts by capacity at the window start', () => {
-    const input = makeInput([
-      makeHost('small', 100),
-      makeHost('big', 1000),
-      makeHost('med', 500),
-    ]);
+    const input = makeInput([makeHost('small', 100), makeHost('big', 1000), makeHost('med', 500)]);
     const r = applyScenario(input, { kind: 'lose_hosts', count: 1 });
     expect(r.hosts.map((h) => h.id).sort()).toEqual(['med', 'small']);
   });
@@ -120,9 +116,7 @@ describe('applyScenario — delay_procurement', () => {
     });
     const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 3 });
     const shifted = r.hosts[0]!.projectedDecommissionAt!.getTime();
-    expect(shifted - future.projectedDecommissionAt!.getTime()).toBe(
-      90 * 24 * 60 * 60 * 1000,
-    );
+    expect(shifted - future.projectedDecommissionAt!.getTime()).toBe(90 * 24 * 60 * 60 * 1000);
   });
 
   it('leaves already-deployed hosts untouched', () => {
