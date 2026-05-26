@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import * as React from 'react';
 import {
+  CartesianGrid,
   Line,
   LineChart,
   ReferenceArea,
@@ -20,6 +21,25 @@ interface FleetClusterTileChartProps {
   entry: ClusterForecastEntry;
 }
 
+/**
+ * Pick a Y-axis range that zooms in around the actual data + the warn/crit
+ * band, instead of always spanning [0, 1]. Snaps to 5% intervals with ~5%
+ * padding so the tick labels read as round percentages.
+ */
+export function tileYDomain(
+  utilValues: number[],
+  thresholds: { warn: number; crit: number },
+): { domain: [number, number]; ticks: number[] } {
+  if (utilValues.length === 0) {
+    return { domain: [0, 1], ticks: [0, 1] };
+  }
+  const lo = Math.min(...utilValues, thresholds.warn);
+  const hi = Math.max(...utilValues, thresholds.crit);
+  const yMin = Math.max(0, Math.floor(lo * 20) / 20 - 0.05);
+  const yMax = Math.min(1, Math.ceil(hi * 20) / 20 + 0.05);
+  return { domain: [yMin, yMax], ticks: [yMin, yMax] };
+}
+
 export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): React.JSX.Element {
   const { cluster, months, thresholds, summary } = entry;
   const colors = useChartColors();
@@ -28,6 +48,10 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
     util: m.capacity > 0 ? m.consumption / m.capacity : 0,
   }));
   const hasData = data.length > 0;
+  const { domain: yDomain, ticks: yTicks } = tileYDomain(
+    data.map((d) => d.util),
+    thresholds,
+  );
 
   return (
     <Link
@@ -35,13 +59,13 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
       params={{ id: cluster.id }}
       className="block rounded-[var(--radius-card)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
     >
-      <Card className="flex h-[196px] flex-col gap-2 p-3.5 transition-colors hover:border-fg-subtle/40">
+      <Card className="flex h-[294px] flex-col gap-2 p-3.5 transition-colors hover:border-fg-subtle/40">
         <div className="flex items-start justify-between gap-2">
           <h3 className="min-w-0 truncate text-sm font-semibold tracking-tight">{cluster.name}</h3>
           <RunwayPill summary={summary} horizonMonths={months.length} thresholds={thresholds} />
         </div>
         {hasData ? (
-          <div className="flex h-[126px] w-full gap-1">
+          <div className="flex h-[189px] w-full gap-1">
             <span
               className="flex w-4 flex-none items-center justify-center text-[9px] uppercase tracking-wide text-fg-muted [writing-mode:vertical-rl] rotate-180"
               data-testid="tile-y-axis-label"
@@ -51,8 +75,18 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
             <div className="flex min-w-0 flex-1 flex-col">
               <div className="min-h-0 flex-1">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                    <YAxis hide domain={[0, 1]} />
+                  <LineChart data={data} margin={{ top: 4, right: 4, bottom: 6, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
+                    <YAxis
+                      domain={yDomain}
+                      ticks={yTicks}
+                      interval={0}
+                      tickFormatter={(v: number) => `${Math.round(v * 100)}%`}
+                      tick={{ fontSize: 9, fill: colors.axis }}
+                      width={26}
+                      axisLine={false}
+                      tickLine={false}
+                    />
                     <XAxis dataKey="month" hide />
                     <ReferenceArea
                       y1={thresholds.warn}
@@ -109,11 +143,11 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
             </div>
           </div>
         ) : entry.error ? (
-          <div className="flex h-[126px] items-center justify-center text-xs text-destructive">
+          <div className="flex h-[189px] items-center justify-center text-xs text-destructive">
             Failed to load
           </div>
         ) : (
-          <div className="flex h-[126px] items-center justify-center text-xs text-fg-muted">
+          <div className="flex h-[189px] items-center justify-center text-xs text-fg-muted">
             No forecast
           </div>
         )}

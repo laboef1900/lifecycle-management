@@ -30,12 +30,9 @@ export function FleetClusterGrid({
 }: FleetClusterGridProps): React.JSX.Element | null {
   if (isLoading && entries.length === 0) {
     return (
-      <div
-        data-testid="grid-skeleton"
-        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-      >
+      <div data-testid="grid-skeleton" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
-          <Card key={i} className="h-[196px] animate-pulse" />
+          <Card key={i} className="h-[294px] animate-pulse" />
         ))}
       </div>
     );
@@ -64,7 +61,7 @@ export function FleetClusterGrid({
           </span>
         </div>
       ) : null}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {sorted.map((entry) => (
           <FleetClusterTileChart key={entry.cluster.id} entry={entry} />
         ))}

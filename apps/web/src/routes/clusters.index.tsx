@@ -10,10 +10,16 @@ import { ClusterTable } from '@/components/clusters/cluster-table';
 import { CreateClusterDialog } from '@/components/clusters/create-cluster-dialog';
 import { ClustersEmptyState } from '@/components/clusters/empty-state';
 import { resolveWindow } from '@/components/clusters/window-controls';
+import { FleetClusterGrid } from '@/components/overview/fleet-cluster-grid';
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
 import { aggregateFleet } from '@/lib/aggregate-fleet';
-import { type UtilStatus, fleetRunwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import {
+  type UtilStatus,
+  buildClusterForecastEntries,
+  fleetRunwayToWarn,
+  utilStatus,
+} from '@/lib/forecast-summary';
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 import { api } from '@/lib/api-client';
 
@@ -80,6 +86,8 @@ function ClustersPage(): React.JSX.Element {
 
   const fleetSummary = aggregateFleet(clusters, forecastEntries);
   const thresholds = useEffectiveThresholds();
+  const forecastsLoading = forecastQueries.some((q) => q.isPending);
+  const tileEntries = buildClusterForecastEntries(clusters, forecastsById);
   const fleetRunway = fleetRunwayToWarn(
     fleetSummary.perClusterSeries.map((s) => s.months),
     thresholds,
@@ -184,6 +192,14 @@ function ClustersPage(): React.JSX.Element {
 
       {clusters.length > 0 && showArchived ? (
         <p className="text-xs text-fg-subtle">KPIs reflect active clusters only.</p>
+      ) : null}
+
+      {clusters.length > 0 ? (
+        <FleetClusterGrid
+          entries={tileEntries}
+          isLoading={forecastsLoading}
+          total={clusters.length}
+        />
       ) : null}
 
       {visibleClusters.length > 0 ? (

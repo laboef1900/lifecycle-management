@@ -45,6 +45,7 @@ vi.mock('recharts', () => {
         {children}
       </div>
     ),
+    CartesianGrid: () => <div data-testid="grid" />,
     XAxis: () => null,
     YAxis: () => null,
     Tooltip: () => null,
