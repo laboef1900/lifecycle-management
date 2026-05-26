@@ -25,9 +25,7 @@ describe('describeScenario', () => {
   });
 
   it('shows count × size for add_vms', () => {
-    expect(describeScenario({ kind: 'add_vms', count: 20, sizeGb: 16 })).toBe(
-      'Add 20 × 16 GB VMs',
-    );
+    expect(describeScenario({ kind: 'add_vms', count: 20, sizeGb: 16 })).toBe('Add 20 × 16 GB VMs');
   });
 
   it('shows months for delay_procurement', () => {
@@ -63,19 +61,14 @@ describe('<ScenarioControls>', () => {
     const onChange = vi.fn();
     const { rerender } = render(<ScenarioControls active={null} onChange={onChange} />);
     expect(screen.queryByTestId('scenario-clear')).not.toBeInTheDocument();
-    rerender(
-      <ScenarioControls active={{ kind: 'lose_hosts', count: 1 }} onChange={onChange} />,
-    );
+    rerender(<ScenarioControls active={{ kind: 'lose_hosts', count: 1 }} onChange={onChange} />);
     await userEvent.click(screen.getByTestId('scenario-clear'));
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
   it('renders the active scenario summary', () => {
     render(
-      <ScenarioControls
-        active={{ kind: 'add_vms', count: 30, sizeGb: 16 }}
-        onChange={() => {}}
-      />,
+      <ScenarioControls active={{ kind: 'add_vms', count: 30, sizeGb: 16 }} onChange={() => {}} />,
     );
     expect(screen.getByTestId('scenario-summary')).toHaveTextContent(/Add 30 × 16 GB VMs/);
   });

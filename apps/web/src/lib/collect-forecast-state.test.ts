@@ -43,7 +43,12 @@ function makeForecast(
     hosts: [],
     applications: [],
     months: [
-      { month: '2026-05-01', consumption, capacity, utilization: capacity > 0 ? consumption / capacity : 0 },
+      {
+        month: '2026-05-01',
+        consumption,
+        capacity,
+        utilization: capacity > 0 ? consumption / capacity : 0,
+      },
     ],
     effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'tenant' },
     procurement,
@@ -75,10 +80,7 @@ describe('collectForecastState', () => {
 
   it('records error messages for errored queries', () => {
     const a = makeCluster('a');
-    const state = collectForecastState(
-      [a],
-      [q({ isError: true, error: new Error('boom') })],
-    );
+    const state = collectForecastState([a], [q({ isError: true, error: new Error('boom') })]);
     expect(state.errorsById.a).toBe('boom');
   });
 

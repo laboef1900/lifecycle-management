@@ -26,7 +26,10 @@ function daysUntil(dateStr: string, today: Date): number {
   return Math.round((target - todayUtc) / DAY_MS);
 }
 
-export function deriveProcurementKpi(info: ProcurementInfo, today: Date = new Date()): ProcurementKpi {
+export function deriveProcurementKpi(
+  info: ProcurementInfo,
+  today: Date = new Date(),
+): ProcurementKpi {
   if (info.breachMonth === null || info.orderByDate === null) {
     return {
       value: '—',

@@ -301,7 +301,11 @@ export function ForecastChart({
         </ResponsiveContainer>
       </div>
 
-      <ChartLegend events={forecast.events} colors={colors} scenarioLabel={scenario?.label ?? null} />
+      <ChartLegend
+        events={forecast.events}
+        colors={colors}
+        scenarioLabel={scenario?.label ?? null}
+      />
     </Card>
   );
 }

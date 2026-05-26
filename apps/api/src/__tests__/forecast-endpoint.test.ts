@@ -37,7 +37,11 @@ describe('GET /api/clusters/:id/forecast', () => {
       toMonth: string;
       months: Array<{ month: string; consumption: number; capacity: number }>;
       effectiveThresholds: { warn: number; crit: number; source: string };
-      procurement: { leadTimeWeeks: number; orderByDate: string | null; breachMonth: string | null };
+      procurement: {
+        leadTimeWeeks: number;
+        orderByDate: string | null;
+        breachMonth: string | null;
+      };
     };
     expect(body.fromMonth).toBe('2026-05-01');
     expect(body.toMonth).toBe('2028-05-01');
