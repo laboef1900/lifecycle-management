@@ -2,7 +2,6 @@ import type {
   ClusterCreateInput,
   ClusterResponse,
   ClusterUpdateInput,
-  EventCategory,
   MetricStateResponse,
 } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
@@ -26,8 +25,7 @@ const clusterInclude = {
       replacedByLinks: { include: { new: { select: { commissionedAt: true, state: true } } } },
     },
   },
-  applications: { include: { allocations: true } },
-  events: true,
+  items: { include: { allocations: true } },
 } satisfies Prisma.ClusterInclude;
 
 type ClusterRow = Prisma.ClusterGetPayload<{ include: typeof clusterInclude }>;
@@ -220,22 +218,24 @@ export class ClustersService {
               .filter((c) => c.metricTypeId === b.metricTypeId)
               .map((c) => ({ effectiveFrom: c.effectiveFrom, amount: c.amount.toNumber() })),
           })),
-          applications: row.applications.map((a) => ({
-            id: a.id,
-            name: a.name,
-            startedAt: a.startedAt,
-            endedAt: a.endedAt,
-            allocations: a.allocations
-              .filter((al) => al.metricTypeId === b.metricTypeId)
-              .map((al) => ({ effectiveFrom: al.effectiveFrom, amount: al.amount.toNumber() })),
-          })),
-          events: row.events
-            .filter((e) => e.metricTypeId === b.metricTypeId)
+          applications: row.items
+            .filter((it) => it.kind === 'application')
+            .map((a) => ({
+              id: a.id,
+              name: a.name,
+              startedAt: a.effectiveDate,
+              endedAt: a.endedAt,
+              allocations: a.allocations
+                .filter((al) => al.metricTypeId === b.metricTypeId)
+                .map((al) => ({ effectiveFrom: al.effectiveFrom, amount: al.amount.toNumber() })),
+            })),
+          events: row.items
+            .filter((it) => it.kind === 'event' && it.metricTypeId === b.metricTypeId)
             .map((e) => ({
               id: e.id,
               effectiveDate: e.effectiveDate,
-              category: e.category as EventCategory,
-              title: e.title,
+              category: e.category,
+              title: e.name,
               description: e.description,
               consumptionDelta: e.consumptionDelta?.toNumber() ?? null,
               capacityDelta: e.capacityDelta?.toNumber() ?? null,

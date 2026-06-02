@@ -1,4 +1,4 @@
-import type { EventCategory, Scenario } from '@lcm/shared';
+import type { Scenario } from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
 
 import { NotFoundError, UnprocessableError } from './errors.js';
@@ -83,12 +83,10 @@ export class ForecastService {
             },
           },
         },
-        applications: {
-          include: {
-            allocations: { where: { metricTypeId: metricType.id } },
-          },
+        items: {
+          where: { OR: [{ metricTypeId: metricType.id }, { metricTypeId: null }] },
+          include: { allocations: { where: { metricTypeId: metricType.id } } },
         },
-        events: { where: { metricTypeId: metricType.id } },
       },
     });
 
@@ -123,26 +121,30 @@ export class ForecastService {
       })),
     }));
 
-    const applications: ForecastApplication[] = cluster.applications.map((app) => ({
-      id: app.id,
-      name: app.name,
-      startedAt: app.startedAt,
-      endedAt: app.endedAt,
-      allocations: app.allocations.map((a) => ({
-        effectiveFrom: a.effectiveFrom,
-        amount: a.amount.toNumber(),
-      })),
-    }));
+    const applications: ForecastApplication[] = cluster.items
+      .filter((it) => it.kind === 'application')
+      .map((app) => ({
+        id: app.id,
+        name: app.name,
+        startedAt: app.effectiveDate,
+        endedAt: app.endedAt,
+        allocations: app.allocations.map((a) => ({
+          effectiveFrom: a.effectiveFrom,
+          amount: a.amount.toNumber(),
+        })),
+      }));
 
-    const events: ForecastEvent[] = cluster.events.map((e) => ({
-      id: e.id,
-      effectiveDate: e.effectiveDate,
-      category: e.category as EventCategory,
-      title: e.title,
-      description: e.description,
-      consumptionDelta: e.consumptionDelta?.toNumber() ?? null,
-      capacityDelta: e.capacityDelta?.toNumber() ?? null,
-    }));
+    const events: ForecastEvent[] = cluster.items
+      .filter((it) => it.kind === 'event' && it.metricTypeId === metricType.id)
+      .map((e) => ({
+        id: e.id,
+        effectiveDate: e.effectiveDate,
+        category: e.category,
+        title: e.name,
+        description: e.description,
+        consumptionDelta: e.consumptionDelta?.toNumber() ?? null,
+        capacityDelta: e.capacityDelta?.toNumber() ?? null,
+      }));
 
     return {
       input: {

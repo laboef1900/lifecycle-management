@@ -1,4 +1,4 @@
-import type { EffectiveThresholds, EventCategory, ProcurementInfo } from '@lcm/shared';
+import type { EffectiveThresholds, ProcurementInfo } from '@lcm/shared';
 
 import { formatDate } from '../lib/dates.js';
 
@@ -27,7 +27,7 @@ export interface ForecastApplication {
 export interface ForecastEvent {
   id: string;
   effectiveDate: Date;
-  category: EventCategory;
+  category: string;
   title: string;
   description: string | null;
   consumptionDelta: number | null;
@@ -53,7 +53,7 @@ export interface MonthlyPoint {
 export interface ForecastEventOutput {
   id: string;
   effectiveDate: string;
-  category: EventCategory;
+  category: string;
   title: string;
   description: string | null;
   consumptionDelta: number | null;
