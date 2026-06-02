@@ -4,10 +4,9 @@ import { createFileRoute } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 
-import { ApplicationsTab } from '@/components/clusters/applications-tab';
-import { EventsTab } from '@/components/clusters/events-tab';
 import { ForecastChart } from '@/components/clusters/forecast-chart';
 import { HostsTab } from '@/components/clusters/hosts-tab';
+import { ItemsTab } from '@/components/clusters/items-tab';
 import { ScenarioControls, describeScenario } from '@/components/clusters/scenario-controls';
 import { SettingsTab } from '@/components/clusters/settings-tab';
 import {
@@ -147,18 +146,14 @@ function ClusterDetailPage(): React.JSX.Element {
           <Tabs defaultValue="hosts" className="pt-2">
             <TabsList>
               <TabsTrigger value="hosts">Hosts</TabsTrigger>
-              <TabsTrigger value="applications">Applications</TabsTrigger>
-              <TabsTrigger value="events">Events</TabsTrigger>
+              <TabsTrigger value="items">Apps &amp; Events</TabsTrigger>
               <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>
             <TabsContent value="hosts">
               <HostsTab clusterId={id} />
             </TabsContent>
-            <TabsContent value="applications">
-              <ApplicationsTab clusterId={id} />
-            </TabsContent>
-            <TabsContent value="events">
-              <EventsTab clusterId={id} />
+            <TabsContent value="items">
+              <ItemsTab clusterId={id} />
             </TabsContent>
             <TabsContent value="settings">
               <SettingsTab clusterId={id} />

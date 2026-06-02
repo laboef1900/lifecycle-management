@@ -106,7 +106,7 @@ describe('ForecastChart props mapping', () => {
         {
           id: 'e1',
           effectiveDate: '2026-06-15',
-          category: 'growth',
+          category: 'Growth',
           title: 'Wachstum',
           description: null,
           consumptionDelta: 50,
@@ -115,7 +115,7 @@ describe('ForecastChart props mapping', () => {
         {
           id: 'e2',
           effectiveDate: '2026-07-01',
-          category: 'hardware_change',
+          category: 'Hardware',
           title: 'HW',
           description: null,
           consumptionDelta: null,
@@ -240,7 +240,7 @@ describe('ForecastChart props mapping', () => {
         {
           id: 'e1',
           effectiveDate: '2026-06-01',
-          category: 'openshift',
+          category: 'OpenShift',
           title: 'lab',
           description: null,
           consumptionDelta: 10,

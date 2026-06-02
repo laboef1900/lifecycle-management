@@ -1,17 +1,16 @@
 import type {
-  ApplicationResponse,
+  CategoryResponse,
   ClusterCreateInput,
   ClusterResponse,
   ClusterSettingsInput,
   ClusterSettingsResponse,
   ClusterUpdateInput,
-  EventCategory,
-  EventResponse,
   ForecastResponse,
   HostLifecycleEventResponse,
   HostReplacementResponse,
   HostResponse,
   HostState,
+  ItemResponse,
   TenantSettings,
 } from '@lcm/shared';
 
@@ -149,47 +148,42 @@ export interface CapacityAppendInputWire {
   amount: number;
 }
 
-export interface ApplicationCreateInputWire {
-  name: string;
-  category: string;
-  description?: string;
-  startedAt: string;
-  endedAt?: string | null;
-  allocations: Array<{ metricTypeKey: string; effectiveFrom: string; amount: number }>;
-}
+export type ItemCreateInputWire =
+  | {
+      kind: 'application';
+      name: string;
+      category: string;
+      description?: string;
+      effectiveDate: string;
+      endedAt?: string | null;
+      allocations: Array<{ metricTypeKey: string; effectiveFrom: string; amount: number }>;
+    }
+  | {
+      kind: 'event';
+      name: string;
+      category: string;
+      description?: string;
+      effectiveDate: string;
+      metricTypeKey: string;
+      consumptionDelta?: number | null;
+      capacityDelta?: number | null;
+    };
 
-export interface ApplicationUpdateInputWire {
+export interface ItemUpdateInputWire {
   name?: string;
   category?: string;
   description?: string | null;
-  startedAt?: string;
+  effectiveDate?: string;
   endedAt?: string | null;
+  metricTypeKey?: string;
+  consumptionDelta?: number | null;
+  capacityDelta?: number | null;
 }
 
-export interface AllocationAppendInputWire {
+export interface ItemAllocationAppendInputWire {
   metricTypeKey: string;
   effectiveFrom: string;
   amount: number;
-}
-
-export interface EventCreateInputWire {
-  metricTypeKey: string;
-  effectiveDate: string;
-  category: EventCategory;
-  title: string;
-  description?: string;
-  consumptionDelta?: number | null;
-  capacityDelta?: number | null;
-}
-
-export interface EventUpdateInputWire {
-  metricTypeKey?: string;
-  effectiveDate?: string;
-  category?: EventCategory;
-  title?: string;
-  description?: string | null;
-  consumptionDelta?: number | null;
-  capacityDelta?: number | null;
 }
 
 /**
@@ -293,42 +287,36 @@ export const api = {
       }),
     delete: (id: string) => request<void>(`/api/host-replacements/${id}`, { method: 'DELETE' }),
   },
-  applications: {
+  items: {
     listByCluster: (clusterId: string) =>
-      request<ApplicationResponse[]>(`/api/clusters/${clusterId}/applications`),
-    create: (clusterId: string, input: ApplicationCreateInputWire) =>
-      request<ApplicationResponse>(`/api/clusters/${clusterId}/applications`, {
+      request<ItemResponse[]>(`/api/clusters/${clusterId}/items`),
+    create: (clusterId: string, input: ItemCreateInputWire) =>
+      request<ItemResponse>(`/api/clusters/${clusterId}/items`, {
         method: 'POST',
         body: JSON.stringify(input),
       }),
-    update: (id: string, input: ApplicationUpdateInputWire) =>
-      request<ApplicationResponse>(`/api/applications/${id}`, {
-        method: 'PUT',
+    update: (id: string, input: ItemUpdateInputWire) =>
+      request<ItemResponse>(`/api/items/${id}`, {
+        method: 'PATCH',
         body: JSON.stringify(input),
       }),
-    appendAllocation: (id: string, input: AllocationAppendInputWire) =>
-      request<ApplicationResponse>(`/api/applications/${id}/allocation`, {
+    appendAllocation: (id: string, input: ItemAllocationAppendInputWire) =>
+      request<ItemResponse>(`/api/items/${id}/allocations`, {
         method: 'POST',
         body: JSON.stringify(input),
       }),
-    delete: (id: string) => request<void>(`/api/applications/${id}`, { method: 'DELETE' }),
-  },
-  events: {
-    listByCluster: (clusterId: string) =>
-      request<EventResponse[]>(`/api/clusters/${clusterId}/events`),
-    create: (clusterId: string, input: EventCreateInputWire) =>
-      request<EventResponse>(`/api/clusters/${clusterId}/events`, {
-        method: 'POST',
-        body: JSON.stringify(input),
-      }),
-    update: (id: string, input: EventUpdateInputWire) =>
-      request<EventResponse>(`/api/events/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(input),
-      }),
-    delete: (id: string) => request<void>(`/api/events/${id}`, { method: 'DELETE' }),
+    delete: (id: string) => request<void>(`/api/items/${id}`, { method: 'DELETE' }),
   },
   settings: {
+    categories: {
+      list: () => request<CategoryResponse[]>('/api/settings/categories'),
+      create: (name: string) =>
+        request<CategoryResponse>('/api/settings/categories', {
+          method: 'POST',
+          body: JSON.stringify({ name }),
+        }),
+      delete: (id: string) => request<void>(`/api/settings/categories/${id}`, { method: 'DELETE' }),
+    },
     tenant: {
       get: () => request<TenantSettings>('/api/settings/tenant'),
       update: (input: TenantSettings) =>

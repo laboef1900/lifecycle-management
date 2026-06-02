@@ -124,13 +124,14 @@ export async function makeApplication(
   const name = options.name ?? `app-${nextSuffix()}`;
   const initialAllocation = options.initialAllocation ?? [{ effectiveFrom: startedAt, amount: 64 }];
 
-  const application = await prisma.application.create({
+  const application = await prisma.item.create({
     data: {
       tenantId,
       clusterId: options.clusterId,
+      kind: 'application',
       name,
       category: options.category ?? 'openshift',
-      startedAt,
+      effectiveDate: startedAt,
       endedAt: options.endedAt ?? null,
       allocations: {
         create: initialAllocation.map((row) => ({
@@ -149,7 +150,7 @@ export async function makeApplication(
 export interface MakeEventOptions {
   clusterId: string;
   effectiveDate?: Date;
-  category?: 'growth' | 'hardware_change' | 'openshift' | 'note';
+  category?: string;
   title?: string;
   description?: string | null;
   consumptionDelta?: number | null;
@@ -165,15 +166,17 @@ export async function makeEvent(
   const metricKey = options.metricKey ?? DEFAULT_METRIC_KEY;
   const metricTypeId = await resolveMetricId(prisma, metricKey);
   const tenantId = options.tenantId ?? DEFAULT_TENANT;
+  const title = options.title ?? `event-${nextSuffix()}`;
 
-  const event = await prisma.event.create({
+  const event = await prisma.item.create({
     data: {
       tenantId,
       clusterId: options.clusterId,
+      kind: 'event',
       metricTypeId,
+      name: title,
       effectiveDate: options.effectiveDate ?? new Date('2026-10-01T00:00:00.000Z'),
       category: options.category ?? 'growth',
-      title: options.title ?? `event-${nextSuffix()}`,
       description: options.description ?? null,
       consumptionDelta:
         options.consumptionDelta === undefined
@@ -188,5 +191,5 @@ export async function makeEvent(
     },
   });
 
-  return { id: event.id, title: event.title };
+  return { id: event.id, title: event.name };
 }

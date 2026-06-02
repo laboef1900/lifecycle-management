@@ -2,9 +2,16 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 
 import { parseCapacityXlsx } from './lib/parse-capacity-xlsx.js';
+
+const CATEGORY_DISPLAY: Record<string, string> = {
+  growth: 'Growth',
+  hardware_change: 'Hardware',
+  openshift: 'OpenShift',
+  note: 'Note',
+};
 
 const DEFAULT_XLSX = resolve(
   import.meta.dirname,
@@ -63,23 +70,27 @@ async function main(): Promise<void> {
         for (let i = 0; i < parsed.length; i++) {
           const parsedCluster = parsed[i]!;
           const dbCluster = dbClusters[i]!;
-          const deletedEvents = await tx.event.deleteMany({
-            where: { clusterId: dbCluster.id },
+          const deletedEvents = await tx.item.deleteMany({
+            where: { clusterId: dbCluster.id, kind: 'event' },
           });
           const deletedHosts = await tx.host.deleteMany({
             where: { clusterId: dbCluster.id },
           });
           if (parsedCluster.events.length > 0) {
-            await tx.event.createMany({
+            await tx.item.createMany({
               data: parsedCluster.events.map((ev) => ({
                 tenantId: TENANT_ID,
                 clusterId: dbCluster.id,
+                kind: 'event' as const,
                 metricTypeId: metric.id,
                 effectiveDate: new Date(`${ev.effectiveDate}T00:00:00Z`),
-                category: ev.category,
-                title: ev.title,
-                consumptionDelta: ev.consumptionDelta,
-                capacityDelta: ev.capacityDelta,
+                category: CATEGORY_DISPLAY[ev.category] ?? ev.category,
+                name: ev.title,
+                description: null,
+                consumptionDelta:
+                  ev.consumptionDelta == null ? null : new Prisma.Decimal(ev.consumptionDelta),
+                capacityDelta:
+                  ev.capacityDelta == null ? null : new Prisma.Decimal(ev.capacityDelta),
               })),
             });
           }
@@ -92,7 +103,22 @@ async function main(): Promise<void> {
       { timeout: TX_TIMEOUT_MS },
     );
 
+    const usedCategories = new Set<string>();
+    for (const c of parsed) {
+      for (const ev of c.events) {
+        usedCategories.add(CATEGORY_DISPLAY[ev.category] ?? ev.category);
+      }
+    }
+    for (const name of usedCategories) {
+      await prisma.category.upsert({
+        where: { tenantId_name: { tenantId: TENANT_ID, name } },
+        create: { tenantId: TENANT_ID, name },
+        update: {},
+      });
+    }
+
     for (const line of summaries) console.log(line);
+    console.log(`Ensured ${usedCategories.size} categories: ${[...usedCategories].join(', ')}.`);
     console.log('Done.');
   } finally {
     await prisma.$disconnect();

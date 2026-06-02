@@ -1,16 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  allocationRowInputSchema,
-  applicationCreateInputSchema,
-  applicationUpdateInputSchema,
   capacityRowInputSchema,
   clusterCreateInputSchema,
   clusterUpdateInputSchema,
-  eventCreateInputSchema,
-  eventUpdateInputSchema,
   forecastQuerySchema,
-  hasPayloadOrIsNote,
   hostCreateInputSchema,
   hostUpdateInputSchema,
 } from '../index.js';
@@ -113,86 +107,6 @@ describe('host schemas', () => {
   it('requires at least one field on update', () => {
     expect(() => hostUpdateInputSchema.parse({})).toThrow();
     expect(() => hostUpdateInputSchema.parse({ decommissionedAt: '2027-12-31' })).not.toThrow();
-  });
-});
-
-describe('application schemas', () => {
-  it('round-trips a valid create payload', () => {
-    const parsed = roundTrip(applicationCreateInputSchema, {
-      name: 'openshift-lab',
-      category: 'openshift',
-      startedAt: '2026-08-01',
-      allocations: [{ metricTypeKey: 'memory_gb', effectiveFrom: '2026-08-01', amount: 144 }],
-    });
-    expect(parsed.category).toBe('openshift');
-  });
-
-  it('round-trips an allocation append payload', () => {
-    const parsed = roundTrip(allocationRowInputSchema, {
-      metricTypeKey: 'memory_gb',
-      effectiveFrom: '2027-02-01',
-      amount: 576,
-    });
-    expect(parsed.amount).toBe(576);
-  });
-
-  it('requires at least one field on update', () => {
-    expect(() => applicationUpdateInputSchema.parse({})).toThrow();
-    expect(() => applicationUpdateInputSchema.parse({ name: 'x' })).not.toThrow();
-  });
-});
-
-describe('event schemas', () => {
-  it('round-trips a growth event with a consumption delta', () => {
-    const parsed = roundTrip(eventCreateInputSchema, {
-      metricTypeKey: 'memory_gb',
-      effectiveDate: '2026-10-01',
-      category: 'growth',
-      title: 'Wachstum Q4',
-      consumptionDelta: 750,
-    });
-    expect(parsed.consumptionDelta).toBe(750);
-    expect(parsed.capacityDelta).toBeUndefined();
-  });
-
-  it('accepts a note event with both deltas null', () => {
-    const parsed = eventCreateInputSchema.parse({
-      metricTypeKey: 'memory_gb',
-      effectiveDate: '2026-06-01',
-      category: 'note',
-      title: 'OpenShift go-live',
-      consumptionDelta: null,
-      capacityDelta: null,
-    });
-    expect(parsed.category).toBe('note');
-  });
-
-  it('rejects a growth event with no deltas', () => {
-    expect(() =>
-      eventCreateInputSchema.parse({
-        metricTypeKey: 'memory_gb',
-        effectiveDate: '2026-10-01',
-        category: 'growth',
-        title: 'empty',
-      }),
-    ).toThrow();
-  });
-
-  it('hasPayloadOrIsNote matches the schema refine', () => {
-    expect(
-      hasPayloadOrIsNote({ category: 'note', consumptionDelta: null, capacityDelta: null }),
-    ).toBe(true);
-    expect(
-      hasPayloadOrIsNote({ category: 'growth', consumptionDelta: 100, capacityDelta: null }),
-    ).toBe(true);
-    expect(
-      hasPayloadOrIsNote({ category: 'growth', consumptionDelta: null, capacityDelta: null }),
-    ).toBe(false);
-  });
-
-  it('requires at least one field on update', () => {
-    expect(() => eventUpdateInputSchema.parse({})).toThrow();
-    expect(() => eventUpdateInputSchema.parse({ title: 'new' })).not.toThrow();
   });
 });
 

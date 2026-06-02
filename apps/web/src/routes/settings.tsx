@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 
+import { CategoriesForm } from '@/components/settings/categories-form';
 import { ForecastThresholdsForm } from '@/components/settings/forecast-thresholds-form';
 
 export const Route = createFileRoute('/settings')({
@@ -18,6 +19,7 @@ function SettingsPage(): React.JSX.Element {
         </h1>
       </header>
       <ForecastThresholdsForm />
+      <CategoriesForm />
     </div>
   );
 }

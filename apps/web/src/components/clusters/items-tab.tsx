@@ -1,4 +1,4 @@
-import type { ApplicationResponse } from '@lcm/shared';
+import type { ItemResponse } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Fragment, useState } from 'react';
@@ -19,30 +19,46 @@ import { formatGb, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 import {
-  CreateApplicationDialog,
-  DeleteApplicationDialog,
-  EditApplicationDialog,
-  EndApplicationDialog,
-  ResizeApplicationDialog,
-} from './application-dialogs';
+  CreateItemDialog,
+  DeleteItemDialog,
+  EditItemDialog,
+  EndItemDialog,
+  ResizeItemDialog,
+} from './item-dialogs';
 
-interface ApplicationsTabProps {
+interface ItemsTabProps {
   clusterId: string;
 }
 
 type DialogKind = 'edit' | 'resize' | 'end' | 'delete';
 
-export function ApplicationsTab({ clusterId }: ApplicationsTabProps): React.JSX.Element {
+/**
+ * Maps a category DISPLAY name to a semantic Badge variant, preserving the
+ * colour coding the old events tab had per category. Unknown / free-form
+ * categories fall back to the neutral `default` variant.
+ */
+function categoryBadgeVariant(category: string): 'default' | 'outline' | 'success' | 'warning' {
+  switch (category) {
+    case 'Growth':
+      return 'warning';
+    case 'Hardware':
+      return 'success';
+    case 'Note':
+      return 'outline';
+    case 'OpenShift':
+    default:
+      return 'default';
+  }
+}
+
+export function ItemsTab({ clusterId }: ItemsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
-  const [target, setTarget] = useState<{
-    application: ApplicationResponse;
-    kind: DialogKind;
-  } | null>(null);
+  const [target, setTarget] = useState<{ item: ItemResponse; kind: DialogKind } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const query = useQuery({
-    queryKey: ['applications', clusterId],
-    queryFn: () => api.applications.listByCluster(clusterId),
+    queryKey: ['items', clusterId],
+    queryFn: () => api.items.listByCluster(clusterId),
   });
 
   const toggle = (id: string): void => {
@@ -54,23 +70,25 @@ export function ApplicationsTab({ clusterId }: ApplicationsTabProps): React.JSX.
     });
   };
 
-  const apps = query.data ?? [];
+  const items = [...(query.data ?? [])].sort((a, b) =>
+    a.effectiveDate.localeCompare(b.effectiveDate),
+  );
 
   return (
     <div className="space-y-3 py-4">
       <Card className="p-4">
         <header className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold">Applications</h2>
+            <h2 className="text-base font-semibold">Apps &amp; Events</h2>
             <p className="text-sm text-fg-muted">
-              {apps.length > 0
-                ? `${apps.length} ${apps.length === 1 ? 'application' : 'applications'} consuming capacity`
-                : 'No applications yet.'}
+              {items.length > 0
+                ? `${items.length} ${items.length === 1 ? 'item' : 'items'} on the forecast`
+                : 'No apps or events yet.'}
             </p>
           </div>
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" />
-            Add application
+            Add item
           </Button>
         </header>
 
@@ -78,82 +96,92 @@ export function ApplicationsTab({ clusterId }: ApplicationsTabProps): React.JSX.
           <Skeleton />
         ) : query.isError ? (
           <ErrorRow message={query.error.message} />
-        ) : apps.length === 0 ? (
-          <EmptyRow message="Add an application to track its memory allocation." />
+        ) : items.length === 0 ? (
+          <EmptyRow message="Add an application to track its memory allocation, or an event to annotate the forecast." />
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-8" />
+                <TableHead className="w-28">Date</TableHead>
+                <TableHead className="w-28">Type</TableHead>
+                <TableHead className="w-32">Category</TableHead>
                 <TableHead>Name</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>Started</TableHead>
-                <TableHead>Ended</TableHead>
-                <TableHead className="text-right">Current allocation</TableHead>
+                <TableHead className="text-right">Amount / Δ</TableHead>
                 <TableHead className="w-24 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {apps.map((application) => {
-                const latest = application.allocations[application.allocations.length - 1];
-                const isOpen = expanded.has(application.id);
+              {items.map((item) => {
+                const isApp = item.kind === 'application';
+                const isOpen = expanded.has(item.id);
                 return (
-                  <Fragment key={application.id}>
+                  <Fragment key={item.id}>
                     <TableRow>
                       <TableCell>
-                        <button
-                          type="button"
-                          onClick={() => toggle(application.id)}
-                          className="rounded p-1 hover:bg-accent"
-                          aria-expanded={isOpen}
-                          aria-label={isOpen ? 'Collapse history' : 'Expand history'}
-                        >
-                          {isOpen ? (
-                            <ChevronDown className="h-4 w-4" />
-                          ) : (
-                            <ChevronRight className="h-4 w-4" />
-                          )}
-                        </button>
+                        {isApp ? (
+                          <button
+                            type="button"
+                            onClick={() => toggle(item.id)}
+                            className="rounded p-1 hover:bg-accent"
+                            aria-expanded={isOpen}
+                            aria-label={isOpen ? 'Collapse history' : 'Expand history'}
+                          >
+                            {isOpen ? (
+                              <ChevronDown className="h-4 w-4" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4" />
+                            )}
+                          </button>
+                        ) : null}
                       </TableCell>
-                      <TableCell className="font-medium">
-                        <div>{application.name}</div>
-                        {application.description ? (
-                          <div className="text-xs text-muted-foreground">
-                            {application.description}
+                      <TableCell className="font-mono text-xs text-muted-foreground tabular-nums">
+                        {item.effectiveDate}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={isApp ? 'accent' : 'outline'}>
+                          {isApp ? 'Application' : 'Event'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={categoryBadgeVariant(item.category)}>{item.category}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium">{item.name}</div>
+                        {item.description ? (
+                          <div className="text-xs text-muted-foreground">{item.description}</div>
+                        ) : null}
+                        {isApp && item.endedAt ? (
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            Ended {item.endedAt}
                           </div>
                         ) : null}
                       </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {isApp ? <AppAmount item={item} /> : <EventDeltas item={item} />}
+                      </TableCell>
                       <TableCell>
-                        <Badge variant="default">{application.category}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">
-                        {application.startedAt}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">
-                        {application.endedAt ? (
-                          <Badge variant="outline">{application.endedAt}</Badge>
+                        {isApp ? (
+                          <AppRowActions
+                            onEdit={() => setTarget({ item, kind: 'edit' })}
+                            onResize={() => setTarget({ item, kind: 'resize' })}
+                            onEnd={() => setTarget({ item, kind: 'end' })}
+                            onDelete={() => setTarget({ item, kind: 'delete' })}
+                            isEnded={Boolean(item.endedAt)}
+                          />
                         ) : (
-                          '—'
+                          <EventRowActions
+                            onEdit={() => setTarget({ item, kind: 'edit' })}
+                            onDelete={() => setTarget({ item, kind: 'delete' })}
+                          />
                         )}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {latest ? formatGb(latest.amount) : '—'}
-                      </TableCell>
-                      <TableCell>
-                        <RowActions
-                          onEdit={() => setTarget({ application, kind: 'edit' })}
-                          onResize={() => setTarget({ application, kind: 'resize' })}
-                          onEnd={() => setTarget({ application, kind: 'end' })}
-                          onDelete={() => setTarget({ application, kind: 'delete' })}
-                          isEnded={Boolean(application.endedAt)}
-                        />
-                      </TableCell>
                     </TableRow>
-                    {isOpen ? (
+                    {isApp && isOpen ? (
                       <TableRow className="bg-muted/20 hover:bg-muted/20">
                         <TableCell />
                         <TableCell colSpan={6} className="py-3">
-                          <AllocationTimeline rows={application.allocations} />
+                          <AllocationTimeline rows={item.allocations} />
                         </TableCell>
                       </TableRow>
                     ) : null}
@@ -165,49 +193,73 @@ export function ApplicationsTab({ clusterId }: ApplicationsTabProps): React.JSX.
         )}
       </Card>
 
-      <CreateApplicationDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        clusterId={clusterId}
-      />
+      <CreateItemDialog open={createOpen} onOpenChange={setCreateOpen} clusterId={clusterId} />
 
       {target?.kind === 'edit' ? (
-        <EditApplicationDialog
+        <EditItemDialog
           open
           onOpenChange={(open) => !open && setTarget(null)}
           clusterId={clusterId}
-          application={target.application}
+          item={target.item}
         />
       ) : null}
       {target?.kind === 'resize' ? (
-        <ResizeApplicationDialog
+        <ResizeItemDialog
           open
           onOpenChange={(open) => !open && setTarget(null)}
           clusterId={clusterId}
-          application={target.application}
+          item={target.item}
         />
       ) : null}
       {target?.kind === 'end' ? (
-        <EndApplicationDialog
+        <EndItemDialog
           open
           onOpenChange={(open) => !open && setTarget(null)}
           clusterId={clusterId}
-          application={target.application}
+          item={target.item}
         />
       ) : null}
       {target?.kind === 'delete' ? (
-        <DeleteApplicationDialog
+        <DeleteItemDialog
           open
           onOpenChange={(open) => !open && setTarget(null)}
           clusterId={clusterId}
-          application={target.application}
+          item={target.item}
         />
       ) : null}
     </div>
   );
 }
 
-interface RowActionsProps {
+function AppAmount({ item }: { item: ItemResponse }): React.JSX.Element {
+  const latest = item.allocations[item.allocations.length - 1];
+  return <span>{latest ? formatGb(latest.amount) : '—'}</span>;
+}
+
+function EventDeltas({ item }: { item: ItemResponse }): React.JSX.Element {
+  const { consumptionDelta, capacityDelta } = item;
+  if (consumptionDelta === null && capacityDelta === null) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  return (
+    <div className="flex flex-col items-end gap-0.5 text-sm">
+      {consumptionDelta !== null ? (
+        <span className={cn(consumptionDelta >= 0 ? 'text-foreground' : 'text-destructive')}>
+          {consumptionDelta >= 0 ? '+' : ''}
+          {formatNumber(consumptionDelta)} GB cons
+        </span>
+      ) : null}
+      {capacityDelta !== null ? (
+        <span className={cn(capacityDelta >= 0 ? 'text-foreground' : 'text-destructive')}>
+          {capacityDelta >= 0 ? '+' : ''}
+          {formatNumber(capacityDelta)} GB cap
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+interface AppRowActionsProps {
   onEdit: () => void;
   onResize: () => void;
   onEnd: () => void;
@@ -215,13 +267,13 @@ interface RowActionsProps {
   isEnded: boolean;
 }
 
-function RowActions({
+function AppRowActions({
   onEdit,
   onResize,
   onEnd,
   onDelete,
   isEnded,
-}: RowActionsProps): React.JSX.Element {
+}: AppRowActionsProps): React.JSX.Element {
   return (
     <div className="flex items-center justify-end gap-1">
       <IconButton onClick={onResize} title="Resize">
@@ -230,6 +282,25 @@ function RowActions({
       <IconButton onClick={onEnd} title={isEnded ? 'Edit end date' : 'End'}>
         <MoreVertical className="h-3.5 w-3.5" />
       </IconButton>
+      <IconButton onClick={onEdit} title="Edit">
+        <Pencil className="h-3.5 w-3.5" />
+      </IconButton>
+      <IconButton onClick={onDelete} title="Delete" destructive>
+        <Trash2 className="h-3.5 w-3.5" />
+      </IconButton>
+    </div>
+  );
+}
+
+function EventRowActions({
+  onEdit,
+  onDelete,
+}: {
+  onEdit: () => void;
+  onDelete: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-end gap-1">
       <IconButton onClick={onEdit} title="Edit">
         <Pencil className="h-3.5 w-3.5" />
       </IconButton>
@@ -269,11 +340,7 @@ function IconButton({
   );
 }
 
-function AllocationTimeline({
-  rows,
-}: {
-  rows: ApplicationResponse['allocations'];
-}): React.JSX.Element {
+function AllocationTimeline({ rows }: { rows: ItemResponse['allocations'] }): React.JSX.Element {
   const sorted = [...rows].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
   return (
     <div className="space-y-1.5">

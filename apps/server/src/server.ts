@@ -9,13 +9,13 @@ import type { Env } from './env.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import prismaPlugin from './plugins/prisma.js';
 import tenantContextPlugin from './plugins/tenant-context.js';
-import { applicationRoutes } from './routes/applications.js';
+import { categoriesRoutes } from './routes/categories.js';
 import { clusterRoutes } from './routes/clusters.js';
-import { eventRoutes } from './routes/events.js';
 import { forecastRoutes } from './routes/forecast.js';
 import { healthRoutes } from './routes/health.js';
 import { hostReplacementRoutes } from './routes/host-replacements.js';
 import { hostRoutes } from './routes/hosts.js';
+import { itemsRoutes } from './routes/items.js';
 import { settingsRoutes } from './routes/settings.js';
 
 export interface BuildServerOptions {
@@ -42,8 +42,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(clusterRoutes, { prefix: '/api' });
   await server.register(hostRoutes, { prefix: '/api' });
   await server.register(hostReplacementRoutes, { prefix: '/api' });
-  await server.register(applicationRoutes, { prefix: '/api' });
-  await server.register(eventRoutes, { prefix: '/api' });
+  await server.register(itemsRoutes, { prefix: '/api' });
+  await server.register(categoriesRoutes, { prefix: '/api' });
   await server.register(forecastRoutes, { prefix: '/api' });
   await server.register(settingsRoutes, { prefix: '/api' });
 

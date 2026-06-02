@@ -86,22 +86,24 @@ describe('GET /api/clusters/:id/forecast', () => {
     });
     await server.inject({
       method: 'POST',
-      url: `/api/clusters/${clusterId}/applications`,
+      url: `/api/clusters/${clusterId}/items`,
       payload: {
+        kind: 'application',
         name: 'app-1',
         category: 'openshift',
-        startedAt: '2026-08-01',
+        effectiveDate: '2026-08-01',
         allocations: [{ metricTypeKey: 'memory_gb', effectiveFrom: '2026-08-01', amount: 200 }],
       },
     });
     await server.inject({
       method: 'POST',
-      url: `/api/clusters/${clusterId}/events`,
+      url: `/api/clusters/${clusterId}/items`,
       payload: {
+        kind: 'event',
         metricTypeKey: 'memory_gb',
         effectiveDate: '2026-09-01',
         category: 'growth',
-        title: 'Q3 growth',
+        name: 'Q3 growth',
         consumptionDelta: 100,
       },
     });

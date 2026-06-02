@@ -5,6 +5,7 @@ const prisma = new PrismaClient();
 const DEFAULT_TENANT_ID = 'default';
 const MEMORY_METRIC_KEY = 'memory_gb';
 const BASELINE_DATE = new Date('2026-05-01T00:00:00Z');
+const DEFAULT_CATEGORIES = ['Growth', 'Hardware', 'OpenShift', 'Note'];
 
 interface ReferenceHost {
   // Suffix appended to the cluster name to keep `(tenantId, serialNumber)`
@@ -89,6 +90,14 @@ async function main(): Promise<void> {
     update: { name: 'Default' },
     create: { id: DEFAULT_TENANT_ID, name: 'Default' },
   });
+
+  for (const name of DEFAULT_CATEGORIES) {
+    await prisma.category.upsert({
+      where: { tenantId_name: { tenantId: tenant.id, name } },
+      create: { tenantId: tenant.id, name },
+      update: {},
+    });
+  }
 
   const memoryMetric = await prisma.metricType.upsert({
     where: { key: MEMORY_METRIC_KEY },
@@ -183,8 +192,9 @@ async function main(): Promise<void> {
   const clusterCount = await prisma.cluster.count();
   const baselineCount = await prisma.clusterMetricBaseline.count();
   const hostCount = await prisma.host.count();
+  const categoryCount = await prisma.category.count();
   console.log(
-    `Seed complete: ${clusterCount} clusters, ${baselineCount} baselines, ${hostCount} hosts, 1 tenant, 1 metric type.`,
+    `Seed complete: ${clusterCount} clusters, ${baselineCount} baselines, ${hostCount} hosts, ${categoryCount} categories, 1 tenant, 1 metric type.`,
   );
 }
 
