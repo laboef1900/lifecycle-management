@@ -26,11 +26,7 @@ export class CategoriesService {
 
   /** Used by ItemsService on save to keep the managed list in sync. */
   async ensure(tenantId: string, name: string): Promise<void> {
-    await this.prisma.category.upsert({
-      where: { tenantId_name: { tenantId, name } },
-      create: { tenantId, name },
-      update: {},
-    });
+    await this.create(tenantId, name);
   }
 
   async delete(tenantId: string, id: string): Promise<void> {

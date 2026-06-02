@@ -149,7 +149,7 @@ export class ItemsService {
         );
         if (earliest !== null && input.effectiveDate > earliest) {
           throw new UnprocessableError(
-            'INVALID_STARTED_AT',
+            'INVALID_EFFECTIVE_DATE',
             'effectiveDate cannot be after the earliest allocation row',
           );
         }
@@ -161,7 +161,7 @@ export class ItemsService {
     if (input.endedAt !== undefined) {
       if (existing.kind !== 'application') {
         throw new UnprocessableError(
-          'NOT_AN_APPLICATION',
+          'WRONG_KIND_FIELD',
           'endedAt can only be set on application items',
         );
       }

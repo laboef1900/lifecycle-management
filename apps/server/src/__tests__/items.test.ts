@@ -305,7 +305,9 @@ describe('PATCH /api/items/:id', () => {
       payload: { effectiveDate: '2026-07-01' },
     });
     expect(response.statusCode).toBe(422);
-    expect((response.json() as { error: { code: string } }).error.code).toBe('INVALID_STARTED_AT');
+    expect((response.json() as { error: { code: string } }).error.code).toBe(
+      'INVALID_EFFECTIVE_DATE',
+    );
   });
 
   it('rejects setting endedAt on an event (wrong kind)', async () => {
@@ -322,7 +324,7 @@ describe('PATCH /api/items/:id', () => {
       payload: { endedAt: '2027-01-01' },
     });
     expect(response.statusCode).toBe(422);
-    expect((response.json() as { error: { code: string } }).error.code).toBe('NOT_AN_APPLICATION');
+    expect((response.json() as { error: { code: string } }).error.code).toBe('WRONG_KIND_FIELD');
   });
 
   it('rejects setting a delta on an application (wrong kind)', async () => {
