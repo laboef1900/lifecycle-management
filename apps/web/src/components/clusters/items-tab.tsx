@@ -32,6 +32,25 @@ interface ItemsTabProps {
 
 type DialogKind = 'edit' | 'resize' | 'end' | 'delete';
 
+/**
+ * Maps a category DISPLAY name to a semantic Badge variant, preserving the
+ * colour coding the old events tab had per category. Unknown / free-form
+ * categories fall back to the neutral `default` variant.
+ */
+function categoryBadgeVariant(category: string): 'default' | 'outline' | 'success' | 'warning' {
+  switch (category) {
+    case 'Growth':
+      return 'warning';
+    case 'Hardware':
+      return 'success';
+    case 'Note':
+      return 'outline';
+    case 'OpenShift':
+    default:
+      return 'default';
+  }
+}
+
 export function ItemsTab({ clusterId }: ItemsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
   const [target, setTarget] = useState<{ item: ItemResponse; kind: DialogKind } | null>(null);
@@ -125,7 +144,7 @@ export function ItemsTab({ clusterId }: ItemsTabProps): React.JSX.Element {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="default">{item.category}</Badge>
+                        <Badge variant={categoryBadgeVariant(item.category)}>{item.category}</Badge>
                       </TableCell>
                       <TableCell>
                         <div className="font-medium">{item.name}</div>

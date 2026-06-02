@@ -91,4 +91,18 @@ describe('ItemsTab', () => {
     expect(screen.getByText('OpenShift')).toBeInTheDocument();
     expect(screen.getByText('Growth')).toBeInTheDocument();
   });
+
+  it('colors the category badge by its semantic variant', async () => {
+    renderTab();
+
+    // OpenShift maps to the neutral default variant; Growth to warning.
+    expect((await screen.findByText('OpenShift')).closest('[data-variant]')).toHaveAttribute(
+      'data-variant',
+      'default',
+    );
+    expect(screen.getByText('Growth').closest('[data-variant]')).toHaveAttribute(
+      'data-variant',
+      'warning',
+    );
+  });
 });
