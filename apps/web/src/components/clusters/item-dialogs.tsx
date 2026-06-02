@@ -1,5 +1,9 @@
-import { itemAllocationRowInputSchema, itemCreateInputSchema } from '@lcm/shared';
-import type { ItemResponse } from '@lcm/shared';
+import {
+  itemAllocationRowInputSchema,
+  itemCreateInputSchema,
+  itemUpdateInputSchema,
+} from '@lcm/shared';
+import type { ItemKind, ItemResponse } from '@lcm/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
@@ -67,8 +71,6 @@ function useCategories(): string[] {
 }
 
 // ---------- Kind toggle ----------
-
-type ItemKind = 'application' | 'event';
 
 function KindToggle({
   value,
@@ -351,6 +353,16 @@ export function EditItemDialog({
             capacityDelta: parseDelta(capacityDelta),
           }),
     };
+    const parsed = itemUpdateInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      const next: Record<string, string> = {};
+      for (const issue of parsed.error.issues) {
+        const root = issue.path[0];
+        if (typeof root === 'string') next[root] = issue.message;
+      }
+      setErrors(next);
+      return;
+    }
     mutation.mutate(payload);
   };
 
