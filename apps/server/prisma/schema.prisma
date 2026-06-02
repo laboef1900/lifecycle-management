@@ -2,7 +2,7 @@
 // Spec: docs/superpowers/specs/2026-05-22-lcm-v1-design.md
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   // `native` is for non-Docker dev on the host. The two `linux-musl-...`
   // targets are for the DHI distroless runtime (`dhi.io/node:22-alpine`):
   // amd64 in production (the GHCR publish workflow builds amd64 only),
@@ -31,9 +31,9 @@ model Tenant {
   hostCapacities      HostMetricCapacity[]
   hostLifecycleEvents HostLifecycleEvent[]
   hostReplacements    HostReplacement[]
-  applications        Application[]
-  appAllocations      ApplicationMetricAllocation[]
-  events              Event[]
+  items               Item[]
+  itemAllocations     ItemAllocation[]
+  categories          Category[]
   settings            TenantSettings?
 
   @@map("tenants")
@@ -58,10 +58,10 @@ model MetricType {
   displayName String @map("display_name")
   unit        String
 
-  baselines      ClusterMetricBaseline[]
-  hostCapacities HostMetricCapacity[]
-  appAllocations ApplicationMetricAllocation[]
-  events         Event[]
+  baselines       ClusterMetricBaseline[]
+  hostCapacities  HostMetricCapacity[]
+  itemAllocations ItemAllocation[]
+  items           Item[]
 
   @@map("metric_types")
 }
@@ -78,12 +78,11 @@ model Cluster {
   updatedAt    DateTime  @updatedAt @map("updated_at")
   archivedAt   DateTime? @map("archived_at")
 
-  tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  baselines    ClusterMetricBaseline[]
-  hosts        Host[]
-  applications Application[]
-  events       Event[]
-  settings     ClusterSettings?
+  tenant    Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  baselines ClusterMetricBaseline[]
+  hosts     Host[]
+  items     Item[]
+  settings  ClusterSettings?
 
   @@unique([tenantId, name], map: "clusters_tenant_name_unique")
   @@map("clusters")
@@ -216,74 +215,66 @@ model HostMetricCapacity {
   @@map("host_metric_capacities")
 }
 
-// ---------- Applications (consumption sources) ----------
+// ---------- Items (unified applications + events) ----------
 
-model Application {
-  id          String    @id @default(cuid())
-  tenantId    String    @default("default") @map("tenant_id")
-  clusterId   String    @map("cluster_id")
-  name        String
-  category    String
-  description String?
-  startedAt   DateTime  @map("started_at") @db.Date
-  endedAt     DateTime? @map("ended_at") @db.Date
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+enum ItemKind {
+  application
+  event
 
-  tenant      Tenant                        @relation(fields: [tenantId], references: [id])
-  cluster     Cluster                       @relation(fields: [clusterId], references: [id], onDelete: Cascade)
-  allocations ApplicationMetricAllocation[]
-
-  @@index([clusterId])
-  @@map("applications")
+  @@map("item_kind")
 }
 
-model ApplicationMetricAllocation {
+model Item {
+  id               String    @id @default(cuid())
+  tenantId         String    @default("default") @map("tenant_id")
+  clusterId        String    @map("cluster_id")
+  kind             ItemKind  @default(application)
+  name             String
+  category         String
+  description      String?
+  effectiveDate    DateTime  @map("effective_date") @db.Date
+  endedAt          DateTime? @map("ended_at") @db.Date
+  metricTypeId     String?   @map("metric_type_id")
+  consumptionDelta Decimal?  @map("consumption_delta") @db.Decimal(18, 3)
+  capacityDelta    Decimal?  @map("capacity_delta") @db.Decimal(18, 3)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id])
+  cluster     Cluster          @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  metricType  MetricType?      @relation(fields: [metricTypeId], references: [id])
+  allocations ItemAllocation[]
+
+  @@index([clusterId])
+  @@index([clusterId, effectiveDate])
+  @@map("items")
+}
+
+model ItemAllocation {
   id            String   @id @default(cuid())
-  applicationId String   @map("application_id")
+  itemId        String   @map("item_id")
   metricTypeId  String   @map("metric_type_id")
   tenantId      String   @default("default") @map("tenant_id")
   effectiveFrom DateTime @map("effective_from") @db.Date
   amount        Decimal  @db.Decimal(18, 3)
   createdAt     DateTime @default(now()) @map("created_at")
 
-  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  metricType  MetricType  @relation(fields: [metricTypeId], references: [id])
-  tenant      Tenant      @relation(fields: [tenantId], references: [id])
-
-  @@unique([applicationId, metricTypeId, effectiveFrom])
-  @@map("application_metric_allocations")
-}
-
-// ---------- Events (un-attributed deltas + annotations) ----------
-
-enum EventCategory {
-  growth
-  hardware_change
-  openshift
-  note
-
-  @@map("event_category")
-}
-
-model Event {
-  id               String        @id @default(cuid())
-  tenantId         String        @default("default") @map("tenant_id")
-  clusterId        String        @map("cluster_id")
-  metricTypeId     String        @map("metric_type_id")
-  effectiveDate    DateTime      @map("effective_date") @db.Date
-  category         EventCategory
-  title            String
-  description      String?
-  consumptionDelta Decimal?      @map("consumption_delta") @db.Decimal(18, 3)
-  capacityDelta    Decimal?      @map("capacity_delta") @db.Decimal(18, 3)
-  createdAt        DateTime      @default(now()) @map("created_at")
-  updatedAt        DateTime      @updatedAt @map("updated_at")
-
-  tenant     Tenant     @relation(fields: [tenantId], references: [id])
-  cluster    Cluster    @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  item       Item       @relation(fields: [itemId], references: [id], onDelete: Cascade)
   metricType MetricType @relation(fields: [metricTypeId], references: [id])
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
 
-  @@index([clusterId, effectiveDate])
-  @@map("events")
+  @@unique([itemId, metricTypeId, effectiveFrom])
+  @@map("item_allocations")
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  tenantId  String   @default("default") @map("tenant_id")
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name], map: "categories_tenant_name_unique")
+  @@map("categories")
 }
