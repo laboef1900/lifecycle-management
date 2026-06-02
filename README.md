@@ -12,7 +12,8 @@ A pnpm monorepo with three runtime services:
 
 - **`apps/server`** — Fastify + Prisma on Node 22. Exposes a typed REST API
   rooted at `/api`, plus `/healthz` / `/readyz`. Computes the forecast as a
-  pure function over baselines, hosts, applications, and events.
+  pure function over baselines, hosts, and items (the unified model that merges
+  applications and events).
 - **`apps/web`** — Vite + React 19 + TanStack Router/Query + Recharts +
   Tailwind v4. SPA served by Nginx in production.
 - **`packages/shared`** — Zod schemas + inferred TS types consumed by both
@@ -20,6 +21,15 @@ A pnpm monorepo with three runtime services:
 - **Postgres 18** holds the lone source of truth. Schema-only multi-tenancy
   (`tenant_id` columns everywhere) — auth lands in the 3-month milestone.
   (The dev compose still uses `postgres:16-alpine` — see note below.)
+
+> **Items — the merged Apps & Events view.** What were once separate
+> _applications_ (workloads with an allocation timeline) and _events_
+> (point-in-time consumption/capacity deltas) are now one `items` model,
+> distinguished by a `kind` field. A cluster surfaces them together in a single
+> **Apps & Events** tab, where you add either kind from one dialog. Each item's
+> **category** comes from a tenant-managed list (a dropdown you can also type a
+> new value into); manage that list — add or remove categories — on the
+> **Settings** page.
 
 ## Prerequisites
 
