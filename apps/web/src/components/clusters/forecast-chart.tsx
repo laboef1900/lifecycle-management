@@ -1,4 +1,4 @@
-import type { EventCategory, ForecastResponse } from '@lcm/shared';
+import type { ForecastResponse } from '@lcm/shared';
 import {
   Area,
   CartesianGrid,
@@ -15,7 +15,7 @@ import {
 
 import { Card } from '@/components/ui/card';
 import { formatMonthShort } from '@/lib/format-month';
-import { useChartColors } from '@/lib/use-chart-colors';
+import { eventColor, useChartColors } from '@/lib/use-chart-colors';
 
 interface ForecastChartProps {
   forecast: ForecastResponse;
@@ -153,7 +153,7 @@ export function ForecastChart({
                             <span
                               aria-hidden
                               className="h-2 w-2 rounded-full"
-                              style={{ background: colors.event[event.category] }}
+                              style={{ background: eventColor(colors, event.category) }}
                             />
                             <span className="flex-1 truncate">{event.title}</span>
                             <span className="font-mono tabular-nums text-fg-muted">
@@ -289,7 +289,7 @@ export function ForecastChart({
                   x={monthKey}
                   y={datum.consumption}
                   r={5}
-                  fill={colors.event[event.category]}
+                  fill={eventColor(colors, event.category)}
                   stroke="var(--card)"
                   strokeWidth={1.5}
                   isFront
@@ -361,12 +361,7 @@ function ChartLegend({ events, colors, scenarioLabel }: ChartLegendProps): React
         </span>
       ) : null}
       {categories.map((category) => (
-        <LegendItem
-          key={category}
-          swatch={colors.event[category]}
-          label={categoryLabel(category)}
-          dot
-        />
+        <LegendItem key={category} swatch={eventColor(colors, category)} label={category} dot />
       ))}
     </div>
   );
@@ -403,17 +398,4 @@ function LegendItem({
       <span>{label}</span>
     </span>
   );
-}
-
-function categoryLabel(category: EventCategory): string {
-  switch (category) {
-    case 'growth':
-      return 'Growth';
-    case 'hardware_change':
-      return 'Hardware';
-    case 'openshift':
-      return 'OpenShift';
-    case 'note':
-      return 'Note';
-  }
 }
