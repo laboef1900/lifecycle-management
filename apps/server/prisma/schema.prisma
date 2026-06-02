@@ -242,7 +242,7 @@ model Item {
 
   tenant      Tenant           @relation(fields: [tenantId], references: [id])
   cluster     Cluster          @relation(fields: [clusterId], references: [id], onDelete: Cascade)
-  metricType  MetricType?      @relation(fields: [metricTypeId], references: [id])
+  metricType  MetricType?      @relation(fields: [metricTypeId], references: [id], onDelete: Restrict)
   allocations ItemAllocation[]
 
   @@index([clusterId])

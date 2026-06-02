@@ -38,7 +38,7 @@ ALTER TABLE "items" ADD COLUMN "capacity_delta" DECIMAL(18,3);
 ALTER TABLE "items"
   ADD CONSTRAINT "items_metric_type_id_fkey"
   FOREIGN KEY ("metric_type_id") REFERENCES "metric_types"("id")
-  ON DELETE SET NULL ON UPDATE CASCADE;
+  ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- 4. Copy events into items (reuse the event id)
 INSERT INTO "items" (
