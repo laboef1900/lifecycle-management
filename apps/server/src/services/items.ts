@@ -55,74 +55,90 @@ export class ItemsService {
   async create(tenantId: string, clusterId: string, input: ItemCreateInput): Promise<ItemResponse> {
     await this.assertClusterExists(tenantId, clusterId);
 
-    let created: ItemRow;
+    // Validation + metric-type reads happen before the transaction; only the
+    // item write and the category upsert must commit atomically together.
+    let metricTypes: Map<
+      string,
+      { id: string; key: string; displayName: string; unit: string }
+    > | null = null;
+    let eventMetricType: { id: string; key: string; displayName: string; unit: string } | null =
+      null;
     if (input.kind === 'application') {
       this.validateInitialAllocations(input);
-      const metricTypes = await this.resolveMetricTypes(
-        input.allocations.map((a) => a.metricTypeKey),
-      );
-      try {
-        created = await this.prisma.item.create({
+      metricTypes = await this.resolveMetricTypes(input.allocations.map((a) => a.metricTypeKey));
+    } else {
+      eventMetricType = await this.resolveMetricType(input.metricTypeKey);
+    }
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      let item: ItemRow;
+      if (input.kind === 'application') {
+        const resolved = metricTypes!;
+        try {
+          item = await tx.item.create({
+            data: {
+              tenantId,
+              clusterId,
+              kind: 'application',
+              name: input.name,
+              category: input.category,
+              description: input.description ?? null,
+              effectiveDate: input.effectiveDate,
+              endedAt: input.endedAt ?? null,
+              metricTypeId: null,
+              allocations: {
+                create: input.allocations.map((a) => {
+                  const metricType = resolved.get(a.metricTypeKey);
+                  if (!metricType) {
+                    throw new UnprocessableError(
+                      'UNKNOWN_METRIC',
+                      `Unknown metric ${a.metricTypeKey}`,
+                    );
+                  }
+                  return {
+                    tenantId,
+                    metricTypeId: metricType.id,
+                    effectiveFrom: a.effectiveFrom,
+                    amount: new Prisma.Decimal(a.amount),
+                  };
+                }),
+              },
+            },
+            include: itemInclude,
+          });
+        } catch (err) {
+          this.translatePrismaError(err);
+          throw err;
+        }
+      } else {
+        const metricType = eventMetricType!;
+        item = await tx.item.create({
           data: {
             tenantId,
             clusterId,
-            kind: 'application',
+            kind: 'event',
             name: input.name,
             category: input.category,
             description: input.description ?? null,
             effectiveDate: input.effectiveDate,
-            endedAt: input.endedAt ?? null,
-            metricTypeId: null,
-            allocations: {
-              create: input.allocations.map((a) => {
-                const metricType = metricTypes.get(a.metricTypeKey);
-                if (!metricType) {
-                  throw new UnprocessableError(
-                    'UNKNOWN_METRIC',
-                    `Unknown metric ${a.metricTypeKey}`,
-                  );
-                }
-                return {
-                  tenantId,
-                  metricTypeId: metricType.id,
-                  effectiveFrom: a.effectiveFrom,
-                  amount: new Prisma.Decimal(a.amount),
-                };
-              }),
-            },
+            metricTypeId: metricType.id,
+            consumptionDelta:
+              input.consumptionDelta !== null && input.consumptionDelta !== undefined
+                ? new Prisma.Decimal(input.consumptionDelta)
+                : null,
+            capacityDelta:
+              input.capacityDelta !== null && input.capacityDelta !== undefined
+                ? new Prisma.Decimal(input.capacityDelta)
+                : null,
           },
           include: itemInclude,
         });
-      } catch (err) {
-        this.translatePrismaError(err);
-        throw err;
       }
-    } else {
-      const metricType = await this.resolveMetricType(input.metricTypeKey);
-      created = await this.prisma.item.create({
-        data: {
-          tenantId,
-          clusterId,
-          kind: 'event',
-          name: input.name,
-          category: input.category,
-          description: input.description ?? null,
-          effectiveDate: input.effectiveDate,
-          metricTypeId: metricType.id,
-          consumptionDelta:
-            input.consumptionDelta !== null && input.consumptionDelta !== undefined
-              ? new Prisma.Decimal(input.consumptionDelta)
-              : null,
-          capacityDelta:
-            input.capacityDelta !== null && input.capacityDelta !== undefined
-              ? new Prisma.Decimal(input.capacityDelta)
-              : null,
-        },
-        include: itemInclude,
-      });
-    }
 
-    await this.categories.ensure(tenantId, input.category);
+      await this.categories.ensure(tenantId, input.category, tx);
+      return item;
+    });
+
     return this.toResponse(created);
   }
 
@@ -200,11 +216,12 @@ export class ItemsService {
         input.capacityDelta === null ? null : new Prisma.Decimal(input.capacityDelta);
     }
 
-    await this.prisma.item.update({ where: { id }, data });
-
-    if (input.category !== undefined) {
-      await this.categories.ensure(tenantId, input.category);
-    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.item.update({ where: { id }, data });
+      if (input.category !== undefined) {
+        await this.categories.ensure(tenantId, input.category, tx);
+      }
+    });
 
     return this.getById(tenantId, id);
   }
