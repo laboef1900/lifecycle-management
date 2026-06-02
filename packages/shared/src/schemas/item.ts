@@ -31,6 +31,9 @@ export const eventItemCreateSchema = z.object({
   kind: z.literal('event'),
   ...baseFields,
   metricTypeKey: z.string().min(1),
+  // Deltas are optional: an event may be a pure annotation (no forecast impact) for ANY category.
+  // The old "non-note events must carry a delta" rule is intentionally dropped now that categories
+  // are free-form.
   consumptionDelta: deltaNumber.nullable().optional(),
   capacityDelta: deltaNumber.nullable().optional(),
 });

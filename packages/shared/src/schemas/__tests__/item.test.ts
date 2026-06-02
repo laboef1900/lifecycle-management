@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { itemCreateInputSchema, categoryCreateInputSchema } from '../../index.js';
+import {
+  categoryCreateInputSchema,
+  itemCreateInputSchema,
+  itemUpdateInputSchema,
+} from '../../index.js';
 
 describe('itemCreateInputSchema', () => {
   it('accepts an application item with allocations', () => {
@@ -34,6 +38,24 @@ describe('itemCreateInputSchema', () => {
       allocations: [],
     });
     expect(parsed.success).toBe(false);
+  });
+
+  it('rejects an unknown kind', () => {
+    expect(
+      itemCreateInputSchema.safeParse({
+        kind: 'widget',
+        name: 'x',
+        category: 'c',
+        effectiveDate: '2026-01-01',
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('itemUpdateInputSchema', () => {
+  it('requires at least one field', () => {
+    expect(itemUpdateInputSchema.safeParse({}).success).toBe(false);
+    expect(itemUpdateInputSchema.safeParse({ name: 'x' }).success).toBe(true);
   });
 });
 
