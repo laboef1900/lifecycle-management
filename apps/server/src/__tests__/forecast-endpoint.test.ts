@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Prisma } from '@prisma/client';
 
 import { buildServer } from '../server.js';
-import { makeCluster } from './factories.js';
+import { makeCluster, makeEvent, makeHost } from './factories.js';
 import { prisma } from './setup.js';
 import { makeTestEnv } from './test-helpers.js';
 
@@ -212,34 +212,58 @@ describe('GET /api/clusters/:id/forecast', () => {
       update: {},
       create: { key: 'cpu_cores', displayName: 'CPU', unit: 'cores' },
     });
-    await prisma.clusterMetricBaseline.create({
-      data: {
-        tenantId: 'default',
+    try {
+      await prisma.clusterMetricBaseline.create({
+        data: {
+          tenantId: 'default',
+          clusterId,
+          metricTypeId: cpu.id,
+          baselineConsumption: new Prisma.Decimal(100),
+          baselineCapacity: new Prisma.Decimal(400),
+        },
+      });
+      await makeHost(prisma, {
         clusterId,
-        metricTypeId: cpu.id,
-        baselineConsumption: new Prisma.Decimal(100),
-        baselineCapacity: new Prisma.Decimal(400),
-      },
-    });
+        metricKey: 'memory_gb',
+        initialCapacity: [{ effectiveFrom: new Date('2026-05-01T00:00:00.000Z'), amount: 512 }],
+      });
+      await makeHost(prisma, {
+        clusterId,
+        metricKey: 'cpu_cores',
+        initialCapacity: [{ effectiveFrom: new Date('2026-05-01T00:00:00.000Z'), amount: 64 }],
+      });
+      await makeEvent(prisma, {
+        clusterId,
+        metricKey: 'cpu_cores',
+        effectiveDate: new Date('2026-05-01T00:00:00.000Z'),
+        consumptionDelta: 50,
+      });
 
-    const mem = await server.inject({
-      method: 'GET',
-      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb`,
-    });
-    const cpuRes = await server.inject({
-      method: 'GET',
-      url: `/api/clusters/${clusterId}/forecast?metric=cpu_cores`,
-    });
+      const mem = await server.inject({
+        method: 'GET',
+        url: `/api/clusters/${clusterId}/forecast?metric=memory_gb`,
+      });
+      const cpuRes = await server.inject({
+        method: 'GET',
+        url: `/api/clusters/${clusterId}/forecast?metric=cpu_cores`,
+      });
 
-    expect(mem.statusCode).toBe(200);
-    expect(cpuRes.statusCode).toBe(200);
-    const memMonths = (mem.json() as { months: Array<{ consumption: number; capacity: number }> })
-      .months;
-    const cpuMonths = (
-      cpuRes.json() as { months: Array<{ consumption: number; capacity: number }> }
-    ).months;
-    expect(memMonths[0]).toMatchObject({ consumption: 3378, capacity: 7680 });
-    expect(cpuMonths[0]).toMatchObject({ consumption: 100, capacity: 400 });
+      expect(mem.statusCode).toBe(200);
+      expect(cpuRes.statusCode).toBe(200);
+      const memBody = mem.json() as {
+        months: Array<{ consumption: number; capacity: number }>;
+      };
+      const cpuBody = cpuRes.json() as {
+        months: Array<{ consumption: number; capacity: number }>;
+      };
+      // 7680 + 512 mem host only; the cpu host/event must not leak in.
+      expect(memBody.months[0]).toMatchObject({ consumption: 3378, capacity: 8192 });
+      // 100 + 50 cpu event, 400 + 64 cpu host only; mem data must not leak in.
+      expect(cpuBody.months[0]).toMatchObject({ consumption: 150, capacity: 464 });
+    } finally {
+      await prisma.cluster.deleteMany({ where: { id: clusterId } });
+      await prisma.metricType.deleteMany({ where: { key: 'cpu_cores' } });
+    }
   });
 });
 
