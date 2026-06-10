@@ -84,6 +84,7 @@ export function ForecastChart({
           <ComposedChart
             data={data}
             margin={{ top: 12, right: compact ? 16 : 56, bottom: 0, left: 8 }}
+            accessibilityLayer={false}
           >
             <defs>
               <linearGradient id="forecast-consumption" x1="0" y1="0" x2="0" y2="1">
@@ -293,7 +294,6 @@ export function ForecastChart({
                   fill={eventColor(colors, event.category)}
                   stroke="var(--card)"
                   strokeWidth={1.5}
-                  isFront
                   ifOverflow="extendDomain"
                 />
               );
