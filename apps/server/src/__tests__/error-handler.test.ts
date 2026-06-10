@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { buildServer } from '../server.js';
 import errorHandler from '../plugins/error-handler.js';
-import { ConflictError, NotFoundError } from '../services/errors.js';
+import { ConflictError, NotFoundError, UnprocessableError } from '../services/errors.js';
 import { makeFakePrisma, makeTestEnv } from './test-helpers.js';
 
 describe('error handler', () => {
@@ -74,8 +74,12 @@ describe('error handler', () => {
 });
 
 describe('ServiceError narrowing', () => {
+  let app: ReturnType<typeof Fastify> | undefined;
+
+  afterEach(() => app?.close());
+
   it('maps ConflictError to its status and code via instanceof', async () => {
-    const app = Fastify();
+    app = Fastify();
     await app.register(errorHandler);
     app.get('/boom', () => {
       throw new ConflictError('CLUSTER_NAME_TAKEN', 'name already in use');
@@ -85,11 +89,10 @@ describe('ServiceError narrowing', () => {
     expect(res.json()).toEqual({
       error: { code: 'CLUSTER_NAME_TAKEN', message: 'name already in use' },
     });
-    await app.close();
   });
 
   it('maps NotFoundError to 404 NOT_FOUND', async () => {
-    const app = Fastify();
+    app = Fastify();
     await app.register(errorHandler);
     app.get('/missing', () => {
       throw new NotFoundError('Cluster', 'abc');
@@ -97,6 +100,18 @@ describe('ServiceError narrowing', () => {
     const res = await app.inject({ method: 'GET', url: '/missing' });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Cluster abc not found' } });
-    await app.close();
+  });
+
+  it('maps UnprocessableError to 422 with its code', async () => {
+    app = Fastify();
+    await app.register(errorHandler);
+    app.get('/unprocessable', () => {
+      throw new UnprocessableError('UNKNOWN_METRIC', 'Unknown metric cpu_cores');
+    });
+    const res = await app.inject({ method: 'GET', url: '/unprocessable' });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({
+      error: { code: 'UNKNOWN_METRIC', message: 'Unknown metric cpu_cores' },
+    });
   });
 });

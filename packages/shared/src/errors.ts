@@ -2,6 +2,8 @@
  * Central registry of service-level error codes returned in API error bodies.
  * Handler-level codes (VALIDATION_ERROR, INTERNAL_ERROR, CLIENT_ERROR) are not
  * service errors and live in the server's error handler.
+ * Kept as a runtime array (not a pure type union) so later work can build
+ * z.enum validators and client-side code guards from it.
  */
 export const SERVICE_ERROR_CODES = [
   'ALLOCATION_DUPLICATE_DATE',

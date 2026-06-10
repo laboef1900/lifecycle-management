@@ -7,6 +7,7 @@ export abstract class ServiceError extends Error {
 
   protected constructor(code: ServiceErrorCode, message: string) {
     super(message);
+    this.name = new.target.name;
     this.code = code;
   }
 }
@@ -16,7 +17,6 @@ export class NotFoundError extends ServiceError {
 
   constructor(resource: string, id: string) {
     super('NOT_FOUND', `${resource} ${id} not found`);
-    this.name = 'NotFoundError';
   }
 }
 
@@ -25,7 +25,6 @@ export class ConflictError extends ServiceError {
 
   constructor(code: ServiceErrorCode, message: string) {
     super(code, message);
-    this.name = 'ConflictError';
   }
 }
 
@@ -34,6 +33,5 @@ export class UnprocessableError extends ServiceError {
 
   constructor(code: ServiceErrorCode, message: string) {
     super(code, message);
-    this.name = 'UnprocessableError';
   }
 }
