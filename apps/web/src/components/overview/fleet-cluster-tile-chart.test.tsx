@@ -177,4 +177,10 @@ describe('<FleetClusterTileChart>', () => {
     expect(screen.queryByText(/Failed to load/i)).toBeNull();
     expect(screen.queryByText(/No forecast/i)).toBeNull();
   });
+
+  it('exposes the tile chart as a labelled image', () => {
+    render(<FleetClusterTileChart entry={entry()} />);
+
+    expect(screen.getByRole('img', { name: /utilization forecast/i })).toBeInTheDocument();
+  });
 });

@@ -254,4 +254,11 @@ describe('ForecastChart props mapping', () => {
     expect(screen.getByText('Capacity ceiling')).toBeInTheDocument();
     expect(screen.getByText('OpenShift')).toBeInTheDocument();
   });
+
+  it('exposes the chart as a labelled image', () => {
+    const forecast = makeForecast();
+    renderChart(forecast);
+
+    expect(screen.getByRole('img', { name: 'Capacity forecast chart' })).toBeInTheDocument();
+  });
 });
