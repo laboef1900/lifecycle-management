@@ -78,6 +78,7 @@ export function ForecastChart({
 
   return (
     <Card className="p-4">
+      {/* TODO(a11y): fold cluster/metric identity into this label before any multi-chart layout (PR 2 Radix rebuild). */}
       <div className="h-[320px] w-full" role="img" aria-label="Capacity forecast chart">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart

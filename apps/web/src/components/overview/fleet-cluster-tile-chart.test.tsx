@@ -181,6 +181,6 @@ describe('<FleetClusterTileChart>', () => {
   it('exposes the tile chart as a labelled image', () => {
     render(<FleetClusterTileChart entry={entry()} />);
 
-    expect(screen.getByRole('img', { name: /utilization forecast/i })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /CL-Test utilization forecast/i })).toBeInTheDocument();
   });
 });
