@@ -1,4 +1,4 @@
-import type { Scenario } from '@lcm/shared';
+import { addUtcMonths, type Scenario } from '@lcm/shared';
 
 import type { ForecastApplication, ForecastHost, ForecastInput } from './forecast.js';
 
@@ -69,27 +69,25 @@ function addSyntheticVms(
   };
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const AVG_DAYS_PER_MONTH = 30;
-
 /**
- * Shift every future commissionedAt and projectedDecommissionAt by N months
- * (~30 days each). Past commissions are untouched: those hosts are already
- * deployed. v1 is uniform across all hosts — per-host targeting is deferred.
+ * Shift every future commissionedAt and projectedDecommissionAt by N calendar
+ * months (UTC, month-end clamped). Past commissions are untouched: those hosts
+ * are already deployed. v1 is uniform across all hosts — per-host targeting is
+ * deferred. Events are intentionally NOT shifted: they model demand/capacity
+ * changes that happen regardless of procurement timing.
  */
 function delayFutureCommissions(input: ForecastInput, months: number): ForecastInput {
   if (months <= 0) return input;
   const now = new Date();
-  const shiftMs = months * AVG_DAYS_PER_MONTH * DAY_MS;
   return {
     ...input,
     hosts: input.hosts.map((host) => {
       if (host.commissionedAt <= now) return host;
       return {
         ...host,
-        commissionedAt: new Date(host.commissionedAt.getTime() + shiftMs),
+        commissionedAt: addUtcMonths(host.commissionedAt, months),
         projectedDecommissionAt: host.projectedDecommissionAt
-          ? new Date(host.projectedDecommissionAt.getTime() + shiftMs)
+          ? addUtcMonths(host.projectedDecommissionAt, months)
           : host.projectedDecommissionAt,
       };
     }),
