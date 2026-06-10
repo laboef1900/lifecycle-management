@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { Prisma } from '@prisma/client';
+
 import { buildServer } from '../server.js';
 import { makeCluster } from './factories.js';
 import { prisma } from './setup.js';
@@ -202,6 +204,42 @@ describe('GET /api/clusters/:id/forecast', () => {
     } finally {
       await prisma.metricType.deleteMany({ where: { key: 'cpu_cores' } });
     }
+  });
+
+  it('keeps forecasts independent per metric on a multi-metric cluster', async () => {
+    const cpu = await prisma.metricType.upsert({
+      where: { key: 'cpu_cores' },
+      update: {},
+      create: { key: 'cpu_cores', displayName: 'CPU', unit: 'cores' },
+    });
+    await prisma.clusterMetricBaseline.create({
+      data: {
+        tenantId: 'default',
+        clusterId,
+        metricTypeId: cpu.id,
+        baselineConsumption: new Prisma.Decimal(100),
+        baselineCapacity: new Prisma.Decimal(400),
+      },
+    });
+
+    const mem = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb`,
+    });
+    const cpuRes = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=cpu_cores`,
+    });
+
+    expect(mem.statusCode).toBe(200);
+    expect(cpuRes.statusCode).toBe(200);
+    const memMonths = (mem.json() as { months: Array<{ consumption: number; capacity: number }> })
+      .months;
+    const cpuMonths = (
+      cpuRes.json() as { months: Array<{ consumption: number; capacity: number }> }
+    ).months;
+    expect(memMonths[0]).toMatchObject({ consumption: 3378, capacity: 7680 });
+    expect(cpuMonths[0]).toMatchObject({ consumption: 100, capacity: 400 });
   });
 });
 
