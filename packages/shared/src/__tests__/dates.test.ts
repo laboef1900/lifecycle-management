@@ -54,4 +54,16 @@ describe('addUtcMonths', () => {
       '2026-02-28T00:00:00.000Z',
     );
   });
+
+  it('returns an equal date for a zero offset', () => {
+    expect(addUtcMonths(new Date('2026-06-10T08:00:00Z'), 0).toISOString()).toBe(
+      '2026-06-10T08:00:00.000Z',
+    );
+  });
+
+  it('supports multi-month negative offsets with clamping', () => {
+    expect(addUtcMonths(new Date('2026-05-31T00:00:00Z'), -3).toISOString()).toBe(
+      '2026-02-28T00:00:00.000Z',
+    );
+  });
 });
