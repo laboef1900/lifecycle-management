@@ -145,7 +145,7 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
           </div>
         ) : entry.error ? (
           <div className="flex h-[189px] items-center justify-center text-xs text-destructive">
-            Failed to load
+            {entry.error}
           </div>
         ) : (
           <div className="flex h-[189px] items-center justify-center text-xs text-fg-muted">

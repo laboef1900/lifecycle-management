@@ -162,10 +162,19 @@ describe('<FleetClusterTileChart>', () => {
     expect(screen.queryByTestId('chart')).toBeNull();
   });
 
-  it('renders "Failed to load" when the entry has an error', () => {
-    render(<FleetClusterTileChart entry={entry({ months: [], error: 'timeout' })} />);
+  it('renders the actual error message when the entry has a load failure', () => {
+    render(
+      <FleetClusterTileChart entry={entry({ months: [], error: 'Failed to load forecast' })} />,
+    );
     expect(screen.getByText('CL-Test')).toBeInTheDocument();
-    expect(screen.getByText(/Failed to load/i)).toBeInTheDocument();
+    expect(screen.getByText('Failed to load forecast')).toBeInTheDocument();
+    expect(screen.queryByText(/No forecast/i)).toBeNull();
+  });
+
+  it('renders "No metric configured" for metric-less clusters instead of a load failure', () => {
+    render(<FleetClusterTileChart entry={entry({ months: [], error: 'No metric configured' })} />);
+    expect(screen.getByText('No metric configured')).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to load/i)).toBeNull();
     expect(screen.queryByText(/No forecast/i)).toBeNull();
   });
 });
