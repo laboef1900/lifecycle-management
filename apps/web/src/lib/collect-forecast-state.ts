@@ -39,6 +39,13 @@ export function collectForecastState(
   for (let i = 0; i < clusters.length; i++) {
     const cluster = clusters[i]!;
     const q = queries[i];
+
+    if (cluster.metrics.length === 0) {
+      forecastEntries.push({ clusterId: cluster.id, data: undefined });
+      errorsById[cluster.id] = 'No metric configured';
+      continue;
+    }
+
     const data = q?.data;
     forecastEntries.push({ clusterId: cluster.id, data });
 
@@ -54,7 +61,7 @@ export function collectForecastState(
       procurementByClusterId[cluster.id] = data.procurement;
     }
 
-    if (q?.isError && q.error !== undefined && q.error !== null) {
+    if (q?.isError) {
       errorsById[cluster.id] =
         q.error instanceof Error ? q.error.message : 'Failed to load forecast';
     }
