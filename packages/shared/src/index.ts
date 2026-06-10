@@ -9,3 +9,4 @@ export * from './schemas/forecast.js';
 export * from './schemas/settings.js';
 export * from './settings/resolve-thresholds.js';
 export * from './dates.js';
+export * from './errors.js';

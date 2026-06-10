@@ -1,7 +1,10 @@
+import Fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { buildServer } from '../server.js';
+import errorHandler from '../plugins/error-handler.js';
+import { ConflictError, NotFoundError } from '../services/errors.js';
 import { makeFakePrisma, makeTestEnv } from './test-helpers.js';
 
 describe('error handler', () => {
@@ -67,5 +70,33 @@ describe('error handler', () => {
     expect(body.error.code).toBe('INTERNAL_ERROR');
     expect(body.error.message).toBe('Internal server error');
     expect(body.error.message).not.toContain('sensitive internal detail');
+  });
+});
+
+describe('ServiceError narrowing', () => {
+  it('maps ConflictError to its status and code via instanceof', async () => {
+    const app = Fastify();
+    await app.register(errorHandler);
+    app.get('/boom', () => {
+      throw new ConflictError('CLUSTER_NAME_TAKEN', 'name already in use');
+    });
+    const res = await app.inject({ method: 'GET', url: '/boom' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: { code: 'CLUSTER_NAME_TAKEN', message: 'name already in use' },
+    });
+    await app.close();
+  });
+
+  it('maps NotFoundError to 404 NOT_FOUND', async () => {
+    const app = Fastify();
+    await app.register(errorHandler);
+    app.get('/missing', () => {
+      throw new NotFoundError('Cluster', 'abc');
+    });
+    const res = await app.inject({ method: 'GET', url: '/missing' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Cluster abc not found' } });
+    await app.close();
   });
 });
