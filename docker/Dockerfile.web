@@ -9,28 +9,32 @@
 # ----- builder -----
 FROM dhi.io/node:22-alpine-dev AS builder
 
+# The -dev builder image defaults to `node` (uid 1000) — upstream renamed
+# it from `nonroot` in mid-2026.
 USER root
-RUN corepack enable
-USER nonroot
+# Pre-create the workdir owned by the build user — don't rely on the
+# builder's WORKDIR-creation ownership behavior.
+RUN corepack enable && install -d -o node -g node /repo
+USER node
 
 WORKDIR /repo
 
-COPY --chown=nonroot:nonroot pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-COPY --chown=nonroot:nonroot apps/server/package.json apps/server/
-COPY --chown=nonroot:nonroot apps/web/package.json apps/web/
-COPY --chown=nonroot:nonroot packages/shared/package.json packages/shared/
+COPY --chown=node:node pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY --chown=node:node apps/server/package.json apps/server/
+COPY --chown=node:node apps/web/package.json apps/web/
+COPY --chown=node:node packages/shared/package.json packages/shared/
 
 # --ignore-scripts skips @lcm/shared's `prepare` hook, which would try
 # to tsc before we've copied sources. We build shared explicitly below
 # once sources are in place.
 RUN pnpm install --frozen-lockfile --ignore-scripts --filter @lcm/web...
 
-COPY --chown=nonroot:nonroot tsconfig.base.json ./
-COPY --chown=nonroot:nonroot packages/shared/src packages/shared/src
-COPY --chown=nonroot:nonroot packages/shared/tsconfig.json packages/shared/tsconfig.build.json packages/shared/
-COPY --chown=nonroot:nonroot apps/web/src apps/web/src
-COPY --chown=nonroot:nonroot apps/web/index.html apps/web/vite.config.ts apps/web/tsconfig.json apps/web/
-COPY --chown=nonroot:nonroot apps/web/public apps/web/public
+COPY --chown=node:node tsconfig.base.json ./
+COPY --chown=node:node packages/shared/src packages/shared/src
+COPY --chown=node:node packages/shared/tsconfig.json packages/shared/tsconfig.build.json packages/shared/
+COPY --chown=node:node apps/web/src apps/web/src
+COPY --chown=node:node apps/web/index.html apps/web/vite.config.ts apps/web/tsconfig.json apps/web/
+COPY --chown=node:node apps/web/public apps/web/public
 
 # Vite resolves @lcm/shared via its package.json "exports" (→ dist/), so
 # build shared first.
