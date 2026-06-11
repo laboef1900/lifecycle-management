@@ -11,9 +11,11 @@ export function Toaster(): React.JSX.Element {
       richColors
       closeButton
       toastOptions={{
+        // Inline styles: sonner's own [data-sonner-toast] rules load after our
+        // utilities and win the cascade tie, so token classes are ignored.
+        style: { borderRadius: 'var(--radius-card)', boxShadow: 'var(--overlay-shadow)' },
         classNames: {
-          toast:
-            'rounded-[var(--radius-card)] border-border shadow-[var(--overlay-shadow)] font-sans',
+          toast: 'border-border font-sans',
         },
       }}
     />
