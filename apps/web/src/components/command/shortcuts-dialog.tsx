@@ -1,4 +1,4 @@
-import * as Dialog from '@radix-ui/react-dialog';
+import { Dialog } from 'radix-ui';
 import { useEffect, useState } from 'react';
 
 import { Kbd } from '@/components/ui/kbd';
