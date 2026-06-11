@@ -86,7 +86,11 @@ function ClustersPage(): React.JSX.Element {
 
   const fleetSummary = aggregateFleet(clusters, forecastEntries);
   const thresholds = useEffectiveThresholds();
-  const forecastsLoading = forecastQueries.some((q) => q.isPending);
+  // Metric-less clusters have their forecast query disabled (enabled: false),
+  // which TanStack reports as forever-pending; don't let them block the grid.
+  const forecastsLoading = forecastQueries.some(
+    (q, i) => (clusters[i]?.metrics.length ?? 0) > 0 && q.isPending,
+  );
   const tileEntries = buildClusterForecastEntries(clusters, forecastsById);
   const fleetRunway = fleetRunwayToWarn(
     fleetSummary.perClusterSeries.map((s) => s.months),

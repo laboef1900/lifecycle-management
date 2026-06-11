@@ -1,7 +1,10 @@
+import Fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { buildServer } from '../server.js';
+import errorHandler from '../plugins/error-handler.js';
+import { ConflictError, NotFoundError, UnprocessableError } from '../services/errors.js';
 import { makeFakePrisma, makeTestEnv } from './test-helpers.js';
 
 describe('error handler', () => {
@@ -67,5 +70,48 @@ describe('error handler', () => {
     expect(body.error.code).toBe('INTERNAL_ERROR');
     expect(body.error.message).toBe('Internal server error');
     expect(body.error.message).not.toContain('sensitive internal detail');
+  });
+});
+
+describe('ServiceError narrowing', () => {
+  let app: ReturnType<typeof Fastify> | undefined;
+
+  afterEach(() => app?.close());
+
+  it('maps ConflictError to its status and code via instanceof', async () => {
+    app = Fastify();
+    await app.register(errorHandler);
+    app.get('/boom', () => {
+      throw new ConflictError('CLUSTER_NAME_TAKEN', 'name already in use');
+    });
+    const res = await app.inject({ method: 'GET', url: '/boom' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: { code: 'CLUSTER_NAME_TAKEN', message: 'name already in use' },
+    });
+  });
+
+  it('maps NotFoundError to 404 NOT_FOUND', async () => {
+    app = Fastify();
+    await app.register(errorHandler);
+    app.get('/missing', () => {
+      throw new NotFoundError('Cluster', 'abc');
+    });
+    const res = await app.inject({ method: 'GET', url: '/missing' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Cluster abc not found' } });
+  });
+
+  it('maps UnprocessableError to 422 with its code', async () => {
+    app = Fastify();
+    await app.register(errorHandler);
+    app.get('/unprocessable', () => {
+      throw new UnprocessableError('UNKNOWN_METRIC', 'Unknown metric cpu_cores');
+    });
+    const res = await app.inject({ method: 'GET', url: '/unprocessable' });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({
+      error: { code: 'UNKNOWN_METRIC', message: 'Unknown metric cpu_cores' },
+    });
   });
 });

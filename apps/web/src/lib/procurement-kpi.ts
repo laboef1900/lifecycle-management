@@ -1,5 +1,7 @@
 import type { ProcurementInfo } from '@lcm/shared';
 
+import { formatMonthLong } from '@/lib/format-month';
+
 export type ProcurementKpiStatus = 'ok' | 'attention' | 'warn' | 'crit';
 
 export interface ProcurementKpi {
@@ -10,14 +12,6 @@ export interface ProcurementKpi {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const URGENT_DAYS = 28;
-
-function formatMonthLong(monthStr: string): string {
-  return new Date(`${monthStr}T00:00:00Z`).toLocaleDateString('en-US', {
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
-}
 
 /** Days from `today` (midnight UTC) until `dateStr` (also midnight UTC). Negative if past. */
 function daysUntil(dateStr: string, today: Date): number {

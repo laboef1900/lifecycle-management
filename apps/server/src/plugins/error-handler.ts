@@ -2,6 +2,8 @@ import type { FastifyError, FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import { ZodError } from 'zod';
 
+import { ServiceError } from '../services/errors.js';
+
 export interface ApiErrorBody {
   error: {
     code: string;
@@ -35,6 +37,15 @@ const errorHandlerPlugin: FastifyPluginAsync = async (fastify) => {
         },
       };
       reply.status(error.statusCode ?? 400).send(body);
+      return;
+    }
+
+    if (error instanceof ServiceError) {
+      request.log.warn({ err: error }, 'Service error');
+      const body: ApiErrorBody = {
+        error: { code: error.code, message: error.message },
+      };
+      reply.status(error.statusCode).send(body);
       return;
     }
 

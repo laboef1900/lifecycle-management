@@ -72,9 +72,17 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
             >
               Utilization (%)
             </span>
-            <div className="min-w-0 flex-1">
+            <div
+              className="min-w-0 flex-1"
+              role="img"
+              aria-label={`${cluster.name} utilization forecast`}
+            >
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                <LineChart
+                  data={data}
+                  margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
+                  accessibilityLayer={false}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
                   <YAxis
                     domain={yDomain}
@@ -145,7 +153,7 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
           </div>
         ) : entry.error ? (
           <div className="flex h-[189px] items-center justify-center text-xs text-destructive">
-            Failed to load
+            {entry.error}
           </div>
         ) : (
           <div className="flex h-[189px] items-center justify-center text-xs text-fg-muted">

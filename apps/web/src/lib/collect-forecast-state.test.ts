@@ -165,6 +165,22 @@ describe('collectForecastState', () => {
   });
 });
 
+describe('collectForecastState hardening', () => {
+  it('records a fallback message when a query errors without an Error instance', () => {
+    const c1 = makeCluster('c1');
+    const state = collectForecastState([c1], [q({ isError: true, error: null })]);
+    expect(state.errorsById.c1).toBe('Failed to load forecast');
+  });
+
+  it('flags clusters with no configured metric instead of loading forever', () => {
+    const c1 = { ...makeCluster('c1'), metrics: [] };
+    const state = collectForecastState([c1], [q({ isPending: true })]);
+    expect(state.errorsById.c1).toBe('No metric configured');
+    expect(state.forecastsLoading).toBe(false);
+    expect(state.responsiveCount).toBe(0);
+  });
+});
+
 describe('earliestOrderByFromFleet', () => {
   it('returns null when no cluster has a projected breach', () => {
     const a = makeCluster('a');

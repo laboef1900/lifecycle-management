@@ -99,24 +99,48 @@ describe('applyScenario — add_vms', () => {
 });
 
 describe('applyScenario — delay_procurement', () => {
-  it('shifts future commissionedAt by N months (~30 days each)', () => {
+  it('shifts future commissionedAt by N calendar months', () => {
     const future = makeHost('upcoming', 500, {
       commissionedAt: new Date('2026-09-01T00:00:00Z'),
     });
     const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 2 });
-    const shifted = r.hosts[0]!.commissionedAt.getTime();
-    // 2 months * 30 days = 60 days = 60 * 86_400_000 ms
-    expect(shifted - future.commissionedAt.getTime()).toBe(60 * 24 * 60 * 60 * 1000);
+    expect(r.hosts[0]!.commissionedAt.toISOString()).toBe('2026-11-01T00:00:00.000Z');
   });
 
-  it('shifts projectedDecommissionAt on the same hosts by the same amount', () => {
+  it('shifts projectedDecommissionAt on the same hosts by the same months', () => {
     const future = makeHost('upcoming', 500, {
       commissionedAt: new Date('2026-09-01T00:00:00Z'),
       projDecom: new Date('2030-09-01T00:00:00Z'),
     });
     const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 3 });
-    const shifted = r.hosts[0]!.projectedDecommissionAt!.getTime();
-    expect(shifted - future.projectedDecommissionAt!.getTime()).toBe(90 * 24 * 60 * 60 * 1000);
+    expect(r.hosts[0]!.projectedDecommissionAt!.toISOString()).toBe('2030-12-01T00:00:00.000Z');
+  });
+
+  it('clamps month-end dates instead of drifting into the next month', () => {
+    const future = makeHost('upcoming', 500, {
+      commissionedAt: new Date('2026-08-31T00:00:00Z'),
+    });
+    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 1 });
+    expect(r.hosts[0]!.commissionedAt.toISOString()).toBe('2026-09-30T00:00:00.000Z');
+  });
+
+  it('does not shift events (point-in-time deltas are independent of procurement)', () => {
+    const input = makeInput([
+      makeHost('upcoming', 500, { commissionedAt: new Date('2026-09-01T00:00:00Z') }),
+    ]);
+    input.events = [
+      {
+        id: 'e1',
+        effectiveDate: new Date('2026-10-01T00:00:00Z'),
+        category: 'growth',
+        title: 'g',
+        description: null,
+        consumptionDelta: 100,
+        capacityDelta: null,
+      },
+    ];
+    const r = applyScenario(input, { kind: 'delay_procurement', months: 6 });
+    expect(r.events).toEqual(input.events);
   });
 
   it('leaves already-deployed hosts untouched', () => {
