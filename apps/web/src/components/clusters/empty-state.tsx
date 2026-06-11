@@ -41,7 +41,7 @@ export function ClustersEmptyState(): React.JSX.Element {
   });
 
   return (
-    <Card className="flex flex-col items-center justify-center border-dashed p-12 text-center">
+    <Card className="flex flex-col items-center justify-center border-dashed p-12 text-center shadow-none">
       <Database className="mb-3 h-8 w-8 text-muted-foreground" aria-hidden />
       <h2 className="text-lg font-semibold">No clusters yet</h2>
       <p className="mt-1 max-w-sm text-sm text-muted-foreground">

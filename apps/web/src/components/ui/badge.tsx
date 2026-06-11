@@ -4,7 +4,7 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 const badgeVariants = cva(
-  'inline-flex items-center gap-1.5 rounded-[var(--radius)] border px-2 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
   {
     variants: {
       variant: {
@@ -49,7 +49,14 @@ export function Badge({
       {...props}
     >
       {dot ? (
-        <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', dotColor[resolvedVariant])} />
+        // color-mix halo: pre-Baseline-2023 browsers render a solid ring instead — accepted for this evergreen-target internal tool.
+        <span
+          aria-hidden
+          className={cn(
+            'h-1.5 w-1.5 rounded-full shadow-[0_0_0_3px_color-mix(in_oklab,currentColor_18%,transparent)]',
+            dotColor[resolvedVariant],
+          )}
+        />
       ) : null}
       {children}
     </span>
