@@ -99,11 +99,10 @@ html.dark {
   --color-warning-foreground: var(--warning-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
-  --radius: var(--radius);
-  --radius-card: var(--radius-card);
-  --radius-modal: var(--radius-modal);
-  --shadow-card: var(--shadow-card);
-  --shadow-card-hover: var(--shadow-card-hover);
+  /* Radius/shadow tokens live in :root and are consumed via arbitrary values
+     (rounded-[var(--radius-card)] etc.) — no @theme re-export, since
+     `--x: var(--x)` inside @theme is a circular reference that invalidates
+     the :root token. */
   /* Alias: exposed as shadow-overlay utility; the raw var is --overlay-shadow (legacy name kept for arbitrary-value usages). */
   --shadow-overlay: var(--overlay-shadow);
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
@@ -166,6 +165,9 @@ body {
   *::before,
   *::after {
     animation-duration: 0s !important;
+    /* Without this, infinite animations (e.g. Skeleton pulse) still loop at
+       0s duration and can repaint every frame. */
+    animation-iteration-count: 1 !important;
     transition-duration: 0s !important;
   }
 }
