@@ -33,6 +33,12 @@ declare module '@tanstack/react-router' {
 export function App(): React.JSX.Element {
   return (
     <ThemeProvider>
+      {/*
+       * domAnimation loads synchronously — LazyMotion here scopes the m.* renderer and
+       * enforces import hygiene (strict), it does NOT defer code. Use components from
+       * 'motion/react-m' (m.div, m.span); a full motion.* component throws under strict.
+       * Hooks (useSpring/useTransform/useReducedMotion) from 'motion/react' are fine.
+       */}
       <LazyMotion features={domAnimation} strict>
         <MotionConfig reducedMotion="user">
           <QueryClientProvider client={queryClient}>
