@@ -218,18 +218,18 @@ html.dark {
   --color-warning-foreground: var(--warning-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
-  --radius: var(--radius);
-  --radius-card: var(--radius-card);
-  --radius-modal: var(--radius-modal);
-  --shadow-card: var(--shadow-card);
-  --shadow-card-hover: var(--shadow-card-hover);
+  /* Radius/shadow tokens live in :root and are consumed via arbitrary values
+     (rounded-[var(--radius-card)] etc.) — no @theme re-export, since
+     `--x: var(--x)` inside @theme is a circular reference that invalidates
+     the :root token. */
+  /* Alias: exposed as shadow-overlay utility; the raw var is --overlay-shadow. */
   --shadow-overlay: var(--overlay-shadow);
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
   --text-display: 28px;
   --text-display--line-height: 1.1;
   --text-display--letter-spacing: -0.025em;
-  --text-display--font-weight: 650;
+  --text-display--font-weight: 600;
   --text-h1: 20px;
   --text-h1--line-height: 1.2;
   --text-h1--letter-spacing: -0.015em;
@@ -283,6 +283,9 @@ body {
   *::before,
   *::after {
     animation-duration: 0s !important;
+    /* Without this, infinite animations (e.g. Skeleton pulse) still loop at
+       0s duration and can repaint every frame. */
+    animation-iteration-count: 1 !important;
     transition-duration: 0s !important;
   }
 }
@@ -600,11 +603,18 @@ import { describe, expect, it } from 'vitest';
 import { StatusDot } from './status-dot';
 
 describe('<StatusDot>', () => {
-  it('is hidden from AT and styled by tone', () => {
+  it('is hidden from AT and tinted by tone', () => {
     const { container } = render(<StatusDot tone="crit" />);
     const dot = container.firstElementChild!;
     expect(dot).toHaveAttribute('aria-hidden', 'true');
-    expect(dot.className).toContain('bg-destructive');
+    expect(dot.className).toContain('text-destructive');
+  });
+
+  it('paints the dot from currentColor so the halo tracks the tone', () => {
+    const { container } = render(<StatusDot tone="ok" />);
+    const dot = container.firstElementChild!;
+    expect(dot.className).toContain('text-success');
+    expect(dot.className).toContain('bg-current');
   });
 });
 ```
@@ -647,11 +657,13 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
+// Tones set the TEXT color; the dot paints from bg-current so the
+// currentColor halo below stays in sync with the tone.
 const toneClass = {
-  ok: 'bg-success',
-  warn: 'bg-warning',
-  crit: 'bg-destructive',
-  neutral: 'bg-fg-subtle',
+  ok: 'text-success',
+  warn: 'text-warning',
+  crit: 'text-destructive',
+  neutral: 'text-fg-subtle',
 } as const;
 
 export interface StatusDotProps extends React.HTMLAttributes<HTMLSpanElement> {
@@ -664,7 +676,7 @@ export function StatusDot({ tone, className, ...props }: StatusDotProps): React.
     <span
       aria-hidden="true"
       className={cn(
-        'inline-block h-1.5 w-1.5 rounded-full shadow-[0_0_0_3px_color-mix(in_oklab,currentColor_15%,transparent)]',
+        'inline-block h-1.5 w-1.5 rounded-full bg-current shadow-[0_0_0_3px_color-mix(in_oklab,currentColor_15%,transparent)]',
         toneClass[tone],
         className,
       )}
@@ -1141,7 +1153,7 @@ Expected: all green (web count grows to ~209 with the 8 new tests). Paste summar
 
 - [ ] **Step 2: Visual review (controller-driven)**
 
-`pnpm dev`, then in light AND dark: overview page (tokens, cards, shadows), cluster detail (dialog open animation, tabs underline, select), Settings (toast theming). Compare against spec §Phase 1. Capture two screenshots for the PR description if the harness allows. Stop the dev server.
+`pnpm dev`, then in light AND dark: overview page (tokens, cards, shadows), cluster detail (dialog open animation, tabs underline, select), Settings (toast theming). While the dialog/sheet is open, confirm the frosted overlay's `backdrop-blur` opens smoothly (no jank while the open animation runs — blur + animate-in is the expensive combination; if it stutters, drop the blur to `backdrop-blur-[1px]` or remove it and report back). Compare against spec §Phase 1. Capture two screenshots for the PR description if the harness allows. Stop the dev server.
 
 - [ ] **Step 3: Push + PR**
 
