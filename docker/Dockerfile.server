@@ -13,20 +13,22 @@
 # ----- builder -----
 FROM dhi.io/node:22-alpine-dev AS builder
 
-# DHI images default to nonroot. We need root briefly to enable corepack
+# The -dev builder image defaults to `node` (uid 1000) — upstream renamed
+# it from `nonroot` in mid-2026. We need root briefly to enable corepack
 # (which writes pnpm/yarn shims into a system path).
 USER root
-RUN corepack enable
-USER nonroot
+# /app ships root-owned (755) in the base image — hand it to the build user.
+RUN corepack enable && chown node:node /app
+USER node
 
 WORKDIR /app
 
 # Workspace metadata first so the install layer caches until a
 # package.json or the lockfile changes.
-COPY --chown=nonroot:nonroot pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-COPY --chown=nonroot:nonroot apps/server/package.json apps/server/
-COPY --chown=nonroot:nonroot apps/web/package.json apps/web/
-COPY --chown=nonroot:nonroot packages/shared/package.json packages/shared/
+COPY --chown=node:node pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY --chown=node:node apps/server/package.json apps/server/
+COPY --chown=node:node apps/web/package.json apps/web/
+COPY --chown=node:node packages/shared/package.json packages/shared/
 
 # Install the server's full dep graph (incl. devDeps — needed for tsc).
 # --ignore-scripts skips the @lcm/shared `prepare` (which tries to tsc
@@ -36,9 +38,9 @@ COPY --chown=nonroot:nonroot packages/shared/package.json packages/shared/
 RUN pnpm install --frozen-lockfile --ignore-scripts --filter @lcm/server...
 
 # Sources.
-COPY --chown=nonroot:nonroot tsconfig.base.json ./
-COPY --chown=nonroot:nonroot packages/shared packages/shared
-COPY --chown=nonroot:nonroot apps/server apps/server
+COPY --chown=node:node tsconfig.base.json ./
+COPY --chown=node:node packages/shared packages/shared
+COPY --chown=node:node apps/server apps/server
 
 # Compile shared first (its dist/ becomes what node imports), then the
 # Prisma client (native query engine binary lands in
@@ -50,15 +52,15 @@ RUN pnpm --filter @lcm/server build
 # Produce a self-contained, prod-only deploy bundle. `pnpm deploy`
 # flattens workspace symlinks into hard files and strips devDeps, which
 # matters for a distroless runtime that has no pnpm to follow links.
-# Target /home/nonroot/deploy because the nonroot user can't mkdir /deploy.
-RUN pnpm --filter @lcm/server deploy --legacy --prod /home/nonroot/deploy
+# Target /home/node/deploy because the node user can't mkdir /deploy.
+RUN pnpm --filter @lcm/server deploy --legacy --prod /home/node/deploy
 
 # Re-run `prisma generate` inside the deploy bundle. The generated client
 # (node_modules/.pnpm/.../node_modules/.prisma/client/) gets replaced when
 # pnpm deploy re-installs node_modules, so the client created earlier is
 # gone — without this step, the runtime image hits
 # "@prisma/client did not initialize" on the first query.
-WORKDIR /home/nonroot/deploy
+WORKDIR /home/node/deploy
 RUN node node_modules/prisma/build/index.js generate
 WORKDIR /app
 
@@ -68,7 +70,7 @@ FROM dhi.io/node:22-alpine AS runtime
 # DHI distroless: nonroot uid 65532, ENTRYPOINT=["node"], no /bin, no apk.
 WORKDIR /app
 
-COPY --from=builder --chown=65532:65532 /home/nonroot/deploy /app
+COPY --from=builder --chown=65532:65532 /home/node/deploy /app
 
 # Prisma's native query engine links to libssl/libcrypto. The DHI distroless
 # runtime ships only `node` + /usr/bin/env — no system libs — so copy the
