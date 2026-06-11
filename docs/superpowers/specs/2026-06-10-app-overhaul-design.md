@@ -64,8 +64,8 @@ New tests (close the gaps that made the audit's false-positive plausible):
 ### Component kit (`apps/web/src/components/ui/`)
 
 - Rebuild on `radix-ui` primitives, keeping current component APIs where possible: Dialog, DropdownMenu (new), Popover (new), Tooltip, Tabs, Select. `Tooltip.Provider` at app root.
-- Replace hand-rolled toaster with `sonner` (themed via CSS vars).
-- New primitives: `Skeleton` (shimmer), `EmptyState`, `StatusDot`, `Sparkline`, `AnimatedNumber`, `SegmentedControl`, `ProgressRing` (refit of utilization gauge).
+- Toaster already wraps `sonner` 1.x — bump to `sonner@^2` and theme it via CSS vars (wording corrected 2026-06-11; the original line assumed a hand-rolled toaster).
+- New primitives: `Skeleton` (shimmer), `EmptyState`, `StatusDot`, `Sparkline`, `AnimatedNumber`, `SegmentedControl`. (`ProgressRing` deviation, decided in the PR 2 plan: `utilization-gauge` is restyled in place and keeps its name until a second consumer needs a generic ring.)
 
 ### Motion
 
