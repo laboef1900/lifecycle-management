@@ -15,9 +15,9 @@
   --popover: #ffffff;
   --popover-foreground: #1c1917;
   --muted: #f5f5f4;
-  --fg-muted: #78716c;
+  --fg-muted: #57534e;
   --muted-foreground: var(--fg-muted);
-  --fg-subtle: #a8a29e;
+  --fg-subtle: #78716c;
   --sidebar: #fcfcfb;
   --border: #eeedec;
   --border-strong: #e7e5e4;
@@ -27,11 +27,11 @@
   --accent-foreground: #ffffff;
   --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
   --accent-gradient: linear-gradient(135deg, #a16207, #854d0e);
-  --success: #16a34a;
+  --success: #166534;
   --success-foreground: #ffffff;
-  --warning: #d97706;
+  --warning: #b45309;
   --warning-foreground: #ffffff;
-  --destructive: #dc2626;
+  --destructive: #b91c1c;
   --destructive-foreground: #ffffff;
   --radius: 8px;
   --radius-card: 12px;
@@ -104,13 +104,14 @@ html.dark {
   --radius-modal: var(--radius-modal);
   --shadow-card: var(--shadow-card);
   --shadow-card-hover: var(--shadow-card-hover);
+  /* Alias: exposed as shadow-overlay utility; the raw var is --overlay-shadow (legacy name kept for arbitrary-value usages). */
   --shadow-overlay: var(--overlay-shadow);
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
   --text-display: 28px;
   --text-display--line-height: 1.1;
   --text-display--letter-spacing: -0.025em;
-  --text-display--font-weight: 650;
+  --text-display--font-weight: 600;
   --text-h1: 20px;
   --text-h1--line-height: 1.2;
   --text-h1--letter-spacing: -0.015em;
@@ -133,6 +134,7 @@ html.dark {
   --text-numeric: 14px;
   --text-numeric--font-weight: 500;
   --text-code: 12px;
+  /* Consumers must set a gradient background with background-size ~400% for the shimmer to travel (see ui/skeleton.tsx). */
   --animate-shimmer: shimmer 1.8s ease-in-out infinite;
 
   @keyframes shimmer {
