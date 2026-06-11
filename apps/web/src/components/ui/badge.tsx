@@ -49,6 +49,7 @@ export function Badge({
       {...props}
     >
       {dot ? (
+        // color-mix halo: pre-Baseline-2023 browsers render a solid ring instead — accepted for this evergreen-target internal tool.
         <span
           aria-hidden
           className={cn(

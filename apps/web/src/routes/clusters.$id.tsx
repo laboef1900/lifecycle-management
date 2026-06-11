@@ -252,7 +252,7 @@ function ChartSkeleton(): React.JSX.Element {
 
 function ErrorCard({ message }: { message: string }): React.JSX.Element {
   return (
-    <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+    <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive shadow-none">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
       <span>{message}</span>
     </Card>

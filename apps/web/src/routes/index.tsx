@@ -111,14 +111,14 @@ function OverviewPage(): React.JSX.Element {
       {isLoading ? <OverviewSkeleton /> : null}
 
       {isError ? (
-        <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+        <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive shadow-none">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <span>Could not load clusters: {clustersQuery.error?.message}</span>
         </Card>
       ) : null}
 
       {!isLoading && !isError && clusters.length === 0 ? (
-        <Card className="border-dashed p-8 text-center text-sm text-muted-foreground">
+        <Card className="border-dashed p-8 text-center text-sm text-muted-foreground shadow-none">
           No clusters yet. Add one from the Clusters page to see fleet overview.
         </Card>
       ) : null}
