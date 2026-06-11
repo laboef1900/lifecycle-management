@@ -5,6 +5,8 @@ import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
+const apiTarget = `http://localhost:${process.env.LCM_API_PORT ?? '8090'}`;
+
 export default defineConfig({
   plugins: [
     TanStackRouterVite({ target: 'react', autoCodeSplitting: true }),
@@ -20,9 +22,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:8090',
-      '/healthz': 'http://localhost:8090',
-      '/readyz': 'http://localhost:8090',
+      '/api': apiTarget,
+      '/healthz': apiTarget,
+      '/readyz': apiTarget,
     },
   },
 });
