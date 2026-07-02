@@ -90,6 +90,7 @@ function buildLoggerConfig(env: Env): NonNullable<FastifyServerOptions['logger']
   if (env.NODE_ENV === 'development') {
     return {
       level: env.LOG_LEVEL,
+      redact: ['req.headers.authorization', 'req.headers.cookie'],
       transport: {
         target: 'pino-pretty',
         options: {
@@ -101,5 +102,8 @@ function buildLoggerConfig(env: Env): NonNullable<FastifyServerOptions['logger']
     };
   }
 
-  return { level: env.LOG_LEVEL };
+  return {
+    level: env.LOG_LEVEL,
+    redact: ['req.headers.authorization', 'req.headers.cookie'],
+  };
 }

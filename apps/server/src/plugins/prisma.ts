@@ -13,7 +13,7 @@ interface PrismaPluginOptions {
 }
 
 const prismaPlugin: FastifyPluginAsync<PrismaPluginOptions> = async (fastify, opts) => {
-  const client = opts.prisma ?? new PrismaClient();
+  const client = opts.prisma ?? new PrismaClient({ log: ['warn', 'error'] });
 
   if (!opts.prisma) {
     await client.$connect();
