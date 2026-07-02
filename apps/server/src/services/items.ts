@@ -231,58 +231,63 @@ export class ItemsService {
     id: string,
     input: ItemAllocationRowInput,
   ): Promise<ItemResponse> {
-    const item = await this.prisma.item.findFirst({
-      where: { id, tenantId },
-      include: { allocations: { include: { metricType: true } } },
-    });
-    if (!item) {
-      throw new NotFoundError('Item', id);
-    }
-    if (item.kind !== 'application') {
-      throw new UnprocessableError(
-        'NOT_AN_APPLICATION',
-        'Allocations can only be appended to application items',
-      );
-    }
-
-    if (input.effectiveFrom < item.effectiveDate) {
-      throw new UnprocessableError(
-        'EFFECTIVE_BEFORE_START',
-        'effectiveFrom must be on or after the item effectiveDate',
-      );
-    }
-
-    const metricType = (await this.resolveMetricTypes([input.metricTypeKey])).get(
-      input.metricTypeKey,
-    );
-    if (!metricType) {
-      throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${input.metricTypeKey}`);
-    }
-
-    const latestForMetric = item.allocations
-      .filter((a) => a.metricType.key === input.metricTypeKey)
-      .reduce<Date | null>(
-        (max, row) => (max === null || row.effectiveFrom > max ? row.effectiveFrom : max),
-        null,
-      );
-
-    if (latestForMetric !== null && input.effectiveFrom <= latestForMetric) {
-      throw new UnprocessableError(
-        'EFFECTIVE_NOT_MONOTONIC',
-        'effectiveFrom must be strictly after the latest existing allocation row for this metric',
-      );
-    }
-
     try {
-      await this.prisma.itemAllocation.create({
-        data: {
-          itemId: id,
-          tenantId,
-          metricTypeId: metricType.id,
-          effectiveFrom: input.effectiveFrom,
-          amount: new Prisma.Decimal(input.amount),
+      await this.prisma.$transaction(
+        async (tx) => {
+          const item = await tx.item.findFirst({
+            where: { id, tenantId },
+            include: { allocations: { include: { metricType: true } } },
+          });
+          if (!item) {
+            throw new NotFoundError('Item', id);
+          }
+          if (item.kind !== 'application') {
+            throw new UnprocessableError(
+              'NOT_AN_APPLICATION',
+              'Allocations can only be appended to application items',
+            );
+          }
+
+          if (input.effectiveFrom < item.effectiveDate) {
+            throw new UnprocessableError(
+              'EFFECTIVE_BEFORE_START',
+              'effectiveFrom must be on or after the item effectiveDate',
+            );
+          }
+
+          const metricType = (await this.resolveMetricTypes([input.metricTypeKey], tx)).get(
+            input.metricTypeKey,
+          );
+          if (!metricType) {
+            throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${input.metricTypeKey}`);
+          }
+
+          const latestForMetric = item.allocations
+            .filter((a) => a.metricType.key === input.metricTypeKey)
+            .reduce<Date | null>(
+              (max, row) => (max === null || row.effectiveFrom > max ? row.effectiveFrom : max),
+              null,
+            );
+
+          if (latestForMetric !== null && input.effectiveFrom <= latestForMetric) {
+            throw new UnprocessableError(
+              'EFFECTIVE_NOT_MONOTONIC',
+              'effectiveFrom must be strictly after the latest existing allocation row for this metric',
+            );
+          }
+
+          await tx.itemAllocation.create({
+            data: {
+              itemId: id,
+              tenantId,
+              metricTypeId: metricType.id,
+              effectiveFrom: input.effectiveFrom,
+              amount: new Prisma.Decimal(input.amount),
+            },
+          });
         },
-      });
+        { isolationLevel: 'Serializable' },
+      );
     } catch (err) {
       this.translatePrismaError(err);
       throw err;
@@ -351,9 +356,10 @@ export class ItemsService {
 
   private async resolveMetricTypes(
     keys: string[],
+    tx: Prisma.TransactionClient = this.prisma,
   ): Promise<Map<string, { id: string; key: string; displayName: string; unit: string }>> {
     const unique = Array.from(new Set(keys));
-    const rows = await this.prisma.metricType.findMany({
+    const rows = await tx.metricType.findMany({
       where: { key: { in: unique } },
     });
     const map = new Map(rows.map((r) => [r.key, r]));
@@ -394,6 +400,9 @@ export class ItemsService {
   }
 
   private translatePrismaError(err: unknown): void {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+      throw new ConflictError('WRITE_CONFLICT', 'Concurrent write detected; retry the request');
+    }
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === PRISMA_UNIQUE_CONSTRAINT
