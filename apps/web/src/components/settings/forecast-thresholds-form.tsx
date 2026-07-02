@@ -73,6 +73,10 @@ export function ForecastThresholdsForm(): React.JSX.Element {
       setValidationError('Warn must be less than crit.');
       return;
     }
+    if (warnPct < 1 || warnPct > 99 || critPct < 1 || critPct > 99) {
+      setValidationError('Thresholds must be between 1% and 99%.');
+      return;
+    }
     if (!Number.isInteger(leadWeeks) || leadWeeks < 0 || leadWeeks > 104) {
       setValidationError('Procurement lead time must be a whole number from 0 to 104 weeks.');
       return;

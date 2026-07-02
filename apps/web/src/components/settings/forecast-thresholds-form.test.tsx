@@ -82,6 +82,26 @@ describe('<ForecastThresholdsForm>', () => {
     expect(screen.getByText(/warn.*less than.*crit/i)).toBeInTheDocument();
   });
 
+  it('rejects warn below 1% with the range validation message', async () => {
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() => expect(screen.getByLabelText(/warn %/i)).toHaveValue(70));
+    await userEvent.clear(screen.getByLabelText(/warn %/i));
+    await userEvent.type(screen.getByLabelText(/warn %/i), '0');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    expect(screen.getByText(/thresholds must be between 1% and 99%/i)).toBeInTheDocument();
+    expect(api.settings.tenant.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects crit above 99% with the range validation message', async () => {
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() => expect(screen.getByLabelText(/crit %/i)).toHaveValue(90));
+    await userEvent.clear(screen.getByLabelText(/crit %/i));
+    await userEvent.type(screen.getByLabelText(/crit %/i), '100');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    expect(screen.getByText(/thresholds must be between 1% and 99%/i)).toBeInTheDocument();
+    expect(api.settings.tenant.update).not.toHaveBeenCalled();
+  });
+
   it('loads and displays the procurement lead time', async () => {
     renderWithClient(<ForecastThresholdsForm />);
     await waitFor(() => {

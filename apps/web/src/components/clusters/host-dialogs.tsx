@@ -166,6 +166,9 @@ export function CreateHostDialog({
         else if (root === 'capacities') fieldErrors.capacityAmount = issue.message;
       }
       setErrors(fieldErrors);
+      if (Object.keys(fieldErrors).length === 0) {
+        toast.error(parsed.error.issues[0]?.message ?? 'Invalid input');
+      }
       return;
     }
     mutation.mutate(payload);
@@ -203,6 +206,7 @@ export function CreateHostDialog({
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
             placeholder="Optional"
+            maxLength={2000}
           />
           <Field
             label="Commissioned at"
@@ -283,18 +287,21 @@ function AssetFieldset({ values, onChange }: AssetFieldsetProps): React.JSX.Elem
           value={values.serialNumber}
           onChange={(e) => onChange({ serialNumber: e.target.value })}
           placeholder="Optional"
+          maxLength={120}
         />
         <Field
           label="Vendor"
           value={values.vendor}
           onChange={(e) => onChange({ vendor: e.target.value })}
           placeholder="e.g. HPE"
+          maxLength={120}
         />
         <Field
           label="Model"
           value={values.model}
           onChange={(e) => onChange({ model: e.target.value })}
           placeholder="e.g. ProLiant DL380"
+          maxLength={120}
         />
         <Field
           label="Purchased at"
@@ -378,7 +385,11 @@ export function EditHostDialog({
     const parsed = hostUpdateInputSchema.safeParse(payload);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
-      if (issue?.path[0] === 'name') setErrors({ name: issue.message });
+      if (issue?.path[0] === 'name') {
+        setErrors({ name: issue.message });
+      } else {
+        toast.error(issue?.message ?? 'Invalid input');
+      }
       return;
     }
     mutation.mutate(payload);
@@ -402,6 +413,7 @@ export function EditHostDialog({
             label="Description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+            maxLength={2000}
           />
           <AssetFieldset
             values={asset}

@@ -72,6 +72,34 @@ describe('<ThresholdOverridesForm>', () => {
     });
   });
 
+  it('rejects warn below 1% with the range validation message', async () => {
+    const updateSpy = vi.spyOn(api.settings.cluster, 'update').mockResolvedValue({
+      warnThreshold: 0,
+      critThreshold: null,
+      effective: { warn: 0, crit: 0.9, source: 'cluster' },
+    });
+    renderWithClient(<ThresholdOverridesForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/warn %/i)).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText(/warn %/i), '0');
+    await userEvent.click(screen.getByRole('button', { name: /save override/i }));
+    expect(screen.getByText(/thresholds must be between 1% and 99%/i)).toBeInTheDocument();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects crit above 99% with the range validation message', async () => {
+    const updateSpy = vi.spyOn(api.settings.cluster, 'update').mockResolvedValue({
+      warnThreshold: null,
+      critThreshold: 1,
+      effective: { warn: 0.7, crit: 1, source: 'cluster' },
+    });
+    renderWithClient(<ThresholdOverridesForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/crit %/i)).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText(/crit %/i), '100');
+    await userEvent.click(screen.getByRole('button', { name: /save override/i }));
+    expect(screen.getByText(/thresholds must be between 1% and 99%/i)).toBeInTheDocument();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
   it('calls reset endpoint on "Reset to inherited"', async () => {
     vi.spyOn(api.settings.cluster, 'get').mockResolvedValue({
       warnThreshold: 0.6,

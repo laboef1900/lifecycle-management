@@ -100,6 +100,22 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
   };
 
   const handleConfirm = (): void => {
+    const invalidMetric = metrics.find((m) => {
+      const edit = metricEdits[m.metricTypeKey];
+      return (
+        (edit?.consumption !== null &&
+          edit?.consumption !== undefined &&
+          parseNumber(edit.consumption) === null) ||
+        (edit?.capacity !== null &&
+          edit?.capacity !== undefined &&
+          parseNumber(edit.capacity) === null)
+      );
+    });
+    if (invalidMetric) {
+      toast.error(`Invalid number for ${invalidMetric.metricTypeKey}`);
+      setConfirmOpen(false);
+      return;
+    }
     const input: ClusterUpdateInputWire = {};
     if (dateChanged) input.baselineDate = date;
     if (baselinesChanged) {

@@ -81,6 +81,12 @@ export function ThresholdOverridesForm({
       setValidationError('Warn must be less than crit.');
       return;
     }
+    for (const pct of [warnPct, critPct]) {
+      if (typeof pct === 'number' && (pct < 1 || pct > 99)) {
+        setValidationError('Thresholds must be between 1% and 99%.');
+        return;
+      }
+    }
     saveMutation.mutate({
       warnThreshold: typeof warnPct === 'number' ? warnPct / 100 : null,
       critThreshold: typeof critPct === 'number' ? critPct / 100 : null,
@@ -98,7 +104,7 @@ export function ThresholdOverridesForm({
         </div>
         <Badge variant={isCurrentlyOverridden ? 'accent' : 'default'}>{sourceLabel}</Badge>
       </header>
-      <form onSubmit={handleSubmit} className="space-y-3">
+      <form onSubmit={handleSubmit} className="space-y-3" noValidate>
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">

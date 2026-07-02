@@ -2,11 +2,16 @@ import type { ClusterResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
 
 import { BaselineEditForm } from './baseline-edit-form';
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
 
 const CLUSTER_ID = 'clu_test_001';
 
@@ -117,5 +122,24 @@ describe('<BaselineEditForm>', () => {
     await waitFor(() => {
       expect(updateSpy).toHaveBeenCalledWith(CLUSTER_ID, { baselineDate: '2026-06-01' });
     });
+  });
+
+  it('shows a toast and does not submit when a metric field holds an invalid number', async () => {
+    const updateSpy = vi.spyOn(api.clusters, 'update').mockResolvedValue(baseCluster);
+    renderWithClient(<BaselineEditForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/baseline date/i)).toHaveValue('2026-05-01'));
+    // Make the form dirty via the date field, then blank out a metric field so
+    // its edit is present but unparseable — this is the "invalid edit next to
+    // a legitimate one" case the confirm-time guard exists to catch.
+    const dateInput = screen.getByLabelText(/baseline date/i);
+    await userEvent.clear(dateInput);
+    await userEvent.type(dateInput, '2026-06-01');
+    await userEvent.clear(screen.getByLabelText(/memory.*consumption/i));
+    await userEvent.click(screen.getByRole('button', { name: /save baseline/i }));
+    await userEvent.click(screen.getByRole('button', { name: /rewrite baseline/i }));
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Invalid number for memory_gb');
+    });
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 });
