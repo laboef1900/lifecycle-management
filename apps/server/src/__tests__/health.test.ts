@@ -61,7 +61,11 @@ describe('health routes', () => {
     const server = await buildServer({ env: makeTestEnv(), prisma: makeFakePrisma() });
     created.push(server);
 
-    const response = await server.inject({ method: 'GET', url: '/healthz' });
+    const response = await server.inject({
+      method: 'GET',
+      url: '/healthz',
+      headers: { origin: 'http://example.test' },
+    });
 
     expect(response.statusCode).toBe(200);
     expect(response.headers['x-content-type-options']).toBe('nosniff');
