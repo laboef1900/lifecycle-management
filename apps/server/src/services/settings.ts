@@ -66,8 +66,9 @@ export class SettingsService {
 
   async getCluster(tenantId: string, clusterId: string): Promise<ClusterSettingsResponse> {
     await this.assertClusterExists(tenantId, clusterId);
+    // ClusterSettings has no tenantId column; scope via the cluster relation.
     const row = await this.prisma.clusterSettings.findUnique({
-      where: { clusterId },
+      where: { clusterId, cluster: { tenantId } },
     });
     const cluster = row
       ? {
@@ -99,6 +100,7 @@ export class SettingsService {
       );
     }
     const row = await this.prisma.clusterSettings.upsert({
+      // upsert keyed on clusterId alone: safe because assertClusterExists() above pins the tenant
       where: { clusterId },
       create: {
         clusterId,
@@ -123,17 +125,20 @@ export class SettingsService {
 
   async resetCluster(tenantId: string, clusterId: string): Promise<ClusterSettingsResponse> {
     await this.assertClusterExists(tenantId, clusterId);
-    await this.prisma.clusterSettings.delete({ where: { clusterId } }).catch((err: unknown) => {
-      if (
-        err &&
-        typeof err === 'object' &&
-        'code' in err &&
-        (err as { code?: string }).code === 'P2025'
-      ) {
-        return;
-      }
-      throw err;
-    });
+    // ClusterSettings has no tenantId column; scope via the cluster relation.
+    await this.prisma.clusterSettings
+      .delete({ where: { clusterId, cluster: { tenantId } } })
+      .catch((err: unknown) => {
+        if (
+          err &&
+          typeof err === 'object' &&
+          'code' in err &&
+          (err as { code?: string }).code === 'P2025'
+        ) {
+          return;
+        }
+        throw err;
+      });
     const tenant = await this.getTenant(tenantId);
     return {
       warnThreshold: null,
