@@ -10,7 +10,7 @@ async function main(): Promise<void> {
   const server = await buildServer({ env });
 
   let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
+  const shutdown = async (signal: string, exitCode = 0): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     server.log.info({ signal }, 'Shutting down');
@@ -18,16 +18,19 @@ async function main(): Promise<void> {
       server.log.error('Shutdown timed out; forcing exit');
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
+    // unref: the timer must not keep the process alive on its own. Hangs we
+    // guard against (sockets, DB disconnect) hold refed handles, so the loop
+    // stays alive and the timer still fires.
     timer.unref();
     await server.close();
-    process.exit(0);
+    process.exit(exitCode);
   };
 
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('unhandledRejection', (reason) => {
     server.log.error({ err: reason }, 'Unhandled promise rejection');
-    void shutdown('unhandledRejection');
+    void shutdown('unhandledRejection', 1);
   });
   process.on('uncaughtException', (err) => {
     server.log.error({ err }, 'Uncaught exception');
