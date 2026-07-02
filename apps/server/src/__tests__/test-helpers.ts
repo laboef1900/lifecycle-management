@@ -10,6 +10,8 @@ export function makeTestEnv(overrides: Partial<Env> = {}): Env {
     HOST: '127.0.0.1',
     LOG_LEVEL: 'silent',
     NODE_ENV: 'test',
+    TRUST_PROXY: 'loopback,uniquelocal',
+    RATE_LIMIT_MAX: 300,
     ...overrides,
   };
 }

@@ -56,4 +56,15 @@ describe('health routes', () => {
       },
     });
   });
+
+  it('/healthz carries the helmet nosniff header and no CORS header when CORS_ORIGIN is unset', async () => {
+    const server = await buildServer({ env: makeTestEnv(), prisma: makeFakePrisma() });
+    created.push(server);
+
+    const response = await server.inject({ method: 'GET', url: '/healthz' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['access-control-allow-origin']).toBeUndefined();
+  });
 });

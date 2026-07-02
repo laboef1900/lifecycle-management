@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
 import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
+import underPressure from '@fastify/under-pressure';
 import type { PrismaClient } from '@prisma/client';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 
@@ -30,13 +33,39 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     logger: buildLoggerConfig(env),
     genReqId: () => randomUUID(),
     disableRequestLogging: env.NODE_ENV === 'test',
-    trustProxy: true,
+    trustProxy: env.TRUST_PROXY,
+    bodyLimit: 1_048_576,
   });
 
+  await server.register(helmet, {
+    // The SPA's CSP is owned by nginx (docker/nginx.conf); this is a JSON API.
+    contentSecurityPolicy: false,
+    // Internal deployments serve plain HTTP; an HSTS header would be misleading.
+    strictTransportSecurity: false,
+  });
+
+  // Same-origin proxies (Vite dev, nginx prod) mean CORS is normally unnecessary;
+  // it stays off unless an allowlist is configured.
+  const corsOrigins = env.CORS_ORIGIN?.split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
   await server.register(cors, {
-    origin: true, // tightened to an env-driven allowlist in Task C4
+    origin: corsOrigins && corsOrigins.length > 0 ? corsOrigins : false,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   });
+
+  if (env.NODE_ENV !== 'test') {
+    await server.register(rateLimit, {
+      max: env.RATE_LIMIT_MAX,
+      timeWindow: '1 minute',
+    });
+    await server.register(underPressure, {
+      maxEventLoopDelay: 1000,
+      message: 'Service under pressure',
+      retryAfter: 10,
+    });
+  }
+
   await server.register(sensible);
   await server.register(errorHandlerPlugin);
   await server.register(tenantContextPlugin);

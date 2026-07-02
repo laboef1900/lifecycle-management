@@ -49,6 +49,8 @@ services:
       PORT: 8080
       LOG_LEVEL: ${LOG_LEVEL:-info}
       SEED_ON_BOOT: ${SEED_ON_BOOT:-false}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
     depends_on:
       db:
         condition: service_healthy
