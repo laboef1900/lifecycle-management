@@ -58,7 +58,7 @@ export function ItemsTab({ clusterId }: ItemsTabProps): React.JSX.Element {
 
   const query = useQuery({
     queryKey: ['items', clusterId],
-    queryFn: () => api.items.listByCluster(clusterId),
+    queryFn: () => api.items.listByCluster(clusterId, { limit: 500 }),
     select: (page) => page.items,
   });
 

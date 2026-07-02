@@ -85,9 +85,9 @@ export function aggregateFleet(
 
   let worstCluster: FleetSummary['worstCluster'] = null;
   for (const series of perClusterSeries) {
-    const current_month = series.months[0];
-    if (!current_month) continue;
-    const u = current_month.capacity > 0 ? current_month.consumption / current_month.capacity : 0;
+    const currentMonth = series.months[0];
+    if (!currentMonth) continue;
+    const u = currentMonth.capacity > 0 ? currentMonth.consumption / currentMonth.capacity : 0;
     if (!worstCluster || u > worstCluster.utilization) {
       worstCluster = { id: series.clusterId, name: series.clusterName, utilization: u };
     }

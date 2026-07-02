@@ -55,7 +55,7 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
 
   const hostsQuery = useQuery({
     queryKey: ['hosts', clusterId],
-    queryFn: () => api.hosts.listByCluster(clusterId),
+    queryFn: () => api.hosts.listByCluster(clusterId, { limit: 500 }),
     select: (page) => page.items,
   });
 
