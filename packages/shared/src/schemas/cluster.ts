@@ -34,7 +34,10 @@ export const clusterUpdateInputSchema = z
 export const clusterIdParamsSchema = z.object({ id: cuid });
 
 export const clustersListQuerySchema = z.object({
-  includeArchived: z.coerce.boolean().optional(),
+  includeArchived: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
 });
 
 export type ClustersListQuery = z.infer<typeof clustersListQuerySchema>;
