@@ -1,12 +1,13 @@
 import type { MetricStateResponse } from '@lcm/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import { ConfirmDialog } from '@/components/form/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { api, type ClusterUpdateInputWire } from '@/lib/api-client';
+import { ApiError, api, type ClusterUpdateInputWire } from '@/lib/api-client';
 
 interface BaselineEditFormProps {
   clusterId: string;
@@ -71,10 +72,13 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
     onSuccess: (data) => {
       queryClient.setQueryData(['cluster', clusterId], data);
       void queryClient.invalidateQueries({ queryKey: ['forecast', clusterId] });
+      void queryClient.invalidateQueries({ queryKey: ['clusters'] });
       setDateEdit(null);
       setMetricEdits({});
       setConfirmOpen(false);
     },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'Could not save baseline'),
   });
 
   const dateChanged = dateEdit !== null && dateEdit !== serverDate;

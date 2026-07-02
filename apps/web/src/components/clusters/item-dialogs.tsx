@@ -48,6 +48,8 @@ function useItemMutations(clusterId: string): { invalidate: () => void } {
       void queryClient.invalidateQueries({ queryKey: ['items', clusterId] });
       void queryClient.invalidateQueries({ queryKey: ['forecast', clusterId] });
       void queryClient.invalidateQueries({ queryKey: ['categories'] });
+      void queryClient.invalidateQueries({ queryKey: ['cluster', clusterId] });
+      void queryClient.invalidateQueries({ queryKey: ['clusters'] });
     },
   };
 }

@@ -57,6 +57,8 @@ function useHostMutations(clusterId: string): {
     invalidate: () => {
       void queryClient.invalidateQueries({ queryKey: ['hosts', clusterId] });
       void queryClient.invalidateQueries({ queryKey: ['forecast', clusterId] });
+      void queryClient.invalidateQueries({ queryKey: ['cluster', clusterId] });
+      void queryClient.invalidateQueries({ queryKey: ['clusters'] });
     },
   };
 }

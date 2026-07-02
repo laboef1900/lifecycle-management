@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 
 interface ThresholdOverridesFormProps {
   clusterId: string;
@@ -44,18 +45,24 @@ export function ThresholdOverridesForm({
       api.settings.cluster.update(clusterId, input),
     onSuccess: (data) => {
       queryClient.setQueryData(['cluster-settings', clusterId], data);
+      void queryClient.invalidateQueries({ queryKey: ['forecast', clusterId] });
       setWarnEdit(null);
       setCritEdit(null);
     },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'Could not save thresholds'),
   });
 
   const resetMutation = useMutation({
     mutationFn: () => api.settings.cluster.reset(clusterId),
     onSuccess: (data) => {
       queryClient.setQueryData(['cluster-settings', clusterId], data);
+      void queryClient.invalidateQueries({ queryKey: ['forecast', clusterId] });
       setWarnEdit(null);
       setCritEdit(null);
     },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'Could not reset thresholds'),
   });
 
   const isCurrentlyOverridden =

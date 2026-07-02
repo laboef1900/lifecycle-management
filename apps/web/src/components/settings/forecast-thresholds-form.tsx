@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 
 type NumInput = number | '';
 
@@ -43,12 +44,16 @@ export function ForecastThresholdsForm(): React.JSX.Element {
     }) => api.settings.tenant.update(input),
     onSuccess: (data) => {
       queryClient.setQueryData(['tenant-settings'], data);
+      void queryClient.invalidateQueries({ queryKey: ['forecast'] });
+      void queryClient.invalidateQueries({ queryKey: ['cluster-settings'] });
       // After save succeeds the server values now match; clear local edits so
       // the dirty check resets.
       setWarnEdit(null);
       setCritEdit(null);
       setLeadEdit(null);
     },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'Could not save settings'),
   });
 
   const dirty =
