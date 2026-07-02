@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { cuid, dateOnly, positiveAmount } from './common.js';
+import { paginationQuerySchema } from './pagination.js';
 
 const metricBaselineInputSchema = z.strictObject({
   metricTypeKey: z.string().min(1),
@@ -33,7 +34,7 @@ export const clusterUpdateInputSchema = z
 
 export const clusterIdParamsSchema = z.object({ id: cuid });
 
-export const clustersListQuerySchema = z.object({
+export const clustersListQuerySchema = paginationQuerySchema.extend({
   includeArchived: z
     .enum(['true', 'false'])
     .optional()

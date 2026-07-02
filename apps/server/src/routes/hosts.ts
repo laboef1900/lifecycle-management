@@ -7,6 +7,7 @@ import {
   hostIdParamsSchema,
   hostTransitionInputSchema,
   hostUpdateInputSchema,
+  paginationQuerySchema,
 } from '@lcm/shared';
 
 import { HostLifecycleService } from '../services/host-lifecycle.js';
@@ -18,7 +19,8 @@ export const hostRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get('/clusters/:clusterId/hosts', async (request) => {
     const { clusterId } = clusterIdHostsParamsSchema.parse(request.params);
-    return service.listByCluster(request.tenantId, clusterId);
+    const { limit, offset } = paginationQuerySchema.parse(request.query);
+    return service.listByCluster(request.tenantId, clusterId, { limit, offset });
   });
 
   fastify.post('/clusters/:clusterId/hosts', async (request, reply) => {

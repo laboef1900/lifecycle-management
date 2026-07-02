@@ -4,6 +4,7 @@ import type {
   HostCreateInput,
   HostResponse,
   HostUpdateInput,
+  Paginated,
 } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
@@ -27,14 +28,29 @@ type HostRow = Prisma.HostGetPayload<{ include: typeof hostInclude }>;
 export class HostsService {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async listByCluster(tenantId: string, clusterId: string): Promise<HostResponse[]> {
+  async listByCluster(
+    tenantId: string,
+    clusterId: string,
+    options: { limit: number; offset: number },
+  ): Promise<Paginated<HostResponse>> {
     await this.assertClusterExists(tenantId, clusterId);
-    const rows = await this.prisma.host.findMany({
-      where: { tenantId, clusterId },
-      include: hostInclude,
-      orderBy: { name: 'asc' },
-    });
-    return rows.map((row) => this.toResponse(row));
+    const where = { tenantId, clusterId };
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.host.count({ where }),
+      this.prisma.host.findMany({
+        where,
+        include: hostInclude,
+        orderBy: { name: 'asc' },
+        take: options.limit,
+        skip: options.offset,
+      }),
+    ]);
+    return {
+      items: rows.map((row) => this.toResponse(row)),
+      total,
+      limit: options.limit,
+      offset: options.offset,
+    };
   }
 
   async getById(tenantId: string, id: string): Promise<HostResponse> {

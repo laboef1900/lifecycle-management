@@ -4,6 +4,7 @@ import type {
   ItemCreateInput,
   ItemResponse,
   ItemUpdateInput,
+  Paginated,
 } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
@@ -31,14 +32,29 @@ export class ItemsService {
     this.categories = new CategoriesService(this.prisma);
   }
 
-  async listByCluster(tenantId: string, clusterId: string): Promise<ItemResponse[]> {
+  async listByCluster(
+    tenantId: string,
+    clusterId: string,
+    options: { limit: number; offset: number },
+  ): Promise<Paginated<ItemResponse>> {
     await this.assertClusterExists(tenantId, clusterId);
-    const rows = await this.prisma.item.findMany({
-      where: { tenantId, clusterId },
-      include: itemInclude,
-      orderBy: [{ effectiveDate: 'asc' }, { createdAt: 'asc' }],
-    });
-    return rows.map((row) => this.toResponse(row));
+    const where = { tenantId, clusterId };
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.item.count({ where }),
+      this.prisma.item.findMany({
+        where,
+        include: itemInclude,
+        orderBy: [{ effectiveDate: 'asc' }, { createdAt: 'asc' }],
+        take: options.limit,
+        skip: options.offset,
+      }),
+    ]);
+    return {
+      items: rows.map((row) => this.toResponse(row)),
+      total,
+      limit: options.limit,
+      offset: options.offset,
+    };
   }
 
   async getById(tenantId: string, id: string): Promise<ItemResponse> {

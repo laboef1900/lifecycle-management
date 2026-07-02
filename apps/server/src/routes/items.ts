@@ -4,6 +4,7 @@ import {
   itemCreateInputSchema,
   itemIdParamsSchema,
   itemUpdateInputSchema,
+  paginationQuerySchema,
 } from '@lcm/shared';
 import type { FastifyPluginAsync } from 'fastify';
 
@@ -14,7 +15,8 @@ export const itemsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get('/clusters/:clusterId/items', async (request) => {
     const { clusterId } = clusterIdItemsParamsSchema.parse(request.params);
-    return service.listByCluster(request.tenantId, clusterId);
+    const { limit, offset } = paginationQuerySchema.parse(request.query);
+    return service.listByCluster(request.tenantId, clusterId, { limit, offset });
   });
 
   fastify.post('/clusters/:clusterId/items', async (request, reply) => {
