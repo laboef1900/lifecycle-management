@@ -76,7 +76,7 @@ describe('<EditItemDialog> validation', () => {
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByText(/at least 1 character/i)).toBeInTheDocument();
+    expect(await screen.findByText(/too small/i)).toBeInTheDocument();
     expect(api.items.update).not.toHaveBeenCalled();
   });
 });
