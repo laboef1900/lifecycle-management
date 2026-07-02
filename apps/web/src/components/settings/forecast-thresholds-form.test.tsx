@@ -1,17 +1,24 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 
 import { ForecastThresholdsForm } from './forecast-thresholds-form';
 
-function renderWithClient(ui: React.ReactNode) {
-  const client = new QueryClient({
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+
+function renderWithClient(
+  ui: React.ReactNode,
+  client: QueryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  }),
+) {
+  return { ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>), client };
 }
 
 describe('<ForecastThresholdsForm>', () => {
@@ -115,5 +122,36 @@ describe('<ForecastThresholdsForm>', () => {
     await userEvent.click(screen.getByRole('button', { name: /save/i }));
     expect(screen.getByText(/whole number/i)).toBeInTheDocument();
     expect(api.settings.tenant.update).not.toHaveBeenCalled();
+  });
+
+  it('invalidates forecast and cluster-settings queries after a successful save', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    client.setQueryData(['forecast', 'c1', 'memory_gb'], { points: [] });
+    client.setQueryData(['cluster-settings', 'c1'], { warnThreshold: null });
+    renderWithClient(<ForecastThresholdsForm />, client);
+    await waitFor(() => expect(screen.getByLabelText(/warn %/i)).toHaveValue(70));
+    await userEvent.clear(screen.getByLabelText(/warn %/i));
+    await userEvent.type(screen.getByLabelText(/warn %/i), '65');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => {
+      expect(client.getQueryState(['forecast', 'c1', 'memory_gb'])?.isInvalidated).toBe(true);
+      expect(client.getQueryState(['cluster-settings', 'c1'])?.isInvalidated).toBe(true);
+    });
+  });
+
+  it('shows a toast with the API error message when saving fails', async () => {
+    vi.spyOn(api.settings.tenant, 'update').mockRejectedValue(
+      new ApiError(500, { error: { code: 'INTERNAL', message: 'Something broke' } }),
+    );
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() => expect(screen.getByLabelText(/warn %/i)).toHaveValue(70));
+    await userEvent.clear(screen.getByLabelText(/warn %/i));
+    await userEvent.type(screen.getByLabelText(/warn %/i), '65');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Something broke');
+    });
   });
 });

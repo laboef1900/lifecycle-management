@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { ApiError, api } from '@/lib/api-client';
+import { api, describeApiError } from '@/lib/api-client';
 
 type NumInput = number | '';
 
@@ -52,8 +52,7 @@ export function ForecastThresholdsForm(): React.JSX.Element {
       setCritEdit(null);
       setLeadEdit(null);
     },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'Could not save settings'),
+    onError: (err) => toast.error(describeApiError(err, 'Could not save settings')),
   });
 
   const dirty =

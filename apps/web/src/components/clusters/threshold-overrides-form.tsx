@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { ApiError, api } from '@/lib/api-client';
+import { api, describeApiError } from '@/lib/api-client';
 
 interface ThresholdOverridesFormProps {
   clusterId: string;
@@ -49,8 +49,7 @@ export function ThresholdOverridesForm({
       setWarnEdit(null);
       setCritEdit(null);
     },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'Could not save thresholds'),
+    onError: (err) => toast.error(describeApiError(err, 'Could not save thresholds')),
   });
 
   const resetMutation = useMutation({
@@ -61,8 +60,7 @@ export function ThresholdOverridesForm({
       setWarnEdit(null);
       setCritEdit(null);
     },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'Could not reset thresholds'),
+    onError: (err) => toast.error(describeApiError(err, 'Could not reset thresholds')),
   });
 
   const isCurrentlyOverridden =

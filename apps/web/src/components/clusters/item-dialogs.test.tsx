@@ -1,12 +1,12 @@
 import type { ItemResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
 
-import { EditItemDialog } from './item-dialogs';
+import { CreateItemDialog, EditItemDialog } from './item-dialogs';
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -78,5 +78,39 @@ describe('<EditItemDialog> validation', () => {
 
     expect(await screen.findByText(/too small/i)).toBeInTheDocument();
     expect(api.items.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('<CreateItemDialog> invalidation', () => {
+  beforeEach(() => {
+    vi.spyOn(api.settings.categories, 'list').mockResolvedValue([{ id: 'c1', name: 'OpenShift' }]);
+    vi.spyOn(api.items, 'create').mockResolvedValue(makeApplication());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('invalidates the cluster and clusters queries after a successful create', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    client.setQueryData(['cluster', 'cl-1'], {});
+    client.setQueryData(['clusters'], []);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={client}>
+        <CreateItemDialog open onOpenChange={vi.fn()} clusterId="cl-1" />
+      </QueryClientProvider>,
+    );
+
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'openshift-lab');
+    await user.type(screen.getByLabelText('Category'), 'OpenShift');
+    await user.click(screen.getByRole('button', { name: /add application/i }));
+
+    await waitFor(() => {
+      expect(client.getQueryState(['cluster', 'cl-1'])?.isInvalidated).toBe(true);
+      expect(client.getQueryState(['clusters'])?.isInvalidated).toBe(true);
+    });
   });
 });

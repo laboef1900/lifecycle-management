@@ -22,6 +22,7 @@ import {
 import {
   ApiError,
   api,
+  describeApiError,
   type ItemAllocationAppendInputWire,
   type ItemCreateInputWire,
   type ItemUpdateInputWire,
@@ -52,10 +53,6 @@ function useItemMutations(clusterId: string): { invalidate: () => void } {
       void queryClient.invalidateQueries({ queryKey: ['clusters'] });
     },
   };
-}
-
-function describeApiError(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
 }
 
 function parseDelta(raw: string): number | null {

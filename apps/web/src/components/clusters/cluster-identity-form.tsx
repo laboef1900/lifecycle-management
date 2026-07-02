@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { ApiError, api, type ClusterUpdateInputWire } from '@/lib/api-client';
+import { api, describeApiError, type ClusterUpdateInputWire } from '@/lib/api-client';
 
 interface ClusterIdentityFormProps {
   clusterId: string;
@@ -35,7 +35,7 @@ export function ClusterIdentityForm({ clusterId }: ClusterIdentityFormProps): Re
       setNameEdit(null);
       setDescriptionEdit(null);
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'Could not save cluster'),
+    onError: (err) => toast.error(describeApiError(err, 'Could not save cluster')),
   });
 
   const dirty =

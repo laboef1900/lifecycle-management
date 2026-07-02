@@ -82,6 +82,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** Human-readable message for a failed API call: the server's message when available. */
+export function describeApiError(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
 function isApiErrorBody(value: unknown): value is ApiErrorBody {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as { error?: { code?: unknown; message?: unknown } };

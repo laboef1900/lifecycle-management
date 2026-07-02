@@ -2,11 +2,16 @@ import type { ClusterResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 
 import { ClusterIdentityForm } from './cluster-identity-form';
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
 
 const CLUSTER_ID = 'clu_test_001';
 
@@ -32,11 +37,13 @@ const baseCluster: ClusterResponse = {
   ],
 };
 
-function renderWithClient(ui: React.ReactNode) {
-  const client = new QueryClient({
+function renderWithClient(
+  ui: React.ReactNode,
+  client: QueryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  }),
+) {
+  return { ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>), client };
 }
 
 describe('<ClusterIdentityForm>', () => {
@@ -102,5 +109,35 @@ describe('<ClusterIdentityForm>', () => {
     await userEvent.clear(screen.getByLabelText(/name/i));
     await userEvent.click(screen.getByRole('button', { name: /save/i }));
     expect(screen.getByText(/name is required/i)).toBeInTheDocument();
+  });
+
+  it('invalidates the clusters list query after a successful rename', async () => {
+    vi.spyOn(api.clusters, 'update').mockResolvedValue({ ...baseCluster, name: 'CL-Renamed' });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    client.setQueryData(['clusters'], [baseCluster]);
+    renderWithClient(<ClusterIdentityForm clusterId={CLUSTER_ID} />, client);
+    await waitFor(() => expect(screen.getByLabelText(/name/i)).toHaveValue('CL-Original'));
+    await userEvent.clear(screen.getByLabelText(/name/i));
+    await userEvent.type(screen.getByLabelText(/name/i), 'CL-Renamed');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => {
+      expect(client.getQueryState(['clusters'])?.isInvalidated).toBe(true);
+    });
+  });
+
+  it('shows a toast with the API error message when the update fails', async () => {
+    vi.spyOn(api.clusters, 'update').mockRejectedValue(
+      new ApiError(409, { error: { code: 'CONFLICT', message: 'Name already in use' } }),
+    );
+    renderWithClient(<ClusterIdentityForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/name/i)).toHaveValue('CL-Original'));
+    await userEvent.clear(screen.getByLabelText(/name/i));
+    await userEvent.type(screen.getByLabelText(/name/i), 'CL-Renamed');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Name already in use');
+    });
   });
 });

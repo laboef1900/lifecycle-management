@@ -7,7 +7,7 @@ import { ConfirmDialog } from '@/components/form/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { ApiError, api, type ClusterUpdateInputWire } from '@/lib/api-client';
+import { api, describeApiError, type ClusterUpdateInputWire } from '@/lib/api-client';
 
 interface BaselineEditFormProps {
   clusterId: string;
@@ -77,8 +77,7 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
       setMetricEdits({});
       setConfirmOpen(false);
     },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'Could not save baseline'),
+    onError: (err) => toast.error(describeApiError(err, 'Could not save baseline')),
   });
 
   const dateChanged = dateEdit !== null && dateEdit !== serverDate;

@@ -31,6 +31,7 @@ import {
 import {
   ApiError,
   api,
+  describeApiError,
   type CapacityAppendInputWire,
   type HostCreateInputWire,
   type HostReplacementCreateInputWire,
@@ -61,10 +62,6 @@ function useHostMutations(clusterId: string): {
       void queryClient.invalidateQueries({ queryKey: ['clusters'] });
     },
   };
-}
-
-function describeApiError(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
 }
 
 // ---------- Create host ----------
