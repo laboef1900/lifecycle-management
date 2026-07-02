@@ -60,11 +60,11 @@ const makeCluster = (
   ],
 });
 
-function renderTable(clusters: ClusterResponse[]): void {
+function renderTable(clusters: ClusterResponse[], total?: number): void {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
-      <ClusterTable clusters={clusters} />
+      <ClusterTable clusters={clusters} {...(total !== undefined && { total })} />
     </QueryClientProvider>,
   );
 }
@@ -177,5 +177,26 @@ describe('ClusterTable runway + navigation', () => {
     // Sort by Runway must not crash or produce NaN-driven ordering; the table
     // should still render all three rows in some deterministic order.
     expect(visibleNames()).toHaveLength(3);
+  });
+});
+
+describe('ClusterTable truncation note', () => {
+  const clusters = [
+    makeCluster({ name: 'Cluster-A', metric: { consumption: 200, capacity: 1000 } }),
+  ];
+
+  it('renders a "Showing first X of Y" note when total exceeds the fetched page', () => {
+    renderTable(clusters, 4);
+    expect(screen.getByRole('status')).toHaveTextContent('Showing first 1 of 4 clusters.');
+  });
+
+  it('omits the note when total equals the number of rows', () => {
+    renderTable(clusters, 1);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('omits the note when total is not provided', () => {
+    renderTable(clusters);
+    expect(screen.queryByRole('status')).toBeNull();
   });
 });

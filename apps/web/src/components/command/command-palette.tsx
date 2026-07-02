@@ -33,6 +33,7 @@ export function CommandPalette(): React.JSX.Element {
     queryKey: ['clusters'],
     queryFn: () => api.clusters.list(),
     enabled: open,
+    select: (page) => page.items,
   });
 
   useEffect(() => {

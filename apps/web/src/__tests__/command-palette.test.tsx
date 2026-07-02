@@ -29,24 +29,29 @@ function wrap(node: React.ReactElement): React.ReactElement {
 
 describe('CommandPalette', () => {
   test('opens via window CustomEvent and filters cluster items', async () => {
-    vi.spyOn(api.clusters, 'list').mockResolvedValue([
-      {
-        id: 'c1',
-        name: 'CL-Prod-Alpha',
-        baselineDate: '2026-01-01',
-        description: null,
-        tenantId: 'default',
-        metrics: [],
-      } as unknown as Awaited<ReturnType<typeof api.clusters.list>>[number],
-      {
-        id: 'c2',
-        name: 'CL-Test-Beta',
-        baselineDate: '2026-01-01',
-        description: null,
-        tenantId: 'default',
-        metrics: [],
-      } as unknown as Awaited<ReturnType<typeof api.clusters.list>>[number],
-    ]);
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [
+        {
+          id: 'c1',
+          name: 'CL-Prod-Alpha',
+          baselineDate: '2026-01-01',
+          description: null,
+          tenantId: 'default',
+          metrics: [],
+        } as unknown as Awaited<ReturnType<typeof api.clusters.list>>['items'][number],
+        {
+          id: 'c2',
+          name: 'CL-Test-Beta',
+          baselineDate: '2026-01-01',
+          description: null,
+          tenantId: 'default',
+          metrics: [],
+        } as unknown as Awaited<ReturnType<typeof api.clusters.list>>['items'][number],
+      ],
+      total: 2,
+      limit: 100,
+      offset: 0,
+    });
     const user = userEvent.setup();
     render(wrap(<CommandPalette />));
 
@@ -62,16 +67,21 @@ describe('CommandPalette', () => {
   });
 
   test('selecting a cluster item navigates to its detail route', async () => {
-    vi.spyOn(api.clusters, 'list').mockResolvedValue([
-      {
-        id: 'cluster-xyz',
-        name: 'CL-One',
-        baselineDate: '2026-01-01',
-        description: null,
-        tenantId: 'default',
-        metrics: [],
-      } as unknown as Awaited<ReturnType<typeof api.clusters.list>>[number],
-    ]);
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [
+        {
+          id: 'cluster-xyz',
+          name: 'CL-One',
+          baselineDate: '2026-01-01',
+          description: null,
+          tenantId: 'default',
+          metrics: [],
+        } as unknown as Awaited<ReturnType<typeof api.clusters.list>>['items'][number],
+      ],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    });
     const user = userEvent.setup();
     render(wrap(<CommandPalette />));
 

@@ -1,6 +1,6 @@
 import type { ForecastResponse } from '@lcm/shared';
 
-import type { ClusterForecastEntry } from '@/components/clusters/cluster-table';
+import type { ClusterTableEntry } from '@/components/clusters/cluster-table';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
@@ -42,10 +42,16 @@ function ClustersPage(): React.JSX.Element {
   });
 
   const visibleClusters = showArchived
-    ? (allClustersQuery.data ?? activeClustersQuery.data ?? [])
-    : (activeClustersQuery.data ?? []);
+    ? (allClustersQuery.data?.items ?? activeClustersQuery.data?.items ?? [])
+    : (activeClustersQuery.data?.items ?? []);
 
-  const clusters = activeClustersQuery.data ?? [];
+  const clusters = activeClustersQuery.data?.items ?? [];
+
+  // The truncation note on ClusterTable needs the server's total, not just
+  // however many rows the current page fetched.
+  const visibleTotal = showArchived
+    ? (allClustersQuery.data?.total ?? activeClustersQuery.data?.total ?? visibleClusters.length)
+    : (activeClustersQuery.data?.total ?? visibleClusters.length);
 
   const forecastQueries = useQueries({
     queries: clusters.map((cluster) => {
@@ -68,7 +74,7 @@ function ClustersPage(): React.JSX.Element {
     clusterId: c.id,
     data: forecastQueries[i]?.data as ForecastResponse | undefined,
   }));
-  const forecastsById: Record<string, ClusterForecastEntry> = {};
+  const forecastsById: Record<string, ClusterTableEntry> = {};
   let horizonMonths = 0;
   clusters.forEach((cluster, i) => {
     const data = forecastQueries[i]?.data as ForecastResponse | undefined;
@@ -129,8 +135,8 @@ function ClustersPage(): React.JSX.Element {
             Clusters
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {activeClustersQuery.data?.length
-              ? `${activeClustersQuery.data.length} clusters tracked`
+            {activeClustersQuery.data?.items.length
+              ? `${activeClustersQuery.data.items.length} clusters tracked`
               : 'Capacity forecasts across all tracked clusters.'}
           </p>
         </header>
@@ -147,7 +153,7 @@ function ClustersPage(): React.JSX.Element {
             />
             {showArchived ? 'Hide archived' : 'Show archived'}
           </button>
-          {activeClustersQuery.data && activeClustersQuery.data.length > 0 ? (
+          {activeClustersQuery.data && activeClustersQuery.data.items.length > 0 ? (
             <CreateClusterDialog />
           ) : null}
         </div>
@@ -162,7 +168,7 @@ function ClustersPage(): React.JSX.Element {
         </Card>
       ) : null}
 
-      {activeClustersQuery.data?.length === 0 ? <ClustersEmptyState /> : null}
+      {activeClustersQuery.data?.items.length === 0 ? <ClustersEmptyState /> : null}
 
       {clusters.length > 0 ? (
         <div className="grid grid-cols-12 gap-4">
@@ -210,6 +216,7 @@ function ClustersPage(): React.JSX.Element {
         <ClusterTable
           clusters={visibleClusters}
           forecastsById={forecastsById}
+          total={visibleTotal}
           {...(horizonMonths > 0 && { horizonMonths })}
         />
       ) : null}

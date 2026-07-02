@@ -30,7 +30,8 @@
     "react-is": "^19.2.7",
     "recharts": "^3.9.1",
     "sonner": "^2.0.0",
-    "tailwind-merge": "^2.5.5"
+    "tailwind-merge": "^2.5.5",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

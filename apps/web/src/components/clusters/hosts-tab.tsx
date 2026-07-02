@@ -56,6 +56,7 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
   const hostsQuery = useQuery({
     queryKey: ['hosts', clusterId],
     queryFn: () => api.hosts.listByCluster(clusterId),
+    select: (page) => page.items,
   });
 
   const toggle = (id: string): void => {
