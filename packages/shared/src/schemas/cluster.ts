@@ -37,6 +37,7 @@ export const clustersListQuerySchema = z.object({
   includeArchived: z
     .enum(['true', 'false'])
     .optional()
+    .default('false')
     .transform((v) => v === 'true'),
 });
 

@@ -14,5 +14,6 @@ describe('clustersListQuerySchema.includeArchived', () => {
   });
   it('rejects junk values', () => {
     expect(clustersListQuerySchema.safeParse({ includeArchived: 'yes' }).success).toBe(false);
+    expect(clustersListQuerySchema.safeParse({ includeArchived: '1' }).success).toBe(false);
   });
 });
