@@ -1,13 +1,13 @@
 import { z } from 'zod';
 
-import { cuid, dateOnly, positiveAmount } from './common.js';
+import { cuid, dateOnly, MAX_AMOUNT, positiveAmount } from './common.js';
 
 export const itemKindSchema = z.enum(['application', 'event']);
 export type ItemKind = z.infer<typeof itemKindSchema>;
 
-const deltaNumber = z.number().finite();
+const deltaNumber = z.number().finite().min(-MAX_AMOUNT).max(MAX_AMOUNT);
 
-export const itemAllocationRowInputSchema = z.object({
+export const itemAllocationRowInputSchema = z.strictObject({
   metricTypeKey: z.string().min(1),
   effectiveFrom: dateOnly,
   amount: positiveAmount,
@@ -20,14 +20,14 @@ const baseFields = {
   effectiveDate: dateOnly,
 };
 
-export const applicationItemCreateSchema = z.object({
+export const applicationItemCreateSchema = z.strictObject({
   kind: z.literal('application'),
   ...baseFields,
   endedAt: dateOnly.nullable().optional(),
-  allocations: z.array(itemAllocationRowInputSchema).min(1),
+  allocations: z.array(itemAllocationRowInputSchema).min(1).max(1000),
 });
 
-export const eventItemCreateSchema = z.object({
+export const eventItemCreateSchema = z.strictObject({
   kind: z.literal('event'),
   ...baseFields,
   metricTypeKey: z.string().min(1),
@@ -46,7 +46,7 @@ export const itemCreateInputSchema = z.discriminatedUnion('kind', [
 // Update: kind is immutable, so it is NOT part of the body. All fields optional;
 // the service applies them based on the stored kind.
 export const itemUpdateInputSchema = z
-  .object({
+  .strictObject({
     name: z.string().trim().min(1).max(200).optional(),
     category: z.string().trim().min(1).max(60).optional(),
     description: z.string().trim().max(2000).nullish(),

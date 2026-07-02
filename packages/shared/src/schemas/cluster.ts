@@ -2,25 +2,25 @@ import { z } from 'zod';
 
 import { cuid, dateOnly, positiveAmount } from './common.js';
 
-const metricBaselineInputSchema = z.object({
+const metricBaselineInputSchema = z.strictObject({
   metricTypeKey: z.string().min(1),
   baselineConsumption: positiveAmount,
   baselineCapacity: positiveAmount,
 });
 
-export const clusterCreateInputSchema = z.object({
+export const clusterCreateInputSchema = z.strictObject({
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().max(2000).nullish(),
   baselineDate: dateOnly,
-  baselines: z.array(metricBaselineInputSchema).min(1),
+  baselines: z.array(metricBaselineInputSchema).min(1).max(50),
 });
 
 export const clusterUpdateInputSchema = z
-  .object({
+  .strictObject({
     name: z.string().trim().min(1).max(120).optional(),
     description: z.string().trim().max(2000).nullish(),
     baselineDate: dateOnly.optional(),
-    baselines: z.array(metricBaselineInputSchema).min(1).optional(),
+    baselines: z.array(metricBaselineInputSchema).min(1).max(50).optional(),
   })
   .refine(
     (data) =>

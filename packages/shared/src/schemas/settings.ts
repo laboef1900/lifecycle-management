@@ -5,7 +5,7 @@ export const percentSchema = z.number().min(0.01).max(0.99);
 export const procurementLeadTimeWeeksSchema = z.number().int().min(0).max(104);
 
 export const tenantSettingsSchema = z
-  .object({
+  .strictObject({
     warnThreshold: percentSchema,
     critThreshold: percentSchema,
     procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
@@ -16,7 +16,7 @@ export const tenantSettingsSchema = z
   });
 
 export const clusterSettingsInputSchema = z
-  .object({
+  .strictObject({
     warnThreshold: percentSchema.nullable(),
     critThreshold: percentSchema.nullable(),
   })
