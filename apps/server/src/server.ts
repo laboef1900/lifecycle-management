@@ -33,7 +33,10 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     trustProxy: true,
   });
 
-  await server.register(cors, { origin: true });
+  await server.register(cors, {
+    origin: true, // tightened to an env-driven allowlist in Task C4
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  });
   await server.register(sensible);
   await server.register(errorHandlerPlugin);
   await server.register(tenantContextPlugin);

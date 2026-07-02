@@ -19,19 +19,19 @@
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
-    "@fastify/cors": "^10.0.1",
-    "@fastify/sensible": "^6.0.1",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/sensible": "^6.0.4",
     "@lcm/shared": "workspace:*",
-    "@prisma/client": "^6.4.0",
-    "dotenv": "^16.4.7",
-    "fastify": "^5.2.0",
-    "fastify-plugin": "^5.0.1",
-    "prisma": "^6.4.0",
+    "@prisma/client": "^6.19.3",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.9.0",
+    "fastify-plugin": "^6.0.0",
+    "prisma": "^6.19.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^10.16.0",
-    "pino-pretty": "^11.3.0",
+    "pino-pretty": "^13.0.0",
     "testcontainers": "^10.16.0",
     "tsx": "^4.19.2",
     "xlsx": "^0.18.5"
