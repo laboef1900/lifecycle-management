@@ -4,6 +4,7 @@ packages:
 overrides:
   '@radix-ui/react-dialog': 1.1.16
   '@radix-ui/react-slot': 1.2.5
+  protobufjs: '>=7.6.3'
 allowBuilds:
   esbuild: true
   '@prisma/client': true
