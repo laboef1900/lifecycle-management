@@ -1,15 +1,31 @@
 import { z } from 'zod';
 
+import { monthsBetweenUtc } from '../dates.js';
 import { cuid, monthOnly } from './common.js';
 import type { EffectiveThresholds } from './settings.js';
 
 export const forecastParamsSchema = z.object({ id: cuid });
 
-export const forecastQuerySchema = z.object({
-  metric: z.string().min(1),
-  from: monthOnly.optional(),
-  to: monthOnly.optional(),
-});
+/** Hard cap on the forecast window — protects the O(months × rows) compute loop. */
+export const MAX_FORECAST_SPAN_MONTHS = 120;
+
+export const forecastQuerySchema = z
+  .object({
+    metric: z.string().min(1),
+    from: monthOnly.optional(),
+    to: monthOnly.optional(),
+  })
+  .refine((q) => q.from === undefined || q.to === undefined || q.from <= q.to, {
+    message: 'from must be on or before to',
+    path: ['from'],
+  })
+  .refine(
+    (q) =>
+      q.from === undefined ||
+      q.to === undefined ||
+      monthsBetweenUtc(q.from, q.to) <= MAX_FORECAST_SPAN_MONTHS,
+    { message: `Range must not exceed ${MAX_FORECAST_SPAN_MONTHS} months`, path: ['to'] },
+  );
 
 export type ForecastQuery = z.infer<typeof forecastQuerySchema>;
 

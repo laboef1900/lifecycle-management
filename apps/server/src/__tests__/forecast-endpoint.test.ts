@@ -151,6 +151,34 @@ describe('GET /api/clusters/:id/forecast', () => {
     expect(response.statusCode).toBe(404);
   });
 
+  it('returns 400 (not 500) for a range spanning thousands of years', async () => {
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&from=0001-01&to=9999-12`,
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('returns 400 (not 500) for an inverted range', async () => {
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&from=2027-01&to=2026-01`,
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('returns 422 (not 500) when a lone `to` far in the future bypasses the schema pair-check', async () => {
+    // No `from` means the schema's pair-refines don't apply (they short-circuit
+    // on a missing side); `fromMonth` falls back to the cluster's baseline
+    // date server-side, so only the forecast-loader's own cap can catch this.
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&to=9999-12`,
+    });
+    expect(response.statusCode).toBe(422);
+    expect((response.json() as { error: { code: string } }).error.code).toBe('RANGE_TOO_LARGE');
+  });
+
   it('returns 422 when the metric is unknown', async () => {
     const response = await server.inject({
       method: 'GET',
