@@ -6,8 +6,8 @@ const API_BASE = 'http://localhost:8090';
  * E2E for configurable warn/crit thresholds.
  *
  * Walks the full settings flow:
- *   1. Tenant defaults — save new values on /settings, verify the fleet
- *      capacity chart shows the new percent labels.
+ *   1. Tenant defaults — save new values on /settings, verify the Overview
+ *      tile charts expose the new thresholds via their accessible name.
  *   2. Cluster override — open the Settings tab on cluster detail, save an
  *      override, verify the cluster's forecast chart picks up the new
  *      percentages, then reset back to inherited.
@@ -17,12 +17,20 @@ const API_BASE = 'http://localhost:8090';
  */
 test.describe('configurable thresholds', () => {
   test.afterEach(async ({ request }) => {
-    await request.put(`${API_BASE}/api/settings/tenant`, {
-      data: { warnThreshold: 0.7, critThreshold: 0.9 },
+    // The PUT schema requires the full settings object, so read the current
+    // lead time and echo it back — omitting it fails validation (400) and
+    // would silently leak 65/85 into subsequent runs.
+    const current = await request.get(`${API_BASE}/api/settings/tenant`);
+    const { procurementLeadTimeWeeks } = (await current.json()) as {
+      procurementLeadTimeWeeks: number;
+    };
+    const reset = await request.put(`${API_BASE}/api/settings/tenant`, {
+      data: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks },
     });
+    expect(reset.ok()).toBe(true);
   });
 
-  test('saves tenant thresholds and chart labels reflect new values', async ({ page }) => {
+  test('saves tenant thresholds and overview tiles reflect new values', async ({ page }) => {
     await page.goto('/settings');
     await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
 
@@ -44,11 +52,13 @@ test.describe('configurable thresholds', () => {
     expect(putResp.ok()).toBe(true);
     await expect(page.getByText(/source: saved tenant settings/i)).toBeVisible();
 
-    // Navigate to overview where the fleet capacity chart renders the
-    // updated Warn / Crit reference-line labels.
+    // Navigate to overview: the per-cluster tile charts draw the thresholds
+    // as label-less ReferenceArea bands, so propagation is asserted via the
+    // chart's accessible name, which carries the effective warn/crit values.
     await page.goto('/');
-    await expect(page.getByText('Warn 65%').first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText('Crit 85%').first()).toBeVisible();
+    await expect(page.getByRole('img', { name: /warn 65%.*crit 85%/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
   });
 
   test('cluster override flips chart labels and source pill', async ({ page, request }) => {
