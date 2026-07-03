@@ -56,7 +56,6 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
   const hostsQuery = useQuery({
     queryKey: ['hosts', clusterId],
     queryFn: () => api.hosts.listByCluster(clusterId, { limit: 500 }),
-    select: (page) => page.items,
   });
 
   const toggle = (id: string): void => {
@@ -68,7 +67,8 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
     });
   };
 
-  const hosts = hostsQuery.data ?? [];
+  const hosts = hostsQuery.data?.items ?? [];
+  const total = hostsQuery.data?.total;
 
   return (
     <div className="space-y-3 py-4">
@@ -188,6 +188,11 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
             </TableBody>
           </Table>
         )}
+        {total !== undefined && total > hosts.length ? (
+          <p className="mt-2 text-xs text-fg-subtle" role="status">
+            Showing first {hosts.length} of {total} hosts.
+          </p>
+        ) : null}
       </Card>
 
       <CreateHostDialog open={createOpen} onOpenChange={setCreateOpen} clusterId={clusterId} />
