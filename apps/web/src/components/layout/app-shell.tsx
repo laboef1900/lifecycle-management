@@ -7,6 +7,7 @@ import { ShortcutsDialog } from '@/components/command/shortcuts-dialog';
 import { Breadcrumbs } from '@/components/layout/breadcrumbs';
 import { MobileNavProvider, MobileNavTrigger, useMobileNav } from '@/components/layout/mobile-nav';
 import { Sidebar, SidebarNav } from '@/components/layout/sidebar';
+import { UserMenu } from '@/components/layout/user-menu';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
@@ -66,6 +67,7 @@ function Header(): React.JSX.Element {
       <div className="ml-auto flex items-center gap-2">
         <CommandPaletteTrigger />
         <ThemeToggle />
+        <UserMenu />
       </div>
     </header>
   );
