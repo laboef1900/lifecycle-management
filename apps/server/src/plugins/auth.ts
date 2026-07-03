@@ -68,12 +68,17 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify, { env 
 
   fastify.addHook('onRequest', async (request) => {
     if (env.AUTH_MODE === 'disabled') {
-      request.user = ANONYMOUS_USER;
+      request.user = { ...ANONYMOUS_USER };
       return;
     }
-    const path = request.url.split('?', 1)[0] ?? request.url;
+    // Match on the router's canonical route pattern, not the raw request URL:
+    // request.url is attacker-controlled and unnormalized (percent-encoding,
+    // dot-segments), while routeOptions.url is the registered route string
+    // find-my-way already matched against, so it can't be spoofed.
+    const routePath = request.routeOptions?.url;
+    if (routePath === undefined) return; // no route matched; 404 will follow
     // Health endpoints are unprefixed; the auth flow itself must stay open.
-    if (!path.startsWith('/api/') || path.startsWith('/api/auth/')) return;
+    if (!routePath.startsWith('/api/') || routePath.startsWith('/api/auth/')) return;
     const token = request.cookies[sessionCookieName(env)];
     if (token !== undefined) {
       const user = await sessions.findUserByToken(token);

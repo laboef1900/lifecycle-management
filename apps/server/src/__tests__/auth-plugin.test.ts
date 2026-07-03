@@ -83,6 +83,40 @@ describe('auth plugin', () => {
 
     expect(response.statusCode).toBe(401);
   });
+
+  describe('percent-encoded / traversal bypass regression', () => {
+    it('rejects a percent-encoded /api prefix with no cookie (router decodes, hook must match router view)', async () => {
+      const server = await buildServer({ env: makeOidcTestEnv(), prisma });
+      created.push(server);
+
+      // %61 = 'a'; find-my-way decodes this to /api/clusters before routing,
+      // but request.url stays raw. A hook keyed off request.url would miss this.
+      const response = await server.inject({ method: 'GET', url: '/%61pi/clusters' });
+
+      expect(response.statusCode).toBe(401);
+    });
+
+    it('rejects when a query string is crafted to look like /api/auth/', async () => {
+      const server = await buildServer({ env: makeOidcTestEnv(), prisma });
+      created.push(server);
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/clusters?x=/api/auth/',
+      });
+
+      expect(response.statusCode).toBe(401);
+    });
+
+    it('never lets a dot-segment traversal through /api/auth/ reach a handler unauthenticated', async () => {
+      const server = await buildServer({ env: makeOidcTestEnv(), prisma });
+      created.push(server);
+
+      const response = await server.inject({ method: 'GET', url: '/api/auth/%2e%2e/clusters' });
+
+      expect(response.statusCode).not.toBe(200);
+    });
+  });
 });
 
 describe('authStartupWarnings', () => {
