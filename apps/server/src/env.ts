@@ -1,15 +1,79 @@
 import { z } from 'zod';
 
-export const envSchema = z.object({
-  DATABASE_URL: z.url(),
-  PORT: z.coerce.number().int().positive().max(65535).default(8080),
-  HOST: z.string().default('0.0.0.0'),
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  CORS_ORIGIN: z.string().optional(),
-  TRUST_PROXY: z.string().default('loopback,uniquelocal'),
-  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
-});
+/** docker-compose passes unset vars as empty strings; treat '' as absent. */
+const emptyToUndefined = (value: unknown): unknown => (value === '' ? undefined : value);
+const optionalString = (): z.ZodType<string | undefined> =>
+  z.preprocess(emptyToUndefined, z.string().optional());
+
+export const OIDC_REQUIRED_VARS = [
+  'OIDC_ISSUER_URL',
+  'OIDC_CLIENT_ID',
+  'OIDC_CLIENT_SECRET',
+  'APP_BASE_URL',
+  'LOGIN_STATE_SECRET',
+] as const;
+
+export const envSchema = z
+  .object({
+    DATABASE_URL: z.url(),
+    PORT: z.coerce.number().int().positive().max(65535).default(8080),
+    HOST: z.string().default('0.0.0.0'),
+    LOG_LEVEL: z
+      .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+      .default('info'),
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+    CORS_ORIGIN: optionalString(),
+    TRUST_PROXY: z.string().default('loopback,uniquelocal'),
+    RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+    AUTH_MODE: z.preprocess(emptyToUndefined, z.enum(['disabled', 'oidc']).optional()),
+    OIDC_ISSUER_URL: z.preprocess(emptyToUndefined, z.url().optional()),
+    OIDC_CLIENT_ID: optionalString(),
+    OIDC_CLIENT_SECRET: optionalString(),
+    APP_BASE_URL: z.preprocess(emptyToUndefined, z.url().optional()),
+    LOGIN_STATE_SECRET: z.preprocess(emptyToUndefined, z.string().min(32).optional()),
+    SESSION_TTL_HOURS: z.preprocess(
+      emptyToUndefined,
+      z.coerce.number().int().positive().max(720).default(12),
+    ),
+    OIDC_SCOPES: z.preprocess(emptyToUndefined, z.string().default('openid profile email')),
+    OIDC_ROLE_CLAIM: optionalString(),
+    OIDC_ADMIN_VALUES: optionalString(),
+    OIDC_DEFAULT_ROLE: z.preprocess(emptyToUndefined, z.enum(['admin', 'viewer']).default('admin')),
+    OIDC_ALLOWED_EMAIL_DOMAINS: optionalString(),
+    OIDC_ALLOWED_EMAILS: optionalString(),
+    OIDC_ALLOW_INSECURE: z.preprocess(
+      emptyToUndefined,
+      z
+        .enum(['true', 'false'])
+        .default('false')
+        .transform((value) => value === 'true'),
+    ),
+  })
+  .superRefine((env, ctx) => {
+    if (env.AUTH_MODE === undefined) {
+      const present = OIDC_REQUIRED_VARS.filter((key) => env[key] !== undefined);
+      if (present.length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AUTH_MODE'],
+          message: `AUTH_MODE must be set explicitly ('oidc' or 'disabled') when OIDC configuration is present (found: ${present.join(', ')})`,
+        });
+      }
+      return;
+    }
+    if (env.AUTH_MODE === 'oidc') {
+      for (const key of OIDC_REQUIRED_VARS) {
+        if (env[key] === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: `${key} is required when AUTH_MODE=oidc`,
+          });
+        }
+      }
+    }
+  })
+  .transform((env) => ({ ...env, AUTH_MODE: env.AUTH_MODE ?? ('disabled' as const) }));
 
 export type Env = z.infer<typeof envSchema>;
 
