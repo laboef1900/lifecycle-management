@@ -1,11 +1,15 @@
-import { Prisma, type PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import type { HostReplacementCreateInput, HostReplacementResponse } from '@lcm/shared';
 
 import { formatDate } from '../lib/dates.js';
 
-import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
+import { NotFoundError, UnprocessableError } from './errors.js';
+import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
 
-const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
+const REPLACEMENT_DUPLICATE: UniqueConstraintMapping = {
+  code: 'REPLACEMENT_DUPLICATE',
+  message: 'This replacement already exists',
+};
 
 export class HostReplacementsService {
   constructor(private readonly prisma: PrismaClient) {}
@@ -40,12 +44,7 @@ export class HostReplacementsService {
       });
       return this.toResponse(row);
     } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === PRISMA_UNIQUE_CONSTRAINT
-      ) {
-        throw new ConflictError('REPLACEMENT_DUPLICATE', 'This replacement already exists');
-      }
+      translatePrismaError(err, { uniqueConstraint: REPLACEMENT_DUPLICATE });
       throw err;
     }
   }

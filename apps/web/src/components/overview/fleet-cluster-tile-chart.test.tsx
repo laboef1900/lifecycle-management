@@ -178,9 +178,19 @@ describe('<FleetClusterTileChart>', () => {
     expect(screen.queryByText(/No forecast/i)).toBeNull();
   });
 
-  it('exposes the tile chart as a labelled image', () => {
+  it('exposes the tile chart as a labelled image including the effective thresholds', () => {
     render(<FleetClusterTileChart entry={entry()} />);
 
-    expect(screen.getByRole('img', { name: /CL-Test utilization forecast/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('img', { name: 'CL-Test utilization forecast, warn 70%, crit 90%' }),
+    ).toBeInTheDocument();
+  });
+
+  it('reflects cluster-specific thresholds in the accessible name', () => {
+    render(<FleetClusterTileChart entry={entry({ thresholds: { warn: 0.45, crit: 0.48 } })} />);
+
+    expect(
+      screen.getByRole('img', { name: 'CL-Test utilization forecast, warn 45%, crit 48%' }),
+    ).toBeInTheDocument();
   });
 });

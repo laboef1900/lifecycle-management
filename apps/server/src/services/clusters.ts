@@ -9,11 +9,17 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 
 import { formatDate } from '../lib/dates.js';
 
-import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
+import { NotFoundError, UnprocessableError } from './errors.js';
 import { computeForecast } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
+import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
 
-const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
+function clusterNameTaken(name: string): UniqueConstraintMapping {
+  return {
+    code: 'CLUSTER_NAME_TAKEN',
+    message: `A cluster named "${name}" already exists in this tenant`,
+  };
+}
 
 const clusterInclude = {
   baselines: {
@@ -97,7 +103,7 @@ export class ClustersService {
       });
       return this.toResponse(created);
     } catch (err) {
-      this.translatePrismaError(err, input.name);
+      translatePrismaError(err, { uniqueConstraint: clusterNameTaken(input.name) });
       throw err;
     }
   }
@@ -144,7 +150,7 @@ export class ClustersService {
         await this.prisma.cluster.update({ where: { id }, data });
       }
     } catch (err) {
-      this.translatePrismaError(err, input.name ?? '');
+      translatePrismaError(err, { uniqueConstraint: clusterNameTaken(input.name ?? '') });
       throw err;
     }
 
@@ -282,18 +288,6 @@ export class ClustersService {
       archivedAt: row.archivedAt?.toISOString() ?? null,
       metrics,
     };
-  }
-
-  private translatePrismaError(err: unknown, name: string): void {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === PRISMA_UNIQUE_CONSTRAINT
-    ) {
-      throw new ConflictError(
-        'CLUSTER_NAME_TAKEN',
-        `A cluster named "${name}" already exists in this tenant`,
-      );
-    }
   }
 }
 

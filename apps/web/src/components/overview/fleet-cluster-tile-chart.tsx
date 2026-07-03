@@ -75,7 +75,7 @@ export function FleetClusterTileChart({ entry }: FleetClusterTileChartProps): Re
             <div
               className="min-w-0 flex-1"
               role="img"
-              aria-label={`${cluster.name} utilization forecast`}
+              aria-label={`${cluster.name} utilization forecast, warn ${Math.round(thresholds.warn * 100)}%, crit ${Math.round(thresholds.crit * 100)}%`}
             >
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart

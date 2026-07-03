@@ -15,7 +15,7 @@ import {
   hostResponseSchema,
   itemResponseSchema,
   paginatedSchema,
-  tenantSettingsSchema,
+  tenantSettingsResponseSchema,
 } from '@lcm/shared';
 import { z } from 'zod';
 
@@ -379,12 +379,12 @@ export const api = {
       delete: (id: string) => request<void>(`/api/settings/categories/${id}`, { method: 'DELETE' }),
     },
     tenant: {
-      get: () => request('/api/settings/tenant', undefined, tenantSettingsSchema),
+      get: () => request('/api/settings/tenant', undefined, tenantSettingsResponseSchema),
       update: (input: TenantSettings) =>
         request(
           '/api/settings/tenant',
           { method: 'PUT', body: JSON.stringify(input) },
-          tenantSettingsSchema,
+          tenantSettingsResponseSchema,
         ),
     },
     cluster: {

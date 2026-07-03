@@ -59,7 +59,6 @@ export function ItemsTab({ clusterId }: ItemsTabProps): React.JSX.Element {
   const query = useQuery({
     queryKey: ['items', clusterId],
     queryFn: () => api.items.listByCluster(clusterId, { limit: 500 }),
-    select: (page) => page.items,
   });
 
   const toggle = (id: string): void => {
@@ -71,9 +70,10 @@ export function ItemsTab({ clusterId }: ItemsTabProps): React.JSX.Element {
     });
   };
 
-  const items = [...(query.data ?? [])].sort((a, b) =>
+  const items = [...(query.data?.items ?? [])].sort((a, b) =>
     a.effectiveDate.localeCompare(b.effectiveDate),
   );
+  const total = query.data?.total;
 
   return (
     <div className="space-y-3 py-4">
@@ -192,6 +192,11 @@ export function ItemsTab({ clusterId }: ItemsTabProps): React.JSX.Element {
             </TableBody>
           </Table>
         )}
+        {total !== undefined && total > items.length ? (
+          <p className="mt-2 text-xs text-fg-subtle" role="status">
+            Showing first {items.length} of {total} items.
+          </p>
+        ) : null}
       </Card>
 
       <CreateItemDialog open={createOpen} onOpenChange={setCreateOpen} clusterId={clusterId} />

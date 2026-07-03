@@ -1,0 +1,96 @@
+import type { HostResponse } from '@lcm/shared';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { api } from '@/lib/api-client';
+
+import { HostsTab } from './hosts-tab';
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+
+function makeHost(overrides: Partial<HostResponse> = {}): HostResponse {
+  return {
+    id: 'host-1',
+    clusterId: 'cl-1',
+    name: 'esx-01',
+    description: null,
+    commissionedAt: '2025-06-01',
+    decommissionedAt: null,
+    serialNumber: null,
+    vendor: null,
+    model: null,
+    purchasedAt: null,
+    warrantyEndsAt: null,
+    eolAt: null,
+    runPastEol: false,
+    state: 'in_service',
+    projectedDecommissionAt: null,
+    createdAt: '2025-06-01T00:00:00.000Z',
+    updatedAt: '2025-06-01T00:00:00.000Z',
+    capacities: [
+      {
+        id: 'cap-1',
+        metricTypeKey: 'memory_gb',
+        metricTypeDisplayName: 'Memory',
+        unit: 'GB',
+        effectiveFrom: '2025-06-01',
+        amount: 1024,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function renderTab(): void {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <HostsTab clusterId="cl-1" />
+    </QueryClientProvider>,
+  );
+}
+
+describe('HostsTab', () => {
+  beforeEach(() => {
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [makeHost(), makeHost({ id: 'host-2', name: 'esx-02' })],
+      total: 2,
+      limit: 500,
+      offset: 0,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders a row per host', async () => {
+    renderTab();
+
+    expect(await screen.findByText('esx-01')).toBeInTheDocument();
+    expect(screen.getByText('esx-02')).toBeInTheDocument();
+  });
+
+  it('shows a truncation note when the server total exceeds the fetched rows', async () => {
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [makeHost(), makeHost({ id: 'host-2', name: 'esx-02' })],
+      total: 512,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    expect(await screen.findByText('esx-01')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Showing first 2 of 512 hosts.');
+  });
+
+  it('omits the truncation note when all hosts fit in one page', async () => {
+    renderTab();
+
+    expect(await screen.findByText('esx-01')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+});
