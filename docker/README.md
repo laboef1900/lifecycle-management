@@ -28,6 +28,13 @@ The web container listens on `${HTTP_PORT:-80}` and serves both the SPA at
 `/` and a reverse proxy to the server at `/api/*`, `/healthz`, `/readyz`.
 The server container listens on 8080 inside the compose network only.
 
+All `dhi.io` base images (in both Dockerfiles and this compose file) are
+pinned as `tag@sha256:...` to the **multi-arch index digest** — the
+top-level `Digest:` from `docker buildx imagetools inspect <ref>`, not a
+per-platform manifest. Dependabot's `docker` ecosystem bumps the pins
+weekly (dhi.io updates additionally need registry credentials — see the
+note in `.github/dependabot.yml`).
+
 The `db` service runs `dhi.io/postgres:18` (Docker Hardened Image).
 `PGDATA=/var/lib/postgresql/18/data`, so the named volume `lcm-postgres-18-data`
 is mounted there — not at the older `/var/lib/postgresql/data` path that

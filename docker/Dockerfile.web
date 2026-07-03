@@ -6,8 +6,12 @@
 #                                        runs as uid 65532 nonroot,
 #                                        listens on :8080)
 
+# Base images are pinned tag@digest to the MULTI-ARCH INDEX digest (the
+# top-level digest from `docker buildx imagetools inspect <ref>`, not a
+# per-platform manifest). Dependabot's docker ecosystem bumps these.
+
 # ----- builder -----
-FROM dhi.io/node:22-alpine-dev AS builder
+FROM dhi.io/node:22-alpine-dev@sha256:bc1012efa717d6017dd093a4facd6b610e167c1b33edf4bca488967c5b1b9d99 AS builder
 
 # The -dev builder image defaults to `node` (uid 1000) — upstream renamed
 # it from `nonroot` in mid-2026.
@@ -42,7 +46,7 @@ RUN pnpm --filter @lcm/shared build
 RUN pnpm --filter @lcm/web build
 
 # ----- runtime -----
-FROM dhi.io/nginx:1 AS runtime
+FROM dhi.io/nginx:1@sha256:de8730b879576024c97094e2b5d2001a7a4f10f46d1058ec5bad48fe64f740c4 AS runtime
 
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /repo/apps/web/dist /usr/share/nginx/html
