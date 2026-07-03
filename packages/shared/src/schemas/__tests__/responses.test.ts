@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ClusterResponse, ForecastResponse, HostResponse, ItemResponse } from '../../index.js';
+import type {
+  ClusterResponse,
+  ForecastResponse,
+  HostResponse,
+  ItemResponse,
+  TenantSettings,
+} from '../../index.js';
 import {
   clusterResponseSchema,
   forecastResponseSchema,
   hostResponseSchema,
   itemResponseSchema,
+  tenantSettingsResponseSchema,
 } from '../responses.js';
 
 describe('clusterResponseSchema', () => {
@@ -167,5 +174,27 @@ describe('forecastResponseSchema', () => {
       effectiveThresholds: { ...literal.effectiveThresholds, source: 'unknown' },
     };
     expect(forecastResponseSchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe('tenantSettingsResponseSchema', () => {
+  const literal: TenantSettings = {
+    warnThreshold: 0.7,
+    critThreshold: 0.9,
+    procurementLeadTimeWeeks: 6,
+  };
+
+  it('round-trips a representative tenant settings response', () => {
+    expect(tenantSettingsResponseSchema.safeParse(literal).success).toBe(true);
+  });
+
+  it('tolerates additive unknown server fields (forward compatibility)', () => {
+    const withExtra = { ...literal, someFutureField: 'new' };
+    expect(tenantSettingsResponseSchema.safeParse(withExtra).success).toBe(true);
+  });
+
+  it('rejects a non-numeric warnThreshold', () => {
+    const bad = { ...literal, warnThreshold: 'high' };
+    expect(tenantSettingsResponseSchema.safeParse(bad).success).toBe(false);
   });
 });
