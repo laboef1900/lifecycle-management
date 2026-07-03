@@ -9,14 +9,22 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-  # Bumps the tag@digest pins in docker/Dockerfile.* and
-  # docker/docker-compose*.yml. NOTE: the dhi.io base images live in a
-  # private registry and no Dependabot registry credentials are configured
-  # for this repo yet, so dhi.io digest updates will not be proposed until
-  # a `registries:` block backed by Dependabot secrets (e.g.
-  # DHI_REGISTRY_USERNAME / DHI_REGISTRY_TOKEN) is added. Public images
-  # (e.g. postgres in docker-compose.dev.yml) update fine without it.
+  # Bumps the tag@digest pins in docker/Dockerfile.* (Dockerfiles only —
+  # compose files are handled by the docker-compose ecosystem below).
+  # NOTE: the dhi.io base images live in a private registry and no
+  # Dependabot registry credentials are configured for this repo yet, so
+  # dhi.io digest updates will not be proposed until a `registries:` block
+  # backed by Dependabot secrets (e.g. DHI_REGISTRY_USERNAME /
+  # DHI_REGISTRY_TOKEN) is added.
   - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+  # Bumps image pins in docker/docker-compose*.yml (the `docker` ecosystem
+  # does not scan compose files). Same dhi.io registry-credentials caveat
+  # as above applies to dhi.io/postgres; public images (e.g. postgres in
+  # docker-compose.dev.yml) update fine without credentials.
+  - package-ecosystem: docker-compose
     directory: /docker
     schedule:
       interval: weekly
