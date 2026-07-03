@@ -17,7 +17,7 @@ import {
 import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 
-export const Route = createFileRoute('/')({
+export const Route = createFileRoute('/_app/')({
   component: OverviewPage,
 });
 

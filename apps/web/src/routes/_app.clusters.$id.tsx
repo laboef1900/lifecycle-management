@@ -27,7 +27,7 @@ import { useMediaQuery } from '@/lib/use-media-query';
 
 const numberFormat = new Intl.NumberFormat('en-US');
 
-export const Route = createFileRoute('/clusters/$id')({
+export const Route = createFileRoute('/_app/clusters/$id')({
   component: ClusterDetailPage,
 });
 

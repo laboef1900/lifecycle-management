@@ -3,7 +3,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { CategoriesForm } from '@/components/settings/categories-form';
 import { ForecastThresholdsForm } from '@/components/settings/forecast-thresholds-form';
 
-export const Route = createFileRoute('/settings')({
+export const Route = createFileRoute('/_app/settings')({
   component: SettingsPage,
 });
 
