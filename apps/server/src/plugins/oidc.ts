@@ -21,6 +21,14 @@ interface OidcPluginOptions {
 }
 
 /**
+ * Capped exponential backoff for discovery retries: 2s, 4s, 8s, 16s, 32s,
+ * then clamped at 60s. `attempt` is the post-increment failure count (1-based).
+ */
+export function discoveryBackoffMs(attempt: number): number {
+  return Math.min(60_000, 1_000 * 2 ** Math.min(attempt, 6));
+}
+
+/**
  * Discovery runs in a background retry loop (capped backoff): the server must
  * listen immediately and /readyz must never depend on the IdP — compose gates
  * the web container on server health, so IdP-coupled readiness would deadlock
@@ -55,7 +63,7 @@ const oidcPlugin: FastifyPluginAsync<OidcPluginOptions> = async (fastify, { env 
       }
     } catch (err) {
       attempt += 1;
-      const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(attempt, 6));
+      const delayMs = discoveryBackoffMs(attempt);
       fastify.log.error(
         { err, attempt, retryInMs: delayMs },
         'OIDC discovery failed; login is unavailable until the issuer is reachable',
