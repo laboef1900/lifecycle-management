@@ -117,6 +117,73 @@ describe('auth routes (oidc mode, mock IdP)', () => {
     expect(await prisma.user.count()).toBe(0);
   });
 
+  it('rejects a tampered callback state that no longer matches the login-state cookie (login_failed)', async () => {
+    // Security-critical: proves authorizationCodeGrant's state/nonce/PKCE
+    // validation actually rejects a real IdP response once the callback's
+    // `state` param has been tampered with after the cookie recorded the
+    // original one. This exercises the real oauth4webapi state check, not a
+    // stub — the mismatch throws synchronously inside authorizationCodeGrant
+    // (before any token-exchange network call), which the route catches and
+    // maps to `login_failed`.
+    stubClaims({ email: 'ada@example.com' });
+    const server = await buildReadyServer();
+
+    const login = await server.inject({ method: 'GET', url: '/api/auth/login' });
+    expect(login.statusCode).toBe(302);
+    const authorizeUrl = login.headers.location as string;
+    expect(authorizeUrl.startsWith(issuerUrl)).toBe(true);
+    const stateCookie = login.cookies.find((c) => c.name === LOGIN_STATE_COOKIE);
+    expect(stateCookie).toBeDefined();
+
+    const idpResponse = await fetch(authorizeUrl, { redirect: 'manual' });
+    expect(idpResponse.status).toBe(302);
+    const callbackUrl = new URL(idpResponse.headers.get('location') as string);
+    expect(callbackUrl.searchParams.get('state')).toBeTruthy();
+    // Tamper the state the IdP echoed back — the cookie still holds the
+    // original, so authorizationCodeGrant must reject the mismatch.
+    callbackUrl.searchParams.set('state', `${callbackUrl.searchParams.get('state')}-tampered`);
+
+    const callback = await server.inject({
+      method: 'GET',
+      url: `${callbackUrl.pathname}${callbackUrl.search}`,
+      cookies: { [LOGIN_STATE_COOKIE]: (stateCookie as { value: string }).value },
+    });
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe('/login?error=login_failed');
+    expect(callback.cookies.find((c) => c.name === SESSION_COOKIE)).toBeUndefined();
+    expect(await prisma.user.count()).toBe(0);
+  });
+
+  it('redirects to idp_error and logs (but never echoes) the raw IdP error/description', async () => {
+    const server = await buildReadyServer();
+    const warnSpy = vi.spyOn(server.log, 'warn');
+
+    const login = await server.inject({ method: 'GET', url: '/api/auth/login' });
+    expect(login.statusCode).toBe(302);
+    const stateCookie = login.cookies.find((c) => c.name === LOGIN_STATE_COOKIE);
+    expect(stateCookie).toBeDefined();
+
+    const callback = await server.inject({
+      method: 'GET',
+      url: '/api/auth/callback?error=access_denied&error_description=nope&state=whatever',
+      cookies: { [LOGIN_STATE_COOKIE]: (stateCookie as { value: string }).value },
+    });
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe('/login?error=idp_error');
+    expect(callback.cookies.find((c) => c.name === SESSION_COOKIE)).toBeUndefined();
+    expect(await prisma.user.count()).toBe(0);
+
+    // The raw error/error_description must reach logs only, never the browser.
+    expect(callback.headers.location).not.toContain('access_denied');
+    expect(callback.headers.location).not.toContain('nope');
+    expect(warnSpy).toHaveBeenCalledWith(
+      { idpError: 'access_denied', idpErrorDescription: 'nope' },
+      'IdP returned an error at callback',
+    );
+  });
+
   it('redirects to state_mismatch when the login-state cookie is missing', async () => {
     const server = await buildReadyServer();
     const response = await server.inject({

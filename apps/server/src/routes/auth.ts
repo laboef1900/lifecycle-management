@@ -17,6 +17,14 @@ interface LoginState {
   verifier: string;
 }
 
+type LoginErrorCode =
+  | 'login_failed'
+  | 'state_mismatch'
+  | 'idp_error'
+  | 'access_denied'
+  | 'idp_unavailable'
+  | 'scheme_mismatch';
+
 interface AuthRoutesOptions {
   env: Env;
 }
@@ -33,7 +41,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
     reply.clearCookie(LOGIN_STATE_COOKIE, { path: '/api/auth' });
   };
 
-  const loginError = (reply: FastifyReply, code: string): FastifyReply =>
+  const loginError = (reply: FastifyReply, code: LoginErrorCode): FastifyReply =>
     reply.redirect(`/login?error=${code}`);
 
   fastify.get('/auth/login', { config: authRateLimit }, async (request, reply) => {
@@ -80,7 +88,10 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
   });
 
   fastify.get('/auth/callback', { config: authRateLimit }, async (request, reply) => {
-    if (env.AUTH_MODE !== 'oidc') return reply.redirect('/');
+    if (env.AUTH_MODE !== 'oidc') {
+      clearLoginState(reply);
+      return reply.redirect('/');
+    }
     if (!fastify.oidc.config) {
       clearLoginState(reply);
       return loginError(reply, 'idp_unavailable');
@@ -102,7 +113,10 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
     if (currentUrl.searchParams.has('error')) {
       // Raw IdP error/error_description go to logs only — never echoed to the browser.
       request.log.warn(
-        { idpError: currentUrl.searchParams.get('error') },
+        {
+          idpError: currentUrl.searchParams.get('error'),
+          idpErrorDescription: currentUrl.searchParams.get('error_description'),
+        },
         'IdP returned an error at callback',
       );
       return loginError(reply, 'idp_error');
