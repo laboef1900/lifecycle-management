@@ -8,5 +8,6 @@ describe('userInitials', () => {
     expect(userInitials(null, 'grace.hopper@example.com')).toBe('GH');
     expect(userInitials('Plato', null)).toBe('P');
     expect(userInitials(null, null)).toBe('?');
+    expect(userInitials('', 'grace.hopper@example.com')).toBe('GH');
   });
 });

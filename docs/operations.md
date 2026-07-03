@@ -200,7 +200,7 @@ or IdP-side app assignment instead.
 
 ### IdP registration
 
-Register `lcm-server` as a confidential OIDC client at your IdP with a
+Register `lcm` as a confidential OIDC client at your IdP with a
 single redirect URI:
 
 ```

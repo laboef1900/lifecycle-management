@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 export function userInitials(displayName: string | null, email: string | null): string {
-  const source = displayName ?? email ?? '';
+  const source = displayName || email || '';
   const parts = source.split(/[\s@._-]+/).filter(Boolean);
   const first = parts[0]?.[0] ?? '?';
   const second = parts.length > 1 ? (parts[1]?.[0] ?? '') : '';
@@ -25,9 +25,12 @@ export function UserMenu(): React.JSX.Element | null {
   const { user } = auth;
 
   const handleSignOut = async (): Promise<void> => {
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
-    // Full-page navigation: stale router context must not outlive the session.
-    window.location.assign('/login');
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    } finally {
+      // Full-page navigation: stale router context must not outlive the session.
+      window.location.assign('/login');
+    }
   };
 
   return (
