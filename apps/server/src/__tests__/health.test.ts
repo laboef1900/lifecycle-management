@@ -57,7 +57,7 @@ describe('health routes', () => {
     });
   });
 
-  it('/healthz carries the helmet nosniff header and no CORS header when CORS_ORIGIN is unset', async () => {
+  it('/healthz carries the helmet nosniff header but no frame-options and no CORS header when CORS_ORIGIN is unset', async () => {
     const server = await buildServer({ env: makeTestEnv(), prisma: makeFakePrisma() });
     created.push(server);
 
@@ -69,6 +69,8 @@ describe('health routes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers['x-content-type-options']).toBe('nosniff');
+    // nginx owns anti-framing; helmet must not add a conflicting X-Frame-Options.
+    expect(response.headers['x-frame-options']).toBeUndefined();
     expect(response.headers['access-control-allow-origin']).toBeUndefined();
   });
 });

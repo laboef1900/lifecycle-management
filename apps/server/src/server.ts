@@ -42,6 +42,8 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
     contentSecurityPolicy: false,
     // Internal deployments serve plain HTTP; an HSTS header would be misleading.
     strictTransportSecurity: false,
+    // nginx owns anti-framing for the SPA (docker/nginx.conf); direct-API JSON needs none.
+    xFrameOptions: false,
   });
 
   // Same-origin proxies (Vite dev, nginx prod) mean CORS is normally unnecessary;
