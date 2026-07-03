@@ -10,8 +10,12 @@
 #           migrate + optional seed + server boot — there is no shell to
 #           run server-entrypoint.sh against.
 
+# Base images are pinned tag@digest to the MULTI-ARCH INDEX digest (the
+# top-level digest from `docker buildx imagetools inspect <ref>`, not a
+# per-platform manifest). Dependabot's docker ecosystem bumps these.
+
 # ----- builder -----
-FROM dhi.io/node:22-alpine-dev AS builder
+FROM dhi.io/node:22-alpine-dev@sha256:bc1012efa717d6017dd093a4facd6b610e167c1b33edf4bca488967c5b1b9d99 AS builder
 
 # The -dev builder image defaults to `node` (uid 1000) — upstream renamed
 # it from `nonroot` in mid-2026. We need root briefly to enable corepack
@@ -65,7 +69,7 @@ RUN node node_modules/prisma/build/index.js generate
 WORKDIR /app
 
 # ----- runtime -----
-FROM dhi.io/node:22-alpine AS runtime
+FROM dhi.io/node:22-alpine@sha256:c39fdc13b385653ebeb4b19a40c4b34b71331cac8da00bd3276bd1fc62de7d56 AS runtime
 
 # DHI distroless: nonroot uid 65532, ENTRYPOINT=["node"], no /bin, no apk.
 WORKDIR /app
