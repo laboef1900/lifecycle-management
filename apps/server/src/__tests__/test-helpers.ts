@@ -18,6 +18,7 @@ export function makeTestEnv(overrides: Partial<Env> = {}): Env {
 
 export interface FakePrismaOptions {
   queryRaw?: ReturnType<typeof vi.fn>;
+  transaction?: ReturnType<typeof vi.fn>;
 }
 
 export function makeFakePrisma(options: FakePrismaOptions = {}): PrismaClient {
@@ -25,6 +26,7 @@ export function makeFakePrisma(options: FakePrismaOptions = {}): PrismaClient {
     $connect: vi.fn().mockResolvedValue(undefined),
     $disconnect: vi.fn().mockResolvedValue(undefined),
     $queryRaw: options.queryRaw ?? vi.fn().mockResolvedValue([{ ok: 1 }]),
+    $transaction: options.transaction ?? vi.fn().mockResolvedValue(undefined),
   };
   return fake as unknown as PrismaClient;
 }

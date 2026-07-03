@@ -10,10 +10,14 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 
 import { formatDate } from '../lib/dates.js';
 
-import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
+import { NotFoundError, UnprocessableError } from './errors.js';
 import { projectedDecommissionDate } from './host-projection.js';
+import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
 
-const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
+const CAPACITY_DUPLICATE: UniqueConstraintMapping = {
+  code: 'CAPACITY_DUPLICATE_DATE',
+  message: 'A capacity row already exists for this host/metric on that effective date',
+};
 
 const hostInclude = {
   capacities: {
@@ -105,7 +109,7 @@ export class HostsService {
       });
       return this.toResponse(created);
     } catch (err) {
-      this.translatePrismaError(err);
+      translatePrismaError(err, { uniqueConstraint: CAPACITY_DUPLICATE });
       throw err;
     }
   }
@@ -207,7 +211,7 @@ export class HostsService {
         { isolationLevel: 'Serializable' },
       );
     } catch (err) {
-      this.translatePrismaError(err);
+      translatePrismaError(err, { uniqueConstraint: CAPACITY_DUPLICATE });
       throw err;
     }
 
@@ -308,20 +312,5 @@ export class HostsService {
       updatedAt: row.updatedAt.toISOString(),
       capacities,
     };
-  }
-
-  private translatePrismaError(err: unknown): void {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
-      throw new ConflictError('WRITE_CONFLICT', 'Concurrent write detected; retry the request');
-    }
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === PRISMA_UNIQUE_CONSTRAINT
-    ) {
-      throw new ConflictError(
-        'CAPACITY_DUPLICATE_DATE',
-        'A capacity row already exists for this host/metric on that effective date',
-      );
-    }
   }
 }
