@@ -11,6 +11,7 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import type { Env } from './env.js';
 import authPlugin, { authStartupWarnings } from './plugins/auth.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
+import oidcPlugin from './plugins/oidc.js';
 import prismaPlugin from './plugins/prisma.js';
 import tenantContextPlugin from './plugins/tenant-context.js';
 import { categoriesRoutes } from './routes/categories.js';
@@ -73,6 +74,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(errorHandlerPlugin);
   await server.register(prismaPlugin, prisma ? { prisma } : {});
   await server.register(authPlugin, { env });
+  await server.register(oidcPlugin, { env });
   await server.register(tenantContextPlugin);
   await server.register(healthRoutes);
   await server.register(clusterRoutes, { prefix: '/api' });
