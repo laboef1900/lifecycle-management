@@ -35,3 +35,11 @@ export class UnprocessableError extends ServiceError {
     super(code, message);
   }
 }
+
+export class UnauthenticatedError extends ServiceError {
+  readonly statusCode = 401;
+
+  constructor() {
+    super('UNAUTHENTICATED', 'Authentication required');
+  }
+}
