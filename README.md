@@ -18,7 +18,8 @@ A pnpm monorepo with three runtime services:
 - **`packages/shared`** — Zod schemas + inferred TS types consumed by both
   the server (route validation) and the web app (forms + response types).
 - **Postgres 18** holds the lone source of truth. Schema-only multi-tenancy
-  (`tenant_id` columns everywhere) — auth lands in the 3-month milestone.
+  (`tenant_id` columns everywhere). OIDC authentication is available, off by
+  default — see [`docs/operations.md`](docs/operations.md).
   (The dev compose still uses `postgres:16-alpine` — see note below.)
 
 ## Prerequisites

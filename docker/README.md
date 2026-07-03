@@ -82,3 +82,55 @@ restarting `server` is cheap. `prisma db seed` only runs when
 `docker-compose.dev.yml` (also in this directory) brings up just Postgres;
 the server and web run on the host via `pnpm dev` so HMR + watch mode work.
 Use `pnpm db:dev:up` / `pnpm db:dev:down` as convenience wrappers.
+
+### Local Keycloak (for testing OIDC login)
+
+`docker-compose.dev.yml` also has a `keycloak` service, gated behind the
+`auth` profile so it doesn't start with a plain `pnpm db:dev:up`:
+
+```sh
+docker compose -f docker/docker-compose.dev.yml --profile auth up -d
+```
+
+This imports `docker/keycloak/lcm-dev-realm.json` — realm `lcm`, client
+`lcm-local` (confidential, secret `lcm-local-secret`, redirect URI
+`http://localhost:5173/api/auth/callback`), and a test user `dev` / `dev`.
+Keycloak listens on `http://localhost:8081`.
+
+Point the server at it in `apps/server/.env`:
+
+```
+AUTH_MODE=oidc
+OIDC_ISSUER_URL=http://localhost:8081/realms/lcm
+OIDC_CLIENT_ID=lcm-local
+OIDC_CLIENT_SECRET=lcm-local-secret
+APP_BASE_URL=http://localhost:5173
+LOGIN_STATE_SECRET=<32+ random chars>
+OIDC_ALLOW_INSECURE=true
+```
+
+`OIDC_ALLOW_INSECURE=true` is required here because both the dev server and
+this Keycloak instance run over plain HTTP — never set it in production.
+Restart `pnpm dev`, browse to <http://localhost:5173>, and sign in as
+`dev` / `dev`.
+
+## Enabling authentication (OIDC)
+
+Auth is off by default (`AUTH_MODE=disabled`). To turn it on in the
+production stack:
+
+1. Set `AUTH_MODE=oidc` plus `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`,
+   `OIDC_CLIENT_SECRET`, `APP_BASE_URL`, and `LOGIN_STATE_SECRET` in `.env`
+   (see the "Authentication (OIDC)" block in `.env.example`).
+2. `docker compose up -d` to recreate the `server` container with the new
+   environment.
+3. **Verify it actually took effect** — a stale compose file or a typo in
+   `.env` silently leaves auth disabled:
+   ```bash
+   curl -si http://<host>/api/clusters | head -1     # must print HTTP/1.1 401
+   curl -s  http://<host>/api/auth/me                # must print {"authRequired":true}
+   ```
+   Any other result means auth is NOT enabled.
+
+See [`docs/operations.md`](../docs/operations.md) for IdP registration,
+the offboarding runbook, secret rotation, and logout semantics.
