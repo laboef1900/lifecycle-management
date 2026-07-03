@@ -64,6 +64,25 @@ function useHostMutations(clusterId: string): {
   };
 }
 
+/**
+ * Map Zod issues onto a dialog's field-error slots using a path-root → field
+ * table. Issues whose path root has no entry are left unmapped — callers with
+ * a fallback (Create/Edit) toast the first issue message when nothing mapped.
+ */
+function mapIssuesToFieldErrors<K extends string>(
+  issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }>,
+  pathToField: Readonly<Record<string, K>>,
+): Partial<Record<K, string>> {
+  const fieldErrors: Partial<Record<K, string>> = {};
+  for (const issue of issues) {
+    const root = issue.path[0];
+    if (typeof root !== 'string') continue;
+    const field = pathToField[root];
+    if (field !== undefined) fieldErrors[field] = issue.message;
+  }
+  return fieldErrors;
+}
+
 // ---------- Create host ----------
 
 interface HostFormState {
@@ -158,13 +177,11 @@ export function CreateHostDialog({
     };
     const parsed = hostCreateInputSchema.safeParse(payload);
     if (!parsed.success) {
-      const fieldErrors: Partial<Record<keyof HostFormState, string>> = {};
-      for (const issue of parsed.error.issues) {
-        const root = issue.path[0];
-        if (root === 'name') fieldErrors.name = issue.message;
-        else if (root === 'commissionedAt') fieldErrors.commissionedAt = issue.message;
-        else if (root === 'capacities') fieldErrors.capacityAmount = issue.message;
-      }
+      const fieldErrors = mapIssuesToFieldErrors(parsed.error.issues, {
+        name: 'name',
+        commissionedAt: 'commissionedAt',
+        capacities: 'capacityAmount',
+      });
       setErrors(fieldErrors);
       if (Object.keys(fieldErrors).length === 0) {
         toast.error(parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -199,6 +216,7 @@ export function CreateHostDialog({
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             error={errors.name}
             placeholder="hpe-01"
+            maxLength={120}
             required
           />
           <Field
@@ -384,11 +402,10 @@ export function EditHostDialog({
     };
     const parsed = hostUpdateInputSchema.safeParse(payload);
     if (!parsed.success) {
-      const issue = parsed.error.issues[0];
-      if (issue?.path[0] === 'name') {
-        setErrors({ name: issue.message });
-      } else {
-        toast.error(issue?.message ?? 'Invalid input');
+      const fieldErrors = mapIssuesToFieldErrors(parsed.error.issues, { name: 'name' });
+      setErrors(fieldErrors);
+      if (Object.keys(fieldErrors).length === 0) {
+        toast.error(parsed.error.issues[0]?.message ?? 'Invalid input');
       }
       return;
     }
@@ -407,6 +424,7 @@ export function EditHostDialog({
             value={name}
             onChange={(e) => setName(e.target.value)}
             error={errors.name}
+            maxLength={120}
             required
           />
           <Field
@@ -475,12 +493,12 @@ export function ResizeHostDialog({
     };
     const parsed = capacityRowInputSchema.safeParse(payload);
     if (!parsed.success) {
-      const next: { effectiveFrom?: string; amount?: string } = {};
-      for (const issue of parsed.error.issues) {
-        if (issue.path[0] === 'effectiveFrom') next.effectiveFrom = issue.message;
-        if (issue.path[0] === 'amount') next.amount = issue.message;
-      }
-      setErrors(next);
+      setErrors(
+        mapIssuesToFieldErrors(parsed.error.issues, {
+          effectiveFrom: 'effectiveFrom',
+          amount: 'amount',
+        }),
+      );
       return;
     }
     mutation.mutate(payload);
@@ -665,14 +683,13 @@ export function HostTransitionDialog({
     };
     const parsed = hostTransitionInputSchema.safeParse(payload);
     if (!parsed.success) {
-      const next: { toState?: string; occurredAt?: string; note?: string } = {};
-      for (const issue of parsed.error.issues) {
-        const root = issue.path[0];
-        if (root === 'toState') next.toState = issue.message;
-        else if (root === 'occurredAt') next.occurredAt = issue.message;
-        else if (root === 'note') next.note = issue.message;
-      }
-      setErrors(next);
+      setErrors(
+        mapIssuesToFieldErrors(parsed.error.issues, {
+          toState: 'toState',
+          occurredAt: 'occurredAt',
+          note: 'note',
+        }),
+      );
       return;
     }
     mutation.mutate(payload);
@@ -830,14 +847,13 @@ export function HostReplaceDialog({
     };
     const parsed = hostReplacementCreateInputSchema.safeParse(payload);
     if (!parsed.success) {
-      const next: { newHostId?: string; swappedAt?: string; reason?: string } = {};
-      for (const issue of parsed.error.issues) {
-        const root = issue.path[0];
-        if (root === 'newHostId') next.newHostId = issue.message;
-        else if (root === 'swappedAt') next.swappedAt = issue.message;
-        else if (root === 'reason') next.reason = issue.message;
-      }
-      setErrors(next);
+      setErrors(
+        mapIssuesToFieldErrors(parsed.error.issues, {
+          newHostId: 'newHostId',
+          swappedAt: 'swappedAt',
+          reason: 'reason',
+        }),
+      );
       return;
     }
     mutation.mutate(payload);
