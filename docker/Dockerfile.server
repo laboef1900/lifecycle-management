@@ -89,6 +89,9 @@ ENV PORT=8080
 
 EXPOSE 8080
 
-# ENTRYPOINT inherits from the base image as ["node"]; CMD names the
-# module that `node` runs.
+# Explicit ENTRYPOINT: the DHI base has shipped both as ENTRYPOINT ["node"]
+# and as CMD ["node"] over time. Relying on inheritance broke the container
+# (exec of the .js as a binary) when upstream switched conventions — pin our
+# own so base changes can't alter how the server starts.
+ENTRYPOINT ["node"]
 CMD ["dist/src/entrypoint.js"]
