@@ -108,13 +108,18 @@ describe('auth plugin', () => {
       expect(response.statusCode).toBe(401);
     });
 
-    it('never lets a dot-segment traversal through /api/auth/ reach a handler unauthenticated', async () => {
+    it('does not leak the /api/auth/ exemption to a sibling prefix like /api/authz/', async () => {
       const server = await buildServer({ env: makeOidcTestEnv(), prisma });
       created.push(server);
+      server.get('/api/authz/secret', async () => ({ ok: true }));
 
-      const response = await server.inject({ method: 'GET', url: '/api/auth/%2e%2e/clusters' });
+      // '/api/authz/secret' starts with the literal string '/api/auth' but not
+      // '/api/auth/'; the exemption check requires the trailing slash, so this
+      // must still be enforced. A naive `startsWith('/api/auth')` (no slash)
+      // would wrongly exempt it and return 200 instead of 401.
+      const response = await server.inject({ method: 'GET', url: '/api/authz/secret' });
 
-      expect(response.statusCode).not.toBe(200);
+      expect(response.statusCode).toBe(401);
     });
   });
 });
