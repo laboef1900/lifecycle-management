@@ -16,7 +16,12 @@ import type { CapacityResponseRow, HostResponse } from './host.js';
 import { itemKindSchema } from './item.js';
 import type { ItemAllocationResponseRow, ItemResponse } from './item.js';
 import type { Paginated } from './pagination.js';
-import { effectiveThresholdsSchema } from './settings.js';
+import {
+  effectiveThresholdsSchema,
+  percentSchema,
+  procurementLeadTimeWeeksSchema,
+} from './settings.js';
+import type { TenantSettings } from './settings.js';
 
 // ---------- Clusters ----------
 
@@ -173,6 +178,16 @@ export const hostReplacementResponseSchema: z.ZodType<HostReplacementResponse> =
   swappedAt: z.string(),
   reason: z.string().nullable(),
   createdAt: z.string(),
+});
+
+// ---------- Settings ----------
+
+// Non-strict on purpose: responses tolerate additive server fields
+// (forward compatibility); the server enforces warn < crit on write.
+export const tenantSettingsResponseSchema: z.ZodType<TenantSettings> = z.object({
+  warnThreshold: percentSchema,
+  critThreshold: percentSchema,
+  procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
 });
 
 // ---------- Pagination envelope ----------
