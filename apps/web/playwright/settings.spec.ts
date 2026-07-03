@@ -54,7 +54,7 @@ test.describe('configurable thresholds', () => {
   test('cluster override flips chart labels and source pill', async ({ page, request }) => {
     // Pick the first existing cluster (relies on seeded data).
     const clustersRes = await request.get(`${API_BASE}/api/clusters`);
-    const clusters = (await clustersRes.json()) as Array<{ id: string }>;
+    const { items: clusters } = (await clustersRes.json()) as { items: Array<{ id: string }> };
     test.skip(clusters.length === 0, 'requires seeded clusters');
     const clusterId = clusters[0]!.id;
 
@@ -105,7 +105,9 @@ test.describe('configurable thresholds', () => {
 test.describe('cluster identity + baseline edit', () => {
   test('renames cluster — header updates immediately', async ({ page, request }) => {
     const clustersRes = await request.get('/api/clusters');
-    const clusters = (await clustersRes.json()) as Array<{ id: string; name: string }>;
+    const { items: clusters } = (await clustersRes.json()) as {
+      items: Array<{ id: string; name: string }>;
+    };
     test.skip(clusters.length === 0, 'requires seeded clusters');
     const cluster = clusters[0]!;
     const originalName = cluster.name;
@@ -141,14 +143,16 @@ test.describe('cluster identity + baseline edit', () => {
 
   test('confirm dialog gates baseline edits', async ({ page, request }) => {
     const clustersRes = await request.get('/api/clusters');
-    const clusters = (await clustersRes.json()) as Array<{
-      id: string;
-      metrics: Array<{
-        metricTypeKey: string;
-        baselineConsumption: number;
-        baselineCapacity: number;
+    const { items: clusters } = (await clustersRes.json()) as {
+      items: Array<{
+        id: string;
+        metrics: Array<{
+          metricTypeKey: string;
+          baselineConsumption: number;
+          baselineCapacity: number;
+        }>;
       }>;
-    }>;
+    };
     test.skip(clusters.length === 0, 'requires seeded clusters');
     const cluster = clusters[0]!;
     const memory = cluster.metrics.find((m) => m.metricTypeKey === 'memory_gb');
