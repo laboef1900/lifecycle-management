@@ -110,4 +110,24 @@ describe('ItemsTab', () => {
       'warning',
     );
   });
+
+  it('shows a truncation note when the server total exceeds the fetched rows', async () => {
+    vi.spyOn(api.items, 'listByCluster').mockResolvedValue({
+      items: [makeApplication(), makeEvent()],
+      total: 750,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    expect(await screen.findByText('openshift-lab')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Showing first 2 of 750 items.');
+  });
+
+  it('omits the truncation note when all items fit in one page', async () => {
+    renderTab();
+
+    expect(await screen.findByText('openshift-lab')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
 });
