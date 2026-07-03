@@ -25,6 +25,7 @@ function OverviewPage(): React.JSX.Element {
   const clustersQuery = useQuery({
     queryKey: ['clusters'],
     queryFn: () => api.clusters.list(),
+    select: (page) => page.items,
   });
 
   const clusters = clustersQuery.data ?? [];

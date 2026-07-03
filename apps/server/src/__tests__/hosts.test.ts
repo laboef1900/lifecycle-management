@@ -128,8 +128,9 @@ describe('GET /api/clusters/:clusterId/hosts', () => {
       url: `/api/clusters/${clusterId}/hosts`,
     });
     expect(response.statusCode).toBe(200);
-    const body = response.json() as Array<{ name: string }>;
-    expect(body.map((h) => h.name).sort()).toEqual(['host-a', 'host-b']);
+    const body = response.json() as { items: Array<{ name: string }>; total: number };
+    expect(body.items.map((h) => h.name).sort()).toEqual(['host-a', 'host-b']);
+    expect(body.total).toBe(2);
   });
 
   it('returns 404 when the cluster does not exist', async () => {
@@ -138,6 +139,41 @@ describe('GET /api/clusters/:clusterId/hosts', () => {
       url: '/api/clusters/missing/hosts',
     });
     expect(response.statusCode).toBe(404);
+  });
+
+  it('paginates results via limit/offset', async () => {
+    for (let i = 0; i < 3; i += 1) {
+      await server.inject({
+        method: 'POST',
+        url: `/api/clusters/${clusterId}/hosts`,
+        payload: hostPayload({ name: `page-host-${i}` }),
+      });
+    }
+
+    const firstPage = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/hosts?limit=2`,
+    });
+    expect(firstPage.statusCode).toBe(200);
+    const firstBody = firstPage.json() as {
+      items: unknown[];
+      total: number;
+      limit: number;
+      offset: number;
+    };
+    expect(firstBody.items).toHaveLength(2);
+    expect(firstBody.total).toBe(3);
+    expect(firstBody.limit).toBe(2);
+    expect(firstBody.offset).toBe(0);
+
+    const secondPage = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/hosts?limit=2&offset=2`,
+    });
+    expect(secondPage.statusCode).toBe(200);
+    const secondBody = secondPage.json() as { items: unknown[]; total: number };
+    expect(secondBody.items).toHaveLength(1);
+    expect(secondBody.total).toBe(3);
   });
 });
 

@@ -69,23 +69,25 @@ export function aggregateFleet(
     return row;
   });
 
-  const latest = fleetMonths[fleetMonths.length - 1];
+  // Headline KPIs describe the PRESENT: window rows start at the current
+  // month (resolveWindow anchors windows at "now"), so row 0 is today.
+  const current = fleetMonths[0];
   let totalConsumption = 0;
   let totalCapacity = 0;
-  if (latest) {
+  if (current) {
     for (const series of perClusterSeries) {
-      const v = latest[series.clusterId];
+      const v = current[series.clusterId];
       if (typeof v === 'number') totalConsumption += v;
     }
-    totalCapacity = latest.capacityTotal;
+    totalCapacity = current.capacityTotal;
   }
   const utilization = totalCapacity > 0 ? totalConsumption / totalCapacity : 0;
 
   let worstCluster: FleetSummary['worstCluster'] = null;
   for (const series of perClusterSeries) {
-    const last = series.months[series.months.length - 1];
-    if (!last) continue;
-    const u = last.capacity > 0 ? last.consumption / last.capacity : 0;
+    const currentMonth = series.months[0];
+    if (!currentMonth) continue;
+    const u = currentMonth.capacity > 0 ? currentMonth.consumption / currentMonth.capacity : 0;
     if (!worstCluster || u > worstCluster.utilization) {
       worstCluster = { id: series.clusterId, name: series.clusterName, utilization: u };
     }

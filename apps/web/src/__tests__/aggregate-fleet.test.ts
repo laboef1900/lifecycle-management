@@ -51,11 +51,13 @@ describe('aggregateFleet', () => {
       ['2026-02-01', 120, 500],
     ]);
     const r = aggregateFleet([c], [{ clusterId: 'a', data: f }]);
-    expect(r.totalConsumption).toBe(120);
+    // Headline KPIs report CURRENT month (row[0], not end of forecast)
+    expect(r.totalConsumption).toBe(100);
     expect(r.totalCapacity).toBe(500);
-    expect(r.utilization).toBeCloseTo(0.24, 5);
+    expect(r.utilization).toBeCloseTo(0.2, 5);
     expect(r.clusterCount).toBe(1);
     expect(r.worstCluster?.id).toBe('a');
+    expect(r.worstCluster?.utilization).toBeCloseTo(0.2, 5);
     expect(r.fleetMonths).toHaveLength(2);
     expect(r.fleetMonths[1]).toMatchObject({
       month: '2026-02-01',
@@ -82,11 +84,12 @@ describe('aggregateFleet', () => {
         { clusterId: 'b', data: fb },
       ],
     );
-    expect(r.totalConsumption).toBe(650);
+    // Headline KPIs report CURRENT month (row[0], not end of forecast)
+    expect(r.totalConsumption).toBe(500);
     expect(r.totalCapacity).toBe(1500);
-    expect(r.utilization).toBeCloseTo(650 / 1500, 5);
+    expect(r.utilization).toBeCloseTo(500 / 1500, 5);
     expect(r.worstCluster?.id).toBe('b');
-    expect(r.worstCluster?.utilization).toBeCloseTo(0.9, 5);
+    expect(r.worstCluster?.utilization).toBeCloseTo(0.8, 5);
     expect(r.fleetMonths[1]).toMatchObject({
       month: '2026-02-01',
       capacityTotal: 1500,

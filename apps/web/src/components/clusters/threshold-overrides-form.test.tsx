@@ -1,19 +1,26 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 
 import { ThresholdOverridesForm } from './threshold-overrides-form';
 
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+
 const CLUSTER_ID = 'clu_test_001';
 
-function renderWithClient(ui: React.ReactNode) {
-  const client = new QueryClient({
+function renderWithClient(
+  ui: React.ReactNode,
+  client: QueryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  }),
+) {
+  return { ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>), client };
 }
 
 describe('<ThresholdOverridesForm>', () => {
@@ -65,6 +72,34 @@ describe('<ThresholdOverridesForm>', () => {
     });
   });
 
+  it('rejects warn below 1% with the range validation message', async () => {
+    const updateSpy = vi.spyOn(api.settings.cluster, 'update').mockResolvedValue({
+      warnThreshold: 0,
+      critThreshold: null,
+      effective: { warn: 0, crit: 0.9, source: 'cluster' },
+    });
+    renderWithClient(<ThresholdOverridesForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/warn %/i)).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText(/warn %/i), '0');
+    await userEvent.click(screen.getByRole('button', { name: /save override/i }));
+    expect(screen.getByText(/thresholds must be between 1% and 99%/i)).toBeInTheDocument();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects crit above 99% with the range validation message', async () => {
+    const updateSpy = vi.spyOn(api.settings.cluster, 'update').mockResolvedValue({
+      warnThreshold: null,
+      critThreshold: 1,
+      effective: { warn: 0.7, crit: 1, source: 'cluster' },
+    });
+    renderWithClient(<ThresholdOverridesForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/crit %/i)).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText(/crit %/i), '100');
+    await userEvent.click(screen.getByRole('button', { name: /save override/i }));
+    expect(screen.getByText(/thresholds must be between 1% and 99%/i)).toBeInTheDocument();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
   it('calls reset endpoint on "Reset to inherited"', async () => {
     vi.spyOn(api.settings.cluster, 'get').mockResolvedValue({
       warnThreshold: 0.6,
@@ -83,6 +118,38 @@ describe('<ThresholdOverridesForm>', () => {
     await userEvent.click(screen.getByRole('button', { name: /reset to inherited/i }));
     await waitFor(() => {
       expect(api.settings.cluster.reset).toHaveBeenCalledWith(CLUSTER_ID);
+    });
+  });
+
+  it('invalidates the forecast query for this cluster after a successful save', async () => {
+    vi.spyOn(api.settings.cluster, 'update').mockResolvedValue({
+      warnThreshold: 0.6,
+      critThreshold: null,
+      effective: { warn: 0.6, crit: 0.9, source: 'cluster' },
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    client.setQueryData(['forecast', CLUSTER_ID], { points: [] });
+    renderWithClient(<ThresholdOverridesForm clusterId={CLUSTER_ID} />, client);
+    await waitFor(() => expect(screen.getByLabelText(/warn %/i)).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText(/warn %/i), '60');
+    await userEvent.click(screen.getByRole('button', { name: /save override/i }));
+    await waitFor(() => {
+      expect(client.getQueryState(['forecast', CLUSTER_ID])?.isInvalidated).toBe(true);
+    });
+  });
+
+  it('shows a toast with the API error message when saving fails', async () => {
+    vi.spyOn(api.settings.cluster, 'update').mockRejectedValue(
+      new ApiError(422, { error: { code: 'VALIDATION', message: 'Warn must be less than crit' } }),
+    );
+    renderWithClient(<ThresholdOverridesForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/warn %/i)).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText(/warn %/i), '60');
+    await userEvent.click(screen.getByRole('button', { name: /save override/i }));
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Warn must be less than crit');
     });
   });
 });

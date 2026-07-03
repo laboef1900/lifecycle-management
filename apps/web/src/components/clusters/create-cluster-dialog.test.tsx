@@ -46,7 +46,7 @@ describe('CreateClusterDialog validation', () => {
     await user.click(screen.getByRole('button', { name: 'Create cluster' }));
 
     expect(api.clusters.create).not.toHaveBeenCalled();
-    expect(screen.getByText(/at least 1 character/i)).toBeInTheDocument();
+    expect(screen.getByText(/too small/i)).toBeInTheDocument();
   });
 
   it('calls api.clusters.create with the wire payload on valid input', async () => {

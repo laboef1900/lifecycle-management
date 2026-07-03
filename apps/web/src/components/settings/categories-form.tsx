@@ -119,6 +119,7 @@ export function CategoriesForm(): React.JSX.Element {
             placeholder="e.g. Growth"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            maxLength={60}
             className="mt-1"
           />
         </label>

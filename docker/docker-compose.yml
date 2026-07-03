@@ -22,7 +22,7 @@ services:
     container_name: lcm-db
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lcm}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lcm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-lcm}
     volumes:
       # DHI postgres:18 sets PGDATA=/var/lib/postgresql/18/data (note the
@@ -38,17 +38,26 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 256
 
   server:
     image: ghcr.io/laboef1900/lcm-server:${LCM_IMAGE_TAG:-latest}
     container_name: lcm-server
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-lcm}:${POSTGRES_PASSWORD:-lcm}@db:5432/${POSTGRES_DB:-lcm}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lcm}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-lcm}
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 8080
       LOG_LEVEL: ${LOG_LEVEL:-info}
       SEED_ON_BOOT: ${SEED_ON_BOOT:-false}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
     depends_on:
       db:
         condition: service_healthy
@@ -65,6 +74,16 @@ services:
       retries: 6
       start_period: 30s
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 256
+    read_only: true
+    tmpfs:
+      - /tmp
 
   web:
     image: ghcr.io/laboef1900/lcm-web:${LCM_IMAGE_TAG:-latest}
@@ -78,6 +97,14 @@ services:
     ports:
       - '${HTTP_PORT:-80}:8080'
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+    # read_only: true — nginx cache paths on DHI image are unverified; not set
 
 volumes:
   lcm-postgres-18:

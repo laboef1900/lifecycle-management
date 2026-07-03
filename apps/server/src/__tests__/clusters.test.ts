@@ -127,11 +127,15 @@ describe('GET /api/clusters', () => {
 
     const response = await server.inject({ method: 'GET', url: '/api/clusters' });
     expect(response.statusCode).toBe(200);
-    const body = response.json() as Array<{
-      name: string;
-      metrics: Array<{ utilization: number }>;
-    }>;
-    const ours = body.find((c) => c.name === name);
+    const body = response.json() as {
+      items: Array<{ name: string; metrics: Array<{ utilization: number }> }>;
+      total: number;
+      limit: number;
+      offset: number;
+    };
+    expect(body.limit).toBe(100);
+    expect(body.offset).toBe(0);
+    const ours = body.items.find((c) => c.name === name);
     expect(ours).toBeDefined();
     expect(ours?.metrics[0]?.utilization).toBe(0.5);
   });
@@ -354,8 +358,8 @@ describe('GET /api/clusters (archived filter)', () => {
     await server.inject({ method: 'POST', url: `/api/clusters/${id}/archive` });
 
     const listRes = await server.inject({ method: 'GET', url: '/api/clusters' });
-    const body = listRes.json() as Array<{ id: string }>;
-    expect(body.some((c) => c.id === id)).toBe(false);
+    const body = listRes.json() as { items: Array<{ id: string }> };
+    expect(body.items.some((c) => c.id === id)).toBe(false);
   });
 
   it('returns archived clusters when includeArchived=true', async () => {
@@ -377,8 +381,8 @@ describe('GET /api/clusters (archived filter)', () => {
       method: 'GET',
       url: '/api/clusters?includeArchived=true',
     });
-    const body = listRes.json() as Array<{ id: string; archivedAt: string | null }>;
-    const found = body.find((c) => c.id === id);
+    const body = listRes.json() as { items: Array<{ id: string; archivedAt: string | null }> };
+    const found = body.items.find((c) => c.id === id);
     expect(found).toBeDefined();
     expect(found!.archivedAt).not.toBeNull();
   });
@@ -405,5 +409,45 @@ describe('GET /api/clusters/:id (archived)', () => {
     const body = detailRes.json() as { id: string; archivedAt: string | null };
     expect(body.id).toBe(id);
     expect(body.archivedAt).not.toBeNull();
+  });
+});
+
+describe('GET /api/clusters pagination', () => {
+  it('paginates results via limit/offset', async () => {
+    for (let i = 0; i < 3; i += 1) {
+      await server.inject({
+        method: 'POST',
+        url: '/api/clusters',
+        payload: {
+          name: uniqueName(`page-${i}`),
+          baselineDate: '2026-05-01',
+          baselines: [
+            { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+          ],
+        },
+      });
+    }
+
+    const firstPage = await server.inject({ method: 'GET', url: '/api/clusters?limit=2' });
+    expect(firstPage.statusCode).toBe(200);
+    const firstBody = firstPage.json() as {
+      items: unknown[];
+      total: number;
+      limit: number;
+      offset: number;
+    };
+    expect(firstBody.items).toHaveLength(2);
+    expect(firstBody.total).toBe(3);
+    expect(firstBody.limit).toBe(2);
+    expect(firstBody.offset).toBe(0);
+
+    const secondPage = await server.inject({
+      method: 'GET',
+      url: '/api/clusters?limit=2&offset=2',
+    });
+    expect(secondPage.statusCode).toBe(200);
+    const secondBody = secondPage.json() as { items: unknown[]; total: number };
+    expect(secondBody.items).toHaveLength(1);
+    expect(secondBody.total).toBe(3);
   });
 });

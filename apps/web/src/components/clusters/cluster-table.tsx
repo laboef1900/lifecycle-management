@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils';
 import { ClusterListCard } from './cluster-list-card';
 import { UtilizationBadge } from './utilization-badge';
 
-export interface ClusterForecastEntry {
+export interface ClusterTableEntry {
   months: ForecastMonthPoint[];
   thresholds: { warn: number; crit: number };
 }
@@ -28,8 +28,10 @@ export interface ClusterForecastEntry {
 interface ClusterTableProps {
   clusters: ClusterResponse[];
   /** Per-cluster forecast months + effective thresholds, keyed by cluster id. Runway shows '—' when missing. */
-  forecastsById?: Record<string, ClusterForecastEntry>;
+  forecastsById?: Record<string, ClusterTableEntry>;
   horizonMonths?: number;
+  /** Server-side total cluster count; renders a truncation note when it exceeds `clusters.length`. */
+  total?: number;
 }
 
 type SortKey = 'name' | 'consumption' | 'capacity' | 'utilization' | 'runway';
@@ -55,6 +57,7 @@ export function ClusterTable({
   clusters,
   forecastsById,
   horizonMonths,
+  total,
 }: ClusterTableProps): React.JSX.Element {
   const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' });
   const navigate = useNavigate();
@@ -194,6 +197,11 @@ export function ClusterTable({
           </TableBody>
         </Table>
       </Card>
+      {total !== undefined && total > clusters.length ? (
+        <p className="mt-2 text-xs text-fg-subtle" role="status">
+          Showing first {clusters.length} of {total} clusters.
+        </p>
+      ) : null}
     </>
   );
 }

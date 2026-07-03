@@ -14,7 +14,7 @@ export const clusterRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get('/clusters', async (request) => {
     const query = clustersListQuerySchema.parse(request.query);
-    return service.list(request.tenantId, { includeArchived: query.includeArchived ?? false });
+    return service.list(request.tenantId, query);
   });
 
   fastify.get('/clusters/:id', async (request) => {

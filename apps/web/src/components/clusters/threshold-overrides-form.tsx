@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { api } from '@/lib/api-client';
+import { api, describeApiError } from '@/lib/api-client';
 
 interface ThresholdOverridesFormProps {
   clusterId: string;
@@ -44,18 +45,22 @@ export function ThresholdOverridesForm({
       api.settings.cluster.update(clusterId, input),
     onSuccess: (data) => {
       queryClient.setQueryData(['cluster-settings', clusterId], data);
+      void queryClient.invalidateQueries({ queryKey: ['forecast', clusterId] });
       setWarnEdit(null);
       setCritEdit(null);
     },
+    onError: (err) => toast.error(describeApiError(err, 'Could not save thresholds')),
   });
 
   const resetMutation = useMutation({
     mutationFn: () => api.settings.cluster.reset(clusterId),
     onSuccess: (data) => {
       queryClient.setQueryData(['cluster-settings', clusterId], data);
+      void queryClient.invalidateQueries({ queryKey: ['forecast', clusterId] });
       setWarnEdit(null);
       setCritEdit(null);
     },
+    onError: (err) => toast.error(describeApiError(err, 'Could not reset thresholds')),
   });
 
   const isCurrentlyOverridden =
@@ -76,6 +81,12 @@ export function ThresholdOverridesForm({
       setValidationError('Warn must be less than crit.');
       return;
     }
+    for (const pct of [warnPct, critPct]) {
+      if (typeof pct === 'number' && (pct < 1 || pct > 99)) {
+        setValidationError('Thresholds must be between 1% and 99%.');
+        return;
+      }
+    }
     saveMutation.mutate({
       warnThreshold: typeof warnPct === 'number' ? warnPct / 100 : null,
       critThreshold: typeof critPct === 'number' ? critPct / 100 : null,
@@ -93,7 +104,7 @@ export function ThresholdOverridesForm({
         </div>
         <Badge variant={isCurrentlyOverridden ? 'accent' : 'default'}>{sourceLabel}</Badge>
       </header>
-      <form onSubmit={handleSubmit} className="space-y-3">
+      <form onSubmit={handleSubmit} className="space-y-3" noValidate>
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">

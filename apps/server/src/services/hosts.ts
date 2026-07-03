@@ -4,6 +4,7 @@ import type {
   HostCreateInput,
   HostResponse,
   HostUpdateInput,
+  Paginated,
 } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
@@ -27,14 +28,29 @@ type HostRow = Prisma.HostGetPayload<{ include: typeof hostInclude }>;
 export class HostsService {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async listByCluster(tenantId: string, clusterId: string): Promise<HostResponse[]> {
+  async listByCluster(
+    tenantId: string,
+    clusterId: string,
+    options: { limit: number; offset: number },
+  ): Promise<Paginated<HostResponse>> {
     await this.assertClusterExists(tenantId, clusterId);
-    const rows = await this.prisma.host.findMany({
-      where: { tenantId, clusterId },
-      include: hostInclude,
-      orderBy: { name: 'asc' },
-    });
-    return rows.map((row) => this.toResponse(row));
+    const where = { tenantId, clusterId };
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.host.count({ where }),
+      this.prisma.host.findMany({
+        where,
+        include: hostInclude,
+        orderBy: { name: 'asc' },
+        take: options.limit,
+        skip: options.offset,
+      }),
+    ]);
+    return {
+      items: rows.map((row) => this.toResponse(row)),
+      total,
+      limit: options.limit,
+      offset: options.offset,
+    };
   }
 
   async getById(tenantId: string, id: string): Promise<HostResponse> {
@@ -139,52 +155,57 @@ export class HostsService {
     id: string,
     input: CapacityRowInput,
   ): Promise<HostResponse> {
-    const host = await this.prisma.host.findFirst({
-      where: { id, tenantId },
-      include: { capacities: { include: { metricType: true } } },
-    });
-    if (!host) {
-      throw new NotFoundError('Host', id);
-    }
-
-    if (input.effectiveFrom < host.commissionedAt) {
-      throw new UnprocessableError(
-        'EFFECTIVE_BEFORE_COMMISSION',
-        'effectiveFrom must be on or after the host commissionedAt date',
-      );
-    }
-
-    const metricType = (await this.resolveMetricTypes([input.metricTypeKey])).get(
-      input.metricTypeKey,
-    );
-    if (!metricType) {
-      throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${input.metricTypeKey}`);
-    }
-
-    const latestForMetric = host.capacities
-      .filter((c) => c.metricType.key === input.metricTypeKey)
-      .reduce<Date | null>(
-        (max, cap) => (max === null || cap.effectiveFrom > max ? cap.effectiveFrom : max),
-        null,
-      );
-
-    if (latestForMetric !== null && input.effectiveFrom <= latestForMetric) {
-      throw new UnprocessableError(
-        'EFFECTIVE_NOT_MONOTONIC',
-        'effectiveFrom must be strictly after the latest existing capacity row for this metric',
-      );
-    }
-
     try {
-      await this.prisma.hostMetricCapacity.create({
-        data: {
-          hostId: id,
-          tenantId,
-          metricTypeId: metricType.id,
-          effectiveFrom: input.effectiveFrom,
-          amount: new Prisma.Decimal(input.amount),
+      await this.prisma.$transaction(
+        async (tx) => {
+          const host = await tx.host.findFirst({
+            where: { id, tenantId },
+            include: { capacities: { include: { metricType: true } } },
+          });
+          if (!host) {
+            throw new NotFoundError('Host', id);
+          }
+
+          if (input.effectiveFrom < host.commissionedAt) {
+            throw new UnprocessableError(
+              'EFFECTIVE_BEFORE_COMMISSION',
+              'effectiveFrom must be on or after the host commissionedAt date',
+            );
+          }
+
+          const metricType = (await this.resolveMetricTypes([input.metricTypeKey], tx)).get(
+            input.metricTypeKey,
+          );
+          if (!metricType) {
+            throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${input.metricTypeKey}`);
+          }
+
+          const latestForMetric = host.capacities
+            .filter((c) => c.metricType.key === input.metricTypeKey)
+            .reduce<Date | null>(
+              (max, cap) => (max === null || cap.effectiveFrom > max ? cap.effectiveFrom : max),
+              null,
+            );
+
+          if (latestForMetric !== null && input.effectiveFrom <= latestForMetric) {
+            throw new UnprocessableError(
+              'EFFECTIVE_NOT_MONOTONIC',
+              'effectiveFrom must be strictly after the latest existing capacity row for this metric',
+            );
+          }
+
+          await tx.hostMetricCapacity.create({
+            data: {
+              hostId: id,
+              tenantId,
+              metricTypeId: metricType.id,
+              effectiveFrom: input.effectiveFrom,
+              amount: new Prisma.Decimal(input.amount),
+            },
+          });
         },
-      });
+        { isolationLevel: 'Serializable' },
+      );
     } catch (err) {
       this.translatePrismaError(err);
       throw err;
@@ -240,9 +261,10 @@ export class HostsService {
 
   private async resolveMetricTypes(
     keys: string[],
+    tx: Prisma.TransactionClient = this.prisma,
   ): Promise<Map<string, { id: string; key: string; displayName: string; unit: string }>> {
     const unique = Array.from(new Set(keys));
-    const rows = await this.prisma.metricType.findMany({
+    const rows = await tx.metricType.findMany({
       where: { key: { in: unique } },
     });
     const map = new Map(rows.map((r) => [r.key, r]));
@@ -289,6 +311,9 @@ export class HostsService {
   }
 
   private translatePrismaError(err: unknown): void {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+      throw new ConflictError('WRITE_CONFLICT', 'Concurrent write detected; retry the request');
+    }
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === PRISMA_UNIQUE_CONSTRAINT

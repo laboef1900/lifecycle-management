@@ -60,7 +60,7 @@ so restarting is cheap.
 
 ## Backups
 
-The Postgres volume `lcm-postgres-data` holds everything. Take logical
+The Postgres volume `lcm-postgres-18-data` holds everything. Take logical
 backups with `pg_dump`:
 
 ```bash

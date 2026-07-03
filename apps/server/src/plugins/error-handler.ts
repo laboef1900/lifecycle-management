@@ -1,6 +1,6 @@
 import type { FastifyError, FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
 
 import { ServiceError } from '../services/errors.js';
 
@@ -20,7 +20,7 @@ const errorHandlerPlugin: FastifyPluginAsync = async (fastify) => {
         error: {
           code: 'VALIDATION_ERROR',
           message: 'Request validation failed',
-          details: error.flatten(),
+          details: z.flattenError(error),
         },
       };
       reply.status(400).send(body);

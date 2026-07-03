@@ -1,0 +1,187 @@
+import { z } from 'zod';
+
+import type { CategoryResponse } from './category.js';
+import type { ClusterResponse, MetricStateResponse } from './cluster.js';
+import type {
+  ForecastEntityContribution,
+  ForecastEventMarker,
+  ForecastMonthPoint,
+  ForecastResponse,
+  ProcurementInfo,
+} from './forecast.js';
+import { hostStateSchema } from './host-lifecycle.js';
+import type { HostLifecycleEventResponse } from './host-lifecycle.js';
+import type { HostReplacementResponse } from './host-replacement.js';
+import type { CapacityResponseRow, HostResponse } from './host.js';
+import { itemKindSchema } from './item.js';
+import type { ItemAllocationResponseRow, ItemResponse } from './item.js';
+import type { Paginated } from './pagination.js';
+import { effectiveThresholdsSchema } from './settings.js';
+
+// ---------- Clusters ----------
+
+export const metricStateResponseSchema: z.ZodType<MetricStateResponse> = z.object({
+  metricTypeKey: z.string(),
+  metricTypeDisplayName: z.string(),
+  unit: z.string(),
+  baselineConsumption: z.number(),
+  baselineCapacity: z.number(),
+  currentConsumption: z.number(),
+  currentCapacity: z.number(),
+  utilization: z.number(),
+});
+
+export const clusterResponseSchema: z.ZodType<ClusterResponse> = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  baselineDate: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().nullable(),
+  metrics: z.array(metricStateResponseSchema),
+});
+
+// ---------- Hosts ----------
+
+export const capacityResponseRowSchema: z.ZodType<CapacityResponseRow> = z.object({
+  id: z.string(),
+  metricTypeKey: z.string(),
+  metricTypeDisplayName: z.string(),
+  unit: z.string(),
+  effectiveFrom: z.string(),
+  amount: z.number(),
+});
+
+export const hostResponseSchema: z.ZodType<HostResponse> = z.object({
+  id: z.string(),
+  clusterId: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  commissionedAt: z.string(),
+  decommissionedAt: z.string().nullable(),
+  serialNumber: z.string().nullable(),
+  vendor: z.string().nullable(),
+  model: z.string().nullable(),
+  purchasedAt: z.string().nullable(),
+  warrantyEndsAt: z.string().nullable(),
+  eolAt: z.string().nullable(),
+  runPastEol: z.boolean(),
+  state: hostStateSchema,
+  projectedDecommissionAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  capacities: z.array(capacityResponseRowSchema),
+});
+
+// ---------- Items ----------
+
+export const itemAllocationResponseRowSchema: z.ZodType<ItemAllocationResponseRow> = z.object({
+  id: z.string(),
+  metricTypeKey: z.string(),
+  metricTypeDisplayName: z.string(),
+  unit: z.string(),
+  effectiveFrom: z.string(),
+  amount: z.number(),
+});
+
+export const itemResponseSchema: z.ZodType<ItemResponse> = z.object({
+  id: z.string(),
+  clusterId: z.string(),
+  kind: itemKindSchema,
+  name: z.string(),
+  category: z.string(),
+  description: z.string().nullable(),
+  effectiveDate: z.string(),
+  endedAt: z.string().nullable(),
+  metricTypeKey: z.string().nullable(),
+  consumptionDelta: z.number().nullable(),
+  capacityDelta: z.number().nullable(),
+  allocations: z.array(itemAllocationResponseRowSchema),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+// ---------- Forecast ----------
+
+export const forecastMonthPointSchema: z.ZodType<ForecastMonthPoint> = z.object({
+  month: z.string(),
+  consumption: z.number(),
+  capacity: z.number(),
+  utilization: z.number(),
+});
+
+export const forecastEventMarkerSchema: z.ZodType<ForecastEventMarker> = z.object({
+  id: z.string(),
+  effectiveDate: z.string(),
+  category: z.string(),
+  title: z.string(),
+  description: z.string().nullable(),
+  consumptionDelta: z.number().nullable(),
+  capacityDelta: z.number().nullable(),
+});
+
+export const forecastEntityContributionSchema: z.ZodType<ForecastEntityContribution> = z.object({
+  id: z.string(),
+  name: z.string(),
+  projectedDecommissionAt: z.string().nullable().exactOptional(),
+  contributions: z.array(z.object({ month: z.string(), amount: z.number() })),
+});
+
+export const procurementInfoSchema: z.ZodType<ProcurementInfo> = z.object({
+  leadTimeWeeks: z.number(),
+  orderByDate: z.string().nullable(),
+  breachMonth: z.string().nullable(),
+});
+
+export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
+  fromMonth: z.string(),
+  toMonth: z.string(),
+  months: z.array(forecastMonthPointSchema),
+  events: z.array(forecastEventMarkerSchema),
+  hosts: z.array(forecastEntityContributionSchema),
+  applications: z.array(forecastEntityContributionSchema),
+  effectiveThresholds: effectiveThresholdsSchema,
+  procurement: procurementInfoSchema,
+});
+
+// ---------- Categories ----------
+
+export const categoryResponseSchema: z.ZodType<CategoryResponse> = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+// ---------- Host lifecycle ----------
+
+export const hostLifecycleEventResponseSchema: z.ZodType<HostLifecycleEventResponse> = z.object({
+  id: z.string(),
+  hostId: z.string(),
+  fromState: hostStateSchema.nullable(),
+  toState: hostStateSchema,
+  occurredAt: z.string(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+// ---------- Host replacements ----------
+
+export const hostReplacementResponseSchema: z.ZodType<HostReplacementResponse> = z.object({
+  id: z.string(),
+  oldHostId: z.string(),
+  newHostId: z.string(),
+  swappedAt: z.string(),
+  reason: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+// ---------- Pagination envelope ----------
+
+export function paginatedSchema<T>(item: z.ZodType<T>): z.ZodType<Paginated<T>> {
+  return z.object({
+    items: z.array(item),
+    total: z.number().int(),
+    limit: z.number().int(),
+    offset: z.number().int(),
+  });
+}

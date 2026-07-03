@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { api } from '@/lib/api-client';
+import { api, describeApiError } from '@/lib/api-client';
 
 type NumInput = number | '';
 
@@ -43,12 +44,15 @@ export function ForecastThresholdsForm(): React.JSX.Element {
     }) => api.settings.tenant.update(input),
     onSuccess: (data) => {
       queryClient.setQueryData(['tenant-settings'], data);
+      void queryClient.invalidateQueries({ queryKey: ['forecast'] });
+      void queryClient.invalidateQueries({ queryKey: ['cluster-settings'] });
       // After save succeeds the server values now match; clear local edits so
       // the dirty check resets.
       setWarnEdit(null);
       setCritEdit(null);
       setLeadEdit(null);
     },
+    onError: (err) => toast.error(describeApiError(err, 'Could not save settings')),
   });
 
   const dirty =
@@ -67,6 +71,10 @@ export function ForecastThresholdsForm(): React.JSX.Element {
     if (typeof leadWeeks !== 'number') return;
     if (warnPct >= critPct) {
       setValidationError('Warn must be less than crit.');
+      return;
+    }
+    if (warnPct < 1 || warnPct > 99 || critPct < 1 || critPct > 99) {
+      setValidationError('Thresholds must be between 1% and 99%.');
       return;
     }
     if (!Number.isInteger(leadWeeks) || leadWeeks < 0 || leadWeeks > 104) {

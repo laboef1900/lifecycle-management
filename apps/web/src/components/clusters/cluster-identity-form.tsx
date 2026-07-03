@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { api, type ClusterUpdateInputWire } from '@/lib/api-client';
+import { api, describeApiError, type ClusterUpdateInputWire } from '@/lib/api-client';
 
 interface ClusterIdentityFormProps {
   clusterId: string;
@@ -30,9 +31,11 @@ export function ClusterIdentityForm({ clusterId }: ClusterIdentityFormProps): Re
     mutationFn: (input: ClusterUpdateInputWire) => api.clusters.update(clusterId, input),
     onSuccess: (data) => {
       queryClient.setQueryData(['cluster', clusterId], data);
+      void queryClient.invalidateQueries({ queryKey: ['clusters'] });
       setNameEdit(null);
       setDescriptionEdit(null);
     },
+    onError: (err) => toast.error(describeApiError(err, 'Could not save cluster')),
   });
 
   const dirty =

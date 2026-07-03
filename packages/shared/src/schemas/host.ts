@@ -2,18 +2,18 @@ import { z } from 'zod';
 
 import { cuid, dateOnly, positiveAmount } from './common.js';
 
-export const capacityRowInputSchema = z.object({
+export const capacityRowInputSchema = z.strictObject({
   metricTypeKey: z.string().min(1),
   effectiveFrom: dateOnly,
   amount: positiveAmount,
 });
 
-export const hostCreateInputSchema = z.object({
+export const hostCreateInputSchema = z.strictObject({
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().max(2000).nullish(),
   commissionedAt: dateOnly,
   decommissionedAt: dateOnly.nullable().optional(),
-  capacities: z.array(capacityRowInputSchema).min(1),
+  capacities: z.array(capacityRowInputSchema).min(1).max(1000),
   serialNumber: z.string().trim().max(120).nullish(),
   vendor: z.string().trim().max(120).nullish(),
   model: z.string().trim().max(120).nullish(),
@@ -24,7 +24,7 @@ export const hostCreateInputSchema = z.object({
 });
 
 export const hostUpdateInputSchema = z
-  .object({
+  .strictObject({
     name: z.string().trim().min(1).max(120).optional(),
     description: z.string().trim().max(2000).nullish(),
     commissionedAt: dateOnly.optional(),
@@ -37,7 +37,6 @@ export const hostUpdateInputSchema = z
     eolAt: dateOnly.nullable().optional(),
     runPastEol: z.boolean().optional(),
   })
-  .strict()
   .refine(
     (data) =>
       data.name !== undefined ||

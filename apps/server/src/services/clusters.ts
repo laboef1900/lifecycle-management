@@ -3,6 +3,7 @@ import type {
   ClusterResponse,
   ClusterUpdateInput,
   MetricStateResponse,
+  Paginated,
 } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
@@ -35,15 +36,25 @@ export class ClustersService {
 
   async list(
     tenantId: string,
-    options: { includeArchived?: boolean } = {},
-  ): Promise<ClusterResponse[]> {
+    options: { includeArchived?: boolean; limit: number; offset: number },
+  ): Promise<Paginated<ClusterResponse>> {
     const where = options.includeArchived ? { tenantId } : { tenantId, archivedAt: null };
-    const rows = await this.prisma.cluster.findMany({
-      where,
-      include: clusterInclude,
-      orderBy: { name: 'asc' },
-    });
-    return rows.map((row) => this.toResponse(row));
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.cluster.count({ where }),
+      this.prisma.cluster.findMany({
+        where,
+        include: clusterInclude,
+        orderBy: { name: 'asc' },
+        take: options.limit,
+        skip: options.offset,
+      }),
+    ]);
+    return {
+      items: rows.map((row) => this.toResponse(row)),
+      total,
+      limit: options.limit,
+      offset: options.offset,
+    };
   }
 
   async getById(tenantId: string, id: string): Promise<ClusterResponse> {

@@ -46,13 +46,7 @@ interface HostsTabProps {
 }
 
 type DialogKind =
-  | 'edit'
-  | 'resize'
-  | 'decommission'
-  | 'delete'
-  | 'transition'
-  | 'replace'
-  | 'history';
+  'edit' | 'resize' | 'decommission' | 'delete' | 'transition' | 'replace' | 'history';
 
 export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
@@ -61,7 +55,8 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
 
   const hostsQuery = useQuery({
     queryKey: ['hosts', clusterId],
-    queryFn: () => api.hosts.listByCluster(clusterId),
+    queryFn: () => api.hosts.listByCluster(clusterId, { limit: 500 }),
+    select: (page) => page.items,
   });
 
   const toggle = (id: string): void => {

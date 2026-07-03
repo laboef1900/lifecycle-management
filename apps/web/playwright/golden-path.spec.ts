@@ -86,15 +86,17 @@ test('create cluster, add host + application, chart reflects updates', async ({
     await expect(page.getByText('1 host providing capacity')).toBeVisible();
     await expect(page.getByRole('cell', { name: '2,000 GB' })).toBeVisible();
 
-    // Add an application.
-    await page.getByRole('tab', { name: 'Applications' }).click();
-    await page.getByRole('button', { name: 'Add application' }).click();
-    const appDialog = page.getByRole('dialog', { name: 'Add application' });
+    // Add an application (the "Apps & Events" tab hosts both item kinds behind
+    // a single "Add item" dialog defaulting to the application form).
+    await page.getByRole('tab', { name: 'Apps & Events' }).click();
+    await page.getByRole('button', { name: 'Add item' }).click();
+    const appDialog = page.getByRole('dialog', { name: 'Add item' });
     await appDialog.getByRole('textbox', { name: 'Name' }).fill('app-e2e');
+    await appDialog.getByLabel('Category').fill('OpenShift');
     await appDialog.getByRole('spinbutton', { name: 'Initial memory allocation (GB)' }).fill('400');
     await appDialog.getByRole('button', { name: 'Add application' }).click();
     await expect(appDialog).toBeHidden();
-    await expect(page.getByText('1 application consuming capacity')).toBeVisible();
+    await expect(page.getByText('1 item on the forecast')).toBeVisible();
     await expect(page.getByRole('cell', { name: '400 GB' })).toBeVisible();
 
     // The chart legend stays present after each mutation invalidates the

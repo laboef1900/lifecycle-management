@@ -1,4 +1,4 @@
-import type { Scenario } from '@lcm/shared';
+import { MAX_FORECAST_SPAN_MONTHS, monthsBetweenUtc, type Scenario } from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
 
 import { NotFoundError, UnprocessableError } from './errors.js';
@@ -108,6 +108,16 @@ export class ForecastService {
 
     const fromMonth = options.fromMonth ?? firstOfMonth(cluster.baselineDate);
     const toMonth = options.toMonth ?? addMonths(fromMonth, DEFAULT_HORIZON_MONTHS);
+
+    if (toMonth < fromMonth) {
+      throw new UnprocessableError('INVALID_RANGE', 'to must be on or after from');
+    }
+    if (monthsBetweenUtc(fromMonth, toMonth) > MAX_FORECAST_SPAN_MONTHS) {
+      throw new UnprocessableError(
+        'RANGE_TOO_LARGE',
+        `Forecast window must not exceed ${MAX_FORECAST_SPAN_MONTHS} months`,
+      );
+    }
 
     const hosts: ForecastHost[] = cluster.hosts.map((host) => ({
       id: host.id,

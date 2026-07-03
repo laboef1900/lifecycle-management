@@ -1,18 +1,23 @@
 import type {
-  CategoryResponse,
   ClusterCreateInput,
-  ClusterResponse,
   ClusterSettingsInput,
-  ClusterSettingsResponse,
   ClusterUpdateInput,
-  ForecastResponse,
-  HostLifecycleEventResponse,
-  HostReplacementResponse,
-  HostResponse,
   HostState,
-  ItemResponse,
   TenantSettings,
 } from '@lcm/shared';
+import {
+  categoryResponseSchema,
+  clusterResponseSchema,
+  clusterSettingsResponseSchema,
+  forecastResponseSchema,
+  hostLifecycleEventResponseSchema,
+  hostReplacementResponseSchema,
+  hostResponseSchema,
+  itemResponseSchema,
+  paginatedSchema,
+  tenantSettingsSchema,
+} from '@lcm/shared';
+import { z } from 'zod';
 
 /**
  * Wire shape of scenarioSchema: Zod's `monthOnly.optional()` transforms a
@@ -46,7 +51,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, schema?: z.ZodType<T>): Promise<T> {
   // Only advertise a JSON body when we actually send one — Fastify rejects
   // requests that declare content-type: application/json but have an empty
   // body (e.g. a bodyless DELETE).
@@ -79,7 +84,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     });
   }
 
-  return body as T;
+  if (schema === undefined) {
+    return body as T;
+  }
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    throw new ApiError(response.status, {
+      error: {
+        code: 'RESPONSE_VALIDATION',
+        message: 'Server response did not match the expected shape',
+        details: z.flattenError(parsed.error),
+      },
+    });
+  }
+  return parsed.data;
+}
+
+/** Human-readable message for a failed API call: the server's message when available. */
+export function describeApiError(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
 }
 
 function isApiErrorBody(value: unknown): value is ApiErrorBody {
@@ -208,35 +231,56 @@ export interface HostReplacementCreateInputWire {
   reason?: string;
 }
 
+// ---------- Query string helper ----------
+
+/** Builds a leading-`?` query string from a params object, skipping undefined/false values. */
+function listQuery(params?: Record<string, string | number | boolean | undefined>): string {
+  if (!params) return '';
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== false) search.set(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : '';
+}
+
 // ---------- API surface ----------
 
 export const api = {
   clusters: {
-    list: (params?: { includeArchived?: boolean }) => {
-      const qs = params?.includeArchived ? '?includeArchived=true' : '';
-      return request<ClusterResponse[]>(`/api/clusters${qs}`);
-    },
-    get: (id: string) => request<ClusterResponse>(`/api/clusters/${id}`),
+    list: (params?: { includeArchived?: boolean; limit?: number; offset?: number }) =>
+      request(
+        `/api/clusters${listQuery(params)}`,
+        undefined,
+        paginatedSchema(clusterResponseSchema),
+      ),
+    get: (id: string) => request(`/api/clusters/${id}`, undefined, clusterResponseSchema),
     create: (input: ClusterCreateInputWire) =>
-      request<ClusterResponse>('/api/clusters', {
-        method: 'POST',
-        body: JSON.stringify(input),
-      }),
+      request(
+        '/api/clusters',
+        { method: 'POST', body: JSON.stringify(input) },
+        clusterResponseSchema,
+      ),
     update: (id: string, input: ClusterUpdateInputWire) =>
-      request<ClusterResponse>(`/api/clusters/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(input),
-      }),
+      request(
+        `/api/clusters/${id}`,
+        { method: 'PUT', body: JSON.stringify(input) },
+        clusterResponseSchema,
+      ),
     delete: (id: string) => request<void>(`/api/clusters/${id}`, { method: 'DELETE' }),
     archive: (id: string) =>
-      request<ClusterResponse>(`/api/clusters/${id}/archive`, { method: 'POST' }),
+      request(`/api/clusters/${id}/archive`, { method: 'POST' }, clusterResponseSchema),
     unarchive: (id: string) =>
-      request<ClusterResponse>(`/api/clusters/${id}/unarchive`, { method: 'POST' }),
+      request(`/api/clusters/${id}/unarchive`, { method: 'POST' }, clusterResponseSchema),
     forecast: (id: string, params: { metric: string; from?: string; to?: string }) => {
       const search = new URLSearchParams({ metric: params.metric });
       if (params.from) search.set('from', params.from);
       if (params.to) search.set('to', params.to);
-      return request<ForecastResponse>(`/api/clusters/${id}/forecast?${search.toString()}`);
+      return request(
+        `/api/clusters/${id}/forecast?${search.toString()}`,
+        undefined,
+        forecastResponseSchema,
+      );
     },
     forecastScenario: (
       id: string,
@@ -246,30 +290,38 @@ export const api = {
       const search = new URLSearchParams({ metric: params.metric });
       if (params.from) search.set('from', params.from);
       if (params.to) search.set('to', params.to);
-      return request<ForecastResponse>(
+      return request(
         `/api/clusters/${id}/forecast/scenario?${search.toString()}`,
         { method: 'POST', body: JSON.stringify(scenario) },
+        forecastResponseSchema,
       );
     },
   },
   hosts: {
-    listByCluster: (clusterId: string) =>
-      request<HostResponse[]>(`/api/clusters/${clusterId}/hosts`),
+    listByCluster: (clusterId: string, params?: { limit?: number; offset?: number }) =>
+      request(
+        `/api/clusters/${clusterId}/hosts${listQuery(params)}`,
+        undefined,
+        paginatedSchema(hostResponseSchema),
+      ),
     create: (clusterId: string, input: HostCreateInputWire) =>
-      request<HostResponse>(`/api/clusters/${clusterId}/hosts`, {
-        method: 'POST',
-        body: JSON.stringify(input),
-      }),
+      request(
+        `/api/clusters/${clusterId}/hosts`,
+        { method: 'POST', body: JSON.stringify(input) },
+        hostResponseSchema,
+      ),
     update: (id: string, input: HostUpdateInputWire) =>
-      request<HostResponse>(`/api/hosts/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(input),
-      }),
+      request(
+        `/api/hosts/${id}`,
+        { method: 'PUT', body: JSON.stringify(input) },
+        hostResponseSchema,
+      ),
     appendCapacity: (id: string, input: CapacityAppendInputWire) =>
-      request<HostResponse>(`/api/hosts/${id}/capacity`, {
-        method: 'POST',
-        body: JSON.stringify(input),
-      }),
+      request(
+        `/api/hosts/${id}/capacity`,
+        { method: 'POST', body: JSON.stringify(input) },
+        hostResponseSchema,
+      ),
     delete: (id: string) => request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
     transition: (id: string, input: HostTransitionInputWire) =>
       request<void>(`/api/hosts/${id}/transitions`, {
@@ -277,65 +329,79 @@ export const api = {
         body: JSON.stringify(input),
       }),
     listLifecycle: (id: string) =>
-      request<HostLifecycleEventResponse[]>(`/api/hosts/${id}/lifecycle`),
+      request(`/api/hosts/${id}/lifecycle`, undefined, z.array(hostLifecycleEventResponseSchema)),
   },
   hostReplacements: {
     create: (input: HostReplacementCreateInputWire) =>
-      request<HostReplacementResponse>('/api/host-replacements', {
-        method: 'POST',
-        body: JSON.stringify(input),
-      }),
+      request(
+        '/api/host-replacements',
+        { method: 'POST', body: JSON.stringify(input) },
+        hostReplacementResponseSchema,
+      ),
     delete: (id: string) => request<void>(`/api/host-replacements/${id}`, { method: 'DELETE' }),
   },
   items: {
-    listByCluster: (clusterId: string) =>
-      request<ItemResponse[]>(`/api/clusters/${clusterId}/items`),
+    listByCluster: (clusterId: string, params?: { limit?: number; offset?: number }) =>
+      request(
+        `/api/clusters/${clusterId}/items${listQuery(params)}`,
+        undefined,
+        paginatedSchema(itemResponseSchema),
+      ),
     create: (clusterId: string, input: ItemCreateInputWire) =>
-      request<ItemResponse>(`/api/clusters/${clusterId}/items`, {
-        method: 'POST',
-        body: JSON.stringify(input),
-      }),
+      request(
+        `/api/clusters/${clusterId}/items`,
+        { method: 'POST', body: JSON.stringify(input) },
+        itemResponseSchema,
+      ),
     update: (id: string, input: ItemUpdateInputWire) =>
-      request<ItemResponse>(`/api/items/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(input),
-      }),
+      request(
+        `/api/items/${id}`,
+        { method: 'PATCH', body: JSON.stringify(input) },
+        itemResponseSchema,
+      ),
     appendAllocation: (id: string, input: ItemAllocationAppendInputWire) =>
-      request<ItemResponse>(`/api/items/${id}/allocations`, {
-        method: 'POST',
-        body: JSON.stringify(input),
-      }),
+      request(
+        `/api/items/${id}/allocations`,
+        { method: 'POST', body: JSON.stringify(input) },
+        itemResponseSchema,
+      ),
     delete: (id: string) => request<void>(`/api/items/${id}`, { method: 'DELETE' }),
   },
   settings: {
     categories: {
-      list: () => request<CategoryResponse[]>('/api/settings/categories'),
+      list: () => request('/api/settings/categories', undefined, z.array(categoryResponseSchema)),
       create: (name: string) =>
-        request<CategoryResponse>('/api/settings/categories', {
-          method: 'POST',
-          body: JSON.stringify({ name }),
-        }),
+        request(
+          '/api/settings/categories',
+          { method: 'POST', body: JSON.stringify({ name }) },
+          categoryResponseSchema,
+        ),
       delete: (id: string) => request<void>(`/api/settings/categories/${id}`, { method: 'DELETE' }),
     },
     tenant: {
-      get: () => request<TenantSettings>('/api/settings/tenant'),
+      get: () => request('/api/settings/tenant', undefined, tenantSettingsSchema),
       update: (input: TenantSettings) =>
-        request<TenantSettings>('/api/settings/tenant', {
-          method: 'PUT',
-          body: JSON.stringify(input),
-        }),
+        request(
+          '/api/settings/tenant',
+          { method: 'PUT', body: JSON.stringify(input) },
+          tenantSettingsSchema,
+        ),
     },
     cluster: {
-      get: (id: string) => request<ClusterSettingsResponse>(`/api/clusters/${id}/settings`),
+      get: (id: string) =>
+        request(`/api/clusters/${id}/settings`, undefined, clusterSettingsResponseSchema),
       update: (id: string, input: ClusterSettingsInput) =>
-        request<ClusterSettingsResponse>(`/api/clusters/${id}/settings`, {
-          method: 'PUT',
-          body: JSON.stringify(input),
-        }),
+        request(
+          `/api/clusters/${id}/settings`,
+          { method: 'PUT', body: JSON.stringify(input) },
+          clusterSettingsResponseSchema,
+        ),
       reset: (id: string) =>
-        request<ClusterSettingsResponse>(`/api/clusters/${id}/settings`, {
-          method: 'DELETE',
-        }),
+        request(
+          `/api/clusters/${id}/settings`,
+          { method: 'DELETE' },
+          clusterSettingsResponseSchema,
+        ),
     },
   },
 };

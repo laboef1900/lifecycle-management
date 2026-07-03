@@ -1,26 +1,27 @@
 import { z } from 'zod';
 
 import { cuid, dateOnly, positiveAmount } from './common.js';
+import { paginationQuerySchema } from './pagination.js';
 
-const metricBaselineInputSchema = z.object({
+const metricBaselineInputSchema = z.strictObject({
   metricTypeKey: z.string().min(1),
   baselineConsumption: positiveAmount,
   baselineCapacity: positiveAmount,
 });
 
-export const clusterCreateInputSchema = z.object({
+export const clusterCreateInputSchema = z.strictObject({
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().max(2000).nullish(),
   baselineDate: dateOnly,
-  baselines: z.array(metricBaselineInputSchema).min(1),
+  baselines: z.array(metricBaselineInputSchema).min(1).max(50),
 });
 
 export const clusterUpdateInputSchema = z
-  .object({
+  .strictObject({
     name: z.string().trim().min(1).max(120).optional(),
     description: z.string().trim().max(2000).nullish(),
     baselineDate: dateOnly.optional(),
-    baselines: z.array(metricBaselineInputSchema).min(1).optional(),
+    baselines: z.array(metricBaselineInputSchema).min(1).max(50).optional(),
   })
   .refine(
     (data) =>
@@ -33,8 +34,12 @@ export const clusterUpdateInputSchema = z
 
 export const clusterIdParamsSchema = z.object({ id: cuid });
 
-export const clustersListQuerySchema = z.object({
-  includeArchived: z.coerce.boolean().optional(),
+export const clustersListQuerySchema = paginationQuerySchema.extend({
+  includeArchived: z
+    .enum(['true', 'false'])
+    .optional()
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 export type ClustersListQuery = z.infer<typeof clustersListQuerySchema>;

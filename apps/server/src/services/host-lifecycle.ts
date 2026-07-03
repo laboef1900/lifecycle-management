@@ -3,7 +3,7 @@ import { Prisma, type HostState, type PrismaClient } from '@prisma/client';
 
 import { formatDate } from '../lib/dates.js';
 
-import { NotFoundError, UnprocessableError } from './errors.js';
+import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
 
 const ALLOWED: Record<HostState, HostState[]> = {
   ordered: ['racked'],
@@ -26,46 +26,51 @@ export class HostLifecycleService {
   constructor(private readonly prisma: PrismaClient) {}
 
   async transition(input: TransitionInput): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      // TODO(v2): use SELECT ... FOR UPDATE to serialize concurrent transitions.
-      // Under READ COMMITTED two concurrent transitions can produce duplicate
-      // from->to events. Acceptable for v1 (single-user-per-host operationally).
-      const host = await tx.host.findFirst({
-        where: { id: input.hostId, tenantId: input.tenantId },
-      });
-      if (!host) throw new NotFoundError('Host', input.hostId);
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          const host = await tx.host.findFirst({
+            where: { id: input.hostId, tenantId: input.tenantId },
+          });
+          if (!host) throw new NotFoundError('Host', input.hostId);
 
-      if (!ALLOWED[host.state].includes(input.toState)) {
-        throw new UnprocessableError(
-          'INVALID_TRANSITION',
-          `Cannot transition host from ${host.state} to ${input.toState}`,
-        );
-      }
+          if (!ALLOWED[host.state].includes(input.toState)) {
+            throw new UnprocessableError(
+              'INVALID_TRANSITION',
+              `Cannot transition host from ${host.state} to ${input.toState}`,
+            );
+          }
 
-      await tx.hostLifecycleEvent.create({
-        data: {
-          tenantId: input.tenantId,
-          hostId: input.hostId,
-          fromState: host.state,
-          toState: input.toState,
-          occurredAt: input.occurredAt,
-          note: input.note ?? null,
+          await tx.hostLifecycleEvent.create({
+            data: {
+              tenantId: input.tenantId,
+              hostId: input.hostId,
+              fromState: host.state,
+              toState: input.toState,
+              occurredAt: input.occurredAt,
+              note: input.note ?? null,
+            },
+          });
+
+          const patch: Prisma.HostUpdateInput = { state: input.toState };
+          if (
+            input.toState === 'in_service' &&
+            host.state === 'racked' &&
+            host.commissionedAt > input.occurredAt
+          ) {
+            patch.commissionedAt = input.occurredAt;
+          }
+          if (input.toState === 'decommissioned') {
+            patch.decommissionedAt = input.occurredAt;
+          }
+          await tx.host.update({ where: { id: input.hostId }, data: patch });
         },
-      });
-
-      const patch: Prisma.HostUpdateInput = { state: input.toState };
-      if (
-        input.toState === 'in_service' &&
-        host.state === 'racked' &&
-        host.commissionedAt > input.occurredAt
-      ) {
-        patch.commissionedAt = input.occurredAt;
-      }
-      if (input.toState === 'decommissioned') {
-        patch.decommissionedAt = input.occurredAt;
-      }
-      await tx.host.update({ where: { id: input.hostId }, data: patch });
-    });
+        { isolationLevel: 'Serializable' },
+      );
+    } catch (err) {
+      this.translatePrismaError(err);
+      throw err;
+    }
   }
 
   async listEvents(tenantId: string, hostId: string): Promise<HostLifecycleEventResponse[]> {
@@ -87,5 +92,11 @@ export class HostLifecycleService {
       note: r.note,
       createdAt: r.createdAt.toISOString(),
     }));
+  }
+
+  private translatePrismaError(err: unknown): void {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+      throw new ConflictError('WRITE_CONFLICT', 'Concurrent write detected; retry the request');
+    }
   }
 }

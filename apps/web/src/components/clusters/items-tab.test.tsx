@@ -69,7 +69,12 @@ function renderTab(): void {
 
 describe('ItemsTab', () => {
   beforeEach(() => {
-    vi.spyOn(api.items, 'listByCluster').mockResolvedValue([makeApplication(), makeEvent()]);
+    vi.spyOn(api.items, 'listByCluster').mockResolvedValue({
+      items: [makeApplication(), makeEvent()],
+      total: 2,
+      limit: 100,
+      offset: 0,
+    });
   });
 
   afterEach(() => {

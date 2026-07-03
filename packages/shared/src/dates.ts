@@ -31,3 +31,10 @@ export function addUtcMonths(date: Date, months: number): Date {
   result.setUTCDate(Math.min(day, daysInMonth));
   return result;
 }
+
+/** Whole-month difference between two UTC dates (to minus from). */
+export function monthsBetweenUtc(from: Date, to: Date): number {
+  return (
+    (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth())
+  );
+}
