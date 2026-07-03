@@ -5,6 +5,7 @@ import { LazyMotion, MotionConfig, domAnimation } from 'motion/react';
 import { ThemeProvider } from '@/components/theme/theme-provider';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import type { AuthState } from '@/lib/auth';
 
 import { routeTree } from './routeTree.gen';
 
@@ -20,7 +21,7 @@ const queryClient = new QueryClient({
 
 const router = createRouter({
   routeTree,
-  context: { queryClient },
+  context: { queryClient, auth: { authRequired: false } },
   defaultPreload: 'intent',
 });
 
@@ -30,7 +31,7 @@ declare module '@tanstack/react-router' {
   }
 }
 
-export function App(): React.JSX.Element {
+export function App({ auth }: { auth: AuthState }): React.JSX.Element {
   return (
     <ThemeProvider>
       {/*
@@ -43,7 +44,7 @@ export function App(): React.JSX.Element {
         <MotionConfig reducedMotion="user">
           <QueryClientProvider client={queryClient}>
             <TooltipProvider delayDuration={200}>
-              <RouterProvider router={router} />
+              <RouterProvider router={router} context={{ queryClient, auth }} />
               <Toaster />
             </TooltipProvider>
           </QueryClientProvider>

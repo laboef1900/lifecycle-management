@@ -1,6 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { fetchAuthState } from '@/lib/auth';
+
 import { App } from './app.tsx';
 import './styles.css';
 
@@ -9,8 +11,12 @@ if (!container) {
   throw new Error('Missing #root element in index.html');
 }
 
-createRoot(container).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+const root = createRoot(container);
+
+void fetchAuthState().then((auth) => {
+  root.render(
+    <StrictMode>
+      <App auth={auth} />
+    </StrictMode>,
+  );
+});
