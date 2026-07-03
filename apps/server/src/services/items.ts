@@ -11,9 +11,13 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { formatDate } from '../lib/dates.js';
 
 import { CategoriesService } from './categories.js';
-import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
+import { NotFoundError, UnprocessableError } from './errors.js';
+import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
 
-const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
+const ALLOCATION_DUPLICATE: UniqueConstraintMapping = {
+  code: 'ALLOCATION_DUPLICATE_DATE',
+  message: 'An allocation row already exists for this item/metric on that effective date',
+};
 
 const itemInclude = {
   allocations: {
@@ -123,7 +127,7 @@ export class ItemsService {
             include: itemInclude,
           });
         } catch (err) {
-          this.translatePrismaError(err);
+          translatePrismaError(err, { uniqueConstraint: ALLOCATION_DUPLICATE });
           throw err;
         }
       } else {
@@ -305,7 +309,7 @@ export class ItemsService {
         { isolationLevel: 'Serializable' },
       );
     } catch (err) {
-      this.translatePrismaError(err);
+      translatePrismaError(err, { uniqueConstraint: ALLOCATION_DUPLICATE });
       throw err;
     }
 
@@ -413,20 +417,5 @@ export class ItemsService {
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
-  }
-
-  private translatePrismaError(err: unknown): void {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
-      throw new ConflictError('WRITE_CONFLICT', 'Concurrent write detected; retry the request');
-    }
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === PRISMA_UNIQUE_CONSTRAINT
-    ) {
-      throw new ConflictError(
-        'ALLOCATION_DUPLICATE_DATE',
-        'An allocation row already exists for this item/metric on that effective date',
-      );
-    }
   }
 }

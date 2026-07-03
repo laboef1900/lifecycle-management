@@ -3,7 +3,8 @@ import { Prisma, type HostState, type PrismaClient } from '@prisma/client';
 
 import { formatDate } from '../lib/dates.js';
 
-import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
+import { NotFoundError, UnprocessableError } from './errors.js';
+import { translatePrismaError } from './prisma-errors.js';
 
 const ALLOWED: Record<HostState, HostState[]> = {
   ordered: ['racked'],
@@ -68,7 +69,7 @@ export class HostLifecycleService {
         { isolationLevel: 'Serializable' },
       );
     } catch (err) {
-      this.translatePrismaError(err);
+      translatePrismaError(err);
       throw err;
     }
   }
@@ -92,11 +93,5 @@ export class HostLifecycleService {
       note: r.note,
       createdAt: r.createdAt.toISOString(),
     }));
-  }
-
-  private translatePrismaError(err: unknown): void {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
-      throw new ConflictError('WRITE_CONFLICT', 'Concurrent write detected; retry the request');
-    }
   }
 }
