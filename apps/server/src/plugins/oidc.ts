@@ -2,6 +2,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import * as client from 'openid-client';
 
+import type { AuthConfigTestResult } from '@lcm/shared';
+
 import type { EffectiveAuthConfig } from '../services/auth-config.js';
 
 declare module 'fastify' {
@@ -52,6 +54,35 @@ export function sanitizeDiscoveryError(err: unknown, clientSecret: string | null
     return message.split(clientSecret).join('[redacted]');
   }
   return message;
+}
+
+/**
+ * One-shot discovery attempt for the settings UI's "Test connection" button
+ * and the save-time enable gate. Mirrors the exact `client.discovery()` call
+ * shape (and `allowInsecure` handling) used by the background `tryDiscover()`
+ * loop below, but is otherwise completely decoupled from it: no retry loop,
+ * no shared/plugin state is read or written, and nothing is persisted. Purely
+ * reports whether the given, caller-supplied config can currently discover.
+ */
+export async function testDiscovery(input: {
+  issuerUrl: string;
+  clientId: string;
+  clientSecret: string;
+  allowInsecure: boolean;
+}): Promise<AuthConfigTestResult> {
+  try {
+    const options = input.allowInsecure ? { execute: [client.allowInsecureRequests] } : undefined;
+    await client.discovery(
+      new URL(input.issuerUrl),
+      input.clientId,
+      input.clientSecret,
+      undefined,
+      options,
+    );
+    return { ok: true, error: null };
+  } catch (err) {
+    return { ok: false, error: sanitizeDiscoveryError(err, input.clientSecret) };
+  }
 }
 
 /**

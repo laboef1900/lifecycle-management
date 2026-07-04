@@ -4,7 +4,11 @@ import * as http from 'node:http';
 import { OAuth2Server } from 'oauth2-mock-server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import oidcPlugin, { discoveryBackoffMs, sanitizeDiscoveryError } from '../plugins/oidc.js';
+import oidcPlugin, {
+  discoveryBackoffMs,
+  sanitizeDiscoveryError,
+  testDiscovery,
+} from '../plugins/oidc.js';
 import type { AuthConfigService, EffectiveAuthConfig } from '../services/auth-config.js';
 
 /**
@@ -373,6 +377,43 @@ describe('sanitizeDiscoveryError', () => {
     expect(sanitizeDiscoveryError('not an Error instance', 'lcm-test-secret')).toBe(
       'Unknown error',
     );
+  });
+});
+
+describe('testDiscovery', () => {
+  it('returns { ok: true, error: null } against a reachable issuer, without persisting or mutating any plugin state', async () => {
+    const issuer = createControllableIssuer();
+    const origin = await issuer.originPromise;
+
+    try {
+      const resultPromise = testDiscovery({
+        issuerUrl: origin,
+        clientId: 'lcm-test',
+        clientSecret: 'lcm-test-distinctive-secret',
+        allowInsecure: true,
+      });
+      await issuer.requested;
+      issuer.respond(200);
+      const result = await resultPromise;
+
+      expect(result).toEqual({ ok: true, error: null });
+    } finally {
+      await issuer.close();
+    }
+  });
+
+  it('returns { ok: false, error } with a non-empty, secret-free message against an unreachable issuer', async () => {
+    const result = await testDiscovery({
+      issuerUrl: 'http://127.0.0.1:1/oidc',
+      clientId: 'lcm-test',
+      clientSecret: 'lcm-test-distinctive-secret',
+      allowInsecure: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toEqual(expect.any(String));
+    expect(result.error).not.toHaveLength(0);
+    expect(result.error).not.toContain('lcm-test-distinctive-secret');
   });
 });
 
