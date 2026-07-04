@@ -68,6 +68,15 @@ const oidcPlugin: FastifyPluginAsync = async (fastify) => {
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   let attempt = 0;
+  /**
+   * Bumped every time a new discovery attempt starts (via `tryDiscover` or
+   * `reconfigure`). A `tryDiscover()` call captures the generation it was
+   * started with; if that no longer matches when its `client.discovery()`
+   * settles, a newer attempt has superseded it, so it must not commit state
+   * or re-arm the backoff timer (prevents a slow, stale attempt from
+   * clobbering a result produced by a later `reconfigure()`).
+   */
+  let generation = 0;
 
   const clearTimer = (): void => {
     if (timer) {
@@ -87,6 +96,7 @@ const oidcPlugin: FastifyPluginAsync = async (fastify) => {
   fastify.decorate('oidc', state);
 
   const tryDiscover = async (): Promise<void> => {
+    const myGeneration = ++generation;
     const current = fastify.authConfig.current;
     try {
       const options = current.allowInsecure
@@ -99,28 +109,37 @@ const oidcPlugin: FastifyPluginAsync = async (fastify) => {
         undefined,
         options,
       );
-      if (closed) return;
+      // A newer attempt (from a subsequent reconfigure()) has superseded this
+      // one, or the server is shutting down — do not commit this result.
+      if (closed || myGeneration !== generation) return;
       state.config = config;
       state.status = 'connected';
       state.lastError = null;
       fastify.log.info({ issuer: current.issuerUrl }, 'OIDC discovery succeeded');
     } catch (err) {
+      if (closed || myGeneration !== generation) return;
       attempt += 1;
       const delayMs = discoveryBackoffMs(attempt);
+      // Sanitize BEFORE logging: the client secret must never reach the
+      // logger, even wrapped inside the raw `err` object.
+      const sanitized = sanitizeDiscoveryError(err, current.clientSecret);
       fastify.log.error(
-        { err, attempt, retryInMs: delayMs },
+        { error: sanitized, attempt, retryInMs: delayMs },
         'OIDC discovery failed; login is unavailable until the issuer is reachable',
       );
-      if (closed) return;
       state.config = null;
       state.status = 'unavailable';
-      state.lastError = sanitizeDiscoveryError(err, current.clientSecret);
+      state.lastError = sanitized;
       timer = setTimeout(() => void tryDiscover(), delayMs);
     }
   };
 
   /** Reset + immediate (single) discovery attempt against the CURRENT config. */
   const reconfigure = async (): Promise<void> => {
+    // Invalidate any in-flight tryDiscover() from before this call — including
+    // the disabled-below early return, so a slow prior attempt can't clobber
+    // the disabled state after we've committed to it below.
+    generation += 1;
     clearTimer();
     attempt = 0;
     const current = fastify.authConfig.current;

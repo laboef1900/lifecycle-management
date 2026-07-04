@@ -1,10 +1,76 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
+import * as http from 'node:http';
 import { OAuth2Server } from 'oauth2-mock-server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import oidcPlugin, { discoveryBackoffMs, sanitizeDiscoveryError } from '../plugins/oidc.js';
 import type { AuthConfigService, EffectiveAuthConfig } from '../services/auth-config.js';
+
+/**
+ * A minimal, hand-rolled OIDC issuer whose `/.well-known/openid-configuration`
+ * response is held open until `respond()` is called. Used to deterministically
+ * test that a fresh `reconfigure()` result cannot be clobbered by a slower,
+ * superseded discovery attempt that started before it (Finding 2 / generation
+ * guard).
+ *
+ * Deliberately real HTTP rather than mocking `openid-client`'s `discovery`
+ * export: `vitest.config.ts` runs with `isolate: false` (module state is
+ * shared across test FILES in the same worker — see the warning comment
+ * there), and `vi.mock('openid-client', ...)` was found empirically to
+ * become unreliable (silently stop intercepting calls) once other test files
+ * that also import `openid-client` via `buildServer()` are part of the same
+ * run. A real, controllable HTTP server sidesteps that entirely.
+ *
+ * `client.discovery()` only requires the metadata response to be a 200 with
+ * `content-type: application/json` and a body whose `issuer` field matches
+ * the requested origin — no other fields (e.g. jwks_uri) are needed for
+ * discovery to resolve into a `Configuration`.
+ */
+function createControllableIssuer(): {
+  originPromise: Promise<string>;
+  /** Resolves once a discovery request has arrived and is being held open. */
+  requested: Promise<void>;
+  respond: (status: number, body?: Record<string, unknown>) => void;
+  close: () => Promise<void>;
+} {
+  let resolveRequested!: () => void;
+  const requested = new Promise<void>((resolve) => {
+    resolveRequested = resolve;
+  });
+  let heldRes: http.ServerResponse | undefined;
+  let origin = '';
+
+  const server = http.createServer((_req, res) => {
+    heldRes = res;
+    resolveRequested();
+  });
+
+  const originPromise = new Promise<string>((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      origin = `http://127.0.0.1:${port}`;
+      resolve(origin);
+    });
+  });
+
+  return {
+    originPromise,
+    requested,
+    respond: (status, body) => {
+      if (!heldRes) {
+        throw new Error('createControllableIssuer: no request is pending to respond to');
+      }
+      heldRes.writeHead(status, { 'content-type': 'application/json' });
+      heldRes.end(JSON.stringify(body ?? { issuer: origin }));
+    },
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      }),
+  };
+}
 
 function makeAuthConfig(overrides: Partial<EffectiveAuthConfig> = {}): EffectiveAuthConfig {
   return {
@@ -191,6 +257,99 @@ describe('oidc plugin', () => {
     expect(server.oidc.status).toBe('disabled');
     expect(server.oidc.config).toBeNull();
     expect(server.oidc.lastError).toBeNull();
+  });
+
+  it('reconfigure() drives disabled -> connected when switching to a reachable oidc issuer (not just at boot)', async () => {
+    idp = new OAuth2Server();
+    await idp.issuer.keys.generate('RS256');
+    await idp.start(0, '127.0.0.1');
+    const issuerUrl = idp.issuer.url as string;
+
+    const server = await buildTestServer(makeAuthConfig({ mode: 'disabled' }));
+    created.push(server);
+    expect(server.oidc.status).toBe('disabled');
+
+    server.authConfig.current = makeOidcConfig({
+      issuerUrl,
+      appBaseUrl: 'http://127.0.0.1:8080',
+    });
+    await server.oidc.reconfigure();
+
+    expect(server.oidc.status).toBe('connected');
+    expect(server.oidc.config).not.toBeNull();
+    expect(server.oidc.lastError).toBeNull();
+    expect(server.oidc.redirectUri).toBe('http://127.0.0.1:8080/api/auth/callback');
+  });
+
+  it('a stale successful discovery cannot resurrect connected state after reconfigure() disables oidc (generation guard)', async () => {
+    const slow = createControllableIssuer();
+    const origin = await slow.originPromise;
+
+    try {
+      const server = await buildTestServer(makeOidcConfig({ issuerUrl: origin }));
+      created.push(server);
+
+      // Wait for the boot-time tryDiscover() to actually reach (and be held
+      // open by) the controllable issuer.
+      await slow.requested;
+
+      // Switch to disabled BEFORE the held discovery response is released.
+      // This must bump the generation counter so the still-in-flight attempt
+      // can no longer commit its result.
+      server.authConfig.current = makeAuthConfig({ mode: 'disabled' });
+      await server.oidc.reconfigure();
+      expect(server.oidc.status).toBe('disabled');
+
+      // Now release the held response as a (belated) discovery success.
+      slow.respond(200);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // The disabled state must not have been clobbered by the late success.
+      expect(server.oidc.status).toBe('disabled');
+      expect(server.oidc.config).toBeNull();
+    } finally {
+      await slow.close();
+    }
+  });
+
+  it('a stale failing discovery cannot flip status back to unavailable after reconfigure() connects successfully (generation guard)', async () => {
+    const slow = createControllableIssuer();
+    const slowOrigin = await slow.originPromise;
+
+    idp = new OAuth2Server();
+    await idp.issuer.keys.generate('RS256');
+    await idp.start(0, '127.0.0.1');
+    const issuerUrl = idp.issuer.url as string;
+
+    try {
+      const server = await buildTestServer(makeOidcConfig({ issuerUrl: slowOrigin }));
+      created.push(server);
+
+      // Wait for the boot-time tryDiscover() to reach (and be held open by)
+      // the controllable issuer before reconfiguring to a different,
+      // reachable one.
+      await slow.requested;
+
+      server.authConfig.current = makeOidcConfig({
+        issuerUrl,
+        appBaseUrl: 'http://127.0.0.1:8080',
+      });
+      await server.oidc.reconfigure();
+
+      expect(server.oidc.status).toBe('connected');
+
+      // Now release the held (first, slow) request as a belated FAILURE,
+      // simulating a slow discovery attempt that finally errors out after
+      // reconfigure() already produced a fresh, successful result.
+      slow.respond(500, { error: 'server_error' });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(server.oidc.status).toBe('connected');
+      expect(server.oidc.config).not.toBeNull();
+      expect(server.oidc.lastError).toBeNull();
+    } finally {
+      await slow.close();
+    }
   });
 });
 
