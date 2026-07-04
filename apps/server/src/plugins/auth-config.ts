@@ -3,7 +3,11 @@ import fp from 'fastify-plugin';
 
 import { loadKey } from '../crypto/secret-box.js';
 import type { Env } from '../env.js';
-import { AuthConfigService, type EffectiveAuthConfig } from '../services/auth-config.js';
+import {
+  AuthConfigService,
+  AuthSecretDecryptError,
+  type EffectiveAuthConfig,
+} from '../services/auth-config.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -33,43 +37,58 @@ const SINGLETON_ID = 'singleton';
  *  1. Build the encryption key from env (or null if unset).
  *  2. `service.load(env)` — seeds the singleton row from legacy OIDC env vars
  *     on an empty table, or upgrades an existing oidc row missing a signing
- *     secret. This throws if a stored secret can't be decrypted because the
- *     key is null (fail-safe guard below).
- *  3. Fail-safe guard: if load() couldn't decrypt (key missing/invalid while
- *     a secret is stored), force the row to mode=disabled with a *direct*
- *     prisma update that touches ONLY the `mode` column — never
- *     `service.update()`, which would try to re-encrypt secrets using a key
- *     we don't have, and never clearing `clientSecretEnc`/`signingSecretEnc`,
- *     since a missing/misconfigured key may be transient and the stored
- *     ciphertext is the only copy of an externally-sourced client secret.
- *     Log loudly, then hand-build the effective config from the (re-fetched)
- *     row without decrypting, instead of calling service.load()/toEffective()
+ *     secret. This throws `AuthSecretDecryptError` if a stored secret can't
+ *     be decrypted — either the key is null, OR the key is present but wrong
+ *     (rotated) / the ciphertext is corrupted (fail-safe guard below covers
+ *     both).
+ *  3. Fail-safe guard: if load() couldn't decrypt for ANY reason
+ *     (`AuthSecretDecryptError` — key missing, key wrong, or ciphertext
+ *     corrupted, while a secret is stored), force the row to mode=disabled
+ *     with a *direct* prisma update that touches ONLY the `mode` column —
+ *     never `service.update()`, which would try to re-encrypt secrets using
+ *     a key we don't have, and never clearing
+ *     `clientSecretEnc`/`signingSecretEnc`, since the stored ciphertext may
+ *     still be recoverable (key fixed, or rolled back to the previous one)
+ *     and is the only copy of an externally-sourced client secret. Log
+ *     loudly, then hand-build the effective config from the (re-fetched) row
+ *     without decrypting, instead of calling service.load()/toEffective()
  *     again — those would throw the exact same error again since the
  *     ciphertext is still there by design.
  *  4. Break-glass: if `RECOVERY_DISABLE_AUTH` is set, force mode=disabled the
- *     same direct way, warn loudly, and reload.
+ *     same direct way, warn loudly, and reload — but only re-run
+ *     `service.load()` when step 2 actually succeeded at decrypting (a valid
+ *     key and no prior decrypt failure); otherwise reusing `service.load()`
+ *     here would immediately hit the same undecryptable row and crash boot
+ *     outside the try/catch above, so `current` is instead updated in memory.
  */
 const authConfigPlugin: FastifyPluginAsync<AuthConfigPluginOptions> = async (fastify, { env }) => {
   const key = env.CONFIG_ENCRYPTION_KEY ? loadKey(env.CONFIG_ENCRYPTION_KEY) : null;
   const service = new AuthConfigService(fastify.prisma, key);
 
   let current: EffectiveAuthConfig;
+  // Tracks whether the initial decrypt attempt below failed, so the
+  // RECOVERY_DISABLE_AUTH branch further down knows it must NOT re-run
+  // service.load() (which would hit the same undecryptable row again and
+  // crash boot outside this try/catch) even though `key` is non-null.
+  let decryptFailed = false;
   try {
     current = await service.load(env);
   } catch (err) {
-    // The only expected failure mode here is the decrypt/encrypt guard in
-    // AuthConfigService throwing because CONFIG_ENCRYPTION_KEY is missing
-    // while a stored row needs it (typically mode==='oidc' with a signing
-    // secret already set). Fail safe rather than crash the whole server.
-    if (!(err instanceof Error) || !err.message.includes('CONFIG_ENCRYPTION_KEY')) {
+    // The only expected failure mode here is AuthConfigService throwing
+    // AuthSecretDecryptError because a stored secret column exists but can't
+    // be decrypted — either CONFIG_ENCRYPTION_KEY is missing, OR it's present
+    // but wrong (rotated) / the ciphertext is corrupted. Fail safe rather
+    // than crash the whole server in either case.
+    if (!(err instanceof AuthSecretDecryptError)) {
       throw err;
     }
+    decryptFailed = true;
     fastify.log.error(
       { err },
-      'AuthConfig could not be decrypted (CONFIG_ENCRYPTION_KEY missing or invalid) while a ' +
-        'secret is stored; forcing mode=disabled to fail safe instead of crashing. The stored ' +
-        'encrypted secret(s) are left intact — this may be a transient key misconfiguration, ' +
-        'and once CONFIG_ENCRYPTION_KEY is fixed the next boot will decrypt and re-enable oidc.',
+      'AuthConfig has a stored secret that could not be decrypted (CONFIG_ENCRYPTION_KEY missing, ' +
+        'wrong/rotated, or the ciphertext is corrupted); forcing mode=disabled to fail safe instead ' +
+        'of crashing. The stored encrypted secret(s) are left intact — fixing or rolling back ' +
+        'CONFIG_ENCRYPTION_KEY, or re-entering the secret in Settings, will allow re-enabling oidc.',
     );
     // Force mode ONLY — never null out clientSecretEnc/signingSecretEnc here.
     // toEffective() would decrypt whatever secret columns are populated
@@ -109,15 +128,17 @@ const authConfigPlugin: FastifyPluginAsync<AuthConfigPluginOptions> = async (fas
       data: { mode: 'disabled' },
     });
     // Only safe to re-load through the service (which decrypts stored
-    // secrets) when we actually have a key. With no key and a stored oidc
-    // row, service.load()/toEffective() would throw the same
-    // CONFIG_ENCRYPTION_KEY error as the guard above — but this time
-    // outside the try/catch, crashing boot instead of failing safe. In
-    // that case `current` is already a valid disabled config (either
-    // hand-built by the guard above, or loaded normally when there was no
-    // secret to decrypt), so just force it disabled in memory without
-    // touching the encrypted columns.
-    current = key !== null ? await service.load(env) : { ...current, mode: 'disabled' };
+    // secrets) when we actually have a key AND the initial load above didn't
+    // already fail to decrypt with it. With no key, or a key that's present
+    // but wrong (rotated) / a corrupted ciphertext, service.load()/
+    // toEffective() would throw the same AuthSecretDecryptError as the guard
+    // above — but this time outside the try/catch, crashing boot instead of
+    // failing safe. In that case `current` is already a valid disabled
+    // config (either hand-built by the guard above, or loaded normally when
+    // there was no secret to decrypt), so just force it disabled in memory
+    // without touching the encrypted columns.
+    current =
+      key !== null && !decryptFailed ? await service.load(env) : { ...current, mode: 'disabled' };
   }
 
   const state: AuthConfigState = {

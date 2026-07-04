@@ -229,18 +229,27 @@ stays) disabled, and the settings UI can't persist a client secret either.
 This is a fail-safe, not a crash: a missing or invalid key never takes the
 server down.
 
-- **Losing the key** (or restarting with it unset after OIDC was enabled):
-  the server detects it can't decrypt the stored secret at boot, logs an
-  error, and forces `mode=disabled` automatically — it does **not** wipe
-  the encrypted columns, so restoring the original key on a later boot
-  recovers the configuration exactly as it was.
+- **Losing the key, or booting with the wrong one** (unset, or changed to a
+  value that can't decrypt what's already stored — e.g. mid-rotation,
+  before the secret has been re-entered): the server detects it can't
+  decrypt the stored secret at boot, logs an error, and forces
+  `mode=disabled` automatically — it does **not** wipe the encrypted
+  columns, so restoring the correct key (missing or wrong, it doesn't
+  matter which) on a later boot recovers the configuration exactly as it
+  was. This is graceful either way — a missing key and a present-but-wrong
+  key both fail safe the same way, and neither crashes the server.
 - **Deliberately rotating to a new key**: do this in a maintenance window.
   Update `CONFIG_ENCRYPTION_KEY` in `.env`, `docker compose up -d`, then go
   to **Settings → Authentication** and re-enter the client secret (the new
   key cannot decrypt ciphertext written under the old one) and save — this
   also re-tests discovery and generates a fresh login-state signing
   secret. Existing sessions are unaffected; only the OIDC test/save step
-  needs the secret re-entered.
+  needs the secret re-entered. If the server happens to restart on the new
+  key before you reach Settings (or the rotation was accidental), it boots
+  fine in `mode=disabled` with the old ciphertext untouched instead of
+  crash-looping — either finish the re-entry step above, or roll
+  `CONFIG_ENCRYPTION_KEY` back to the previous value to recover the
+  existing configuration without re-entering anything.
 - Never commit `CONFIG_ENCRYPTION_KEY` or check it into version control —
   treat it like `POSTGRES_PASSWORD`.
 

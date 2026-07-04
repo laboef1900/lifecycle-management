@@ -9,6 +9,27 @@ import { UnprocessableError } from './errors.js';
 const SINGLETON_ID = 'singleton';
 
 /**
+ * Thrown when a stored secret column (`clientSecretEnc`/`signingSecretEnc`)
+ * exists but cannot be decrypted — covers BOTH cases:
+ *  - `CONFIG_ENCRYPTION_KEY` is not configured at all (null key), and
+ *  - a key IS configured but is the wrong one (rotated away from the key the
+ *    ciphertext was encrypted under) or the ciphertext has been tampered
+ *    with — Node's AES-GCM auth-tag check fails and throws a generic
+ *    `"Unsupported state or unable to authenticate data"` error in that case.
+ *
+ * Callers (the auth-config plugin's boot fail-safe guard) catch this one
+ * type to force `mode=disabled` without crashing, regardless of *why*
+ * decryption failed. The message never includes the secret, ciphertext, or
+ * key.
+ */
+export class AuthSecretDecryptError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'AuthSecretDecryptError';
+  }
+}
+
+/**
  * Plain-scalar shape for building the singleton row's create/update payload.
  * Deliberately its own type (not `Prisma.AuthConfigUpdateInput`) so a single
  * object can be passed to both `upsert`'s `create` and `update` — Prisma's
@@ -133,9 +154,20 @@ export class AuthConfigService {
     }
 
     // Upgrade path: rows created before signing secrets existed (or a
-    // manually-inserted row) may be oidc with no signing secret yet.
+    // manually-inserted row) may be oidc with no signing secret yet. This
+    // needs a key to encrypt a freshly generated one; a null key here is the
+    // same "stored/needed secret unusable" fail-safe scenario as a decrypt
+    // failure below, so it's raised the same way (AuthSecretDecryptError)
+    // rather than requireKey()'s generic error, so the plugin's boot
+    // fail-safe guard also catches it instead of crashing.
     if (row.mode === 'oidc' && !row.signingSecretEnc) {
-      const signingSecretEnc = encrypt(generateSecret(), this.requireKey());
+      if (!this.key) {
+        throw new AuthSecretDecryptError(
+          'AuthConfig is oidc-mode with no signing secret yet, but CONFIG_ENCRYPTION_KEY is not ' +
+            'configured to generate and encrypt one',
+        );
+      }
+      const signingSecretEnc = encrypt(generateSecret(), this.key);
       row = await this.prisma.authConfig.update({
         where: { id: SINGLETON_ID },
         data: { signingSecretEnc },
@@ -268,11 +300,24 @@ export class AuthConfigService {
   private decryptColumn(enc: string | null, label: string): string | null {
     if (enc === null) return null;
     if (!this.key) {
-      throw new Error(
+      throw new AuthSecretDecryptError(
         `AuthConfig has a stored ${label} but CONFIG_ENCRYPTION_KEY is not configured; cannot decrypt`,
       );
     }
-    return decrypt(enc, this.key);
+    try {
+      return decrypt(enc, this.key);
+    } catch (err) {
+      // Node's AES-GCM auth-tag check throws a generic, non-specific error
+      // (e.g. "Unsupported state or unable to authenticate data") when the
+      // key is wrong or the ciphertext was tampered with — normalize it to
+      // the same dedicated error type as the null-key case above, so callers
+      // have one thing to catch regardless of *why* decryption failed.
+      throw new AuthSecretDecryptError(
+        `AuthConfig has a stored ${label} that could not be decrypted with the configured ` +
+          'CONFIG_ENCRYPTION_KEY (the key may have changed/rotated, or the ciphertext is corrupted)',
+        { cause: err },
+      );
+    }
   }
 
   private requireKey(): Buffer {

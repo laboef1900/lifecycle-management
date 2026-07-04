@@ -10,6 +10,10 @@ import { makeTestEnv } from './test-helpers.js';
 
 const KEY = loadKey(Buffer.alloc(32, 7).toString('base64'));
 const KEY_B64 = KEY.toString('base64');
+// A different 32-byte key, simulating an operator rotating CONFIG_ENCRYPTION_KEY
+// to a new value that cannot decrypt ciphertext produced under KEY.
+const WRONG_KEY = loadKey(Buffer.alloc(32, 9).toString('base64'));
+const WRONG_KEY_B64 = WRONG_KEY.toString('base64');
 
 async function buildTestServer(
   envOverrides: Parameters<typeof makeTestEnv>[0] = {},
@@ -79,6 +83,65 @@ describe('auth-config plugin', () => {
     expect(row!.clientSecretEnc).not.toBeNull();
     expect(row!.clientSecretEnc).toBe(clientSecretEnc);
     expect(row!.signingSecretEnc).not.toBeNull();
+    expect(row!.signingSecretEnc).toBe(signingSecretEnc);
+  });
+
+  it('forces mode=disabled without crashing when the stored row is oidc but CONFIG_ENCRYPTION_KEY was rotated to a different (wrong) key, preserving the encrypted secrets so rolling back the key (or re-entering the secret) can recover', async () => {
+    const clientSecretEnc = encrypt('super-secret-client-secret', KEY);
+    const signingSecretEnc = encrypt(generateSecret(), KEY);
+    await prisma.authConfig.create({
+      data: {
+        id: 'singleton',
+        mode: 'oidc',
+        clientId: 'legacy',
+        clientSecretEnc,
+        signingSecretEnc,
+      },
+    });
+
+    // Boot with a DIFFERENT key than the one the ciphertext was encrypted
+    // under — this is the key-rotation case: the key is present (not null)
+    // but wrong, so `decrypt()` throws Node's generic GCM auth-tag error
+    // rather than anything mentioning CONFIG_ENCRYPTION_KEY.
+    const server = await buildTestServer({ CONFIG_ENCRYPTION_KEY: WRONG_KEY_B64 });
+    created.push(server);
+
+    expect(server.authConfig.current.mode).toBe('disabled');
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('disabled');
+    // Non-destructive recovery: the ciphertext (still under the OLD key)
+    // must survive an operator's key rotation so rolling the key back, or
+    // re-entering the secret via Settings to re-encrypt under the new key,
+    // can recover.
+    expect(row!.clientSecretEnc).not.toBeNull();
+    expect(row!.clientSecretEnc).toBe(clientSecretEnc);
+    expect(row!.signingSecretEnc).not.toBeNull();
+    expect(row!.signingSecretEnc).toBe(signingSecretEnc);
+  });
+
+  it('forces mode=disabled without crashing when the key was rotated to a wrong value AND RECOVERY_DISABLE_AUTH=true is also set, preserving ciphertext', async () => {
+    const clientSecretEnc = encrypt('super-secret-client-secret', KEY);
+    const signingSecretEnc = encrypt(generateSecret(), KEY);
+    await prisma.authConfig.create({
+      data: {
+        id: 'singleton',
+        mode: 'oidc',
+        clientId: 'legacy',
+        clientSecretEnc,
+        signingSecretEnc,
+      },
+    });
+
+    const server = await buildTestServer({
+      CONFIG_ENCRYPTION_KEY: WRONG_KEY_B64,
+      RECOVERY_DISABLE_AUTH: true,
+    });
+    created.push(server);
+
+    expect(server.authConfig.current.mode).toBe('disabled');
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('disabled');
+    expect(row!.clientSecretEnc).toBe(clientSecretEnc);
     expect(row!.signingSecretEnc).toBe(signingSecretEnc);
   });
 

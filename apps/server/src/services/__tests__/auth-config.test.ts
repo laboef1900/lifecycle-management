@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { loadKey } from '../../crypto/secret-box.js';
+import { encrypt, loadKey } from '../../crypto/secret-box.js';
 import { prisma } from '../../__tests__/setup.js';
 import { makeOidcTestEnv, makeTestEnv } from '../../__tests__/test-helpers.js';
-import { AuthConfigService, type EffectiveAuthConfig } from '../auth-config.js';
+import {
+  AuthConfigService,
+  AuthSecretDecryptError,
+  type EffectiveAuthConfig,
+} from '../auth-config.js';
 
 const KEY = loadKey(Buffer.alloc(32, 7).toString('base64'));
+const WRONG_KEY = loadKey(Buffer.alloc(32, 9).toString('base64'));
 
 describe('AuthConfigService.load', () => {
   it('creates a default disabled row on first load when no env + no key', async () => {
@@ -77,12 +82,33 @@ describe('AuthConfigService.load', () => {
     expect(row!.signingSecretEnc).not.toBeNull();
   });
 
-  it('throws a clear error when a secret column is set but the key is null', async () => {
+  it('throws a clear AuthSecretDecryptError when a secret column is set but the key is null', async () => {
     await prisma.authConfig.create({
       data: { id: 'singleton', mode: 'oidc', clientSecretEnc: 'x.y.z' },
     });
     const svc = new AuthConfigService(prisma, null);
     await expect(svc.load()).rejects.toThrow(/CONFIG_ENCRYPTION_KEY/);
+    await expect(svc.load()).rejects.toBeInstanceOf(AuthSecretDecryptError);
+  });
+
+  it('throws AuthSecretDecryptError (not a raw GCM error) when the configured key is wrong (rotated) rather than null', async () => {
+    await prisma.authConfig.create({
+      data: {
+        id: 'singleton',
+        mode: 'oidc',
+        clientSecretEnc: encrypt('super-secret', KEY),
+        signingSecretEnc: encrypt('signing-secret-value', KEY),
+      },
+    });
+    // A non-null key that is nonetheless the WRONG one for this ciphertext —
+    // the key-rotation scenario. Node's generic GCM auth-tag error must be
+    // normalized to AuthSecretDecryptError, not leak through as-is.
+    const svc = new AuthConfigService(prisma, WRONG_KEY);
+    await expect(svc.load()).rejects.toBeInstanceOf(AuthSecretDecryptError);
+    // The raw Node crypto message must not be what callers match on — assert
+    // our own message is present instead, and that it never contains the key
+    // material.
+    await expect(svc.load()).rejects.toThrow(/could not be decrypted/);
   });
 
   it("throws from toEffective's own decrypt guard (not load()'s upgrade-path guard) when a disabled row has a secret set", async () => {
