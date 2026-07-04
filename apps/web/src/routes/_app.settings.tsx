@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 
+import { AuthenticationForm } from '@/components/settings/authentication-form';
 import { CategoriesForm } from '@/components/settings/categories-form';
 import { ForecastThresholdsForm } from '@/components/settings/forecast-thresholds-form';
 
@@ -8,6 +9,11 @@ export const Route = createFileRoute('/_app/settings')({
 });
 
 function SettingsPage(): React.JSX.Element {
+  const { auth } = Route.useRouteContext();
+  // Disabled-mode bootstrap: with no auth enforced yet, anyone on this page
+  // can configure it. Once OIDC is on, only an ADMIN sees the panel.
+  const canManageAuth = auth.user?.role === 'ADMIN' || auth.authRequired === false;
+
   return (
     <div className="space-y-6">
       <header>
@@ -20,6 +26,7 @@ function SettingsPage(): React.JSX.Element {
       </header>
       <ForecastThresholdsForm />
       <CategoriesForm />
+      {canManageAuth ? <AuthenticationForm /> : null}
     </div>
   );
 }
