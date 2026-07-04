@@ -129,6 +129,30 @@ describe('auth-config plugin', () => {
     expect(row!.signingSecretEnc).toBe(signingSecretEnc);
   });
 
+  it('RECOVERY_DISABLE_AUTH=true with no encryption key and a stored oidc secret does not crash boot', async () => {
+    const clientSecretEnc = 'x.y.z';
+    await prisma.authConfig.create({
+      data: {
+        id: 'singleton',
+        mode: 'oidc',
+        clientId: 'legacy',
+        clientSecretEnc,
+      },
+    });
+
+    const server = await buildTestServer({
+      CONFIG_ENCRYPTION_KEY: undefined,
+      RECOVERY_DISABLE_AUTH: true,
+    });
+    created.push(server);
+
+    expect(server.authConfig.current.mode).toBe('disabled');
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('disabled');
+    expect(row!.clientSecretEnc).not.toBeNull();
+    expect(row!.clientSecretEnc).toBe(clientSecretEnc);
+  });
+
   it('reload() picks up an out-of-band row change', async () => {
     const server = await buildTestServer({ CONFIG_ENCRYPTION_KEY: KEY_B64 });
     created.push(server);

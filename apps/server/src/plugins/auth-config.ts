@@ -108,7 +108,16 @@ const authConfigPlugin: FastifyPluginAsync<AuthConfigPluginOptions> = async (fas
       where: { id: SINGLETON_ID },
       data: { mode: 'disabled' },
     });
-    current = await service.load(env);
+    // Only safe to re-load through the service (which decrypts stored
+    // secrets) when we actually have a key. With no key and a stored oidc
+    // row, service.load()/toEffective() would throw the same
+    // CONFIG_ENCRYPTION_KEY error as the guard above — but this time
+    // outside the try/catch, crashing boot instead of failing safe. In
+    // that case `current` is already a valid disabled config (either
+    // hand-built by the guard above, or loaded normally when there was no
+    // secret to decrypt), so just force it disabled in memory without
+    // touching the encrypted columns.
+    current = key !== null ? await service.load(env) : { ...current, mode: 'disabled' };
   }
 
   const state: AuthConfigState = {
