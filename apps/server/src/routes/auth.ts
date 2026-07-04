@@ -61,12 +61,14 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify)
     const current = cfg();
     if (current.mode !== 'oidc') return reply.redirect('/');
     if (!fastify.oidc.config) return loginError(reply, 'idp_unavailable');
+    if (!current.appBaseUrl) return loginError(reply, 'idp_unavailable');
+    const appBaseUrl = current.appBaseUrl;
 
-    const secure = current.appBaseUrl?.startsWith('https://') === true;
-    const expectedProtocol = new URL(current.appBaseUrl as string).protocol.replace(':', '');
+    const secure = appBaseUrl.startsWith('https://');
+    const expectedProtocol = new URL(appBaseUrl).protocol.replace(':', '');
     if (request.protocol !== expectedProtocol) {
       request.log.error(
-        { requestProtocol: request.protocol, appBaseUrl: current.appBaseUrl },
+        { requestProtocol: request.protocol, appBaseUrl },
         'appBaseUrl scheme mismatch — Secure cookies would be dropped; fix the configured App base URL',
       );
       return loginError(reply, 'scheme_mismatch');
@@ -115,6 +117,11 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify)
       clearLoginState(reply);
       return loginError(reply, 'idp_unavailable');
     }
+    if (!current.appBaseUrl) {
+      clearLoginState(reply);
+      return loginError(reply, 'idp_unavailable');
+    }
+    const appBaseUrl = current.appBaseUrl;
 
     const raw = request.cookies[LOGIN_STATE_COOKIE];
     const verified =
@@ -129,7 +136,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify)
       return loginError(reply, 'state_mismatch');
     }
 
-    const currentUrl = new URL(request.url, current.appBaseUrl as string);
+    const currentUrl = new URL(request.url, appBaseUrl);
     if (currentUrl.searchParams.has('error')) {
       // Raw IdP error/error_description go to logs only — never echoed to the browser.
       request.log.warn(
@@ -175,7 +182,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify)
     );
     // Access/refresh tokens are deliberately discarded — only identity matters (spec non-goal).
     const session = await sessions.create(user.id, current.sessionTtlHours);
-    const secure = current.appBaseUrl?.startsWith('https://') === true;
+    const secure = appBaseUrl.startsWith('https://');
     reply.setCookie(sessionCookieName(current), session.token, {
       path: '/',
       httpOnly: true,
