@@ -11,7 +11,9 @@ const apiDir = dirname(fileURLToPath(import.meta.url));
 let container: StartedPostgreSqlContainer | undefined;
 
 export async function setup(): Promise<void> {
-  container = await new PostgreSqlContainer('postgres:16-alpine')
+  // Pinned to the production Postgres major (docker-compose.yml runs
+  // dhi.io/postgres:18) so integration tests exercise the same engine version.
+  container = await new PostgreSqlContainer('postgres:18-alpine')
     .withDatabase('lcm_test')
     .withUsername('lcm')
     .withPassword('lcm')
