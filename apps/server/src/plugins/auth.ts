@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 
 import type { Env } from '../env.js';
+import type { EffectiveAuthConfig } from '../services/auth-config.js';
 import { UnauthenticatedError } from '../services/errors.js';
 import { SessionService, type SessionUser } from '../services/sessions.js';
 
@@ -15,9 +16,15 @@ declare module 'fastify' {
 export const SESSION_COOKIE = 'lcm_session';
 export const SECURE_SESSION_COOKIE = '__Host-lcm_session';
 
-/** __Host- prefix binds the cookie to the origin; only valid over https. */
-export function sessionCookieName(env: Env): string {
-  return env.APP_BASE_URL?.startsWith('https://') === true ? SECURE_SESSION_COOKIE : SESSION_COOKIE;
+/**
+ * __Host- prefix binds the cookie to the origin; only valid over https.
+ * Reads `appBaseUrl` off the effective (DB-backed) auth config rather than
+ * env — `EffectiveAuthConfig` is the auth source of truth post-C3.
+ */
+export function sessionCookieName(config: Pick<EffectiveAuthConfig, 'appBaseUrl'>): string {
+  return config.appBaseUrl?.startsWith('https://') === true
+    ? SECURE_SESSION_COOKIE
+    : SESSION_COOKIE;
 }
 
 /** Principal used in AUTH_MODE=disabled so downstream code sees one shape. */
@@ -56,18 +63,31 @@ export function authStartupWarnings(env: Env): string[] {
 }
 
 interface AuthPluginOptions {
+  /**
+   * No longer read inside this plugin — auth mode, cookie naming, and the
+   * login-state signing secret all come from `fastify.authConfig.current`
+   * (DB-backed, live-reloadable) instead of env. Kept on the options type
+   * purely so `server.ts`'s existing `server.register(authPlugin, { env })`
+   * call site (out of scope for this change) keeps type-checking; a later
+   * cleanup that also migrates `server.ts`/`routes/auth.ts` off env can drop
+   * this.
+   */
   env: Env;
 }
 
-const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify, { env }) => {
-  await fastify.register(cookie, env.LOGIN_STATE_SECRET ? { secret: env.LOGIN_STATE_SECRET } : {});
+const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify) => {
+  // No global secret: login-state cookies are self-signed with the in-house
+  // HMAC helper (login-state-signer.ts) using
+  // fastify.authConfig.current.signingSecret at request time, so the secret
+  // can rotate (via the settings UI) without re-registering this plugin.
+  await fastify.register(cookie);
 
   const sessions = new SessionService(fastify.prisma);
 
   fastify.decorateRequest('user', null);
 
   fastify.addHook('onRequest', async (request) => {
-    if (env.AUTH_MODE === 'disabled') {
+    if (fastify.authConfig.current.mode === 'disabled') {
       request.user = { ...ANONYMOUS_USER };
       return;
     }
@@ -79,7 +99,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify, { env 
     if (routePath === undefined) return; // no route matched; 404 will follow
     // Health endpoints are unprefixed; the auth flow itself must stay open.
     if (!routePath.startsWith('/api/') || routePath.startsWith('/api/auth/')) return;
-    const token = request.cookies[sessionCookieName(env)];
+    const token = request.cookies[sessionCookieName(fastify.authConfig.current)];
     if (token !== undefined) {
       const user = await sessions.findUserByToken(token);
       if (user) {
@@ -91,4 +111,4 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify, { env 
   });
 };
 
-export default fp(authPlugin, { name: 'auth', dependencies: ['prisma'] });
+export default fp(authPlugin, { name: 'auth', dependencies: ['prisma', 'auth-config'] });
