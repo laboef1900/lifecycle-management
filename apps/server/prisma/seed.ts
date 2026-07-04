@@ -1,6 +1,9 @@
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, Prisma, type HostState } from '@prisma/client';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+});
 
 const DEFAULT_TENANT_ID = 'default';
 const MEMORY_METRIC_KEY = 'memory_gb';
