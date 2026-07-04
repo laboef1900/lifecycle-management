@@ -60,6 +60,25 @@ describe('authConfigResponseSchema', () => {
     expect(r.success).toBe(true);
   });
   it('rejects a bad discoveryStatus', () => {
-    expect(authConfigResponseSchema.safeParse({ discoveryStatus: 'nope' }).success).toBe(false);
+    const r = authConfigResponseSchema.safeParse({
+      mode: 'oidc',
+      issuerUrl: 'https://x',
+      clientId: 'lcm',
+      appBaseUrl: 'https://a',
+      scopes: 'openid',
+      roleClaim: null,
+      adminValues: null,
+      defaultRole: 'admin',
+      allowedEmailDomains: null,
+      allowedEmails: null,
+      sessionTtlHours: 12,
+      allowInsecure: false,
+      clientSecretSet: true,
+      signingSecretSet: true,
+      redirectUri: 'https://a/api/auth/callback',
+      discoveryStatus: 'nope',
+      lastDiscoveryError: null,
+    });
+    expect(r.success).toBe(false);
   });
 });
