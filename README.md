@@ -10,7 +10,7 @@ See [`docs/vision.md`](docs/vision.md) for the full product context.
 
 A pnpm monorepo with three runtime services:
 
-- **`apps/server`** — Fastify + Prisma on Node 22. Exposes a typed REST API
+- **`apps/server`** — Fastify + Prisma on Node 26. Exposes a typed REST API
   rooted at `/api`, plus `/healthz` / `/readyz`. Computes the forecast as a
   pure function over baselines, hosts, applications, and events.
 - **`apps/web`** — Vite + React 19 + TanStack Router/Query + Recharts +
@@ -24,7 +24,7 @@ A pnpm monorepo with three runtime services:
 
 ## Prerequisites
 
-- **Node.js 22** and **pnpm 11** (the repo pins `packageManager`)
+- **Node.js 26** and **pnpm 11** (the repo pins `packageManager`)
 - **Docker** with Compose (development uses just Postgres; production uses
   all three services)
 
@@ -87,7 +87,7 @@ All three containers run on [Docker Hardened Images](https://www.docker.com/prod
 | Container | Image                                  | Size    | Notes                                                                                                                             |
 | --------- | -------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `db`      | `dhi.io/postgres:18`                   | 1.14 GB | Hardened Postgres 18. Drop-in for postgres:16-alpine apart from `PGDATA=/var/lib/postgresql/18/data`.                             |
-| `server`  | `ghcr.io/laboef1900/lcm-server:latest` | 604 MB  | Distroless Node 22 runtime; multi-stage build, Node entrypoint replaces a shell script. Was 1.6 GB on the unhardened base (-62%). |
+| `server`  | `ghcr.io/laboef1900/lcm-server:latest` | 604 MB  | Distroless Node 26 runtime; multi-stage build, Node entrypoint replaces a shell script. Was 1.6 GB on the unhardened base (-62%). |
 | `web`     | `ghcr.io/laboef1900/lcm-web:latest`    | 70 MB   | Distroless nginx; listens on container-side `:8080` (nonroot can't bind 80). Was 94 MB on `nginx:alpine` (-25%).                  |
 
 > **Dev DB**: `docker/docker-compose.dev.yml` still uses `postgres:16-alpine`. The dev/prod parity gap is intentional for now — dev volumes are throwaway, and we haven't needed PG18-only features yet. To match prod exactly, bump that image and recreate the dev volume.
@@ -144,7 +144,7 @@ pnpm --filter @lcm/server db:import-xlsx [path]
 ```
 .
 ├─ apps/
-│  ├─ server/             Fastify + Prisma (Node 22)
+│  ├─ server/             Fastify + Prisma (Node 26)
 │  └─ web/                React + Vite SPA
 ├─ packages/
 │  └─ shared/             Zod schemas + types (consumed by server + web)

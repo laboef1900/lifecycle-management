@@ -5,7 +5,7 @@ This file provides foundational guidance for AI coding assistants (Gemini, Claud
 ## Project Overview
 
 **LCM** (repo: `laboef1900/lifecycle-management`) — self-hosted vSphere memory-capacity forecasting for a small internal infrastructure team; replaces the capacity spreadsheet as the single source of truth for capacity planning.
-**Architecture:** pnpm monorepo with three runtime services — `apps/server` (Fastify 5 + Prisma 7 REST API under `/api`, Node 22), `apps/web` (React 19 + Vite SPA, served by distroless nginx in production), and PostgreSQL. `packages/shared` (`@lcm/shared`) holds the Zod schemas + inferred TS types consumed by both sides. No Redis. The forecast is computed as a pure function over baselines, hosts, applications, and events.
+**Architecture:** pnpm monorepo with three runtime services — `apps/server` (Fastify 5 + Prisma 7 REST API under `/api`, Node 26), `apps/web` (React 19 + Vite SPA, served by distroless nginx in production), and PostgreSQL. `packages/shared` (`@lcm/shared`) holds the Zod schemas + inferred TS types consumed by both sides. No Redis. The forecast is computed as a pure function over baselines, hosts, applications, and events.
 
 ## Mandatory Rules (The "Golden Rules")
 
@@ -21,7 +21,7 @@ This file provides foundational guidance for AI coding assistants (Gemini, Claud
 
 | Layer                | Technology                                                                                                                                       |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Backend**          | Node 22, Fastify 5, Prisma 7 (pg driver adapter, `prisma.config.ts`), Zod 4 (`apps/server`)                                                      |
+| **Backend**          | Node 26, Fastify 5, Prisma 7 (pg driver adapter, `prisma.config.ts`), Zod 4 (`apps/server`)                                                      |
 | **Frontend**         | React 19, Vite 8, TanStack Router (file-based) + TanStack Query 5, Tailwind CSS 4, Radix UI, Recharts (`apps/web`)                               |
 | **Database**         | PostgreSQL 18 everywhere — `dhi.io/postgres:18` in production, `postgres:18-alpine` in dev and in the Testcontainers integration suite; no Redis |
 | **State/Data**       | TanStack Query for server state (staleTime 5 min); local React state otherwise — no Redux/Zustand                                                |
