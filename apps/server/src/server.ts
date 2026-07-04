@@ -23,6 +23,7 @@ import { healthRoutes } from './routes/health.js';
 import { hostReplacementRoutes } from './routes/host-replacements.js';
 import { hostRoutes } from './routes/hosts.js';
 import { itemsRoutes } from './routes/items.js';
+import { settingsAuthRoutes } from './routes/settings-auth.js';
 import { settingsRoutes } from './routes/settings.js';
 
 export interface BuildServerOptions {
@@ -95,6 +96,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(categoriesRoutes, { prefix: '/api' });
   await server.register(forecastRoutes, { prefix: '/api' });
   await server.register(settingsRoutes, { prefix: '/api' });
+  await server.register(settingsAuthRoutes, { prefix: '/api' });
 
   return server;
 }

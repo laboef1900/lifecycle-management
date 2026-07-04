@@ -4,6 +4,7 @@ import type { AuthConfigResponse, AuthConfigUpdate } from '@lcm/shared';
 
 import { decrypt, encrypt, generateSecret } from '../crypto/secret-box.js';
 import type { Env } from '../env.js';
+import { UnprocessableError } from './errors.js';
 
 const SINGLETON_ID = 'singleton';
 
@@ -190,6 +191,29 @@ export class AuthConfigService {
       where: { id: SINGLETON_ID },
       create: { id: SINGLETON_ID, ...data },
       update: data,
+    });
+  }
+
+  /**
+   * Generates a fresh signing secret (used for login-state cookie HMAC),
+   * encrypts, and stores it — invalidating any in-flight login attempts that
+   * relied on the previous secret. Requires `CONFIG_ENCRYPTION_KEY`; throws a
+   * (422) `UnprocessableError` rather than a raw `Error` so the route layer
+   * doesn't need special-case handling to turn a missing key into a clean
+   * HTTP response.
+   */
+  async rotateSigningSecret(): Promise<void> {
+    if (!this.key) {
+      throw new UnprocessableError(
+        'ENCRYPTION_KEY_REQUIRED',
+        'CONFIG_ENCRYPTION_KEY is not configured; cannot rotate the signing secret.',
+      );
+    }
+    const signingSecretEnc = encrypt(generateSecret(), this.key);
+    await this.prisma.authConfig.upsert({
+      where: { id: SINGLETON_ID },
+      create: { id: SINGLETON_ID, signingSecretEnc },
+      update: { signingSecretEnc },
     });
   }
 
