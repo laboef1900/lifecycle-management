@@ -5,6 +5,7 @@ import type { AuthMeResponse } from '@lcm/shared';
 
 import type { Env } from '../env.js';
 import { sessionCookieName } from '../plugins/auth.js';
+import { signLoginState, verifyLoginState } from '../plugins/login-state-signer.js';
 import { SessionService } from '../services/sessions.js';
 import { UserService, isEmailAllowed } from '../services/users.js';
 
@@ -26,13 +27,25 @@ type LoginErrorCode =
   | 'scheme_mismatch';
 
 interface AuthRoutesOptions {
+  /**
+   * No longer read inside this plugin — auth mode, scopes, appBaseUrl,
+   * session TTL, and the login-state signing secret all come from
+   * `fastify.authConfig.current` (DB-backed, live-reloadable) instead of env.
+   * Kept on the options type purely so `server.ts`'s existing
+   * `server.register(authRoutes, { prefix: '/api', env })` call site (out of
+   * scope for this change) keeps type-checking; a later cleanup that also
+   * migrates `server.ts` off env can drop this.
+   */
   env: Env;
 }
 
-export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify, { env }) => {
+export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify) => {
   const sessions = new SessionService(fastify.prisma);
   const users = new UserService(fastify.prisma);
-  const secure = env.APP_BASE_URL?.startsWith('https://') === true;
+  // Mutable accessor: authConfig.current can be reloaded at runtime (settings
+  // UI save → reconfigure()), so every request must read the CURRENT config
+  // rather than a value captured once at plugin-registration time.
+  const cfg = () => fastify.authConfig.current;
   // Tighter per-IP limit: these endpoints are unauthenticated by definition
   // and the code exchange is expensive. Inert in tests (plugin not registered).
   const authRateLimit = { rateLimit: { max: 30, timeWindow: '1 minute' } };
@@ -45,14 +58,16 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
     reply.redirect(`/login?error=${code}`);
 
   fastify.get('/auth/login', { config: authRateLimit }, async (request, reply) => {
-    if (env.AUTH_MODE !== 'oidc') return reply.redirect('/');
+    const current = cfg();
+    if (current.mode !== 'oidc') return reply.redirect('/');
     if (!fastify.oidc.config) return loginError(reply, 'idp_unavailable');
 
-    const expectedProtocol = new URL(env.APP_BASE_URL as string).protocol.replace(':', '');
+    const secure = current.appBaseUrl?.startsWith('https://') === true;
+    const expectedProtocol = new URL(current.appBaseUrl as string).protocol.replace(':', '');
     if (request.protocol !== expectedProtocol) {
       request.log.error(
-        { requestProtocol: request.protocol, appBaseUrl: env.APP_BASE_URL },
-        'APP_BASE_URL scheme mismatch — Secure cookies would be dropped; fix APP_BASE_URL',
+        { requestProtocol: request.protocol, appBaseUrl: current.appBaseUrl },
+        'appBaseUrl scheme mismatch — Secure cookies would be dropped; fix the configured App base URL',
       );
       return loginError(reply, 'scheme_mismatch');
     }
@@ -64,7 +79,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
 
     const authorizationUrl = client.buildAuthorizationUrl(fastify.oidc.config, {
       redirect_uri: fastify.oidc.redirectUri,
-      scope: env.OIDC_SCOPES,
+      scope: current.scopes,
       state,
       nonce,
       code_challenge: challenge,
@@ -72,15 +87,18 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
     });
 
     const payload: LoginState = { state, nonce, verifier };
+    const payloadEncoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    // Signed (not encrypted) with the in-house HMAC helper — the signing
+    // secret is DB-backed/rotatable, so @fastify/cookie's registration-time
+    // `signed: true` (single static secret) can no longer be used.
     reply.setCookie(
       LOGIN_STATE_COOKIE,
-      Buffer.from(JSON.stringify(payload)).toString('base64url'),
+      signLoginState(payloadEncoded, current.signingSecret as string),
       {
         path: '/api/auth',
         httpOnly: true,
         sameSite: 'lax',
         secure,
-        signed: true,
         maxAge: LOGIN_STATE_TTL_SECONDS,
       },
     );
@@ -88,7 +106,8 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
   });
 
   fastify.get('/auth/callback', { config: authRateLimit }, async (request, reply) => {
-    if (env.AUTH_MODE !== 'oidc') {
+    const current = cfg();
+    if (current.mode !== 'oidc') {
       clearLoginState(reply);
       return reply.redirect('/');
     }
@@ -98,18 +117,19 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
     }
 
     const raw = request.cookies[LOGIN_STATE_COOKIE];
-    const unsigned = raw === undefined ? null : request.unsignCookie(raw);
+    const verified =
+      raw === undefined ? null : verifyLoginState(raw, current.signingSecret as string);
     clearLoginState(reply);
-    if (!unsigned?.valid || unsigned.value === null) return loginError(reply, 'state_mismatch');
+    if (verified === null) return loginError(reply, 'state_mismatch');
 
     let login: LoginState;
     try {
-      login = JSON.parse(Buffer.from(unsigned.value, 'base64url').toString()) as LoginState;
+      login = JSON.parse(Buffer.from(verified, 'base64url').toString()) as LoginState;
     } catch {
       return loginError(reply, 'state_mismatch');
     }
 
-    const currentUrl = new URL(request.url, env.APP_BASE_URL);
+    const currentUrl = new URL(request.url, current.appBaseUrl as string);
     if (currentUrl.searchParams.has('error')) {
       // Raw IdP error/error_description go to logs only — never echoed to the browser.
       request.log.warn(
@@ -138,7 +158,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
     if (!claims) return loginError(reply, 'login_failed');
     const email = typeof claims.email === 'string' ? claims.email : undefined;
 
-    if (!isEmailAllowed(email, env)) {
+    if (!isEmailAllowed(email, current)) {
       request.log.warn({ sub: claims.sub }, 'Login rejected by email allowlist');
       return loginError(reply, 'access_denied');
     }
@@ -151,11 +171,12 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
         ...(typeof claims.name === 'string' && { name: claims.name }),
         claims: claims as Record<string, unknown>,
       },
-      env,
+      current,
     );
     // Access/refresh tokens are deliberately discarded — only identity matters (spec non-goal).
-    const session = await sessions.create(user.id, env.SESSION_TTL_HOURS);
-    reply.setCookie(sessionCookieName(env), session.token, {
+    const session = await sessions.create(user.id, current.sessionTtlHours);
+    const secure = current.appBaseUrl?.startsWith('https://') === true;
+    reply.setCookie(sessionCookieName(current), session.token, {
       path: '/',
       httpOnly: true,
       sameSite: 'lax',
@@ -166,15 +187,19 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify,
   });
 
   fastify.post('/auth/logout', async (request, reply) => {
-    const token = request.cookies[sessionCookieName(env)];
+    const current = cfg();
+    const cookieName = sessionCookieName(current);
+    const token = request.cookies[cookieName];
     if (token !== undefined) await sessions.destroy(token);
-    reply.clearCookie(sessionCookieName(env), { path: '/', secure });
+    const secure = current.appBaseUrl?.startsWith('https://') === true;
+    reply.clearCookie(cookieName, { path: '/', secure });
     return reply.code(204).send();
   });
 
   fastify.get('/auth/me', async (request): Promise<AuthMeResponse> => {
-    if (env.AUTH_MODE !== 'oidc') return { authRequired: false };
-    const token = request.cookies[sessionCookieName(env)];
+    const current = cfg();
+    if (current.mode !== 'oidc') return { authRequired: false };
+    const token = request.cookies[sessionCookieName(current)];
     const user = token === undefined ? null : await sessions.findUserByToken(token);
     if (!user) return { authRequired: true };
     return {

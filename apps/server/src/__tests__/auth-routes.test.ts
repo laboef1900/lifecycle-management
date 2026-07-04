@@ -10,6 +10,17 @@ import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
 
 const LOGIN_STATE_COOKIE = 'lcm_login_state';
 
+/**
+ * A valid 32-byte CONFIG_ENCRYPTION_KEY, local to this file. The auth routes
+ * now gate on `fastify.authConfig.current.mode` (DB-backed), not
+ * `env.AUTH_MODE` directly — to actually land in oidc mode the auth-config
+ * plugin needs a key so its boot-time seed from `makeOidcTestEnv`'s OIDC env
+ * vars isn't forced back to disabled by the missing-key fail-safe guard (see
+ * auth-config.ts). Same pattern as auth-plugin.test.ts's `oidcEnv()`;
+ * deliberately not added to the shared `makeOidcTestEnv` in test-helpers.ts.
+ */
+const CONFIG_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+
 describe('auth routes (oidc mode, mock IdP)', () => {
   let idp: OAuth2Server;
   let issuerUrl: string;
@@ -36,10 +47,15 @@ describe('auth routes (oidc mode, mock IdP)', () => {
 
   async function buildReadyServer(envOverrides: Parameters<typeof makeOidcTestEnv>[0] = {}) {
     const server = await buildServer({
-      env: makeOidcTestEnv({ OIDC_ISSUER_URL: issuerUrl, ...envOverrides }),
+      env: makeOidcTestEnv({
+        OIDC_ISSUER_URL: issuerUrl,
+        CONFIG_ENCRYPTION_KEY,
+        ...envOverrides,
+      }),
       prisma,
     });
     created.push(server);
+    expect(server.authConfig.current.mode).toBe('oidc');
     await vi.waitFor(() => {
       expect(server.oidc.config).not.toBeNull();
     });
@@ -194,8 +210,13 @@ describe('auth routes (oidc mode, mock IdP)', () => {
   });
 
   it('redirects to idp_unavailable when discovery has not completed', async () => {
-    const server = await buildServer({ env: makeOidcTestEnv(), prisma }); // unreachable issuer
+    // Needs CONFIG_ENCRYPTION_KEY so the seed actually lands in oidc mode (see
+    // buildReadyServer's comment) — the default OIDC_ISSUER_URL is
+    // unreachable, so discovery never completes and fastify.oidc.config stays
+    // null, which is exactly what this test exercises.
+    const server = await buildServer({ env: makeOidcTestEnv({ CONFIG_ENCRYPTION_KEY }), prisma });
     created.push(server);
+    expect(server.authConfig.current.mode).toBe('oidc');
     const response = await server.inject({ method: 'GET', url: '/api/auth/login' });
     expect(response.headers.location).toBe('/login?error=idp_unavailable');
   });
