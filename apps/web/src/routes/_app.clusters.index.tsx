@@ -23,7 +23,7 @@ import {
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 import { api } from '@/lib/api-client';
 
-export const Route = createFileRoute('/clusters/')({
+export const Route = createFileRoute('/_app/clusters/')({
   component: ClustersPage,
 });
 

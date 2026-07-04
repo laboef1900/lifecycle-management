@@ -1,7 +1,13 @@
-import { createRootRoute } from '@tanstack/react-router';
+import type { QueryClient } from '@tanstack/react-query';
+import { Outlet, createRootRouteWithContext } from '@tanstack/react-router';
 
-import { AppShell } from '@/components/layout/app-shell';
+import type { AuthState } from '@/lib/auth';
 
-export const Route = createRootRoute({
-  component: AppShell,
+export interface RouterContext {
+  queryClient: QueryClient;
+  auth: AuthState;
+}
+
+export const Route = createRootRouteWithContext<RouterContext>()({
+  component: Outlet,
 });

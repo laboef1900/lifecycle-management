@@ -159,12 +159,98 @@ error — typically a constraint added by a future migration.
 
 ## What's not in v1
 
-- Authentication / OIDC (planned for the 3-month milestone)
 - CPU and disk metrics (schema-ready, no UI)
 - Live hypervisor integration
 - Excel import/export
 - Multi-tenant enforcement (schema-only `tenant_id`)
 - Audit log
 - Alerting / thresholds
+- Role enforcement — OIDC roles are stored (`users.role`) but not yet
+  checked anywhere; every authenticated user has full access regardless of
+  role. See "Authentication (OIDC)" below.
 
 See the [vision](vision.md) for the rationale and roadmap.
+
+## Authentication (OIDC)
+
+Off by default (`AUTH_MODE=disabled`). When enabled, all `/api/*` routes
+except `/api/auth/*` require a valid session; unauthenticated requests get
+`401`. Health checks (`/healthz`, `/readyz`) are never gated.
+
+**Role enforcement is deferred**: the OIDC role claim is mapped and stored
+on the user record, but no route currently checks it — every signed-in user
+has full access. Don't rely on `OIDC_ROLE_CLAIM` / `OIDC_ADMIN_VALUES` for
+access control yet; use `OIDC_ALLOWED_EMAIL_DOMAINS` / `OIDC_ALLOWED_EMAILS`
+or IdP-side app assignment instead.
+
+### Enabling authentication
+
+1. Set in `.env`: `AUTH_MODE=oidc`, `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`,
+   `OIDC_CLIENT_SECRET`, `APP_BASE_URL`, `LOGIN_STATE_SECRET` (see the
+   "Authentication (OIDC)" block in `.env.example` for the full var list,
+   including optional role/allowlist knobs).
+2. `docker compose up -d` to recreate `server` with the new environment.
+3. **Verify** — a stale compose file or a typo in `.env` silently leaves
+   auth disabled, so always check:
+   ```bash
+   curl -si http://<host>/api/clusters | head -1     # must print HTTP/1.1 401
+   curl -s  http://<host>/api/auth/me                # must print {"authRequired":true}
+   ```
+   Any other result means auth is NOT enabled.
+
+### IdP registration
+
+Register `lcm` as a confidential OIDC client at your IdP with a
+single redirect URI:
+
+```
+${APP_BASE_URL}/api/auth/callback
+```
+
+`APP_BASE_URL` must exactly match the browser-facing origin — scheme,
+host, and port included (e.g. `https://lcm.example.com`, not
+`http://lcm.example.com:80` or a trailing slash). A mismatch shows up as
+the IdP rejecting the redirect URI at the consent screen, not as a
+server-side error.
+
+### Offboarding a user
+
+Deactivating or deleting the user at the IdP stops new logins, but any
+session issued before deactivation stays valid for up to
+`SESSION_TTL_HOURS` (default 12) — the server does not call back to the
+IdP to check. To revoke access immediately:
+
+```bash
+docker compose exec db psql -U lcm -d lcm \
+  -c "DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = 'user@example.com');"
+```
+
+### Secret rotation
+
+- **`LOGIN_STATE_SECRET`**: signs the short-lived login-state cookie used
+  only during the OIDC redirect round-trip. Rotating it (change the value,
+  `docker compose up -d`) only aborts logins that are already in flight at
+  the moment of restart — existing sessions are unaffected.
+- **`OIDC_CLIENT_SECRET`**: rotate at the IdP first, then update `.env` and
+  `docker compose up -d` in the same maintenance window. The old and new
+  secrets are not valid simultaneously at most IdPs, so a gap between the
+  two steps causes login failures (existing sessions still work).
+
+### Logout semantics
+
+Logout is local only: it clears the LCM session cookie and deletes the
+session row. It does not call the IdP's end-session endpoint, so if the
+IdP has an active SSO session, visiting the login flow again may
+re-authenticate the user instantly without a credentials prompt. This is
+expected — treat IdP-side logout as a separate action if it matters for
+your environment.
+
+### Plain-HTTP caveat
+
+If you run the stack without TLS, OIDC credentials (the authorization
+code exchange, session cookies) transit in cleartext between the browser,
+this host, and the IdP. Put TLS in front of `web`'s nginx (a reverse
+proxy or load balancer) before enabling auth on anything reachable outside
+localhost. Most IdPs also refuse to register or use `http://` redirect
+URIs except for `localhost`, so plain HTTP mainly only works for the local
+Keycloak dev loop described in [`docker/README.md`](../docker/README.md).

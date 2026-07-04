@@ -35,6 +35,7 @@ model Tenant {
   itemAllocations     ItemAllocation[]
   categories          Category[]
   settings            TenantSettings?
+  users               User[]
 
   @@map("tenants")
 }
@@ -277,4 +278,42 @@ model Category {
 
   @@unique([tenantId, name], map: "categories_tenant_name_unique")
   @@map("categories")
+}
+
+// ---------- Auth ----------
+
+model User {
+  id          String    @id @default(cuid())
+  tenantId    String    @default("default") @map("tenant_id")
+  issuer      String
+  subject     String
+  email       String?
+  displayName String?   @map("display_name")
+  role        UserRole  @default(VIEWER)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  lastLoginAt DateTime? @map("last_login_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@unique([issuer, subject])
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+enum UserRole {
+  ADMIN
+  VIEWER
 }

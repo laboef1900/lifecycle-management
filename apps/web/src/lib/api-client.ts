@@ -65,8 +65,15 @@ async function request<T>(path: string, init?: RequestInit, schema?: z.ZodType<T
   }
   const response = await fetch(path, {
     ...init,
+    credentials: 'same-origin',
     headers,
   });
+
+  // Session expired or missing: bounce to the login page. The ApiError below
+  // still throws so in-flight callers settle deterministically.
+  if (response.status === 401 && !window.location.pathname.startsWith('/login')) {
+    window.location.assign('/login');
+  }
 
   if (response.status === 204) {
     return undefined as T;

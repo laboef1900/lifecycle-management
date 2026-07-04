@@ -9,9 +9,12 @@ import type { PrismaClient } from '@prisma/client';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 
 import type { Env } from './env.js';
+import authPlugin, { authStartupWarnings } from './plugins/auth.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
+import oidcPlugin from './plugins/oidc.js';
 import prismaPlugin from './plugins/prisma.js';
 import tenantContextPlugin from './plugins/tenant-context.js';
+import { authRoutes } from './routes/auth.js';
 import { categoriesRoutes } from './routes/categories.js';
 import { clusterRoutes } from './routes/clusters.js';
 import { forecastRoutes } from './routes/forecast.js';
@@ -70,9 +73,12 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
   await server.register(sensible);
   await server.register(errorHandlerPlugin);
-  await server.register(tenantContextPlugin);
   await server.register(prismaPlugin, prisma ? { prisma } : {});
+  await server.register(authPlugin, { env });
+  await server.register(oidcPlugin, { env });
+  await server.register(tenantContextPlugin);
   await server.register(healthRoutes);
+  await server.register(authRoutes, { prefix: '/api', env });
   await server.register(clusterRoutes, { prefix: '/api' });
   await server.register(hostRoutes, { prefix: '/api' });
   await server.register(hostReplacementRoutes, { prefix: '/api' });
@@ -80,6 +86,10 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(categoriesRoutes, { prefix: '/api' });
   await server.register(forecastRoutes, { prefix: '/api' });
   await server.register(settingsRoutes, { prefix: '/api' });
+
+  for (const warning of authStartupWarnings(env)) {
+    server.log.warn(warning);
+  }
 
   return server;
 }

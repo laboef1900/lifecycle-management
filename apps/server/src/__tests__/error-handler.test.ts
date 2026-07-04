@@ -4,7 +4,12 @@ import { z } from 'zod';
 
 import { buildServer } from '../server.js';
 import errorHandler from '../plugins/error-handler.js';
-import { ConflictError, NotFoundError, UnprocessableError } from '../services/errors.js';
+import {
+  ConflictError,
+  NotFoundError,
+  UnauthenticatedError,
+  UnprocessableError,
+} from '../services/errors.js';
 import { makeFakePrisma, makeTestEnv } from './test-helpers.js';
 
 describe('error handler', () => {
@@ -112,6 +117,32 @@ describe('ServiceError narrowing', () => {
     expect(res.statusCode).toBe(422);
     expect(res.json()).toEqual({
       error: { code: 'UNKNOWN_METRIC', message: 'Unknown metric cpu_cores' },
+    });
+  });
+});
+
+describe('UnauthenticatedError', () => {
+  const created: Array<{ close: () => Promise<void> }> = [];
+
+  afterEach(async () => {
+    while (created.length) {
+      const server = created.pop();
+      await server?.close();
+    }
+  });
+
+  it('maps to a 401 UNAUTHENTICATED envelope', async () => {
+    const server = await buildServer({ env: makeTestEnv(), prisma: makeFakePrisma() });
+    created.push(server);
+    server.get('/boom-unauthenticated', async () => {
+      throw new UnauthenticatedError();
+    });
+
+    const response = await server.inject({ method: 'GET', url: '/boom-unauthenticated' });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({
+      error: { code: 'UNAUTHENTICATED', message: 'Authentication required' },
     });
   });
 });

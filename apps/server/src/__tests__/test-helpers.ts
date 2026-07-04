@@ -12,8 +12,27 @@ export function makeTestEnv(overrides: Partial<Env> = {}): Env {
     NODE_ENV: 'test',
     TRUST_PROXY: 'loopback,uniquelocal',
     RATE_LIMIT_MAX: 300,
+    AUTH_MODE: 'disabled',
+    SESSION_TTL_HOURS: 12,
+    OIDC_SCOPES: 'openid profile email',
+    OIDC_DEFAULT_ROLE: 'admin',
+    OIDC_ALLOW_INSECURE: false,
     ...overrides,
-  };
+  } as Env;
+}
+
+/** Env for auth tests: AUTH_MODE=oidc with a complete (mock-friendly) OIDC config. */
+export function makeOidcTestEnv(overrides: Partial<Env> = {}): Env {
+  return makeTestEnv({
+    AUTH_MODE: 'oidc',
+    OIDC_ISSUER_URL: 'http://127.0.0.1:1/oidc',
+    OIDC_CLIENT_ID: 'lcm-test',
+    OIDC_CLIENT_SECRET: 'lcm-test-secret',
+    APP_BASE_URL: 'http://127.0.0.1:8080',
+    LOGIN_STATE_SECRET: 'test-login-state-secret-0123456789abcdef',
+    OIDC_ALLOW_INSECURE: true,
+    ...overrides,
+  });
 }
 
 export interface FakePrismaOptions {
