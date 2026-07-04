@@ -9,4 +9,5 @@ beforeEach(async () => {
   await prisma.clusterSettings.deleteMany({});
   await prisma.cluster.deleteMany({});
   await prisma.tenantSettings.deleteMany({});
+  await prisma.authConfig.deleteMany({});
 });
