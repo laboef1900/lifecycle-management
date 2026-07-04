@@ -1,10 +1,10 @@
 # Multi-stage build for the Fastify server using Docker Hardened Images.
 #
-# Builder = dhi.io/node:22-alpine-dev (full shell + apk + npm + corepack).
+# Builder = dhi.io/node:26-alpine-dev (full shell + apk + npm + corepack).
 #           Compiles TS → JS, generates Prisma client, then packages a
 #           self-contained deploy bundle via `pnpm deploy`.
 #
-# Runtime = dhi.io/node:22-alpine (distroless: only `node` + /usr/bin/env,
+# Runtime = dhi.io/node:26-alpine (distroless: only `node` + /usr/bin/env,
 #           runs as uid 65532 nonroot, ENTRYPOINT is `node`). The Node
 #           entrypoint module at dist/src/entrypoint.js handles
 #           migrate + optional seed + server boot — there is no shell to
@@ -15,7 +15,7 @@
 # per-platform manifest). Dependabot's docker ecosystem bumps these.
 
 # ----- builder -----
-FROM dhi.io/node:22-alpine-dev@sha256:bc1012efa717d6017dd093a4facd6b610e167c1b33edf4bca488967c5b1b9d99 AS builder
+FROM dhi.io/node:26-alpine-dev@sha256:1c3f16604700ad8ea27c20299e66e0c1359583f9662301c4d3a660228255b7d8 AS builder
 
 # The -dev builder image defaults to `node` (uid 1000) — upstream renamed
 # it from `nonroot` in mid-2026. We need root briefly to enable corepack
@@ -70,7 +70,7 @@ RUN node node_modules/prisma/build/index.js generate
 WORKDIR /app
 
 # ----- runtime -----
-FROM dhi.io/node:22-alpine@sha256:c39fdc13b385653ebeb4b19a40c4b34b71331cac8da00bd3276bd1fc62de7d56 AS runtime
+FROM dhi.io/node:26-alpine@sha256:fedb4f426b8fcc707e5186f886ff6bfe2f589fc4eaf6da5b4632e51beb3a4b8f AS runtime
 
 # DHI distroless: nonroot uid 65532, ENTRYPOINT=["node"], no /bin, no apk.
 WORKDIR /app
