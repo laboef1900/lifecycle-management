@@ -97,7 +97,38 @@ describe('<AuthenticationForm>', () => {
     expect(body.roleClaim).toBe('roles');
   });
 
-  it('sends the typed secret only after clicking Replace and entering a value', async () => {
+  it('sends the typed secret only after clicking Replace, re-testing, and entering a value', async () => {
+    vi.mocked(api.settings.auth.get).mockResolvedValue({
+      ...baseConfig,
+      mode: 'oidc',
+      issuerUrl: 'https://idp.example.com',
+      clientId: 'client-123',
+      appBaseUrl: 'https://app.example.com',
+      clientSecretSet: true,
+      discoveryStatus: 'connected',
+    });
+    renderWithClient(<AuthenticationForm />);
+    await screen.findByText(/configured/i);
+
+    // Replacing the secret is a critical-field edit: it now requires a
+    // fresh Test connection before Save is allowed, even though the server
+    // already has mode 'oidc'.
+    await userEvent.click(screen.getByRole('button', { name: /replace/i }));
+    await userEvent.type(screen.getByLabelText(/client secret/i), 'new-secret-value');
+    await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/connection succeeded/i)).toBeInTheDocument();
+    });
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(api.settings.auth.update).toHaveBeenCalled();
+    });
+    const body = vi.mocked(api.settings.auth.update).mock.calls[0]![0];
+    expect(body.clientSecret).toBe('new-secret-value');
+  });
+
+  it('trims whitespace from a pasted secret before sending it (test and save)', async () => {
     vi.mocked(api.settings.auth.get).mockResolvedValue({
       ...baseConfig,
       mode: 'oidc',
@@ -111,14 +142,71 @@ describe('<AuthenticationForm>', () => {
     await screen.findByText(/configured/i);
 
     await userEvent.click(screen.getByRole('button', { name: /replace/i }));
-    await userEvent.type(screen.getByLabelText(/client secret/i), 'new-secret-value');
-    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await userEvent.type(screen.getByLabelText(/client secret/i), '  padded-secret  ');
+    await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
+    await waitFor(() => {
+      expect(api.settings.auth.test).toHaveBeenCalledWith(
+        expect.objectContaining({ clientSecret: 'padded-secret' }),
+      );
+    });
 
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => {
       expect(api.settings.auth.update).toHaveBeenCalled();
     });
     const body = vi.mocked(api.settings.auth.update).mock.calls[0]![0];
-    expect(body.clientSecret).toBe('new-secret-value');
+    expect(body.clientSecret).toBe('padded-secret');
+  });
+
+  it('requires a fresh test after editing a critical field while data.mode is already oidc', async () => {
+    vi.mocked(api.settings.auth.get).mockResolvedValue({
+      ...baseConfig,
+      mode: 'oidc',
+      issuerUrl: 'https://idp.example.com',
+      clientId: 'client-123',
+      appBaseUrl: 'https://app.example.com',
+      clientSecretSet: true,
+      discoveryStatus: 'connected',
+    });
+    renderWithClient(<AuthenticationForm />);
+    await screen.findByText(/configured/i);
+
+    // No edits yet: the server-verified oidc state stands in for a fresh
+    // test, so the hint is hidden and the toggle stays checked.
+    expect(
+      screen.queryByText(/run a successful connection test below to enable/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeChecked();
+
+    // Editing a critical field invalidates that carry-over, even though
+    // computed.mode is still 'oidc' (the toggle is untouched).
+    await userEvent.clear(screen.getByLabelText(/issuer url/i));
+    await userEvent.type(screen.getByLabelText(/issuer url/i), 'https://idp2.example.com');
+
+    expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeChecked();
+    expect(
+      screen.getByText(/run a successful connection test below to enable/i),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(
+      await screen.findByText(/test the connection successfully before enabling oidc/i),
+    ).toBeInTheDocument();
+    expect(api.settings.auth.update).not.toHaveBeenCalled();
+
+    // A fresh, successful test clears the block.
+    await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/connection succeeded/i)).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/run a successful connection test below to enable/i),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => {
+      expect(api.settings.auth.update).toHaveBeenCalled();
+    });
   });
 
   it('unlocks the enable toggle after a successful Test connection', async () => {

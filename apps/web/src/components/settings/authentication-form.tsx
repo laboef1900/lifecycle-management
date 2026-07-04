@@ -91,11 +91,22 @@ export function AuthenticationForm(): React.JSX.Element {
     allowInsecure: edits.allowInsecure ?? data?.allowInsecure ?? false,
   };
 
+  // The fields the /test call actually verifies. If any of them currently
+  // differ from what the server last verified — including "a replacement
+  // secret is being typed" — the server's last-known-good state no longer
+  // covers the config on screen, so it can't stand in for a fresh test.
+  const criticalFieldsDirty =
+    computed.issuerUrl !== (data?.issuerUrl ?? '') ||
+    computed.clientId !== (data?.clientId ?? '') ||
+    computed.allowInsecure !== (data?.allowInsecure ?? false) ||
+    secretInputValue.trim() !== '';
+
   // Enabling OIDC is gated on a successful Test-connection this session —
-  // unless the server already has it enabled, in which case flipping the
-  // local checkbox back on (without editing connection fields) needs no
-  // fresh proof.
-  const canEnable = testedOk || data?.mode === 'oidc';
+  // unless the server already has it enabled AND none of the critical
+  // fields have been edited away from that verified state, in which case
+  // flipping the local checkbox back on (or saving other, non-critical
+  // edits) needs no fresh proof.
+  const canEnable = testedOk || (data?.mode === 'oidc' && !criticalFieldsDirty);
   const showSecretInput = !data?.clientSecretSet || secretReplacing;
 
   const editField = <K extends keyof AuthFormEdits>(key: K, value: AuthFormEdits[K]): void => {
@@ -154,7 +165,7 @@ export function AuthenticationForm(): React.JSX.Element {
       issuerUrl: computed.issuerUrl,
       clientId: computed.clientId,
       allowInsecure: computed.allowInsecure,
-      ...(secretInputValue.trim() !== '' ? { clientSecret: secretInputValue } : {}),
+      ...(secretInputValue.trim() !== '' ? { clientSecret: secretInputValue.trim() } : {}),
     });
   };
 
@@ -189,7 +200,7 @@ export function AuthenticationForm(): React.JSX.Element {
     // Write-only: blank means unchanged. Only include clientSecret when the
     // admin actually typed a replacement, never send '' (that would clear it).
     if (secretInputValue.trim() !== '') {
-      candidate.clientSecret = secretInputValue;
+      candidate.clientSecret = secretInputValue.trim();
     }
 
     const parsed = authConfigUpdateSchema.safeParse(candidate);
@@ -258,7 +269,7 @@ export function AuthenticationForm(): React.JSX.Element {
               Enable OIDC authentication
             </label>
           </div>
-          {computed.mode !== 'oidc' && !canEnable ? (
+          {!canEnable ? (
             <p className="text-xs text-fg-subtle">
               Run a successful connection test below to enable.
             </p>
