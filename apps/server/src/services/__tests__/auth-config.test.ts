@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { loadKey } from '../../crypto/secret-box.js';
 import { prisma } from '../../__tests__/setup.js';
@@ -38,6 +38,25 @@ describe('AuthConfigService.load', () => {
     expect(row!.clientSecretEnc).not.toBeNull();
     expect(row!.clientSecretEnc).not.toContain('shh'); // encrypted at rest
     expect(row!.signingSecretEnc).not.toBeNull();
+  });
+
+  it('seeds as disabled (never crashing) when the key is null even though env has OIDC vars and a client secret', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const svc = new AuthConfigService(prisma, null);
+
+    const cfg = await svc.load(makeOidcTestEnv());
+
+    expect(cfg.mode).toBe('disabled');
+    expect(cfg.clientSecret).toBeNull();
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row).not.toBeNull();
+    expect(row!.mode).toBe('disabled');
+    // The secret can't be stored without a key, and enabling oidc without
+    // one stored would be unsafe — so it must not be persisted at all.
+    expect(row!.clientSecretEnc).toBeNull();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    warnSpy.mockRestore();
   });
 
   it('does not seed when no OIDC env vars are present', async () => {

@@ -105,7 +105,22 @@ export class AuthConfigService {
     if (!row) {
       const seed = seedEnv ? seedFromEnv(seedEnv) : null;
       if (seed) {
-        await this.update(seed, null);
+        if (this.key === null) {
+          // OIDC env vars (possibly including a client secret) are present,
+          // but there is no key to encrypt anything with. Storing the secret
+          // is impossible and enabling oidc without one would be unsafe, so
+          // seed a disabled config from the non-secret fields only. This
+          // keeps `update()`'s upsert from ever needing `requireKey()`, so it
+          // can't throw here — boot must fail safe, never crash.
+          console.warn(
+            '[auth-config] OIDC env configuration present but CONFIG_ENCRYPTION_KEY is not set ' +
+              '— seeded as disabled; set the key and configure authentication in Settings.',
+          );
+          const { clientSecret: _clientSecret, ...withoutSecret } = seed;
+          await this.update({ ...withoutSecret, mode: 'disabled' }, null);
+        } else {
+          await this.update(seed, null);
+        }
       } else {
         await this.prisma.authConfig.create({ data: { id: SINGLETON_ID } });
       }
