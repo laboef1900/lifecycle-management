@@ -12,11 +12,12 @@ export function encrypt(plaintext: string, key: Buffer): string {
 }
 
 export function decrypt(envelope: string, key: Buffer): string {
-  const [ivB64, tagB64, ctB64] = envelope.split('.');
-  if (!ivB64 || !tagB64 || !ctB64) throw new Error('Malformed secret envelope');
-  const decipher = createDecipheriv(ALGO, key, Buffer.from(ivB64, 'base64'));
-  decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
-  return Buffer.concat([decipher.update(Buffer.from(ctB64, 'base64')), decipher.final()]).toString(
+  const parts = envelope.split('.');
+  if (parts.length !== 3) throw new Error('Malformed secret envelope');
+  const [ivB64, tagB64, ctB64] = parts;
+  const decipher = createDecipheriv(ALGO, key, Buffer.from(ivB64!, 'base64'));
+  decipher.setAuthTag(Buffer.from(tagB64!, 'base64'));
+  return Buffer.concat([decipher.update(Buffer.from(ctB64!, 'base64')), decipher.final()]).toString(
     'utf8',
   );
 }

@@ -10,6 +10,10 @@ describe('secret-box', () => {
     expect(env).not.toContain('client-secret');
     expect(decrypt(env, key)).toBe('client-secret');
   });
+  it('roundtrips empty plaintext', () => {
+    const env = encrypt('', key);
+    expect(decrypt(env, key)).toBe('');
+  });
   it('rejects a tampered envelope', () => {
     const env = encrypt('x', key).split('.');
     env[2] = Buffer.from('tampered').toString('base64');
