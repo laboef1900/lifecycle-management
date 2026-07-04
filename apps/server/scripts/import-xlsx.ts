@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, Prisma } from '@prisma/client';
 
 import { parseCapacityXlsx } from './lib/parse-capacity-xlsx.js';
@@ -44,7 +45,9 @@ async function main(): Promise<void> {
     console.log(`  ${c.name}: ${c.events.length} events`);
   }
 
-  const prisma = new PrismaClient();
+  const prisma = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+  });
   try {
     const metric = await prisma.metricType.findUnique({ where: { key: METRIC_KEY } });
     if (!metric) {

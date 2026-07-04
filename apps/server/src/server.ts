@@ -75,7 +75,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
 
   await server.register(sensible);
   await server.register(errorHandlerPlugin);
-  await server.register(prismaPlugin, prisma ? { prisma } : {});
+  await server.register(prismaPlugin, prisma ? { prisma } : { connectionString: env.DATABASE_URL });
   await server.register(authConfigPlugin, { env });
 
   // Config is loaded once authConfigPlugin has registered; warnings must

@@ -1,7 +1,11 @@
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { beforeEach } from 'vitest';
 
-export const prisma = new PrismaClient();
+// DATABASE_URL is set by the testcontainer in vitest.global-setup.ts.
+export const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+});
 
 beforeEach(async () => {
   await prisma.session.deleteMany({});

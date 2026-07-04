@@ -2,19 +2,18 @@
 // Spec: docs/superpowers/specs/2026-05-22-lcm-v1-design.md
 
 generator client {
-  provider      = "prisma-client-js"
-  // `native` is for non-Docker dev on the host. The two `linux-musl-...`
-  // targets are for the DHI distroless runtime (`dhi.io/node:22-alpine`):
-  // amd64 in production (the GHCR publish workflow builds amd64 only),
-  // arm64 for local testing on Apple Silicon. Both pin OpenSSL 3.0.x —
-  // Prisma's runtime detection on DHI distroless (no openssl binary on
-  // disk) defaults to 1.1.x, which doesn't exist for these targets.
-  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "linux-musl-arm64-openssl-3.0.x"]
+  // Prisma 7 ships a Rust-free client (WASM query compiler + a JS driver
+  // adapter), so there is no native query-engine binary and `binaryTargets`
+  // is obsolete — the pure-JS `@prisma/adapter-pg` runs identically on
+  // musl amd64/arm64, which is what the old OpenSSL pinning worked around.
+  provider = "prisma-client-js"
 }
 
 datasource db {
+  // Prisma 7 no longer accepts `url` here; the connection string lives in
+  // prisma.config.ts (for the CLI) and is passed to PrismaClient via the
+  // `@prisma/adapter-pg` driver adapter at runtime.
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ---------- Lookup ----------

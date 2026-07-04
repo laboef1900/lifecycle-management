@@ -47,8 +47,9 @@ COPY --chown=node:node packages/shared packages/shared
 COPY --chown=node:node apps/server apps/server
 
 # Compile shared first (its dist/ becomes what node imports), then the
-# Prisma client (native query engine binary lands in
-# node_modules/.prisma/client/), then the server itself.
+# Prisma client (Prisma 7 is Rust-free: the generated client is pure JS +
+# a WASM query compiler in node_modules/.prisma/client/, no engine binary),
+# then the server itself.
 RUN pnpm --filter @lcm/shared build
 RUN pnpm --filter @lcm/server exec prisma generate
 RUN pnpm --filter @lcm/server build
@@ -76,11 +77,11 @@ WORKDIR /app
 
 COPY --from=builder --chown=65532:65532 /home/node/deploy /app
 
-# Prisma's native query engine links to libssl/libcrypto. The DHI distroless
-# runtime ships only `node` + /usr/bin/env — no system libs — so copy the
-# two OpenSSL .so files from the builder. Without these, Prisma's openssl
-# detection fails and falls back to "openssl-1.1.x" (which we don't and
-# can't generate engines for).
+# Prisma 7 has no query-engine binary, but the entrypoint still runs
+# `prisma migrate deploy` at boot, which uses Prisma's native *schema*
+# engine — and that links to libssl/libcrypto. The DHI distroless runtime
+# ships only `node` + /usr/bin/env (no system libs), so copy the two
+# OpenSSL .so files from the builder; without them migrate-on-boot fails.
 COPY --from=builder /usr/lib/libssl.so.3 /usr/lib/libcrypto.so.3 /usr/lib/
 
 ENV NODE_ENV=production

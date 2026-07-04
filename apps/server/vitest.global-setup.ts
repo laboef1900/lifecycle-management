@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
@@ -39,7 +40,7 @@ function applyMigrations(databaseUrl: string): void {
 }
 
 async function seedDefaults(databaseUrl: string): Promise<void> {
-  const client = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+  const client = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl }) });
   try {
     await client.tenant.upsert({
       where: { id: 'default' },
