@@ -2,6 +2,7 @@
   "routesDirectory": "src/routes",
   "generatedRouteTree": "src/routeTree.gen.ts",
   "routeFileIgnorePrefix": "-",
+  "routeFileIgnorePattern": "__tests__|\\.test\\.tsx?$",
   "quoteStyle": "single",
   "semicolons": true,
   "autoCodeSplitting": true

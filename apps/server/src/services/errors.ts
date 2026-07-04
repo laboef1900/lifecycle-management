@@ -43,3 +43,11 @@ export class UnauthenticatedError extends ServiceError {
     super('UNAUTHENTICATED', 'Authentication required');
   }
 }
+
+export class ForbiddenError extends ServiceError {
+  readonly statusCode = 403;
+
+  constructor(message = 'Forbidden') {
+    super('FORBIDDEN', message);
+  }
+}

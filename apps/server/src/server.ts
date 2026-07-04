@@ -9,6 +9,7 @@ import type { PrismaClient } from '@prisma/client';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 
 import type { Env } from './env.js';
+import authConfigPlugin from './plugins/auth-config.js';
 import authPlugin, { authStartupWarnings } from './plugins/auth.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import oidcPlugin from './plugins/oidc.js';
@@ -22,6 +23,7 @@ import { healthRoutes } from './routes/health.js';
 import { hostReplacementRoutes } from './routes/host-replacements.js';
 import { hostRoutes } from './routes/hosts.js';
 import { itemsRoutes } from './routes/items.js';
+import { settingsAuthRoutes } from './routes/settings-auth.js';
 import { settingsRoutes } from './routes/settings.js';
 
 export interface BuildServerOptions {
@@ -74,11 +76,19 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(sensible);
   await server.register(errorHandlerPlugin);
   await server.register(prismaPlugin, prisma ? { prisma } : {});
-  await server.register(authPlugin, { env });
-  await server.register(oidcPlugin, { env });
+  await server.register(authConfigPlugin, { env });
+
+  // Config is loaded once authConfigPlugin has registered; warnings must
+  // reflect the actual (config-driven) auth state, not raw env.
+  for (const warning of authStartupWarnings(server.authConfig.current, env.NODE_ENV)) {
+    server.log.warn(warning);
+  }
+
+  await server.register(authPlugin);
+  await server.register(oidcPlugin);
   await server.register(tenantContextPlugin);
   await server.register(healthRoutes);
-  await server.register(authRoutes, { prefix: '/api', env });
+  await server.register(authRoutes, { prefix: '/api' });
   await server.register(clusterRoutes, { prefix: '/api' });
   await server.register(hostRoutes, { prefix: '/api' });
   await server.register(hostReplacementRoutes, { prefix: '/api' });
@@ -86,10 +96,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(categoriesRoutes, { prefix: '/api' });
   await server.register(forecastRoutes, { prefix: '/api' });
   await server.register(settingsRoutes, { prefix: '/api' });
-
-  for (const warning of authStartupWarnings(env)) {
-    server.log.warn(warning);
-  }
+  await server.register(settingsAuthRoutes, { prefix: '/api' });
 
   return server;
 }

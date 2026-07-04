@@ -2,7 +2,9 @@ import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import * as client from 'openid-client';
 
-import type { Env } from '../env.js';
+import type { AuthConfigTestResult } from '@lcm/shared';
+
+import type { EffectiveAuthConfig } from '../services/auth-config.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -14,10 +16,17 @@ export interface OidcState {
   /** null until discovery succeeds; login redirects to idp_unavailable meanwhile. */
   config: client.Configuration | null;
   redirectUri: string;
-}
-
-interface OidcPluginOptions {
-  env: Env;
+  /** Mirrors AuthConfigResponse.discoveryStatus — surfaced by the settings API. */
+  status: 'connected' | 'unavailable' | 'disabled';
+  /** Sanitized (never contains the client secret) message from the last failed attempt. */
+  lastError: string | null;
+  /**
+   * Resets the backoff attempt counter and immediately re-derives state from
+   * the CURRENT `fastify.authConfig.current` (redirectUri included), then
+   * runs a fresh discovery attempt. Called by the settings save route after
+   * an auth-config update so the new config takes effect without a restart.
+   */
+  reconfigure(): Promise<void>;
 }
 
 /**
@@ -28,58 +37,162 @@ export function discoveryBackoffMs(attempt: number): number {
   return Math.min(60_000, 1_000 * 2 ** Math.min(attempt, 6));
 }
 
+function computeRedirectUri(current: EffectiveAuthConfig): string {
+  const base = current.appBaseUrl?.replace(/\/$/, '') ?? '';
+  return `${base}/api/auth/callback`;
+}
+
+/**
+ * Never let a failed-discovery log/lastError leak the client secret. Discovery
+ * itself only fetches the issuer's public metadata document (no secret is
+ * sent), so this is a defense-in-depth guard against an unexpected error
+ * message (e.g. from a custom fetch wrapper) echoing request details.
+ */
+export function sanitizeDiscoveryError(err: unknown, clientSecret: string | null): string {
+  const message = err instanceof Error ? err.message : 'Unknown error';
+  if (clientSecret && message.includes(clientSecret)) {
+    return message.split(clientSecret).join('[redacted]');
+  }
+  return message;
+}
+
+/**
+ * One-shot discovery attempt for the settings UI's "Test connection" button
+ * and the save-time enable gate. Mirrors the exact `client.discovery()` call
+ * shape (and `allowInsecure` handling) used by the background `tryDiscover()`
+ * loop below, but is otherwise completely decoupled from it: no retry loop,
+ * no shared/plugin state is read or written, and nothing is persisted. Purely
+ * reports whether the given, caller-supplied config can currently discover.
+ */
+export async function testDiscovery(input: {
+  issuerUrl: string;
+  clientId: string;
+  clientSecret: string;
+  allowInsecure: boolean;
+}): Promise<AuthConfigTestResult> {
+  try {
+    const options = input.allowInsecure ? { execute: [client.allowInsecureRequests] } : undefined;
+    await client.discovery(
+      new URL(input.issuerUrl),
+      input.clientId,
+      input.clientSecret,
+      undefined,
+      options,
+    );
+    return { ok: true, error: null };
+  } catch (err) {
+    return { ok: false, error: sanitizeDiscoveryError(err, input.clientSecret) };
+  }
+}
+
 /**
  * Discovery runs in a background retry loop (capped backoff): the server must
  * listen immediately and /readyz must never depend on the IdP — compose gates
  * the web container on server health, so IdP-coupled readiness would deadlock
  * the whole stack at cold boot. Established sessions never touch the IdP.
+ *
+ * Config is read from `fastify.authConfig.current` (Task C5) rather than env
+ * — the DB-backed AuthConfig singleton is the source of truth so the settings
+ * UI can change it at runtime via `reconfigure()`.
  */
-const oidcPlugin: FastifyPluginAsync<OidcPluginOptions> = async (fastify, { env }) => {
-  const base = env.APP_BASE_URL?.replace(/\/$/, '') ?? '';
-  const state: OidcState = { config: null, redirectUri: `${base}/api/auth/callback` };
-  fastify.decorate('oidc', state);
-
-  if (env.AUTH_MODE !== 'oidc') return;
-
+const oidcPlugin: FastifyPluginAsync = async (fastify) => {
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   let attempt = 0;
+  /**
+   * Bumped every time a new discovery attempt starts (via `tryDiscover` or
+   * `reconfigure`). A `tryDiscover()` call captures the generation it was
+   * started with; if that no longer matches when its `client.discovery()`
+   * settles, a newer attempt has superseded it, so it must not commit state
+   * or re-arm the backoff timer (prevents a slow, stale attempt from
+   * clobbering a result produced by a later `reconfigure()`).
+   */
+  let generation = 0;
 
-  const tryDiscover = async (): Promise<void> => {
-    try {
-      const options = env.OIDC_ALLOW_INSECURE
-        ? { execute: [client.allowInsecureRequests] }
-        : undefined;
-      const config = await client.discovery(
-        new URL(env.OIDC_ISSUER_URL as string),
-        env.OIDC_CLIENT_ID as string,
-        env.OIDC_CLIENT_SECRET as string,
-        undefined,
-        options,
-      );
-      if (!closed) {
-        state.config = config;
-        fastify.log.info({ issuer: env.OIDC_ISSUER_URL }, 'OIDC discovery succeeded');
-      }
-    } catch (err) {
-      attempt += 1;
-      const delayMs = discoveryBackoffMs(attempt);
-      fastify.log.error(
-        { err, attempt, retryInMs: delayMs },
-        'OIDC discovery failed; login is unavailable until the issuer is reachable',
-      );
-      if (!closed) {
-        timer = setTimeout(() => void tryDiscover(), delayMs);
-      }
+  const clearTimer = (): void => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
     }
   };
 
-  void tryDiscover();
+  const initial = fastify.authConfig.current;
+  const state: OidcState = {
+    config: null,
+    redirectUri: computeRedirectUri(initial),
+    status: initial.mode === 'oidc' ? 'unavailable' : 'disabled',
+    lastError: null,
+    reconfigure: async () => {},
+  };
+  fastify.decorate('oidc', state);
+
+  const tryDiscover = async (): Promise<void> => {
+    const myGeneration = ++generation;
+    const current = fastify.authConfig.current;
+    try {
+      const options = current.allowInsecure
+        ? { execute: [client.allowInsecureRequests] }
+        : undefined;
+      const config = await client.discovery(
+        new URL(current.issuerUrl as string),
+        current.clientId as string,
+        current.clientSecret as string,
+        undefined,
+        options,
+      );
+      // A newer attempt (from a subsequent reconfigure()) has superseded this
+      // one, or the server is shutting down — do not commit this result.
+      if (closed || myGeneration !== generation) return;
+      state.config = config;
+      state.status = 'connected';
+      state.lastError = null;
+      fastify.log.info({ issuer: current.issuerUrl }, 'OIDC discovery succeeded');
+    } catch (err) {
+      if (closed || myGeneration !== generation) return;
+      attempt += 1;
+      const delayMs = discoveryBackoffMs(attempt);
+      // Sanitize BEFORE logging: the client secret must never reach the
+      // logger, even wrapped inside the raw `err` object.
+      const sanitized = sanitizeDiscoveryError(err, current.clientSecret);
+      fastify.log.error(
+        { error: sanitized, attempt, retryInMs: delayMs },
+        'OIDC discovery failed; login is unavailable until the issuer is reachable',
+      );
+      state.config = null;
+      state.status = 'unavailable';
+      state.lastError = sanitized;
+      timer = setTimeout(() => void tryDiscover(), delayMs);
+    }
+  };
+
+  /** Reset + immediate (single) discovery attempt against the CURRENT config. */
+  const reconfigure = async (): Promise<void> => {
+    // Invalidate any in-flight tryDiscover() from before this call — including
+    // the disabled-below early return, so a slow prior attempt can't clobber
+    // the disabled state after we've committed to it below.
+    generation += 1;
+    clearTimer();
+    attempt = 0;
+    const current = fastify.authConfig.current;
+    state.redirectUri = computeRedirectUri(current);
+    if (current.mode !== 'oidc') {
+      state.status = 'disabled';
+      state.config = null;
+      state.lastError = null;
+      return;
+    }
+    await tryDiscover();
+  };
+  state.reconfigure = reconfigure;
+
+  if (initial.mode === 'oidc') {
+    void tryDiscover();
+  }
 
   fastify.addHook('onClose', async () => {
     closed = true;
-    if (timer) clearTimeout(timer);
+    clearTimer();
   });
 };
 
-export default fp(oidcPlugin, { name: 'oidc' });
+export default fp(oidcPlugin, { name: 'oidc', dependencies: ['auth-config'] });

@@ -10,6 +10,17 @@ import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
 
 const LOGIN_STATE_COOKIE = 'lcm_login_state';
 
+/**
+ * A valid 32-byte CONFIG_ENCRYPTION_KEY, local to this file. The auth routes
+ * now gate on `fastify.authConfig.current.mode` (DB-backed), not
+ * `env.AUTH_MODE` directly — to actually land in oidc mode the auth-config
+ * plugin needs a key so its boot-time seed from `makeOidcTestEnv`'s OIDC env
+ * vars isn't forced back to disabled by the missing-key fail-safe guard (see
+ * auth-config.ts). Same pattern as auth-plugin.test.ts's `oidcEnv()`;
+ * deliberately not added to the shared `makeOidcTestEnv` in test-helpers.ts.
+ */
+const CONFIG_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+
 describe('auth routes (oidc mode, mock IdP)', () => {
   let idp: OAuth2Server;
   let issuerUrl: string;
@@ -36,10 +47,15 @@ describe('auth routes (oidc mode, mock IdP)', () => {
 
   async function buildReadyServer(envOverrides: Parameters<typeof makeOidcTestEnv>[0] = {}) {
     const server = await buildServer({
-      env: makeOidcTestEnv({ OIDC_ISSUER_URL: issuerUrl, ...envOverrides }),
+      env: makeOidcTestEnv({
+        OIDC_ISSUER_URL: issuerUrl,
+        CONFIG_ENCRYPTION_KEY,
+        ...envOverrides,
+      }),
       prisma,
     });
     created.push(server);
+    expect(server.authConfig.current.mode).toBe('oidc');
     await vi.waitFor(() => {
       expect(server.oidc.config).not.toBeNull();
     });
@@ -193,9 +209,39 @@ describe('auth routes (oidc mode, mock IdP)', () => {
     expect(response.headers.location).toBe('/login?error=state_mismatch');
   });
 
+  it('redirects to state_mismatch when the login-state cookie has been forged/corrupted', async () => {
+    // Route-level coverage for verifyLoginState(...) === null -> state_mismatch:
+    // drive a real /auth/login to obtain a validly-signed cookie, then corrupt
+    // its HMAC so verification must fail on the callback, never a 500 and
+    // never a successful login.
+    const server = await buildReadyServer();
+
+    const login = await server.inject({ method: 'GET', url: '/api/auth/login' });
+    expect(login.statusCode).toBe(302);
+    const stateCookie = login.cookies.find((c) => c.name === LOGIN_STATE_COOKIE);
+    expect(stateCookie).toBeDefined();
+    const forgedCookie = `${(stateCookie as { value: string }).value}tampered`;
+
+    const callback = await server.inject({
+      method: 'GET',
+      url: '/api/auth/callback?code=whatever&state=whatever',
+      cookies: { [LOGIN_STATE_COOKIE]: forgedCookie },
+    });
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe('/login?error=state_mismatch');
+    expect(callback.cookies.find((c) => c.name === SESSION_COOKIE)).toBeUndefined();
+    expect(await prisma.user.count()).toBe(0);
+  });
+
   it('redirects to idp_unavailable when discovery has not completed', async () => {
-    const server = await buildServer({ env: makeOidcTestEnv(), prisma }); // unreachable issuer
+    // Needs CONFIG_ENCRYPTION_KEY so the seed actually lands in oidc mode (see
+    // buildReadyServer's comment) — the default OIDC_ISSUER_URL is
+    // unreachable, so discovery never completes and fastify.oidc.config stays
+    // null, which is exactly what this test exercises.
+    const server = await buildServer({ env: makeOidcTestEnv({ CONFIG_ENCRYPTION_KEY }), prisma });
     created.push(server);
+    expect(server.authConfig.current.mode).toBe('oidc');
     const response = await server.inject({ method: 'GET', url: '/api/auth/login' });
     expect(response.headers.location).toBe('/login?error=idp_unavailable');
   });
@@ -204,6 +250,18 @@ describe('auth routes (oidc mode, mock IdP)', () => {
     const server = await buildReadyServer({ APP_BASE_URL: 'https://lcm.example.com' });
     const response = await server.inject({ method: 'GET', url: '/api/auth/login' });
     expect(response.headers.location).toBe('/login?error=scheme_mismatch');
+  });
+
+  it('redirects to idp_unavailable (not a 500) when oidc mode has no appBaseUrl configured', async () => {
+    // A config can land in mode:oidc with appBaseUrl:null (e.g. AUTH_MODE=oidc
+    // seeded without APP_BASE_URL) — discovery only needs issuer/client/secret,
+    // so `fastify.oidc.config` is populated even though appBaseUrl is missing.
+    // `new URL(null)` would otherwise throw and crash the request with a 500.
+    const server = await buildReadyServer({ APP_BASE_URL: undefined });
+    expect(server.authConfig.current.appBaseUrl).toBeNull();
+    const response = await server.inject({ method: 'GET', url: '/api/auth/login' });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/login?error=idp_unavailable');
   });
 
   it('logout destroys the session and clears the cookie', async () => {

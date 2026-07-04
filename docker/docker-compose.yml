@@ -61,6 +61,20 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN:-}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
       TRUST_PROXY: ${TRUST_PROXY:-loopback,uniquelocal}
+      # Required to start at all — fail-closed, same as POSTGRES_PASSWORD
+      # above. Encrypts the DB-backed OIDC config (client secret, the
+      # app-generated login-state signing secret). Generate once with:
+      #   openssl rand -base64 32
+      # Losing/rotating it after OIDC is enabled forces auth back to
+      # disabled and requires re-entering the client secret via
+      # Settings → Authentication — see docs/operations.md.
+      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:?CONFIG_ENCRYPTION_KEY must be set — generate with 'openssl rand -base64 32'}
+      # Break-glass: `true` forces auth disabled on next boot regardless of
+      # the stored config. See docs/operations.md ("Break-glass").
+      RECOVERY_DISABLE_AUTH: ${RECOVERY_DISABLE_AUTH:-false}
+      # ---- OIDC seed vars — first-boot only, ignored afterwards ----
+      # Configure OIDC via the app's Settings → Authentication panel
+      # instead of editing these post-deploy; see docs/operations.md.
       AUTH_MODE: ${AUTH_MODE:-disabled}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}

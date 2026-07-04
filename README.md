@@ -94,22 +94,29 @@ All three containers run on [Docker Hardened Images](https://www.docker.com/prod
 
 ## Environment variables
 
-| Variable            | Default                                   | Used by                | Purpose                                               |
-| ------------------- | ----------------------------------------- | ---------------------- | ----------------------------------------------------- |
-| `DATABASE_URL`      | `postgresql://lcm:lcm@localhost:5432/lcm` | server                 | Prisma connection string                              |
-| `PORT`              | `8080` (prod), `8090` (dev)               | server                 | Server listen port                                    |
-| `HOST`              | `0.0.0.0`                                 | server                 | Server listen host                                    |
-| `LOG_LEVEL`         | `info`                                    | server                 | Pino log level (`trace`–`silent`)                     |
-| `NODE_ENV`          | `development`                             | server                 | Switches log format + features                        |
-| `CORS_ORIGIN`       | unset (CORS disabled)                     | server                 | Comma-separated allowlist of CORS origins             |
-| `TRUST_PROXY`       | `loopback,uniquelocal`                    | server                 | Trusted proxy ranges for `X-Forwarded-*`              |
-| `RATE_LIMIT_MAX`    | `300`                                     | server                 | Max requests per minute per IP                        |
-| `SEED_ON_BOOT`      | `false`                                   | server (compose)       | Runs `prisma db seed` on container start              |
-| `POSTGRES_USER`     | `lcm`                                     | db (compose)           | Postgres role                                         |
-| `POSTGRES_PASSWORD` | `— (required)`                            | db + server (compose)  | Postgres password (compose refuses to start if unset) |
-| `POSTGRES_DB`       | `lcm`                                     | db (compose)           | Postgres database name                                |
-| `HTTP_PORT`         | `80`                                      | web (compose)          | Host port mapped to nginx :8080                       |
-| `LCM_IMAGE_TAG`     | `latest`                                  | server + web (compose) | GHCR image tag (e.g. `0.1`, `dev`)                    |
+| Variable                | Default                                   | Used by                | Purpose                                                                                                         |
+| ----------------------- | ----------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`          | `postgresql://lcm:lcm@localhost:5432/lcm` | server                 | Prisma connection string                                                                                        |
+| `PORT`                  | `8080` (prod), `8090` (dev)               | server                 | Server listen port                                                                                              |
+| `HOST`                  | `0.0.0.0`                                 | server                 | Server listen host                                                                                              |
+| `LOG_LEVEL`             | `info`                                    | server                 | Pino log level (`trace`–`silent`)                                                                               |
+| `NODE_ENV`              | `development`                             | server                 | Switches log format + features                                                                                  |
+| `CORS_ORIGIN`           | unset (CORS disabled)                     | server                 | Comma-separated allowlist of CORS origins                                                                       |
+| `TRUST_PROXY`           | `loopback,uniquelocal`                    | server                 | Trusted proxy ranges for `X-Forwarded-*`                                                                        |
+| `RATE_LIMIT_MAX`        | `300`                                     | server                 | Max requests per minute per IP                                                                                  |
+| `SEED_ON_BOOT`          | `false`                                   | server (compose)       | Runs `prisma db seed` on container start                                                                        |
+| `POSTGRES_USER`         | `lcm`                                     | db (compose)           | Postgres role                                                                                                   |
+| `POSTGRES_PASSWORD`     | `— (required)`                            | db + server (compose)  | Postgres password (compose refuses to start if unset)                                                           |
+| `POSTGRES_DB`           | `lcm`                                     | db (compose)           | Postgres database name                                                                                          |
+| `HTTP_PORT`             | `80`                                      | web (compose)          | Host port mapped to nginx :8080                                                                                 |
+| `LCM_IMAGE_TAG`         | `latest`                                  | server + web (compose) | GHCR image tag (e.g. `0.1`, `dev`)                                                                              |
+| `CONFIG_ENCRYPTION_KEY` | `— (required)`                            | server (compose)       | Encrypts the DB-backed OIDC config; compose refuses to start if unset — generate with `openssl rand -base64 32` |
+| `RECOVERY_DISABLE_AUTH` | `false`                                   | server (compose)       | Break-glass: forces auth off on next boot regardless of stored config                                           |
+
+OIDC itself is configured at runtime via **Settings → Authentication**, not
+env vars — see [`docs/operations.md`](docs/operations.md#authentication-oidc).
+The `AUTH_MODE` / `OIDC_*` vars in `.env.example` are seed-only (first-boot
+provisioning); they're ignored on every later boot.
 
 ## Day-to-day commands
 
