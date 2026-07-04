@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { ANONYMOUS_USER, SESSION_COOKIE, authStartupWarnings } from '../plugins/auth.js';
 import { buildServer } from '../server.js';
+import type { EffectiveAuthConfig } from '../services/auth-config.js';
 import { SessionService } from '../services/sessions.js';
 import { prisma } from './setup.js';
 import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
@@ -163,15 +164,47 @@ describe('auth plugin', () => {
 });
 
 describe('authStartupWarnings', () => {
+  /** Mirrors the disabled `EffectiveAuthConfig` the auth-config plugin seeds by default. */
+  function makeConfig(overrides: Partial<EffectiveAuthConfig> = {}): EffectiveAuthConfig {
+    return {
+      mode: 'disabled',
+      issuerUrl: null,
+      clientId: null,
+      clientSecret: null,
+      signingSecret: null,
+      appBaseUrl: null,
+      scopes: 'openid profile email',
+      roleClaim: null,
+      adminValues: null,
+      defaultRole: 'admin',
+      allowedEmailDomains: null,
+      allowedEmails: null,
+      sessionTtlHours: 12,
+      allowInsecure: false,
+      ...overrides,
+    };
+  }
+
+  /** oidc mode with no allowlist/role claim and allowInsecure — mirrors makeOidcTestEnv's shape. */
+  function makeOidcConfig(overrides: Partial<EffectiveAuthConfig> = {}): EffectiveAuthConfig {
+    return makeConfig({
+      mode: 'oidc',
+      issuerUrl: 'http://127.0.0.1:1/oidc',
+      clientId: 'lcm-test',
+      clientSecret: 'lcm-test-secret',
+      appBaseUrl: 'http://127.0.0.1:8080',
+      allowInsecure: true,
+      ...overrides,
+    });
+  }
+
   it('warns about disabled auth in production, wide-open oidc, and insecure issuers', () => {
-    expect(authStartupWarnings(makeTestEnv({ NODE_ENV: 'production' }))).toHaveLength(1);
-    expect(authStartupWarnings(makeTestEnv())).toHaveLength(0);
-    // makeOidcTestEnv sets OIDC_ALLOW_INSECURE=true and no allowlist/role claim → 2 warnings.
-    expect(authStartupWarnings(makeOidcTestEnv())).toHaveLength(2);
+    expect(authStartupWarnings(makeConfig(), 'production')).toHaveLength(1);
+    expect(authStartupWarnings(makeConfig(), 'test')).toHaveLength(0);
+    // No allowlist/role claim and allowInsecure=true → 2 warnings.
+    expect(authStartupWarnings(makeOidcConfig(), 'test')).toHaveLength(2);
     expect(
-      authStartupWarnings(
-        makeOidcTestEnv({ OIDC_ROLE_CLAIM: 'groups', OIDC_ALLOW_INSECURE: false }),
-      ),
+      authStartupWarnings(makeOidcConfig({ roleClaim: 'groups', allowInsecure: false }), 'test'),
     ).toHaveLength(0);
   });
 });

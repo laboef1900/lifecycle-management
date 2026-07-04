@@ -36,46 +36,45 @@ export const ANONYMOUS_USER: SessionUser = {
   role: 'ADMIN',
 };
 
-export function authStartupWarnings(env: Env): string[] {
+/**
+ * Boot-time warnings reflecting the ACTUAL (config-driven) auth state —
+ * `EffectiveAuthConfig` is the auth source of truth post-C3, so this reads
+ * `fastify.authConfig.current` fields rather than raw env. `nodeEnv` is not
+ * part of that config (it's the process's runtime environment, not an auth
+ * setting) so it's still taken directly from `Env`.
+ */
+export function authStartupWarnings(
+  config: EffectiveAuthConfig,
+  nodeEnv: Env['NODE_ENV'],
+): string[] {
   const warnings: string[] = [];
-  if (env.AUTH_MODE === 'disabled' && env.NODE_ENV === 'production') {
+  if (config.mode === 'disabled' && nodeEnv === 'production') {
     warnings.push(
-      'AUTH_MODE=disabled: the API is unauthenticated. Set AUTH_MODE=oidc to enable authentication.',
+      'Auth is disabled: the API is unauthenticated. Enable OIDC authentication via Settings ' +
+        '(or AUTH_MODE=oidc on first boot) to secure it.',
     );
   }
   if (
-    env.AUTH_MODE === 'oidc' &&
-    !env.OIDC_ROLE_CLAIM &&
-    !env.OIDC_ALLOWED_EMAILS &&
-    !env.OIDC_ALLOWED_EMAIL_DOMAINS
+    config.mode === 'oidc' &&
+    !config.roleClaim &&
+    !config.allowedEmails &&
+    !config.allowedEmailDomains
   ) {
     warnings.push(
-      'AUTH_MODE=oidc with no email allowlist and no role claim: every user your IdP accepts ' +
-        'gets full access. IdP-side app assignment is your only access-control boundary.',
+      'OIDC auth is enabled with no email allowlist and no role claim: every user your IdP ' +
+        'accepts gets full access. IdP-side app assignment is your only access-control boundary.',
     );
   }
-  if (env.OIDC_ALLOW_INSECURE) {
+  if (config.allowInsecure) {
     warnings.push(
-      'OIDC_ALLOW_INSECURE=true: plain-http OIDC issuer allowed. Never use in production.',
+      'Insecure OIDC issuer connections are allowed (allowInsecure): plain-http issuer allowed. ' +
+        'Never use in production.',
     );
   }
   return warnings;
 }
 
-interface AuthPluginOptions {
-  /**
-   * No longer read inside this plugin — auth mode, cookie naming, and the
-   * login-state signing secret all come from `fastify.authConfig.current`
-   * (DB-backed, live-reloadable) instead of env. Kept on the options type
-   * purely so `server.ts`'s existing `server.register(authPlugin, { env })`
-   * call site (out of scope for this change) keeps type-checking; a later
-   * cleanup that also migrates `server.ts`/`routes/auth.ts` off env can drop
-   * this.
-   */
-  env: Env;
-}
-
-const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (fastify) => {
+const authPlugin: FastifyPluginAsync = async (fastify) => {
   // No global secret: login-state cookies are self-signed with the in-house
   // HMAC helper (login-state-signer.ts) using
   // fastify.authConfig.current.signingSecret at request time, so the secret

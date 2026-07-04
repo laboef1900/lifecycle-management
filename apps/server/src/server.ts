@@ -76,11 +76,18 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(errorHandlerPlugin);
   await server.register(prismaPlugin, prisma ? { prisma } : {});
   await server.register(authConfigPlugin, { env });
-  await server.register(authPlugin, { env });
+
+  // Config is loaded once authConfigPlugin has registered; warnings must
+  // reflect the actual (config-driven) auth state, not raw env.
+  for (const warning of authStartupWarnings(server.authConfig.current, env.NODE_ENV)) {
+    server.log.warn(warning);
+  }
+
+  await server.register(authPlugin);
   await server.register(oidcPlugin);
   await server.register(tenantContextPlugin);
   await server.register(healthRoutes);
-  await server.register(authRoutes, { prefix: '/api', env });
+  await server.register(authRoutes, { prefix: '/api' });
   await server.register(clusterRoutes, { prefix: '/api' });
   await server.register(hostRoutes, { prefix: '/api' });
   await server.register(hostReplacementRoutes, { prefix: '/api' });
@@ -88,10 +95,6 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(categoriesRoutes, { prefix: '/api' });
   await server.register(forecastRoutes, { prefix: '/api' });
   await server.register(settingsRoutes, { prefix: '/api' });
-
-  for (const warning of authStartupWarnings(env)) {
-    server.log.warn(warning);
-  }
 
   return server;
 }

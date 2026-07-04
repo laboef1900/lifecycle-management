@@ -3,7 +3,6 @@ import * as client from 'openid-client';
 
 import type { AuthMeResponse } from '@lcm/shared';
 
-import type { Env } from '../env.js';
 import { sessionCookieName } from '../plugins/auth.js';
 import { signLoginState, verifyLoginState } from '../plugins/login-state-signer.js';
 import { SessionService } from '../services/sessions.js';
@@ -26,20 +25,7 @@ type LoginErrorCode =
   | 'idp_unavailable'
   | 'scheme_mismatch';
 
-interface AuthRoutesOptions {
-  /**
-   * No longer read inside this plugin — auth mode, scopes, appBaseUrl,
-   * session TTL, and the login-state signing secret all come from
-   * `fastify.authConfig.current` (DB-backed, live-reloadable) instead of env.
-   * Kept on the options type purely so `server.ts`'s existing
-   * `server.register(authRoutes, { prefix: '/api', env })` call site (out of
-   * scope for this change) keeps type-checking; a later cleanup that also
-   * migrates `server.ts` off env can drop this.
-   */
-  env: Env;
-}
-
-export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (fastify) => {
+export const authRoutes: FastifyPluginAsync = async (fastify) => {
   const sessions = new SessionService(fastify.prisma);
   const users = new UserService(fastify.prisma);
   // Mutable accessor: authConfig.current can be reloaded at runtime (settings
