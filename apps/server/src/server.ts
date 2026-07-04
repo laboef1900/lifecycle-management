@@ -9,6 +9,7 @@ import type { PrismaClient } from '@prisma/client';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 
 import type { Env } from './env.js';
+import authConfigPlugin from './plugins/auth-config.js';
 import authPlugin, { authStartupWarnings } from './plugins/auth.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import oidcPlugin from './plugins/oidc.js';
@@ -74,8 +75,9 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(sensible);
   await server.register(errorHandlerPlugin);
   await server.register(prismaPlugin, prisma ? { prisma } : {});
+  await server.register(authConfigPlugin, { env });
   await server.register(authPlugin, { env });
-  await server.register(oidcPlugin, { env });
+  await server.register(oidcPlugin);
   await server.register(tenantContextPlugin);
   await server.register(healthRoutes);
   await server.register(authRoutes, { prefix: '/api', env });
