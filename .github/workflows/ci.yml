@@ -55,7 +55,7 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # apps/server integration tests spin up their own Postgres 16 container via
+      # apps/server integration tests spin up their own Postgres 18 container via
       # @testcontainers/postgresql. ubuntu-latest already exposes the Docker
       # socket, so no extra service is needed.
       - name: Test
