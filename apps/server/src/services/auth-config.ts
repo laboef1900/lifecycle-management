@@ -353,7 +353,10 @@ export class AuthConfigService {
 
   private requireKey(): Buffer {
     if (!this.key) {
-      throw new Error('CONFIG_ENCRYPTION_KEY is required to store auth secrets');
+      throw new UnprocessableError(
+        'ENCRYPTION_KEY_REQUIRED',
+        'CONFIG_ENCRYPTION_KEY is not configured; cannot store an auth secret.',
+      );
     }
     return this.key;
   }

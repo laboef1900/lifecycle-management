@@ -204,6 +204,32 @@ describe('/api/settings/auth', () => {
       expect(body.clientSecretSet).toBe(true);
       expect(JSON.stringify(body)).not.toContain('"x"');
     });
+
+    it('fails with 422 ENCRYPTION_KEY_REQUIRED (not 500) when writing a client secret with no encryption key configured, and persists nothing', async () => {
+      const server = await buildServer({
+        env: makeTestEnv({ CONFIG_ENCRYPTION_KEY: undefined }),
+        prisma,
+      });
+      created.push(server);
+      expect(server.authConfig.current.mode).toBe('disabled');
+
+      const response = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/auth',
+        payload: { mode: 'disabled', clientSecret: 'x' },
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().error.code).toBe('ENCRYPTION_KEY_REQUIRED');
+
+      // Nothing persisted: the boot-created singleton row (empty, no key to
+      // encrypt with) still has no client secret stored.
+      const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+      expect(row?.clientSecretEnc).toBeNull();
+
+      const get = await server.inject({ method: 'GET', url: '/api/settings/auth' });
+      expect(get.json()).toMatchObject({ mode: 'disabled', clientSecretSet: false });
+    });
   });
 
   describe('POST /settings/auth/test', () => {
