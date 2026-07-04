@@ -37,9 +37,15 @@ const SINGLETON_ID = 'singleton';
  *     key is null (fail-safe guard below).
  *  3. Fail-safe guard: if load() couldn't decrypt (key missing/invalid while
  *     a secret is stored), force the row to mode=disabled with a *direct*
- *     prisma update — never `service.update()`, which would try to
- *     re-encrypt secrets using a key we don't have — log loudly, and retry
- *     the load instead of crashing the process.
+ *     prisma update that touches ONLY the `mode` column — never
+ *     `service.update()`, which would try to re-encrypt secrets using a key
+ *     we don't have, and never clearing `clientSecretEnc`/`signingSecretEnc`,
+ *     since a missing/misconfigured key may be transient and the stored
+ *     ciphertext is the only copy of an externally-sourced client secret.
+ *     Log loudly, then hand-build the effective config from the (re-fetched)
+ *     row without decrypting, instead of calling service.load()/toEffective()
+ *     again — those would throw the exact same error again since the
+ *     ciphertext is still there by design.
  *  4. Break-glass: if `RECOVERY_DISABLE_AUTH` is set, force mode=disabled the
  *     same direct way, warn loudly, and reload.
  */
@@ -61,19 +67,36 @@ const authConfigPlugin: FastifyPluginAsync<AuthConfigPluginOptions> = async (fas
     fastify.log.error(
       { err },
       'AuthConfig could not be decrypted (CONFIG_ENCRYPTION_KEY missing or invalid) while a ' +
-        'secret is stored; forcing mode=disabled to fail safe instead of crashing.',
+        'secret is stored; forcing mode=disabled to fail safe instead of crashing. The stored ' +
+        'encrypted secret(s) are left intact — this may be a transient key misconfiguration, ' +
+        'and once CONFIG_ENCRYPTION_KEY is fixed the next boot will decrypt and re-enable oidc.',
     );
-    // toEffective() decrypts whatever secret columns are populated
-    // unconditionally, regardless of mode — leaving the now-undecryptable
-    // ciphertext in place would make the re-load below (and every later
-    // load()) throw the exact same error again. Clear it: re-enabling oidc
-    // later via service.update() (once a valid key is configured) generates
-    // fresh secrets.
-    await fastify.prisma.authConfig.update({
+    // Force mode ONLY — never null out clientSecretEnc/signingSecretEnc here.
+    // toEffective() would decrypt whatever secret columns are populated
+    // unconditionally regardless of mode, so calling service.load()/
+    // toEffective() again below would throw the exact same error — but that
+    // is fine, because we deliberately do NOT call them again. We build
+    // `current` by hand from the row `update()` just returned instead.
+    const row = await fastify.prisma.authConfig.update({
       where: { id: SINGLETON_ID },
-      data: { mode: 'disabled', clientSecretEnc: null, signingSecretEnc: null },
+      data: { mode: 'disabled' },
     });
-    current = await service.load(env);
+    current = {
+      mode: 'disabled',
+      issuerUrl: row.issuerUrl,
+      clientId: row.clientId,
+      clientSecret: null,
+      signingSecret: null,
+      appBaseUrl: row.appBaseUrl,
+      scopes: row.scopes,
+      roleClaim: row.roleClaim,
+      adminValues: row.adminValues,
+      defaultRole: row.defaultRole === 'viewer' ? 'viewer' : 'admin',
+      allowedEmailDomains: row.allowedEmailDomains,
+      allowedEmails: row.allowedEmails,
+      sessionTtlHours: row.sessionTtlHours,
+      allowInsecure: row.allowInsecure,
+    };
   }
 
   if (env.RECOVERY_DISABLE_AUTH) {
