@@ -313,6 +313,28 @@ model Session {
   @@map("sessions")
 }
 
+model AuthConfig {
+  id                  String   @id @default("singleton")
+  mode                String   @default("disabled")
+  issuerUrl           String?
+  clientId            String?
+  clientSecretEnc     String?
+  signingSecretEnc    String?
+  appBaseUrl          String?
+  scopes              String   @default("openid profile email")
+  roleClaim           String?
+  adminValues         String?
+  defaultRole         String   @default("admin")
+  allowedEmailDomains String?
+  allowedEmails       String?
+  sessionTtlHours     Int      @default(12)
+  allowInsecure       Boolean  @default(false)
+  updatedAt           DateTime @updatedAt
+  updatedByUserId     String?
+
+  @@map("auth_config")
+}
+
 enum UserRole {
   ADMIN
   VIEWER
