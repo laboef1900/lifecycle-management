@@ -100,37 +100,60 @@ Keycloak listens on `http://localhost:8081`.
 Point the server at it in `apps/server/.env`:
 
 ```
+# dev-only key — do not reuse in production
+CONFIG_ENCRYPTION_KEY=rEYzAdycY7kLEq3gPuNr9MdS0lxiX9u7hLz609nvJGc=
 AUTH_MODE=oidc
 OIDC_ISSUER_URL=http://localhost:8081/realms/lcm
 OIDC_CLIENT_ID=lcm-local
 OIDC_CLIENT_SECRET=lcm-local-secret
 APP_BASE_URL=http://localhost:5173
-LOGIN_STATE_SECRET=<32+ random chars>
 OIDC_ALLOW_INSECURE=true
 ```
+
+`CONFIG_ENCRYPTION_KEY` is **required** for the OIDC vars above to seed
+anything — without it the server seeds `auth_config` as disabled and
+drops the client secret rather than store it unencrypted (fail-safe, see
+`docs/operations.md`). The value above is a fixed **dev-only** example (32
+random bytes, base64); do not reuse it anywhere real — generate your own
+with `openssl rand -base64 32` if you'd rather not share this one.
+These vars are consumed once, on first boot against an empty dev DB, to
+pre-seed the config; if you've already booted the dev server before, either
+wipe the dev DB (`pnpm db:dev:down && pnpm db:dev:up`, then re-migrate) or
+just configure OIDC directly in Settings → Authentication instead of
+editing `.env`.
 
 `OIDC_ALLOW_INSECURE=true` is required here because both the dev server and
 this Keycloak instance run over plain HTTP — never set it in production.
 Restart `pnpm dev`, browse to <http://localhost:5173>, and sign in as
 `dev` / `dev`.
 
-## Enabling authentication (OIDC)
+## Configuring authentication (OIDC)
 
-Auth is off by default (`AUTH_MODE=disabled`). To turn it on in the
-production stack:
+Auth is off by default (`AUTH_MODE=disabled` seed value). OIDC is
+DB-backed and configured from the running app's **Settings → Authentication**
+panel (admin-only once oidc mode is active) — not by editing `.env` and
+redeploying. To turn it on in the production stack:
 
-1. Set `AUTH_MODE=oidc` plus `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`,
-   `OIDC_CLIENT_SECRET`, `APP_BASE_URL`, and `LOGIN_STATE_SECRET` in `.env`
-   (see the "Authentication (OIDC)" block in `.env.example`).
-2. `docker compose up -d` to recreate the `server` container with the new
-   environment.
-3. **Verify it actually took effect** — a stale compose file or a typo in
-   `.env` silently leaves auth disabled:
+1. Make sure `CONFIG_ENCRYPTION_KEY` is set in `.env` (it's required for
+   compose to start at all — see the fail-closed guard in
+   `docker-compose.yml`). Without it OIDC can never be enabled: the server
+   has nowhere to safely store a client secret.
+2. Start the stack (`docker compose up -d`) and open the app. Go to
+   **Settings → Authentication**, fill in the issuer URL, client ID,
+   client secret, and app base URL, then save — the server re-tests OIDC
+   discovery before it will actually flip the mode to `oidc`, so a save
+   that fails the test never leaves you with a broken config.
+3. **Verify it actually took effect**:
    ```bash
    curl -si http://<host>/api/clusters | head -1     # must print HTTP/1.1 401
    curl -s  http://<host>/api/auth/me                # must print {"authRequired":true}
    ```
    Any other result means auth is NOT enabled.
 
-See [`docs/operations.md`](../docs/operations.md) for IdP registration,
-the offboarding runbook, secret rotation, and logout semantics.
+The `AUTH_MODE`/`OIDC_*` vars in `.env.example` still exist as a **seed-only**
+path for unattended first-boot provisioning (they're read once, only when
+`auth_config` has no row yet); once a row exists, editing them and
+restarting has no effect. See
+[`docs/operations.md`](../docs/operations.md) ("Authentication (OIDC)") for
+IdP registration, the offboarding runbook, `CONFIG_ENCRYPTION_KEY` rotation,
+the `RECOVERY_DISABLE_AUTH` break-glass, and logout semantics.
