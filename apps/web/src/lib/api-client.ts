@@ -1,4 +1,7 @@
 import type {
+  AuthConfigTest,
+  AuthConfigTestResult,
+  AuthConfigUpdate,
   ClusterCreateInput,
   ClusterSettingsInput,
   ClusterUpdateInput,
@@ -6,6 +9,7 @@ import type {
   TenantSettings,
 } from '@lcm/shared';
 import {
+  authConfigResponseSchema,
   categoryResponseSchema,
   clusterResponseSchema,
   clusterSettingsResponseSchema,
@@ -409,6 +413,27 @@ export const api = {
           { method: 'DELETE' },
           clusterSettingsResponseSchema,
         ),
+    },
+    // authConfigUpdateSchema/authConfigTestSchema have no Date fields (all
+    // strings/enums/numbers/booleans), so the Zod-inferred types are already
+    // the wire shape — no *Wire translation type needed here.
+    auth: {
+      get: () => request('/api/settings/auth', undefined, authConfigResponseSchema),
+      update: (input: AuthConfigUpdate) =>
+        request(
+          '/api/settings/auth',
+          { method: 'PUT', body: JSON.stringify(input) },
+          authConfigResponseSchema,
+        ),
+      test: (input: AuthConfigTest) =>
+        request<AuthConfigTestResult>('/api/settings/auth/test', {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      rotateSigningSecret: () =>
+        request<{ rotated: boolean }>('/api/settings/auth/rotate-signing-secret', {
+          method: 'POST',
+        }),
     },
   },
 };
