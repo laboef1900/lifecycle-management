@@ -79,16 +79,16 @@ describe('AUTH_MODE / OIDC configuration', () => {
     expect(env.OIDC_ISSUER_URL).toBe(oidcVars.OIDC_ISSUER_URL);
   });
 
-  it('rejects AUTH_MODE=oidc with missing vars, naming each one', () => {
-    expect(() => parseEnv({ ...base, AUTH_MODE: 'oidc' })).toThrowError(
-      /OIDC_ISSUER_URL[\s\S]*OIDC_CLIENT_ID[\s\S]*OIDC_CLIENT_SECRET[\s\S]*APP_BASE_URL[\s\S]*LOGIN_STATE_SECRET/,
-    );
+  it('accepts AUTH_MODE=oidc with no OIDC vars set: the DB is authoritative, env is seed-only', () => {
+    const env = parseEnv({ ...base, AUTH_MODE: 'oidc' });
+    expect(env.AUTH_MODE).toBe('oidc');
+    expect(env.OIDC_ISSUER_URL).toBeUndefined();
   });
 
-  it('fails closed: OIDC vars present without an explicit AUTH_MODE refuses to boot', () => {
-    expect(() => parseEnv({ ...base, ...oidcVars })).toThrowError(
-      /AUTH_MODE must be set explicitly/,
-    );
+  it('accepts OIDC vars present without an explicit AUTH_MODE (seed-only, no fail-closed check)', () => {
+    const env = parseEnv({ ...base, ...oidcVars });
+    expect(env.AUTH_MODE).toBe('disabled');
+    expect(env.OIDC_ISSUER_URL).toBe(oidcVars.OIDC_ISSUER_URL);
   });
 
   it('allows explicit AUTH_MODE=disabled with OIDC vars present (escape hatch)', () => {
@@ -96,9 +96,39 @@ describe('AUTH_MODE / OIDC configuration', () => {
     expect(env.AUTH_MODE).toBe('disabled');
   });
 
-  it('rejects a LOGIN_STATE_SECRET shorter than 32 chars', () => {
+  it('rejects a LOGIN_STATE_SECRET shorter than 32 chars when provided', () => {
     expect(() =>
       parseEnv({ ...base, AUTH_MODE: 'oidc', ...oidcVars, LOGIN_STATE_SECRET: 'short' }),
     ).toThrowError(/LOGIN_STATE_SECRET/);
+  });
+});
+
+describe('CONFIG_ENCRYPTION_KEY / RECOVERY_DISABLE_AUTH', () => {
+  const base = { DATABASE_URL: 'postgresql://lcm:lcm@localhost:5432/lcm' };
+
+  it('defaults RECOVERY_DISABLE_AUTH to false when unset', () => {
+    const env = parseEnv(base);
+    expect(env.RECOVERY_DISABLE_AUTH).toBe(false);
+  });
+
+  it('parses RECOVERY_DISABLE_AUTH=true as boolean true', () => {
+    const env = parseEnv({ ...base, RECOVERY_DISABLE_AUTH: 'true' });
+    expect(env.RECOVERY_DISABLE_AUTH).toBe(true);
+  });
+
+  it('treats an empty RECOVERY_DISABLE_AUTH string as absent (defaults to false)', () => {
+    const env = parseEnv({ ...base, RECOVERY_DISABLE_AUTH: '' });
+    expect(env.RECOVERY_DISABLE_AUTH).toBe(false);
+  });
+
+  it('passes CONFIG_ENCRYPTION_KEY through when set', () => {
+    const key = Buffer.from('x'.repeat(32)).toString('base64');
+    const env = parseEnv({ ...base, CONFIG_ENCRYPTION_KEY: key });
+    expect(env.CONFIG_ENCRYPTION_KEY).toBe(key);
+  });
+
+  it('leaves CONFIG_ENCRYPTION_KEY undefined when unset', () => {
+    const env = parseEnv(base);
+    expect(env.CONFIG_ENCRYPTION_KEY).toBeUndefined();
   });
 });

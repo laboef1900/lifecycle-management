@@ -5,14 +5,6 @@ const emptyToUndefined = (value: unknown): unknown => (value === '' ? undefined 
 const optionalString = (): z.ZodType<string | undefined> =>
   z.preprocess(emptyToUndefined, z.string().optional());
 
-export const OIDC_REQUIRED_VARS = [
-  'OIDC_ISSUER_URL',
-  'OIDC_CLIENT_ID',
-  'OIDC_CLIENT_SECRET',
-  'APP_BASE_URL',
-  'LOGIN_STATE_SECRET',
-] as const;
-
 export const envSchema = z
   .object({
     DATABASE_URL: z.url(),
@@ -48,30 +40,14 @@ export const envSchema = z
         .default('false')
         .transform((value) => value === 'true'),
     ),
-  })
-  .superRefine((env, ctx) => {
-    if (env.AUTH_MODE === undefined) {
-      const present = OIDC_REQUIRED_VARS.filter((key) => env[key] !== undefined);
-      if (present.length > 0) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['AUTH_MODE'],
-          message: `AUTH_MODE must be set explicitly ('oidc' or 'disabled') when OIDC configuration is present (found: ${present.join(', ')})`,
-        });
-      }
-      return;
-    }
-    if (env.AUTH_MODE === 'oidc') {
-      for (const key of OIDC_REQUIRED_VARS) {
-        if (env[key] === undefined) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [key],
-            message: `${key} is required when AUTH_MODE=oidc`,
-          });
-        }
-      }
-    }
+    CONFIG_ENCRYPTION_KEY: optionalString(),
+    RECOVERY_DISABLE_AUTH: z.preprocess(
+      emptyToUndefined,
+      z
+        .enum(['true', 'false'])
+        .default('false')
+        .transform((value) => value === 'true'),
+    ),
   })
   .transform((env) => ({ ...env, AUTH_MODE: env.AUTH_MODE ?? ('disabled' as const) }));
 
