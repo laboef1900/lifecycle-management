@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import type { FastifyInstance } from 'fastify';
 
+import { encrypt, loadKey } from '../crypto/secret-box.js';
 import { SESSION_COOKIE } from '../plugins/auth.js';
 import { buildServer } from '../server.js';
 import { SessionService } from '../services/sessions.js';
@@ -16,6 +17,9 @@ import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
  * than the auth-config plugin's missing-key fail-safe forcing mode=disabled.
  */
 const CONFIG_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
+
+/** A second, DIFFERENT 32-byte key — simulates CONFIG_ENCRYPTION_KEY rotation. */
+const ROTATED_CONFIG_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString('base64');
 
 const UNREACHABLE_ISSUER = 'http://127.0.0.1:1/oidc';
 const DISTINCTIVE_SECRET = 'e2-distinctive-client-secret-do-not-leak';
@@ -320,6 +324,85 @@ describe('/api/settings/auth', () => {
 
       expect(response.statusCode).toBe(422);
       expect(response.json().error.code).toBe('ENCRYPTION_KEY_REQUIRED');
+    });
+  });
+
+  describe('CONFIG_ENCRYPTION_KEY rotation recovery via PUT /settings/auth', () => {
+    it('re-entering the client secret after a key rotation succeeds (200, not 500) and leaves both secrets decryptable under the new key', async () => {
+      // Seed an oidc row exactly as it would exist before a key rotation:
+      // both secrets encrypted under the OLD key (K1).
+      const oldKey = loadKey(CONFIG_ENCRYPTION_KEY);
+      const staleSigningSecretEnc = encrypt('old-signing-secret', oldKey);
+      await prisma.authConfig.create({
+        data: {
+          id: 'singleton',
+          mode: 'oidc',
+          issuerUrl,
+          clientId: 'lcm-test',
+          appBaseUrl: 'http://127.0.0.1:8080',
+          allowInsecure: true,
+          clientSecretEnc: encrypt('old-client-secret', oldKey),
+          signingSecretEnc: staleSigningSecretEnc,
+        },
+      });
+
+      // Boot with the ROTATED (new, K2) key — boot's fail-safe guard must
+      // force mode=disabled without crashing, preserving the old ciphertext.
+      const server = await buildServer({
+        env: makeTestEnv({ CONFIG_ENCRYPTION_KEY: ROTATED_CONFIG_ENCRYPTION_KEY }),
+        prisma,
+      });
+      created.push(server);
+      expect(server.authConfig.current.mode).toBe('disabled');
+
+      // The documented recovery: admin re-enters the client secret and saves.
+      const response = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/auth',
+        payload: {
+          mode: 'oidc',
+          issuerUrl,
+          clientId: 'lcm-test',
+          clientSecret: 'freshly-re-entered-secret',
+          appBaseUrl: 'http://127.0.0.1:8080',
+          allowInsecure: true,
+        },
+      });
+
+      // The core regression assertion: this must be 200, not a 500 caused by
+      // reload() choking on the stale (old-key-encrypted) signing secret.
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.mode).toBe('oidc');
+      expect(body.clientSecretSet).toBe(true);
+      expect(body.signingSecretSet).toBe(true);
+      expect(JSON.stringify(body)).not.toContain('freshly-re-entered-secret');
+
+      // In-memory effective config (populated by reload() inside the PUT
+      // handler) must be fully decryptable under the new key.
+      expect(server.authConfig.current.mode).toBe('oidc');
+      expect(server.authConfig.current.clientSecret).toBe('freshly-re-entered-secret');
+      expect(server.authConfig.current.signingSecret).not.toBeNull();
+
+      // A subsequent GET and an independent reload() must both succeed
+      // (proves the row itself — not just in-memory state — is consistent).
+      // Mode is oidc now, so the admin gate applies — authenticate as admin.
+      const adminToken = await createUserSession('ADMIN');
+      const get = await server.inject({
+        method: 'GET',
+        url: '/api/settings/auth',
+        cookies: { [SESSION_COOKIE]: adminToken },
+      });
+      expect(get.statusCode).toBe(200);
+      expect(get.json()).toMatchObject({ clientSecretSet: true, signingSecretSet: true });
+
+      await expect(server.authConfig.reload()).resolves.toBeUndefined();
+      expect(server.authConfig.current.signingSecret).not.toBeNull();
+
+      const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+      expect(row?.signingSecretEnc).not.toBeNull();
+      // Regenerated, not the stale one left over from before the rotation.
+      expect(row?.signingSecretEnc).not.toBe(staleSigningSecretEnc);
     });
   });
 });

@@ -1,13 +1,36 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 
 import { authConfigTestSchema, authConfigUpdateSchema } from '@lcm/shared';
 import type { AuthConfigResponse, AuthConfigTestResult } from '@lcm/shared';
 
 import { testDiscovery } from '../plugins/oidc.js';
+import { AuthSecretDecryptError } from '../services/auth-config.js';
 import { ForbiddenError, UnprocessableError } from '../services/errors.js';
 
 interface RotateSigningSecretResponse {
   rotated: true;
+}
+
+/**
+ * Defense in depth only: `AuthConfigService.update()` regenerates any
+ * signing secret that can't be decrypted under the current key before
+ * writing oidc mode (see its docstring), so a subsequent `reload()` should
+ * never actually throw `AuthSecretDecryptError` here. If it somehow did
+ * anyway, surface a clean 422 instead of a raw 500 — mirrors how
+ * `rotateSigningSecret()` itself reports a missing key.
+ */
+async function reloadOrUnprocessable(fastify: FastifyInstance): Promise<void> {
+  try {
+    await fastify.authConfig.reload();
+  } catch (err) {
+    if (err instanceof AuthSecretDecryptError) {
+      throw new UnprocessableError(
+        'AUTH_RELOAD_FAILED',
+        'Saved, but the stored auth secrets could not be reloaded — please retry.',
+      );
+    }
+    throw err;
+  }
 }
 
 /**
@@ -90,7 +113,7 @@ export const settingsAuthRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     await service.update(body, request.user?.id ?? null);
-    await fastify.authConfig.reload();
+    await reloadOrUnprocessable(fastify);
     await fastify.oidc.reconfigure();
 
     return sanitizedView();
@@ -117,7 +140,7 @@ export const settingsAuthRoutes: FastifyPluginAsync = async (fastify) => {
     '/settings/auth/rotate-signing-secret',
     async (): Promise<RotateSigningSecretResponse> => {
       await service.rotateSigningSecret();
-      await fastify.authConfig.reload();
+      await reloadOrUnprocessable(fastify);
       return { rotated: true };
     },
   );

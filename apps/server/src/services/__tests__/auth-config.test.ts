@@ -279,6 +279,108 @@ describe('AuthConfigService.update', () => {
     const rowAfter = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
     expect(rowAfter!.signingSecretEnc).toBe(firstSigningSecretEnc);
   });
+
+  it('regenerates the signing secret on re-enabling oidc when the existing one cannot be decrypted under the current key (key-rotation UI recovery)', async () => {
+    // Simulate: oidc was configured under K1, then CONFIG_ENCRYPTION_KEY was
+    // rotated to K2 (a service now built with K2 can no longer decrypt
+    // either secret column written under K1).
+    const staleSigningSecretEnc = encrypt('signing-secret-under-old-key', KEY);
+    await prisma.authConfig.create({
+      data: {
+        id: 'singleton',
+        mode: 'disabled', // boot's fail-safe guard already forced this
+        clientId: 'lcm',
+        issuerUrl: 'https://idp',
+        appBaseUrl: 'https://app',
+        clientSecretEnc: encrypt('old-client-secret', KEY),
+        signingSecretEnc: staleSigningSecretEnc,
+      },
+    });
+
+    const svc = new AuthConfigService(prisma, WRONG_KEY);
+    // The documented recovery: admin re-enters the client secret and saves.
+    await svc.update(
+      {
+        mode: 'oidc',
+        clientId: 'lcm',
+        clientSecret: 're-entered-secret',
+        issuerUrl: 'https://idp',
+        appBaseUrl: 'https://app',
+        scopes: 'openid profile email',
+        roleClaim: null,
+        adminValues: null,
+        defaultRole: 'admin',
+        allowedEmailDomains: null,
+        allowedEmails: null,
+        sessionTtlHours: 12,
+        allowInsecure: false,
+      },
+      'user-1',
+    );
+
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('oidc');
+    // The stale (undecryptable-under-WRONG_KEY) signing secret must have been
+    // replaced, not kept as-is.
+    expect(row!.signingSecretEnc).not.toBeNull();
+    expect(row!.signingSecretEnc).not.toBe(staleSigningSecretEnc);
+
+    // The key proof: load()/toEffective() (what the settings route's
+    // reload() calls) must now succeed under the new key instead of throwing
+    // AuthSecretDecryptError, with both secrets decrypting cleanly.
+    const cfg = await svc.load();
+    expect(cfg.mode).toBe('oidc');
+    expect(cfg.clientSecret).toBe('re-entered-secret');
+    expect(cfg.signingSecret).not.toBeNull();
+  });
+
+  it('does NOT rotate a valid existing signing secret on a normal oidc save (no key change)', async () => {
+    const svc = new AuthConfigService(prisma, KEY);
+    await svc.update(
+      {
+        mode: 'oidc',
+        clientId: 'a',
+        clientSecret: 'x',
+        issuerUrl: null,
+        appBaseUrl: null,
+        scopes: 'openid profile email',
+        roleClaim: null,
+        adminValues: null,
+        defaultRole: 'admin',
+        allowedEmailDomains: null,
+        allowedEmails: null,
+        sessionTtlHours: 12,
+        allowInsecure: false,
+      },
+      null,
+    );
+    const before = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    const signingSecretEncBefore = before!.signingSecretEnc;
+    expect(signingSecretEncBefore).not.toBeNull();
+
+    // A no-op-secret save (clientSecret omitted, same key) must leave the
+    // signing secret completely untouched — it's still decryptable under the
+    // current key, so canDecrypt() must short-circuit the regeneration.
+    await svc.update(
+      {
+        mode: 'oidc',
+        clientId: 'a',
+        issuerUrl: null,
+        appBaseUrl: null,
+        scopes: 'openid profile email',
+        roleClaim: null,
+        adminValues: null,
+        defaultRole: 'admin',
+        allowedEmailDomains: null,
+        allowedEmails: null,
+        sessionTtlHours: 12,
+        allowInsecure: false,
+      },
+      null,
+    );
+    const after = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(after!.signingSecretEnc).toBe(signingSecretEncBefore);
+  });
 });
 
 describe('AuthConfigService.sanitize', () => {

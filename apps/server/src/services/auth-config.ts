@@ -181,7 +181,18 @@ export class AuthConfigService {
    * Applies a partial update to the singleton row (creating it if absent).
    * `clientSecret` is tri-state: `undefined` leaves the stored value
    * untouched, `null` clears it, a string encrypts and stores it. A signing
-   * secret is generated the first time oidc mode is enabled without one.
+   * secret is (re)generated whenever oidc mode is being enabled and the
+   * existing one is unusable — either absent (first time enabling oidc) or
+   * present but undecryptable under the *current* key. The latter is the
+   * key-rotation recovery path: after `CONFIG_ENCRYPTION_KEY` is rotated,
+   * boot fails safe to `mode=disabled` leaving the old ciphertext in place
+   * (see the plugin's boot guard); when an admin re-enables oidc by
+   * re-entering the client secret in Settings, the stale `signingSecretEnc`
+   * (still encrypted under the OLD key) would otherwise be kept as-is and
+   * make the very next `reload()`/`toEffective()` throw `AuthSecretDecryptError`
+   * — regenerating it here instead guarantees that, once `update()` returns
+   * successfully for oidc mode, every stored secret column is decryptable
+   * under the current key.
    *
    * Other nullable fields (`issuerUrl`, `clientId`, ...) are optional only for
    * zod ergonomics — the settings UI always submits the full form — but for
@@ -215,7 +226,7 @@ export class AuthConfigService {
         input.clientSecret === null ? null : encrypt(input.clientSecret, this.requireKey());
     }
 
-    if (input.mode === 'oidc' && !existing?.signingSecretEnc) {
+    if (input.mode === 'oidc' && !this.canDecrypt(existing?.signingSecretEnc ?? null)) {
       data.signingSecretEnc = encrypt(generateSecret(), this.requireKey());
     }
 
@@ -317,6 +328,26 @@ export class AuthConfigService {
           'CONFIG_ENCRYPTION_KEY (the key may have changed/rotated, or the ciphertext is corrupted)',
         { cause: err },
       );
+    }
+  }
+
+  /**
+   * True only if `enc` is present AND decrypts cleanly under the current
+   * key — used by `update()` to decide whether an existing `signingSecretEnc`
+   * is still usable or must be regenerated. Returns `false` (never throws)
+   * for every "unusable" case: `null` (nothing stored), no key configured, a
+   * wrong/rotated key, or corrupted ciphertext — `decryptColumn` normalizes
+   * all of those to `AuthSecretDecryptError`, which is the only thing this
+   * catches; anything else rethrows.
+   */
+  private canDecrypt(enc: string | null): boolean {
+    if (enc === null) return false;
+    try {
+      this.decryptColumn(enc, 'signing secret');
+      return true;
+    } catch (err) {
+      if (err instanceof AuthSecretDecryptError) return false;
+      throw err;
     }
   }
 
