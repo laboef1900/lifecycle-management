@@ -65,6 +65,20 @@ describe('AuthConfigService.load', () => {
     const svc = new AuthConfigService(prisma, null);
     await expect(svc.load()).rejects.toThrow(/CONFIG_ENCRYPTION_KEY/);
   });
+
+  it("throws from toEffective's own decrypt guard (not load()'s upgrade-path guard) when a disabled row has a secret set", async () => {
+    // mode: 'disabled' means load()'s upgrade-path guard
+    // (`row.mode === 'oidc' && !row.signingSecretEnc`) never fires here, so
+    // the only way this can throw is toEffective's decryptColumn guard
+    // running unconditionally over row.clientSecretEnc regardless of mode.
+    await prisma.authConfig.create({
+      data: { id: 'singleton', mode: 'disabled', clientSecretEnc: 'x.y.z' },
+    });
+    const svc = new AuthConfigService(prisma, null);
+    await expect(svc.load()).rejects.toThrow(
+      /AuthConfig has a stored client secret but CONFIG_ENCRYPTION_KEY is not configured; cannot decrypt/,
+    );
+  });
 });
 
 describe('AuthConfigService.update', () => {
@@ -130,6 +144,48 @@ describe('AuthConfigService.update', () => {
     );
     const afterClear = await svc.load();
     expect(afterClear.clientSecret).toBeNull();
+  });
+
+  it('leaves an omitted non-secret nullable field (roleClaim) unchanged, distinguishing undefined-skip from null-clear', async () => {
+    const svc = new AuthConfigService(prisma, KEY);
+    await svc.update(
+      {
+        mode: 'oidc',
+        clientId: 'a',
+        clientSecret: 'x',
+        issuerUrl: null,
+        appBaseUrl: null,
+        scopes: 'openid profile email',
+        roleClaim: 'groups',
+        adminValues: null,
+        defaultRole: 'admin',
+        allowedEmailDomains: null,
+        allowedEmails: null,
+        sessionTtlHours: 12,
+        allowInsecure: false,
+      },
+      null,
+    );
+    await svc.update(
+      {
+        mode: 'oidc',
+        clientId: 'a',
+        clientSecret: 'x',
+        issuerUrl: null,
+        appBaseUrl: null,
+        scopes: 'openid profile email',
+        adminValues: null,
+        defaultRole: 'admin',
+        allowedEmailDomains: null,
+        allowedEmails: null,
+        sessionTtlHours: 12,
+        allowInsecure: false,
+        // roleClaim omitted entirely
+      },
+      null,
+    );
+    const cfg = await svc.load();
+    expect(cfg.roleClaim).toBe('groups');
   });
 
   it('generates a signing secret when enabling oidc for the first time', async () => {
