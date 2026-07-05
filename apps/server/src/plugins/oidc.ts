@@ -1,3 +1,6 @@
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+
 import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import * as client from 'openid-client';
@@ -57,19 +60,166 @@ export function sanitizeDiscoveryError(err: unknown, clientSecret: string | null
 }
 
 /**
+ * True when an IP literal is loopback, private (RFC1918 / ULA), link-local
+ * (incl. the 169.254.169.254 cloud metadata endpoint), carrier-grade NAT, or
+ * the unspecified/"this host" address — i.e. an address the bootstrap window
+ * must not be allowed to probe. Anything unrecognized (a real public IP) is
+ * false. Malformed literals are treated as denied (fail closed).
+ */
+export function isPrivateAddress(ip: string): boolean {
+  const kind = isIP(ip);
+  if (kind === 4) return isPrivateIpv4(ip);
+  if (kind === 6) return isPrivateIpv6(ip.toLowerCase());
+  return true;
+}
+
+function isPrivateIpv4(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+    return true;
+  const [a, b] = parts as [number, number, number, number];
+  if (a === 0 || a === 127) return true; // "this host" / loopback
+  if (a === 10) return true; // private
+  if (a === 172 && b >= 16 && b <= 31) return true; // private
+  if (a === 192 && b === 168) return true; // private
+  if (a === 169 && b === 254) return true; // link-local (incl. cloud metadata)
+  if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
+  return false;
+}
+
+function isPrivateIpv6(ip: string): boolean {
+  if (ip === '::1' || ip === '::') return true; // loopback / unspecified
+  // IPv4-mapped hosts (::ffff:0:0/96) route to their embedded IPv4, so classify
+  // by that address. Catch EVERY textual form — dotted `::ffff:127.0.0.1`, hex
+  // `::ffff:7f00:1`, and the hex form WHATWG `new URL()` normalizes a bracketed
+  // literal to — by expanding and inspecting the 96-bit prefix, not regex-matching
+  // one spelling (the previous dotted-only regex let `::ffff:7f00:1` slip through).
+  const embedded = ipv4MappedEmbeddedAddress(ip);
+  if (embedded !== null) return isPrivateIpv4(embedded);
+  if (ip.startsWith('fc') || ip.startsWith('fd')) return true; // unique-local fc00::/7
+  if (/^fe[89ab]/.test(ip)) return true; // link-local fe80::/10
+  return false;
+}
+
+/**
+ * If `ip` is an IPv4-mapped IPv6 address (::ffff:0:0/96, in any textual form),
+ * returns its embedded IPv4 as dotted-decimal; otherwise null. Assumes `ip` is a
+ * valid, lower-cased IPv6 literal (callers gate on `isIP(ip) === 6`).
+ */
+function ipv4MappedEmbeddedAddress(ip: string): string | null {
+  const groups = expandIpv6(ip);
+  if (!groups) return null;
+  const [a, b, c, d, e, f, g, h] = groups;
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0xffff) {
+    return `${g >> 8}.${g & 0xff}.${h >> 8}.${h & 0xff}`;
+  }
+  return null;
+}
+
+/**
+ * Expand a valid IPv6 literal into its 8 16-bit groups, resolving `::`
+ * compression and any embedded dotted-quad tail. Returns null on an unexpected
+ * shape (caller then treats the address as non-mapped).
+ */
+function expandIpv6(
+  ip: string,
+): [number, number, number, number, number, number, number, number] | null {
+  let text = ip;
+  // Fold an embedded dotted IPv4 tail (e.g. ::ffff:127.0.0.1) into two hex groups.
+  const dot = text.indexOf('.');
+  if (dot !== -1) {
+    const colon = text.lastIndexOf(':');
+    if (colon === -1 || colon > dot) return null;
+    const octets = text
+      .slice(colon + 1)
+      .split('.')
+      .map(Number);
+    if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+      return null;
+    const [o1, o2, o3, o4] = octets as [number, number, number, number];
+    text = `${text.slice(0, colon)}:${((o1 << 8) | o2).toString(16)}:${((o3 << 8) | o4).toString(16)}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 ? (halves[1] ? halves[1].split(':') : []) : null;
+  let parts: string[];
+  if (tail === null) {
+    parts = head;
+  } else {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 0) return null;
+    parts = [...head, ...Array<string>(fill).fill('0'), ...tail];
+  }
+  if (parts.length !== 8) return null;
+  const groups = parts.map((p) => (p === '' ? Number.NaN : parseInt(p, 16)));
+  if (groups.some((n) => Number.isNaN(n) || n < 0 || n > 0xffff)) return null;
+  return groups as [number, number, number, number, number, number, number, number];
+}
+
+/**
+ * SSRF guard for the bootstrap window: resolves an issuer URL's host and
+ * reports whether it targets an internal address. IP literals are checked
+ * directly; hostnames are resolved and denied if ANY resolved address is
+ * internal. Uncertainty (unparseable URL, resolution failure) returns false so
+ * discovery fails on its own with a network error rather than a misleading
+ * "private address" message — no internal service is reached either way.
+ *
+ * @ai-warning Best-effort, not a hard control: this DNS lookup is separate from
+ * the one openid-client performs when it connects, so a DNS-rebinding attacker
+ * could answer this resolution with a public address and the subsequent
+ * connection with a private one (TOCTOU). Fully closing that would require
+ * pinning resolution and forcing the connection to the vetted IP; here the
+ * residual rebinding risk is accepted as a defence-in-depth limitation of the
+ * bootstrap window.
+ */
+export async function issuerTargetsInternalAddress(issuerUrl: string): Promise<boolean> {
+  let host: string;
+  try {
+    host = new URL(issuerUrl).hostname.replace(/^\[|\]$/g, '');
+  } catch {
+    return false;
+  }
+  if (isIP(host)) return isPrivateAddress(host);
+  try {
+    const results = await lookup(host, { all: true });
+    return results.some((r) => isPrivateAddress(r.address));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * One-shot discovery attempt for the settings UI's "Test connection" button
  * and the save-time enable gate. Mirrors the exact `client.discovery()` call
  * shape (and `allowInsecure` handling) used by the background `tryDiscover()`
  * loop below, but is otherwise completely decoupled from it: no retry loop,
  * no shared/plugin state is read or written, and nothing is persisted. Purely
  * reports whether the given, caller-supplied config can currently discover.
+ *
+ * SSRF hardening: while auth is disabled the /test and save routes are open to
+ * any network caller, so a private, loopback, or link-local issuer host is
+ * rejected before any request is made, closing the internal-service-probe
+ * surface. The deny-list is gated off ONLY by `allowInternalIssuer`, which the
+ * caller derives from SERVER-SIDE config (non-production, or an explicit
+ * OIDC_ALLOW_INSECURE opt-in for an on-prem IdP) — never from the request body.
+ * `allowInsecure` is caller-supplied and controls TLS only, so it must not
+ * influence the deny-list (else an unauthenticated caller could disable it).
  */
 export async function testDiscovery(input: {
   issuerUrl: string;
   clientId: string;
   clientSecret: string;
   allowInsecure: boolean;
+  allowInternalIssuer: boolean;
 }): Promise<AuthConfigTestResult> {
+  if (!input.allowInternalIssuer && (await issuerTargetsInternalAddress(input.issuerUrl))) {
+    return {
+      ok: false,
+      error:
+        'The issuer host resolves to a private, loopback, or link-local address, which is not permitted.',
+    };
+  }
   try {
     const options = input.allowInsecure ? { execute: [client.allowInsecureRequests] } : undefined;
     await client.discovery(
