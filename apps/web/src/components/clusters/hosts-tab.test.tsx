@@ -1,6 +1,6 @@
 import type { HostResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
@@ -44,11 +44,11 @@ function makeHost(overrides: Partial<HostResponse> = {}): HostResponse {
   };
 }
 
-function renderTab(): void {
+function renderTab(canManage = true): void {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <HostsTab clusterId="cl-1" />
+      <HostsTab clusterId="cl-1" canManage={canManage} />
     </QueryClientProvider>,
   );
 }
@@ -72,6 +72,16 @@ describe('HostsTab', () => {
 
     expect(await screen.findByText('esx-01')).toBeInTheDocument();
     expect(screen.getByText('esx-02')).toBeInTheDocument();
+  });
+
+  it('shows the Add host button for managers and hides it for viewers', async () => {
+    renderTab(true);
+    expect(await screen.findByRole('button', { name: /add host/i })).toBeInTheDocument();
+
+    cleanup();
+    renderTab(false);
+    await screen.findByText('esx-01');
+    expect(screen.queryByRole('button', { name: /add host/i })).not.toBeInTheDocument();
   });
 
   it('shows a truncation note when the server total exceeds the fetched rows', async () => {

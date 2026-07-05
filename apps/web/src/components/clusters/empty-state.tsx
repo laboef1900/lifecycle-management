@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Database } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { AdminOnly } from '@/components/auth/admin-only';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { api } from '@/lib/api-client';
@@ -48,7 +49,9 @@ export function ClustersEmptyState(): React.JSX.Element {
         Add a cluster to start tracking memory capacity and forecasting growth.
       </p>
       <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
-        <CreateClusterDialog />
+        <AdminOnly>
+          <CreateClusterDialog />
+        </AdminOnly>
         {import.meta.env.DEV ? (
           <Button
             variant="outline"

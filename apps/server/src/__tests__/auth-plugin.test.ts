@@ -1,11 +1,23 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { ANONYMOUS_USER, SESSION_COOKIE, authStartupWarnings } from '../plugins/auth.js';
+import {
+  ANONYMOUS_USER,
+  SESSION_COOKIE,
+  authStartupWarnings,
+  requiresAdmin,
+} from '../plugins/auth.js';
 import { buildServer } from '../server.js';
 import type { EffectiveAuthConfig } from '../services/auth-config.js';
 import { SessionService } from '../services/sessions.js';
+import { makeCluster } from './factories.js';
 import { prisma } from './setup.js';
 import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
+
+const validClusterPayload = (name: string) => ({
+  name,
+  baselineDate: '2026-01-01',
+  baselines: [{ metricTypeKey: 'memory_gb', baselineConsumption: 1, baselineCapacity: 2 }],
+});
 
 /**
  * A valid 32-byte CONFIG_ENCRYPTION_KEY, local to this file. The auth gate now
@@ -123,6 +135,96 @@ describe('auth plugin', () => {
     expect(response.statusCode).toBe(401);
   });
 
+  describe('role enforcement (#118)', () => {
+    async function sessionForRole(role: 'ADMIN' | 'VIEWER'): Promise<string> {
+      const user = await prisma.user.create({
+        data: {
+          issuer: 'https://idp.test',
+          subject: `sub-${role}`,
+          email: `${role.toLowerCase()}@example.com`,
+          role,
+        },
+      });
+      const { token } = await new SessionService(prisma).create(user.id, 12);
+      return token;
+    }
+
+    it('returns 403 FORBIDDEN when a VIEWER attempts a mutating /api route', async () => {
+      const token = await sessionForRole('VIEWER');
+      const server = await buildServer({ env: oidcEnv(), prisma });
+      created.push(server);
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/api/clusters',
+        cookies: { [SESSION_COOKIE]: token },
+        payload: validClusterPayload('viewer-attempt'),
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+    });
+
+    it('allows a VIEWER to read (GET) an /api route', async () => {
+      const token = await sessionForRole('VIEWER');
+      const server = await buildServer({ env: oidcEnv(), prisma });
+      created.push(server);
+
+      const res = await server.inject({
+        method: 'GET',
+        url: '/api/clusters',
+        cookies: { [SESSION_COOKIE]: token },
+      });
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('exempts the read-only forecast scenario POST from the admin gate (VIEWER allowed)', async () => {
+      const token = await sessionForRole('VIEWER');
+      const { id: clusterId } = await makeCluster(prisma);
+      const server = await buildServer({ env: oidcEnv(), prisma });
+      created.push(server);
+
+      const res = await server.inject({
+        method: 'POST',
+        url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+        cookies: { [SESSION_COOKIE]: token },
+        payload: { kind: 'lose_hosts', count: 1 },
+      });
+
+      expect(res.statusCode).not.toBe(403);
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('allows an ADMIN to perform a mutating /api route', async () => {
+      const token = await sessionForRole('ADMIN');
+      const server = await buildServer({ env: oidcEnv(), prisma });
+      created.push(server);
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/api/clusters',
+        cookies: { [SESSION_COOKIE]: token },
+        payload: validClusterPayload('admin-made'),
+      });
+
+      expect(res.statusCode).toBe(201);
+    });
+
+    it('does not gate mutations in disabled mode (anonymous principal is ADMIN)', async () => {
+      const server = await buildServer({ env: makeTestEnv(), prisma });
+      created.push(server);
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/api/clusters',
+        payload: validClusterPayload('anon-made'),
+      });
+
+      expect(res.statusCode).toBe(201);
+    });
+  });
+
   describe('percent-encoded / traversal bypass regression', () => {
     it('rejects a percent-encoded /api prefix with no cookie (router decodes, hook must match router view)', async () => {
       const server = await buildServer({ env: oidcEnv(), prisma });
@@ -206,5 +308,26 @@ describe('authStartupWarnings', () => {
     expect(
       authStartupWarnings(makeOidcConfig({ roleClaim: 'groups', allowInsecure: false }), 'test'),
     ).toHaveLength(0);
+  });
+});
+
+describe('requiresAdmin', () => {
+  it('requires admin for mutating /api routes', () => {
+    expect(requiresAdmin('POST', '/api/clusters')).toBe(true);
+    expect(requiresAdmin('PUT', '/api/clusters/:id')).toBe(true);
+    expect(requiresAdmin('DELETE', '/api/hosts/:id')).toBe(true);
+    expect(requiresAdmin('PATCH', '/api/items/:id')).toBe(true);
+    expect(requiresAdmin('PUT', '/api/settings/tenant')).toBe(true);
+    expect(requiresAdmin('POST', '/api/settings/auth/rotate-signing-secret')).toBe(true);
+  });
+
+  it('does not require admin for reads, the auth flow, or the read-only scenario query', () => {
+    expect(requiresAdmin('GET', '/api/clusters')).toBe(false);
+    expect(requiresAdmin('HEAD', '/api/clusters')).toBe(false);
+    expect(requiresAdmin('POST', '/api/auth/logout')).toBe(false);
+    expect(requiresAdmin('GET', '/api/auth/me')).toBe(false);
+    expect(requiresAdmin('POST', '/api/clusters/:id/forecast/scenario')).toBe(false);
+    // Non-/api routes (health) are never gated here.
+    expect(requiresAdmin('POST', '/healthz')).toBe(false);
   });
 });

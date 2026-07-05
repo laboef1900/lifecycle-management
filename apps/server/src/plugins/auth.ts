@@ -4,7 +4,7 @@ import fp from 'fastify-plugin';
 
 import type { Env } from '../env.js';
 import type { EffectiveAuthConfig } from '../services/auth-config.js';
-import { UnauthenticatedError } from '../services/errors.js';
+import { ForbiddenError, UnauthenticatedError } from '../services/errors.js';
 import { SessionService, type SessionUser } from '../services/sessions.js';
 
 declare module 'fastify' {
@@ -15,6 +15,31 @@ declare module 'fastify' {
 
 export const SESSION_COOKIE = 'lcm_session';
 export const SECURE_SESSION_COOKIE = '__Host-lcm_session';
+
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * Routes that use a mutating HTTP method but are semantically read-only
+ * queries, so they must NOT require the ADMIN role. `forecast/scenario` is a
+ * POST only because its what-if parameters are too large/structured for a
+ * query string — it computes and returns a forecast without persisting
+ * anything. Matched against the router's canonical (prefixed) route pattern.
+ */
+const READ_ONLY_MUTATION_ROUTES = new Set(['/api/clusters/:id/forecast/scenario']);
+
+/**
+ * True when a request must be performed by an ADMIN: a mutating method on an
+ * `/api` route, excluding the auth flow (`/api/auth/*`) and the read-only
+ * scenario query. VIEWERs keep full read access; only ADMINs may mutate. In
+ * `AUTH_MODE=disabled` the anonymous principal is ADMIN, so nothing is blocked.
+ * A blanket "non-GET requires admin" rule would wrongly block the scenario
+ * query, which is exactly why it is exempted explicitly.
+ */
+export function requiresAdmin(method: string, routePath: string): boolean {
+  if (!routePath.startsWith('/api/') || routePath.startsWith('/api/auth/')) return false;
+  if (!MUTATING_METHODS.has(method)) return false;
+  return !READ_ONLY_MUTATION_ROUTES.has(routePath);
+}
 
 /**
  * __Host- prefix binds the cookie to the origin; only valid over https.
@@ -107,6 +132,20 @@ const authPlugin: FastifyPluginAsync = async (fastify) => {
       }
     }
     throw new UnauthenticatedError();
+  });
+
+  // Authorization (role enforcement) runs after authentication above has set
+  // request.user (or thrown 401). Mutating /api routes require ADMIN; VIEWERs
+  // get a 403. In disabled mode the anonymous principal is ADMIN, so this is a
+  // no-op. Kept separate from the settings-auth plugin's own admin gate (which
+  // additionally protects its GET reads) — both throw ForbiddenError.
+  fastify.addHook('onRequest', async (request) => {
+    const routePath = request.routeOptions?.url;
+    if (routePath === undefined) return; // no route matched; 404 will follow
+    if (!requiresAdmin(request.method, routePath)) return;
+    if (request.user?.role !== 'ADMIN') {
+      throw new ForbiddenError('Admin role is required to perform this action.');
+    }
   });
 };
 
