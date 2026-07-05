@@ -46,8 +46,8 @@ describe('AuthConfigService.load', () => {
   });
 
   it('seeds as disabled (never crashing) when the key is null even though env has OIDC vars and a client secret', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const svc = new AuthConfigService(prisma, null);
+    const warn = vi.fn();
+    const svc = new AuthConfigService(prisma, null, { warn });
 
     const cfg = await svc.load(makeOidcTestEnv());
 
@@ -59,9 +59,11 @@ describe('AuthConfigService.load', () => {
     // The secret can't be stored without a key, and enabling oidc without
     // one stored would be unsafe — so it must not be persisted at all.
     expect(row!.clientSecretEnc).toBeNull();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-
-    warnSpy.mockRestore();
+    // The security-relevant warning goes through the structured logger, not console.
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'auth_config.seeded_disabled_no_key' }),
+      expect.stringContaining('CONFIG_ENCRYPTION_KEY'),
+    );
   });
 
   it('does not seed when no OIDC env vars are present', async () => {
