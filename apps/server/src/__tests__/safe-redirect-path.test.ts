@@ -8,6 +8,16 @@ describe('safeRedirectPath', () => {
     expect(safeRedirectPath('/clusters/abc')).toBe('/clusters/abc');
     expect(safeRedirectPath('/clusters/abc?tab=hosts')).toBe('/clusters/abc?tab=hosts');
     expect(safeRedirectPath('/settings#auth')).toBe('/settings#auth');
+    // Legit dot-segments still normalize and are accepted (not over-rejected).
+    expect(safeRedirectPath('/foo/../bar')).toBe('/bar');
+  });
+
+  it('rejects dot-segment inputs that normalize to a protocol-relative //host (#121 F1)', () => {
+    // A single leading slash passes the startsWith('//') guard, but the URL
+    // parser folds the dot-segment into a //host authority — must be rejected.
+    expect(safeRedirectPath('/..//evil.example.com')).toBeNull();
+    expect(safeRedirectPath('/.//evil.example.com')).toBeNull();
+    expect(safeRedirectPath('/../..//evil.example.com/phish')).toBeNull();
   });
 
   it('rejects protocol-relative and absolute URLs (open-redirect vectors)', () => {

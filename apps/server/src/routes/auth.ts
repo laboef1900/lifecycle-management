@@ -39,7 +39,13 @@ export function safeRedirectPath(value: unknown): string | null {
   try {
     const resolved = new URL(value, 'http://localhost');
     if (resolved.origin !== 'http://localhost') return null;
-    return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+    const path = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+    // A dot-segment input (e.g. '/..//host') can normalize to a '//host'
+    // pathname that is protocol-relative once used as a Location — reject it so
+    // the function never returns an off-origin target, even to a caller that
+    // forgets to re-validate.
+    if (path.startsWith('//')) return null;
+    return path;
   } catch {
     return null;
   }
