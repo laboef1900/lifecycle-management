@@ -1,6 +1,6 @@
 /**
  * Boots a fully self-contained OIDC stack for the browser-level auth e2e
- * (apps/web/playwright/oidc): a throwaway Postgres (Testcontainers), an
+ * (apps/web/playwright-oidc): a throwaway Postgres (Testcontainers), an
  * in-process mock IdP (oauth2-mock-server, which auto-approves the authorize
  * request), and the real API server in AUTH_MODE=oidc pointed at that IdP.
  *
