@@ -144,6 +144,26 @@ jobs:
           done
           docker buildx imagetools create "${tag_args[@]}" "${source_refs[@]}"
 
+      # The manifest-list digest of the image just pushed — the subject the
+      # attestation is bound to.
+      - name: Resolve pushed manifest digest
+        id: manifest
+        run: |
+          repo="ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name }}"
+          digest="$(docker buildx imagetools inspect "${repo}:${{ steps.meta.outputs.version }}" --format '{{ .Manifest.Digest }}')"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      # Keyless Sigstore signing (Fulcio cert + Rekor transparency log) of the
+      # pushed multi-arch manifest, bound to this workflow's OIDC identity
+      # (id-token: write) — no long-lived keys. Makes the images cryptographically
+      # verifiable on the deploy host via `gh attestation verify` / cosign.
+      - name: Attest build provenance (keyless)
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true
+
       - name: Inspect image
         run: |
           docker buildx imagetools inspect \

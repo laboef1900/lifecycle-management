@@ -384,4 +384,11 @@ describe('<AuthenticationForm>', () => {
       screen.queryByRole('button', { name: /rotate signing secret/i }),
     ).not.toBeInTheDocument();
   });
+
+  it('shows skeleton placeholders while the auth config query is pending', () => {
+    // A never-resolving fetch keeps the query in its pending state.
+    vi.mocked(api.settings.auth.get).mockReturnValue(new Promise<never>(() => {}));
+    const { container } = renderWithClient(<AuthenticationForm />);
+    expect(container.querySelector('.animate-shimmer')).toBeInTheDocument();
+  });
 });

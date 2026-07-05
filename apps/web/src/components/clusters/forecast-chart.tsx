@@ -270,14 +270,14 @@ export function ForecastChart({
             {eolMonthInRange && earliestEolHost ? (
               <ReferenceLine
                 x={eolMonthKey ?? undefined}
-                stroke="#d97706"
+                stroke={colors.utilizationWarn}
                 strokeDasharray="4 4"
                 ifOverflow="extendDomain"
                 label={{
                   value: `EOL: ${earliestEolHost.name}`,
                   position: 'top',
                   fontSize: 11,
-                  fill: '#b45309',
+                  fill: colors.utilizationWarn,
                 }}
               />
             ) : null}
@@ -311,13 +311,18 @@ export function ForecastChart({
   );
 }
 
-// Recharts types its LabelList `content` callback with the same broad shape
-// as its own ImplicitLabelType, so we accept any and validate the fields we
-// actually use at runtime.
+// Recharts calls a LabelList `content` render function with a broad, loosely
+// typed props bag (its ImplicitLabelType). We only read index/x/y, so accept a
+// minimal structural shape (all optional) and validate at runtime — no `any`.
+interface EndLabelRenderProps {
+  index?: number | undefined;
+  x?: string | number | undefined;
+  y?: string | number | undefined;
+}
+
 function renderEndLabel(lastIndex: number, text: string, fill: string) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (props: any): React.JSX.Element | null => {
-    if (props?.index !== lastIndex) return null;
+  return (props: EndLabelRenderProps): React.JSX.Element | null => {
+    if (props.index !== lastIndex) return null;
     const numericX = Number(props.x);
     const numericY = Number(props.y);
     if (!Number.isFinite(numericX) || !Number.isFinite(numericY)) return null;

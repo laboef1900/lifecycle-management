@@ -52,3 +52,13 @@ describe('SessionService', () => {
     expect(await prisma.session.findUnique({ where: { tokenHash: 'stale' } })).toBeNull();
   });
 });
+
+describe('sessions schema', () => {
+  it('indexes user_id so per-user lookups and cascade deletes do not seq-scan', async () => {
+    const rows = await prisma.$queryRaw<Array<{ indexname: string }>>`
+      SELECT indexname FROM pg_indexes
+      WHERE tablename = 'sessions' AND indexdef LIKE '%(user_id)%'
+    `;
+    expect(rows.map((r) => r.indexname)).toContain('sessions_user_id_idx');
+  });
+});

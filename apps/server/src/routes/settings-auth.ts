@@ -1,14 +1,24 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 
 import { authConfigTestSchema, authConfigUpdateSchema } from '@lcm/shared';
-import type { AuthConfigResponse, AuthConfigTestResult } from '@lcm/shared';
+import type {
+  AuthConfigResponse,
+  AuthConfigTestResult,
+  RotateSigningSecretResponse,
+} from '@lcm/shared';
 
 import { testDiscovery } from '../plugins/oidc.js';
 import { AuthSecretDecryptError } from '../services/auth-config.js';
 import { ForbiddenError, UnprocessableError } from '../services/errors.js';
 
-interface RotateSigningSecretResponse {
-  rotated: true;
+export interface SettingsAuthRoutesOptions {
+  /**
+   * Server-side gate for the SSRF internal-address deny-list applied when a
+   * discovery test/enable runs against a private/loopback/link-local issuer.
+   * Derived from deployment config in `buildServer` (never from a request), so
+   * an unauthenticated caller in the bootstrap window cannot disable the guard.
+   */
+  allowInternalIssuer: boolean;
 }
 
 /**
@@ -39,8 +49,12 @@ async function reloadOrUnprocessable(fastify: FastifyInstance): Promise<void> {
  * must never appear in any response body, and enabling oidc always re-tests
  * discovery server-side before persisting (the UI cannot bypass this).
  */
-export const settingsAuthRoutes: FastifyPluginAsync = async (fastify) => {
+export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> = async (
+  fastify,
+  opts,
+) => {
   const service = fastify.authConfig.service;
+  const { allowInternalIssuer } = opts;
 
   /**
    * Bootstrap-safe admin gate: while auth is disabled there are no roles yet
@@ -92,7 +106,7 @@ export const settingsAuthRoutes: FastifyPluginAsync = async (fastify) => {
 
       if (!issuerUrl || !clientId || !clientSecret) {
         throw new UnprocessableError(
-          'TEST_REQUIRED',
+          'INCOMPLETE_OIDC_CONFIG',
           'Issuer URL, client ID, and client secret are all required to enable OIDC authentication.',
         );
       }
@@ -103,6 +117,7 @@ export const settingsAuthRoutes: FastifyPluginAsync = async (fastify) => {
         clientId,
         clientSecret,
         allowInsecure: body.allowInsecure,
+        allowInternalIssuer,
       });
       if (!testResult.ok) {
         throw new UnprocessableError(
@@ -133,6 +148,7 @@ export const settingsAuthRoutes: FastifyPluginAsync = async (fastify) => {
       clientId: body.clientId,
       clientSecret,
       allowInsecure: body.allowInsecure,
+      allowInternalIssuer,
     });
   });
 

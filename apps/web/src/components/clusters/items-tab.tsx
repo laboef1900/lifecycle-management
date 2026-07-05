@@ -6,6 +6,8 @@ import { Fragment, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Table,
   TableBody,
@@ -28,6 +30,12 @@ import {
 
 interface ItemsTabProps {
   clusterId: string;
+  /**
+   * Whether to show mutation controls (Add item). The parent derives this from
+   * the current role; defaults to true so this stays a presentational unit and
+   * the server remains the real enforcement point.
+   */
+  canManage?: boolean;
 }
 
 type DialogKind = 'edit' | 'resize' | 'end' | 'delete';
@@ -51,7 +59,7 @@ function categoryBadgeVariant(category: string): 'default' | 'outline' | 'succes
   }
 }
 
-export function ItemsTab({ clusterId }: ItemsTabProps): React.JSX.Element {
+export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
   const [target, setTarget] = useState<{ item: ItemResponse; kind: DialogKind } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -87,18 +95,23 @@ export function ItemsTab({ clusterId }: ItemsTabProps): React.JSX.Element {
                 : 'No apps or events yet.'}
             </p>
           </div>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Add item
-          </Button>
+          {canManage ? (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Add item
+            </Button>
+          ) : null}
         </header>
 
         {query.isPending ? (
-          <Skeleton />
+          <div className="space-y-2">
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-12 w-full" />
+          </div>
         ) : query.isError ? (
           <ErrorRow message={query.error.message} />
         ) : items.length === 0 ? (
-          <EmptyRow message="Add an application to track its memory allocation, or an event to annotate the forecast." />
+          <EmptyState title="Add an application to track its memory allocation, or an event to annotate the forecast." />
         ) : (
           <Table>
             <TableHeader>
@@ -373,24 +386,6 @@ function AllocationTimeline({ rows }: { rows: ItemResponse['allocations'] }): Re
           );
         })}
       </ol>
-    </div>
-  );
-}
-
-function Skeleton(): React.JSX.Element {
-  return (
-    <div className="space-y-2">
-      {Array.from({ length: 2 }).map((_, i) => (
-        <div key={i} className="h-12 animate-pulse rounded bg-muted/60" />
-      ))}
-    </div>
-  );
-}
-
-function EmptyRow({ message }: { message: string }): React.JSX.Element {
-  return (
-    <div className="rounded-[var(--radius)] border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
-      {message}
     </div>
   );
 }

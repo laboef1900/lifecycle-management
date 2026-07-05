@@ -21,6 +21,7 @@ import { RunwayPill } from '@/components/ui/runway-pill';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { UtilizationGauge } from '@/components/ui/utilization-gauge';
 import { api, type ScenarioWire } from '@/lib/api-client';
+import { useIsAdmin } from '@/lib/auth';
 import { runwayToWarn, utilStatus } from '@/lib/forecast-summary';
 import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 import { useMediaQuery } from '@/lib/use-media-query';
@@ -36,6 +37,7 @@ function ClusterDetailPage(): React.JSX.Element {
   const [windowSelection, setWindowSelection] = useState<ForecastWindow>('24mo');
   const [scenario, setScenario] = useState<ScenarioWire | null>(null);
   const isWide = useMediaQuery('(min-width: 640px)');
+  const canManage = useIsAdmin();
 
   const clusterQuery = useQuery({
     queryKey: ['cluster', id],
@@ -150,10 +152,10 @@ function ClusterDetailPage(): React.JSX.Element {
               <TabsTrigger value="settings">Settings</TabsTrigger>
             </TabsList>
             <TabsContent value="hosts">
-              <HostsTab clusterId={id} />
+              <HostsTab clusterId={id} canManage={canManage} />
             </TabsContent>
             <TabsContent value="items">
-              <ItemsTab clusterId={id} />
+              <ItemsTab clusterId={id} canManage={canManage} />
             </TabsContent>
             <TabsContent value="settings">
               <SettingsTab clusterId={id} />

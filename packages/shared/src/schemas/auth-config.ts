@@ -70,4 +70,14 @@ export const authConfigResponseSchema: z.ZodType<AuthConfigResponse> = z.object(
   discoveryStatus: z.enum(['connected', 'unavailable', 'disabled']),
   lastDiscoveryError: z.string().nullable(),
 });
-export type AuthConfigTestResult = { ok: boolean; error: string | null };
+export const authConfigTestResultSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().nullable(),
+});
+export type AuthConfigTestResult = z.infer<typeof authConfigTestResultSchema>;
+
+/** Response of POST /api/settings/auth/rotate-signing-secret. */
+export const rotateSigningSecretResponseSchema = z.object({
+  rotated: z.boolean(),
+});
+export type RotateSigningSecretResponse = z.infer<typeof rotateSigningSecretResponseSchema>;

@@ -96,7 +96,15 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(categoriesRoutes, { prefix: '/api' });
   await server.register(forecastRoutes, { prefix: '/api' });
   await server.register(settingsRoutes, { prefix: '/api' });
-  await server.register(settingsAuthRoutes, { prefix: '/api' });
+  // The bootstrap-window /settings/auth test+enable endpoints are open to any
+  // caller while auth is disabled, so the SSRF internal-address deny-list must be
+  // gated on server-side config, never a request field. Internal issuer hosts are
+  // permitted only outside production, or when the operator explicitly opts in via
+  // OIDC_ALLOW_INSECURE (e.g. an on-prem IdP on a private network).
+  await server.register(settingsAuthRoutes, {
+    prefix: '/api',
+    allowInternalIssuer: env.NODE_ENV !== 'production' || env.OIDC_ALLOW_INSECURE,
+  });
 
   return server;
 }

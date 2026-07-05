@@ -47,6 +47,10 @@ services:
     mem_limit: 1g
     cpus: 2
     pids_limit: 256
+    # read_only rootfs is a candidate hardening step, pending verification of
+    # the DHI postgres writable paths (socket dir, /tmp) against the actual
+    # image — see docs/operations.md "Container hardening → Read-only root
+    # filesystem". Not enabled unverified: a missing writable path stops boot.
 
   server:
     image: ghcr.io/laboef1900/lcm-server:${LCM_IMAGE_TAG:-latest}
@@ -134,7 +138,9 @@ services:
     mem_limit: 256m
     cpus: 1
     pids_limit: 128
-    # read_only: true — nginx cache paths on DHI image are unverified; not set
+    # read_only rootfs pending verification of the DHI nginx writable paths
+    # (cache, run, /tmp) — see docs/operations.md "Container hardening →
+    # Read-only root filesystem". Not enabled unverified.
 
 volumes:
   lcm-postgres-18:

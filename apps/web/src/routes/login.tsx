@@ -2,14 +2,30 @@ import { createFileRoute, redirect } from '@tanstack/react-router';
 import { Activity } from 'lucide-react';
 import { z } from 'zod';
 
+import { type LoginErrorCode, loginErrorCodeSchema } from '@lcm/shared';
+
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 
 const loginSearchSchema = z.object({
   error: z.string().optional(),
+  // The path the user was headed to before being bounced here. Forwarded to the
+  // server's login endpoint, which validates it before honouring it.
+  redirect: z.string().optional(),
 });
 
-const ERROR_COPY: Record<string, string> = {
+/**
+ * Builds the sign-in URL, forwarding the deep-link return path when present.
+ * Validation of the target is the server's responsibility (open-redirect
+ * defence lives there); this only URL-encodes it.
+ */
+export function buildLoginHref(redirect: string | undefined): string {
+  return redirect ? `/api/auth/login?redirect=${encodeURIComponent(redirect)}` : '/api/auth/login';
+}
+
+// Keyed by the shared LoginErrorCode union so a new server code fails the build
+// here until copy is added, instead of silently degrading to the generic message.
+const ERROR_COPY: Record<LoginErrorCode, string> = {
   login_failed: 'Sign-in failed. Please try again.',
   state_mismatch: 'The sign-in attempt expired or was started in another tab. Please try again.',
   idp_error: 'The identity provider reported an error. Please try again.',
@@ -30,8 +46,14 @@ export const Route = createFileRoute('/login')({
 });
 
 function LoginPage(): React.JSX.Element {
-  const { error } = Route.useSearch();
-  const message = error ? (ERROR_COPY[error] ?? ERROR_COPY['login_failed']) : undefined;
+  const { error, redirect } = Route.useSearch();
+  const parsedError = loginErrorCodeSchema.safeParse(error);
+  const message = parsedError.success
+    ? ERROR_COPY[parsedError.data]
+    : error
+      ? ERROR_COPY.login_failed
+      : undefined;
+  const loginHref = buildLoginHref(redirect);
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
       <Card className="w-full max-w-sm p-8">
@@ -56,7 +78,7 @@ function LoginPage(): React.JSX.Element {
           Sign in with your organization account to continue.
         </p>
         <Button asChild className="w-full">
-          <a href="/api/auth/login">Sign in</a>
+          <a href={loginHref}>Sign in</a>
         </Button>
       </Card>
     </div>

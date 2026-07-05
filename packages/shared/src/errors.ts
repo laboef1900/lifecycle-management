@@ -1,3 +1,28 @@
+import { z } from 'zod';
+
+/**
+ * Wire contract for every API error response, produced by the server's
+ * error-handler plugin and consumed by the web api-client. Declared once here
+ * (next to the `ServiceErrorCode` registry) so both sides share a single
+ * source of truth. `code` is a plain string, not `ServiceErrorCode`, because
+ * the envelope also carries handler-level codes (VALIDATION_ERROR,
+ * INTERNAL_ERROR, CLIENT_ERROR, NOT_FOUND) that are not service errors.
+ */
+export const apiErrorBodySchema = z.object({
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+    details: z.unknown().optional(),
+  }),
+});
+
+export type ApiErrorBody = z.infer<typeof apiErrorBodySchema>;
+
+/** Type guard: true when `value` structurally matches the API error envelope. */
+export function isApiErrorBody(value: unknown): value is ApiErrorBody {
+  return apiErrorBodySchema.safeParse(value).success;
+}
+
 /**
  * Central registry of service-level error codes returned in API error bodies.
  * Handler-level codes (VALIDATION_ERROR, INTERNAL_ERROR, CLIENT_ERROR) are not
@@ -20,6 +45,7 @@ export const SERVICE_ERROR_CODES = [
   'ENCRYPTION_KEY_REQUIRED',
   'FORBIDDEN',
   'HOST_NOT_FOUND',
+  'INCOMPLETE_OIDC_CONFIG',
   'INVALID_COMMISSIONED_AT',
   'INVALID_EFFECTIVE_DATE',
   'INVALID_RANGE',
