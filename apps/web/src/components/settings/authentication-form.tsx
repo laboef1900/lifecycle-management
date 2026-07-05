@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { Skeleton } from '@/components/ui/skeleton';
 import { api, describeApiError } from '@/lib/api-client';
 
 type NumInput = number | '';
@@ -243,7 +244,12 @@ export function AuthenticationForm(): React.JSX.Element {
         </Badge>
       </header>
 
-      {authConfigQuery.isPending ? <p className="text-sm text-fg-subtle">Loading…</p> : null}
+      {authConfigQuery.isPending ? (
+        <div className="space-y-3">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-2/3" />
+        </div>
+      ) : null}
       {authConfigQuery.isError ? (
         <p className="text-sm text-destructive">Could not load authentication settings.</p>
       ) : null}
