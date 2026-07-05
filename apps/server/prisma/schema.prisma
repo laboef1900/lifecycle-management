@@ -309,6 +309,9 @@ model Session {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // Postgres does not auto-index FK columns; index user_id so per-user session
+  // lookups and the ON DELETE CASCADE from users don't sequential-scan sessions.
+  @@index([userId])
   @@map("sessions")
 }
 
