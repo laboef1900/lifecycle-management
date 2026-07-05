@@ -43,12 +43,18 @@ import {
 
 interface HostsTabProps {
   clusterId: string;
+  /**
+   * Whether to show mutation controls (Add host). The parent derives this from
+   * the current role; defaults to true so this stays a presentational unit and
+   * the server remains the real enforcement point.
+   */
+  canManage?: boolean;
 }
 
 type DialogKind =
   'edit' | 'resize' | 'decommission' | 'delete' | 'transition' | 'replace' | 'history';
 
-export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
+export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
   const [target, setTarget] = useState<{ host: HostResponse; kind: DialogKind } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -82,10 +88,12 @@ export function HostsTab({ clusterId }: HostsTabProps): React.JSX.Element {
                 : 'No hosts yet.'}
             </p>
           </div>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Add host
-          </Button>
+          {canManage ? (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Add host
+            </Button>
+          ) : null}
         </header>
 
         {hostsQuery.isPending ? (

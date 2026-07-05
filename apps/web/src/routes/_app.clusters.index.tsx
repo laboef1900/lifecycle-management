@@ -6,6 +6,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
 
+import { AdminOnly } from '@/components/auth/admin-only';
 import { ClusterTable } from '@/components/clusters/cluster-table';
 import { CreateClusterDialog } from '@/components/clusters/create-cluster-dialog';
 import { ClustersEmptyState } from '@/components/clusters/empty-state';
@@ -154,7 +155,9 @@ function ClustersPage(): React.JSX.Element {
             {showArchived ? 'Hide archived' : 'Show archived'}
           </button>
           {activeClustersQuery.data && activeClustersQuery.data.items.length > 0 ? (
-            <CreateClusterDialog />
+            <AdminOnly>
+              <CreateClusterDialog />
+            </AdminOnly>
           ) : null}
         </div>
       </div>

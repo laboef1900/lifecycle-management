@@ -1,6 +1,22 @@
 import { authMeResponseSchema, type AuthMeResponse } from '@lcm/shared';
+import { useRouteContext } from '@tanstack/react-router';
 
 export type AuthState = AuthMeResponse;
+
+/**
+ * True when the current principal may perform mutations. In AUTH_MODE=disabled
+ * (authRequired=false) there is no session user and everyone is treated as
+ * ADMIN, matching the server's anonymous-ADMIN principal. In oidc mode it
+ * reflects the signed-in user's role.
+ *
+ * UX affordance only: the server is the real enforcement point — mutations 403
+ * for non-admins regardless of what the UI shows.
+ */
+export function useIsAdmin(): boolean {
+  const { auth } = useRouteContext({ from: '__root__' });
+  if (!auth.authRequired) return true;
+  return auth.user?.role === 'ADMIN';
+}
 
 /**
  * One bootstrap fetch before the router renders. Fails closed: any error is

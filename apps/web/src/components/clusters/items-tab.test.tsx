@@ -1,6 +1,6 @@
 import type { ItemResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
@@ -58,11 +58,11 @@ function makeEvent(): ItemResponse {
   };
 }
 
-function renderTab(): void {
+function renderTab(canManage = true): void {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <ItemsTab clusterId="cl-1" />
+      <ItemsTab clusterId="cl-1" canManage={canManage} />
     </QueryClientProvider>,
   );
 }
@@ -79,6 +79,16 @@ describe('ItemsTab', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('shows the Add item button for managers and hides it for viewers', async () => {
+    renderTab(true);
+    expect(await screen.findByRole('button', { name: /add item/i })).toBeInTheDocument();
+
+    cleanup();
+    renderTab(false);
+    await screen.findByText('openshift-lab');
+    expect(screen.queryByRole('button', { name: /add item/i })).not.toBeInTheDocument();
   });
 
   it('renders both application and event rows with type and category', async () => {
