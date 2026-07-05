@@ -296,6 +296,30 @@ describe('/api/settings/auth', () => {
       expect(response.json()).toEqual({ ok: true, error: null });
       expect(server.authConfig.current.mode).toBe('disabled');
     });
+
+    it('rejects an internal issuer in the open bootstrap window even with allowInsecure=true (#125 F1 SSRF)', async () => {
+      // Production server => allowInternalIssuer is derived as false server-side,
+      // so the caller-supplied allowInsecure flag cannot re-open the deny-list.
+      const server = await buildDisabledServer({ NODE_ENV: 'production' });
+
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/settings/auth/test',
+        payload: {
+          issuerUrl: 'http://169.254.169.254/latest/meta-data/', // cloud-metadata probe
+          clientId: 'attacker',
+          clientSecret: DISTINCTIVE_SECRET,
+          allowInsecure: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.ok).toBe(false);
+      expect(body.error).toMatch(/private, loopback, or link-local/i);
+      expect(body.error).not.toContain(DISTINCTIVE_SECRET);
+      expect(server.authConfig.current.mode).toBe('disabled');
+    });
   });
 
   describe('authorization', () => {

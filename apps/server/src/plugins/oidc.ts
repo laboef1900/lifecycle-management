@@ -89,11 +89,72 @@ function isPrivateIpv4(ip: string): boolean {
 
 function isPrivateIpv6(ip: string): boolean {
   if (ip === '::1' || ip === '::') return true; // loopback / unspecified
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip); // IPv4-mapped
-  if (mapped?.[1]) return isPrivateIpv4(mapped[1]);
+  // IPv4-mapped hosts (::ffff:0:0/96) route to their embedded IPv4, so classify
+  // by that address. Catch EVERY textual form — dotted `::ffff:127.0.0.1`, hex
+  // `::ffff:7f00:1`, and the hex form WHATWG `new URL()` normalizes a bracketed
+  // literal to — by expanding and inspecting the 96-bit prefix, not regex-matching
+  // one spelling (the previous dotted-only regex let `::ffff:7f00:1` slip through).
+  const embedded = ipv4MappedEmbeddedAddress(ip);
+  if (embedded !== null) return isPrivateIpv4(embedded);
   if (ip.startsWith('fc') || ip.startsWith('fd')) return true; // unique-local fc00::/7
   if (/^fe[89ab]/.test(ip)) return true; // link-local fe80::/10
   return false;
+}
+
+/**
+ * If `ip` is an IPv4-mapped IPv6 address (::ffff:0:0/96, in any textual form),
+ * returns its embedded IPv4 as dotted-decimal; otherwise null. Assumes `ip` is a
+ * valid, lower-cased IPv6 literal (callers gate on `isIP(ip) === 6`).
+ */
+function ipv4MappedEmbeddedAddress(ip: string): string | null {
+  const groups = expandIpv6(ip);
+  if (!groups) return null;
+  const [a, b, c, d, e, f, g, h] = groups;
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0xffff) {
+    return `${g >> 8}.${g & 0xff}.${h >> 8}.${h & 0xff}`;
+  }
+  return null;
+}
+
+/**
+ * Expand a valid IPv6 literal into its 8 16-bit groups, resolving `::`
+ * compression and any embedded dotted-quad tail. Returns null on an unexpected
+ * shape (caller then treats the address as non-mapped).
+ */
+function expandIpv6(
+  ip: string,
+): [number, number, number, number, number, number, number, number] | null {
+  let text = ip;
+  // Fold an embedded dotted IPv4 tail (e.g. ::ffff:127.0.0.1) into two hex groups.
+  const dot = text.indexOf('.');
+  if (dot !== -1) {
+    const colon = text.lastIndexOf(':');
+    if (colon === -1 || colon > dot) return null;
+    const octets = text
+      .slice(colon + 1)
+      .split('.')
+      .map(Number);
+    if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+      return null;
+    const [o1, o2, o3, o4] = octets as [number, number, number, number];
+    text = `${text.slice(0, colon)}:${((o1 << 8) | o2).toString(16)}:${((o3 << 8) | o4).toString(16)}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 ? (halves[1] ? halves[1].split(':') : []) : null;
+  let parts: string[];
+  if (tail === null) {
+    parts = head;
+  } else {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 0) return null;
+    parts = [...head, ...Array<string>(fill).fill('0'), ...tail];
+  }
+  if (parts.length !== 8) return null;
+  const groups = parts.map((p) => (p === '' ? Number.NaN : parseInt(p, 16)));
+  if (groups.some((n) => Number.isNaN(n) || n < 0 || n > 0xffff)) return null;
+  return groups as [number, number, number, number, number, number, number, number];
 }
 
 /**
@@ -129,18 +190,22 @@ export async function issuerTargetsInternalAddress(issuerUrl: string): Promise<b
  * reports whether the given, caller-supplied config can currently discover.
  *
  * SSRF hardening: while auth is disabled the /test and save routes are open to
- * any network caller, so in production (`allowInsecure=false`) a private,
- * loopback, or link-local issuer host is rejected before any request is made,
- * closing the internal-service-probe surface. The deny-list is gated off under
- * `allowInsecure` (dev/test, which points at http://127.0.0.1 issuers).
+ * any network caller, so a private, loopback, or link-local issuer host is
+ * rejected before any request is made, closing the internal-service-probe
+ * surface. The deny-list is gated off ONLY by `allowInternalIssuer`, which the
+ * caller derives from SERVER-SIDE config (non-production, or an explicit
+ * OIDC_ALLOW_INSECURE opt-in for an on-prem IdP) — never from the request body.
+ * `allowInsecure` is caller-supplied and controls TLS only, so it must not
+ * influence the deny-list (else an unauthenticated caller could disable it).
  */
 export async function testDiscovery(input: {
   issuerUrl: string;
   clientId: string;
   clientSecret: string;
   allowInsecure: boolean;
+  allowInternalIssuer: boolean;
 }): Promise<AuthConfigTestResult> {
-  if (!input.allowInsecure && (await issuerTargetsInternalAddress(input.issuerUrl))) {
+  if (!input.allowInternalIssuer && (await issuerTargetsInternalAddress(input.issuerUrl))) {
     return {
       ok: false,
       error:

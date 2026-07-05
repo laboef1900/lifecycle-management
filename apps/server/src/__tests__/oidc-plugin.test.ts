@@ -393,6 +393,7 @@ describe('testDiscovery', () => {
         clientId: 'lcm-test',
         clientSecret: 'lcm-test-distinctive-secret',
         allowInsecure: true,
+        allowInternalIssuer: true,
       });
       await issuer.requested;
       issuer.respond(200);
@@ -410,6 +411,7 @@ describe('testDiscovery', () => {
       clientId: 'lcm-test',
       clientSecret: 'lcm-test-distinctive-secret',
       allowInsecure: true,
+      allowInternalIssuer: true,
     });
 
     expect(result.ok).toBe(false);
@@ -418,16 +420,33 @@ describe('testDiscovery', () => {
     expect(result.error).not.toContain('lcm-test-distinctive-secret');
   });
 
-  it('rejects a private/loopback issuer host before any request when allowInsecure=false (#125 SSRF)', async () => {
+  it('rejects a private/loopback issuer host before any request when the server disallows internal issuers (#125 SSRF)', async () => {
     const result = await testDiscovery({
       issuerUrl: 'https://127.0.0.1/oidc',
       clientId: 'lcm-test',
       clientSecret: 'lcm-test-distinctive-secret',
       allowInsecure: false,
+      allowInternalIssuer: false,
     });
 
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/private, loopback, or link-local/i);
+  });
+
+  it('does NOT let the request-supplied allowInsecure flag bypass the SSRF guard (#125 F1)', async () => {
+    // allowInsecure is caller-controlled and, in the bootstrap window, reachable
+    // unauthenticated — it must only relax TLS, never the internal-address guard.
+    const result = await testDiscovery({
+      issuerUrl: 'http://169.254.169.254/latest/meta-data/', // cloud-metadata probe
+      clientId: 'attacker',
+      clientSecret: 'lcm-test-distinctive-secret',
+      allowInsecure: true,
+      allowInternalIssuer: false,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/private, loopback, or link-local/i);
+    expect(result.error).not.toContain('lcm-test-distinctive-secret');
   });
 });
 
@@ -452,8 +471,28 @@ describe('isPrivateAddress (#125 SSRF deny-list)', () => {
     }
   });
 
+  it('flags IPv4-mapped IPv6 loopback/private addresses in hex and normalized forms (#125 F2)', () => {
+    for (const ip of [
+      '::ffff:7f00:1', // 127.0.0.1 (hex, compressed) — the form WHATWG URL normalizes to
+      '::ffff:7f00:0001', // 127.0.0.1 (hex, zero-padded)
+      '0:0:0:0:0:ffff:7f00:1', // 127.0.0.1 (hex, uncompressed)
+      '::ffff:0a00:0001', // 10.0.0.1
+      '::ffff:c0a8:0001', // 192.168.0.1
+      '::ffff:a9fe:a9fe', // 169.254.169.254 cloud metadata
+    ]) {
+      expect(isPrivateAddress(ip)).toBe(true);
+    }
+  });
+
   it('does not flag public addresses', () => {
-    for (const ip of ['8.8.8.8', '1.1.1.1', '172.32.0.1', '192.169.0.1', '2606:4700:4700::1111']) {
+    for (const ip of [
+      '8.8.8.8',
+      '1.1.1.1',
+      '172.32.0.1',
+      '192.169.0.1',
+      '2606:4700:4700::1111',
+      '::ffff:0808:0808', // 8.8.8.8 as an IPv4-mapped IPv6 literal
+    ]) {
       expect(isPrivateAddress(ip)).toBe(false);
     }
   });
@@ -471,6 +510,12 @@ describe('issuerTargetsInternalAddress (#125 SSRF deny-list)', () => {
 
   it('flags hostnames that resolve to loopback (localhost)', async () => {
     expect(await issuerTargetsInternalAddress('https://localhost/oidc')).toBe(true);
+  });
+
+  it('flags a bracketed IPv4-mapped IPv6 issuer host, incl. the WHATWG-normalized hex form (#125 F2)', async () => {
+    // new URL('https://[::ffff:127.0.0.1]/...').hostname normalizes to '[::ffff:7f00:1]'
+    expect(await issuerTargetsInternalAddress('https://[::ffff:127.0.0.1]/oidc')).toBe(true);
+    expect(await issuerTargetsInternalAddress('https://[::ffff:7f00:1]/oidc')).toBe(true);
   });
 
   it('does not flag a public IP literal, and returns false for an unparseable URL', async () => {
