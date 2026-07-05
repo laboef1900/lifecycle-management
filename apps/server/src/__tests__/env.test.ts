@@ -146,4 +146,9 @@ describe('CONFIG_ENCRYPTION_KEY / RECOVERY_DISABLE_AUTH', () => {
     const env = parseEnv(base);
     expect(env.CONFIG_ENCRYPTION_KEY).toBeUndefined();
   });
+
+  it('defaults AUTH_STRICT_BOOT to false and parses true', () => {
+    expect(parseEnv(base).AUTH_STRICT_BOOT).toBe(false);
+    expect(parseEnv({ ...base, AUTH_STRICT_BOOT: 'true' }).AUTH_STRICT_BOOT).toBe(true);
+  });
 });

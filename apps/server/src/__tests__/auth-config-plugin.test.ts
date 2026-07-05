@@ -2,11 +2,24 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { encrypt, generateSecret, loadKey } from '../crypto/secret-box.js';
-import authConfigPlugin from '../plugins/auth-config.js';
+import authConfigPlugin, { AuthConfigStrictBootError } from '../plugins/auth-config.js';
 import prismaPlugin from '../plugins/prisma.js';
 import { AuthConfigService } from '../services/auth-config.js';
 import { prisma } from './setup.js';
 import { makeTestEnv } from './test-helpers.js';
+
+/** Seeds a stored oidc row whose secrets are encrypted under KEY. */
+async function seedOidcRow(): Promise<void> {
+  await prisma.authConfig.create({
+    data: {
+      id: 'singleton',
+      mode: 'oidc',
+      clientId: 'legacy',
+      clientSecretEnc: encrypt('super-secret-client-secret', KEY),
+      signingSecretEnc: encrypt(generateSecret(), KEY),
+    },
+  });
+}
 
 const KEY = loadKey(Buffer.alloc(32, 7).toString('base64'));
 const KEY_B64 = KEY.toString('base64');
@@ -238,5 +251,73 @@ describe('auth-config plugin', () => {
 
     expect(server.authConfig.current.mode).toBe('oidc');
     expect(server.authConfig.current.clientId).toBe('new-client');
+  });
+});
+
+describe('auth-config plugin — AUTH_STRICT_BOOT', () => {
+  const created: FastifyInstance[] = [];
+
+  afterEach(async () => {
+    while (created.length) {
+      await created.pop()?.close();
+    }
+  });
+
+  it('refuses to boot (throws) when a configured secret cannot be decrypted, leaving the row intact', async () => {
+    await seedOidcRow();
+
+    const server = Fastify({ logger: false });
+    // Register without awaiting so the plugin runs at ready(), not eagerly.
+    server.register(prismaPlugin, { prisma });
+    server.register(authConfigPlugin, {
+      env: makeTestEnv({ CONFIG_ENCRYPTION_KEY: WRONG_KEY_B64, AUTH_STRICT_BOOT: true }),
+    });
+    created.push(server);
+
+    await expect(server.ready()).rejects.toBeInstanceOf(AuthConfigStrictBootError);
+
+    // The configured row is preserved (not force-disabled) so restoring the key recovers it.
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('oidc');
+    expect(row!.clientSecretEnc).not.toBeNull();
+  });
+
+  it('RECOVERY_DISABLE_AUTH overrides strict boot: degrades to disabled instead of crashing', async () => {
+    await seedOidcRow();
+
+    const server = Fastify({ logger: false });
+    await server.register(prismaPlugin, { prisma });
+    await server.register(authConfigPlugin, {
+      env: makeTestEnv({
+        CONFIG_ENCRYPTION_KEY: WRONG_KEY_B64,
+        AUTH_STRICT_BOOT: true,
+        RECOVERY_DISABLE_AUTH: true,
+      }),
+    });
+    created.push(server);
+
+    expect(server.authConfig.current.mode).toBe('disabled');
+  });
+
+  it('does not bite a fresh/disabled deployment (no configured secret to decrypt)', async () => {
+    const server = Fastify({ logger: false });
+    await server.register(prismaPlugin, { prisma });
+    await server.register(authConfigPlugin, { env: makeTestEnv({ AUTH_STRICT_BOOT: true }) });
+    created.push(server);
+
+    expect(server.authConfig.current.mode).toBe('disabled');
+  });
+
+  it('boots normally when strict is on and the configured secret decrypts', async () => {
+    await seedOidcRow();
+
+    const server = Fastify({ logger: false });
+    await server.register(prismaPlugin, { prisma });
+    await server.register(authConfigPlugin, {
+      env: makeTestEnv({ CONFIG_ENCRYPTION_KEY: KEY_B64, AUTH_STRICT_BOOT: true }),
+    });
+    created.push(server);
+
+    expect(server.authConfig.current.mode).toBe('oidc');
   });
 });

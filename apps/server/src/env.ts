@@ -62,6 +62,20 @@ export const envSchema = z
         .default('false')
         .transform((value) => value === 'true'),
     ),
+    // Opt-in defense-in-depth: when a previously-configured deployment can no
+    // longer decrypt its stored auth secret (CONFIG_ENCRYPTION_KEY missing,
+    // wrong, or rotated), the default is to fail *safe* to mode=disabled — which
+    // also opens /api to an anonymous ADMIN. With AUTH_STRICT_BOOT=true the
+    // server instead refuses to boot, so RECOVERY_DISABLE_AUTH stays the only
+    // deliberate path to an open API. Left case-sensitive like the other
+    // security break-glass flag above (type it exactly).
+    AUTH_STRICT_BOOT: z.preprocess(
+      emptyToUndefined,
+      z
+        .enum(['true', 'false'])
+        .default('false')
+        .transform((value) => value === 'true'),
+    ),
   })
   .transform((env) => ({ ...env, AUTH_MODE: env.AUTH_MODE ?? ('disabled' as const) }));
 

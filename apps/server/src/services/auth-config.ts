@@ -110,10 +110,21 @@ export function seedFromEnv(env: Env): AuthConfigUpdate | null {
   };
 }
 
+/**
+ * Minimal structured-logger surface (satisfied by pino / `fastify.log`) so
+ * security-relevant boot warnings go through the configured logger — honouring
+ * `LOG_LEVEL` and JSON aggregation — instead of `console.warn`, which bypasses
+ * both. Injected as an optional dependency so unit tests can omit it.
+ */
+export interface AuthConfigLogger {
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
 export class AuthConfigService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly key: Buffer | null,
+    private readonly logger?: AuthConfigLogger,
   ) {}
 
   /**
@@ -134,9 +145,10 @@ export class AuthConfigService {
           // seed a disabled config from the non-secret fields only. This
           // keeps `update()`'s upsert from ever needing `requireKey()`, so it
           // can't throw here — boot must fail safe, never crash.
-          console.warn(
-            '[auth-config] OIDC env configuration present but CONFIG_ENCRYPTION_KEY is not set ' +
-              '— seeded as disabled; set the key and configure authentication in Settings.',
+          this.logger?.warn(
+            { event: 'auth_config.seeded_disabled_no_key' },
+            'OIDC env configuration present but CONFIG_ENCRYPTION_KEY is not set — seeded as ' +
+              'disabled; set the key and configure authentication in Settings.',
           );
           const { clientSecret: _clientSecret, ...withoutSecret } = seed;
           await this.update({ ...withoutSecret, mode: 'disabled' }, null);
