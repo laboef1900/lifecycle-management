@@ -15,7 +15,7 @@ interface PrismaPluginOptions {
   connectionString?: string;
 }
 
-const prismaPlugin: FastifyPluginAsync<PrismaPluginOptions> = async (fastify, opts) => {
+const prismaPluginFn: FastifyPluginAsync<PrismaPluginOptions> = async (fastify, opts) => {
   const client =
     opts.prisma ??
     new PrismaClient({
@@ -36,4 +36,4 @@ const prismaPlugin: FastifyPluginAsync<PrismaPluginOptions> = async (fastify, op
   });
 };
 
-export default fp(prismaPlugin, { name: 'prisma' });
+export const prismaPlugin = fp(prismaPluginFn, { name: 'prisma' });

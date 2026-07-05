@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { encrypt, loadKey } from '../../crypto/secret-box.js';
-import { prisma } from '../../__tests__/setup.js';
-import { makeOidcTestEnv, makeTestEnv } from '../../__tests__/test-helpers.js';
+import { encrypt, loadKey } from '../crypto/secret-box.js';
+import { prisma } from './setup.js';
+import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
 import {
   AuthConfigService,
   AuthSecretDecryptError,
   type EffectiveAuthConfig,
-} from '../auth-config.js';
+} from '../services/auth-config.js';
 
 const KEY = loadKey(Buffer.alloc(32, 7).toString('base64'));
 const WRONG_KEY = loadKey(Buffer.alloc(32, 9).toString('base64'));

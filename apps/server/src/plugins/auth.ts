@@ -74,7 +74,7 @@ export function authStartupWarnings(
   return warnings;
 }
 
-const authPlugin: FastifyPluginAsync = async (fastify) => {
+const authPluginFn: FastifyPluginAsync = async (fastify) => {
   // No global secret: login-state cookies are self-signed with the in-house
   // HMAC helper (login-state-signer.ts) using
   // fastify.authConfig.current.signingSecret at request time, so the secret
@@ -110,4 +110,7 @@ const authPlugin: FastifyPluginAsync = async (fastify) => {
   });
 };
 
-export default fp(authPlugin, { name: 'auth', dependencies: ['prisma', 'auth-config'] });
+export const authPlugin = fp(authPluginFn, {
+  name: 'auth',
+  dependencies: ['prisma', 'auth-config'],
+});

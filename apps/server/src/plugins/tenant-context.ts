@@ -13,7 +13,7 @@ export const DEFAULT_TENANT_ID = 'default';
  * Resolves the request tenant from the authenticated principal (auth plugin
  * runs first). v1 is single-tenant: every user row carries tenant 'default'.
  */
-const tenantContextPlugin: FastifyPluginAsync = async (fastify) => {
+const tenantContextPluginFn: FastifyPluginAsync = async (fastify) => {
   fastify.decorateRequest('tenantId', '');
 
   fastify.addHook('onRequest', async (request) => {
@@ -21,4 +21,7 @@ const tenantContextPlugin: FastifyPluginAsync = async (fastify) => {
   });
 };
 
-export default fp(tenantContextPlugin, { name: 'tenant-context', dependencies: ['auth'] });
+export const tenantContextPlugin = fp(tenantContextPluginFn, {
+  name: 'tenant-context',
+  dependencies: ['auth'],
+});

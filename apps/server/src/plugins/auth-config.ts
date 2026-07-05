@@ -80,7 +80,10 @@ const SINGLETON_ID = 'singleton';
  *     here would immediately hit the same undecryptable row and crash boot
  *     outside the try/catch above, so `current` is instead updated in memory.
  */
-const authConfigPlugin: FastifyPluginAsync<AuthConfigPluginOptions> = async (fastify, { env }) => {
+const authConfigPluginFn: FastifyPluginAsync<AuthConfigPluginOptions> = async (
+  fastify,
+  { env },
+) => {
   const key = env.CONFIG_ENCRYPTION_KEY ? loadKey(env.CONFIG_ENCRYPTION_KEY) : null;
   const service = new AuthConfigService(fastify.prisma, key, fastify.log);
 
@@ -190,4 +193,7 @@ const authConfigPlugin: FastifyPluginAsync<AuthConfigPluginOptions> = async (fas
   fastify.decorate('authConfig', state);
 };
 
-export default fp(authConfigPlugin, { name: 'auth-config', dependencies: ['prisma'] });
+export const authConfigPlugin = fp(authConfigPluginFn, {
+  name: 'auth-config',
+  dependencies: ['prisma'],
+});

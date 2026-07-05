@@ -2,8 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { encrypt, generateSecret, loadKey } from '../crypto/secret-box.js';
-import authConfigPlugin, { AuthConfigStrictBootError } from '../plugins/auth-config.js';
-import prismaPlugin from '../plugins/prisma.js';
+import { authConfigPlugin, AuthConfigStrictBootError } from '../plugins/auth-config.js';
+import { prismaPlugin } from '../plugins/prisma.js';
 import { AuthConfigService } from '../services/auth-config.js';
 import { prisma } from './setup.js';
 import { makeTestEnv } from './test-helpers.js';
