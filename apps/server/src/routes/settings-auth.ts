@@ -1,15 +1,15 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 
 import { authConfigTestSchema, authConfigUpdateSchema } from '@lcm/shared';
-import type { AuthConfigResponse, AuthConfigTestResult } from '@lcm/shared';
+import type {
+  AuthConfigResponse,
+  AuthConfigTestResult,
+  RotateSigningSecretResponse,
+} from '@lcm/shared';
 
 import { testDiscovery } from '../plugins/oidc.js';
 import { AuthSecretDecryptError } from '../services/auth-config.js';
 import { ForbiddenError, UnprocessableError } from '../services/errors.js';
-
-interface RotateSigningSecretResponse {
-  rotated: true;
-}
 
 /**
  * Defense in depth only: `AuthConfigService.update()` regenerates any

@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { ApiErrorBody } from '../plugins/error-handler.js';
+
+import type { ApiErrorBody } from '@lcm/shared';
 
 export const healthRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/healthz', async () => ({ status: 'ok' }));

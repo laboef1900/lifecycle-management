@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import * as client from 'openid-client';
 
-import type { AuthMeResponse } from '@lcm/shared';
+import type { AuthMeResponse, LoginErrorCode } from '@lcm/shared';
 
 import { sessionCookieName } from '../plugins/auth.js';
 import { signLoginState, verifyLoginState } from '../plugins/login-state-signer.js';
@@ -16,14 +16,6 @@ interface LoginState {
   nonce: string;
   verifier: string;
 }
-
-type LoginErrorCode =
-  | 'login_failed'
-  | 'state_mismatch'
-  | 'idp_error'
-  | 'access_denied'
-  | 'idp_unavailable'
-  | 'scheme_mismatch';
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
   const sessions = new SessionService(fastify.prisma);

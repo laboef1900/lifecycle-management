@@ -2,15 +2,9 @@ import type { FastifyError, FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import { z, ZodError } from 'zod';
 
-import { ServiceError } from '../services/errors.js';
+import type { ApiErrorBody } from '@lcm/shared';
 
-export interface ApiErrorBody {
-  error: {
-    code: string;
-    message: string;
-    details?: unknown;
-  };
-}
+import { ServiceError } from '../services/errors.js';
 
 const errorHandlerPlugin: FastifyPluginAsync = async (fastify) => {
   fastify.setErrorHandler((error: FastifyError, request, reply) => {

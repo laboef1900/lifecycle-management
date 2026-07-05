@@ -1,45 +1,38 @@
 import type {
+  ApiErrorBody,
   AuthConfigTest,
-  AuthConfigTestResult,
   AuthConfigUpdate,
-  ClusterCreateInput,
   ClusterSettingsInput,
-  ClusterUpdateInput,
-  HostState,
   TenantSettings,
 } from '@lcm/shared';
 import {
   authConfigResponseSchema,
+  authConfigTestResultSchema,
+  capacityRowInputSchema,
   categoryResponseSchema,
+  clusterCreateInputSchema,
   clusterResponseSchema,
   clusterSettingsResponseSchema,
+  clusterUpdateInputSchema,
   forecastResponseSchema,
+  hostCreateInputSchema,
   hostLifecycleEventResponseSchema,
+  hostReplacementCreateInputSchema,
   hostReplacementResponseSchema,
   hostResponseSchema,
+  hostTransitionInputSchema,
+  hostUpdateInputSchema,
+  isApiErrorBody,
+  itemAllocationRowInputSchema,
+  itemCreateInputSchema,
   itemResponseSchema,
+  itemUpdateInputSchema,
   paginatedSchema,
+  rotateSigningSecretResponseSchema,
+  scenarioSchema,
   tenantSettingsResponseSchema,
 } from '@lcm/shared';
 import { z } from 'zod';
-
-/**
- * Wire shape of scenarioSchema: Zod's `monthOnly.optional()` transforms a
- * `YYYY-MM` string to a Date, so the inferred type's `startMonth` is `Date`.
- * On the wire we send the original `YYYY-MM` string.
- */
-export type ScenarioWire =
-  | { kind: 'lose_hosts'; count: number }
-  | { kind: 'add_vms'; count: number; sizeGb: number; startMonth?: string }
-  | { kind: 'delay_procurement'; months: number };
-
-export interface ApiErrorBody {
-  error: {
-    code: string;
-    message: string;
-    details?: unknown;
-  };
-}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -116,131 +109,23 @@ export function describeApiError(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
 
-function isApiErrorBody(value: unknown): value is ApiErrorBody {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as { error?: { code?: unknown; message?: unknown } };
-  return (
-    typeof candidate.error === 'object' &&
-    candidate.error !== null &&
-    typeof candidate.error.code === 'string' &&
-    typeof candidate.error.message === 'string'
-  );
-}
-
 // ---------- Wire body types ----------
 
-/**
- * Wire shape of clusterCreateInputSchema: a Zod-parsed ClusterCreateInput has
- * a real Date for baselineDate, but JSON.stringify serializes that to an ISO
- * string. POST bodies must send the original wire shape (YYYY-MM-DD).
- */
-export type ClusterCreateInputWire = Omit<ClusterCreateInput, 'baselineDate'> & {
-  baselineDate: string;
-};
-
-/**
- * Wire shape of clusterUpdateInputSchema. Same Date→string translation as
- * ClusterCreateInputWire. All fields optional; at least one must be present
- * (server-side .refine enforces this).
- */
-export type ClusterUpdateInputWire = Omit<ClusterUpdateInput, 'baselineDate'> & {
-  baselineDate?: string;
-};
-
-export interface HostCreateInputWire {
-  name: string;
-  description?: string;
-  commissionedAt: string;
-  decommissionedAt?: string | null;
-  capacities: Array<{ metricTypeKey: string; effectiveFrom: string; amount: number }>;
-  serialNumber?: string | null;
-  vendor?: string | null;
-  model?: string | null;
-  purchasedAt?: string | null;
-  warrantyEndsAt?: string | null;
-  eolAt?: string | null;
-  runPastEol?: boolean;
-}
-
-export interface HostUpdateInputWire {
-  name?: string;
-  description?: string | null;
-  commissionedAt?: string;
-  decommissionedAt?: string | null;
-  serialNumber?: string | null;
-  vendor?: string | null;
-  model?: string | null;
-  purchasedAt?: string | null;
-  warrantyEndsAt?: string | null;
-  eolAt?: string | null;
-  runPastEol?: boolean;
-}
-
-export interface CapacityAppendInputWire {
-  metricTypeKey: string;
-  effectiveFrom: string;
-  amount: number;
-}
-
-export type ItemCreateInputWire =
-  | {
-      kind: 'application';
-      name: string;
-      category: string;
-      description?: string;
-      effectiveDate: string;
-      endedAt?: string | null;
-      allocations: Array<{ metricTypeKey: string; effectiveFrom: string; amount: number }>;
-    }
-  | {
-      kind: 'event';
-      name: string;
-      category: string;
-      description?: string;
-      effectiveDate: string;
-      metricTypeKey: string;
-      consumptionDelta?: number | null;
-      capacityDelta?: number | null;
-    };
-
-export interface ItemUpdateInputWire {
-  name?: string;
-  category?: string;
-  description?: string | null;
-  effectiveDate?: string;
-  endedAt?: string | null;
-  metricTypeKey?: string;
-  consumptionDelta?: number | null;
-  capacityDelta?: number | null;
-}
-
-export interface ItemAllocationAppendInputWire {
-  metricTypeKey: string;
-  effectiveFrom: string;
-  amount: number;
-}
-
-/**
- * Wire shape of hostTransitionInputSchema. The parsed type has a Date for
- * occurredAt, but the server's dateOnly schema expects 'YYYY-MM-DD' on the
- * wire — matches HostCreateInputWire.commissionedAt handling.
- */
-export interface HostTransitionInputWire {
-  toState: HostState;
-  occurredAt: string;
-  note?: string;
-}
-
-/**
- * Wire shape of hostReplacementCreateInputSchema. Same Date→string translation
- * for swappedAt.
- */
-export interface HostReplacementCreateInputWire {
-  oldHostId: string;
-  newHostId: string;
-  swappedAt: string;
-  reason?: string;
-}
+// Derived directly from the shared input schemas via `z.input`, which yields the
+// PRE-transform (wire) shape — e.g. `dateOnly`/`monthOnly` are `string` on input
+// but `Date` after parsing. This keeps the request bodies in lockstep with the
+// server's Zod contracts instead of hand-maintaining parallel types.
+export type ScenarioWire = z.input<typeof scenarioSchema>;
+export type ClusterCreateInputWire = z.input<typeof clusterCreateInputSchema>;
+export type ClusterUpdateInputWire = z.input<typeof clusterUpdateInputSchema>;
+export type HostCreateInputWire = z.input<typeof hostCreateInputSchema>;
+export type HostUpdateInputWire = z.input<typeof hostUpdateInputSchema>;
+export type CapacityAppendInputWire = z.input<typeof capacityRowInputSchema>;
+export type ItemCreateInputWire = z.input<typeof itemCreateInputSchema>;
+export type ItemUpdateInputWire = z.input<typeof itemUpdateInputSchema>;
+export type ItemAllocationAppendInputWire = z.input<typeof itemAllocationRowInputSchema>;
+export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
+export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
 
 // ---------- Query string helper ----------
 
@@ -426,14 +311,17 @@ export const api = {
           authConfigResponseSchema,
         ),
       test: (input: AuthConfigTest) =>
-        request<AuthConfigTestResult>('/api/settings/auth/test', {
-          method: 'POST',
-          body: JSON.stringify(input),
-        }),
+        request(
+          '/api/settings/auth/test',
+          { method: 'POST', body: JSON.stringify(input) },
+          authConfigTestResultSchema,
+        ),
       rotateSigningSecret: () =>
-        request<{ rotated: boolean }>('/api/settings/auth/rotate-signing-secret', {
-          method: 'POST',
-        }),
+        request(
+          '/api/settings/auth/rotate-signing-secret',
+          { method: 'POST' },
+          rotateSigningSecretResponseSchema,
+        ),
     },
   },
 };
