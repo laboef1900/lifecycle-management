@@ -92,7 +92,7 @@ export const settingsAuthRoutes: FastifyPluginAsync = async (fastify) => {
 
       if (!issuerUrl || !clientId || !clientSecret) {
         throw new UnprocessableError(
-          'TEST_REQUIRED',
+          'INCOMPLETE_OIDC_CONFIG',
           'Issuer URL, client ID, and client secret are all required to enable OIDC authentication.',
         );
       }

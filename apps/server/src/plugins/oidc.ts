@@ -1,3 +1,6 @@
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+
 import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import * as client from 'openid-client';
@@ -57,12 +60,79 @@ export function sanitizeDiscoveryError(err: unknown, clientSecret: string | null
 }
 
 /**
+ * True when an IP literal is loopback, private (RFC1918 / ULA), link-local
+ * (incl. the 169.254.169.254 cloud metadata endpoint), carrier-grade NAT, or
+ * the unspecified/"this host" address — i.e. an address the bootstrap window
+ * must not be allowed to probe. Anything unrecognized (a real public IP) is
+ * false. Malformed literals are treated as denied (fail closed).
+ */
+export function isPrivateAddress(ip: string): boolean {
+  const kind = isIP(ip);
+  if (kind === 4) return isPrivateIpv4(ip);
+  if (kind === 6) return isPrivateIpv6(ip.toLowerCase());
+  return true;
+}
+
+function isPrivateIpv4(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+    return true;
+  const [a, b] = parts as [number, number, number, number];
+  if (a === 0 || a === 127) return true; // "this host" / loopback
+  if (a === 10) return true; // private
+  if (a === 172 && b >= 16 && b <= 31) return true; // private
+  if (a === 192 && b === 168) return true; // private
+  if (a === 169 && b === 254) return true; // link-local (incl. cloud metadata)
+  if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
+  return false;
+}
+
+function isPrivateIpv6(ip: string): boolean {
+  if (ip === '::1' || ip === '::') return true; // loopback / unspecified
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip); // IPv4-mapped
+  if (mapped?.[1]) return isPrivateIpv4(mapped[1]);
+  if (ip.startsWith('fc') || ip.startsWith('fd')) return true; // unique-local fc00::/7
+  if (/^fe[89ab]/.test(ip)) return true; // link-local fe80::/10
+  return false;
+}
+
+/**
+ * SSRF guard for the bootstrap window: resolves an issuer URL's host and
+ * reports whether it targets an internal address. IP literals are checked
+ * directly; hostnames are resolved and denied if ANY resolved address is
+ * internal. Uncertainty (unparseable URL, resolution failure) returns false so
+ * discovery fails on its own with a network error rather than a misleading
+ * "private address" message — no internal service is reached either way.
+ */
+export async function issuerTargetsInternalAddress(issuerUrl: string): Promise<boolean> {
+  let host: string;
+  try {
+    host = new URL(issuerUrl).hostname.replace(/^\[|\]$/g, '');
+  } catch {
+    return false;
+  }
+  if (isIP(host)) return isPrivateAddress(host);
+  try {
+    const results = await lookup(host, { all: true });
+    return results.some((r) => isPrivateAddress(r.address));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * One-shot discovery attempt for the settings UI's "Test connection" button
  * and the save-time enable gate. Mirrors the exact `client.discovery()` call
  * shape (and `allowInsecure` handling) used by the background `tryDiscover()`
  * loop below, but is otherwise completely decoupled from it: no retry loop,
  * no shared/plugin state is read or written, and nothing is persisted. Purely
  * reports whether the given, caller-supplied config can currently discover.
+ *
+ * SSRF hardening: while auth is disabled the /test and save routes are open to
+ * any network caller, so in production (`allowInsecure=false`) a private,
+ * loopback, or link-local issuer host is rejected before any request is made,
+ * closing the internal-service-probe surface. The deny-list is gated off under
+ * `allowInsecure` (dev/test, which points at http://127.0.0.1 issuers).
  */
 export async function testDiscovery(input: {
   issuerUrl: string;
@@ -70,6 +140,13 @@ export async function testDiscovery(input: {
   clientSecret: string;
   allowInsecure: boolean;
 }): Promise<AuthConfigTestResult> {
+  if (!input.allowInsecure && (await issuerTargetsInternalAddress(input.issuerUrl))) {
+    return {
+      ok: false,
+      error:
+        'The issuer host resolves to a private, loopback, or link-local address, which is not permitted.',
+    };
+  }
   try {
     const options = input.allowInsecure ? { execute: [client.allowInsecureRequests] } : undefined;
     await client.discovery(

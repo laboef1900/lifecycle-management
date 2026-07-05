@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import oidcPlugin, {
   discoveryBackoffMs,
+  isPrivateAddress,
+  issuerTargetsInternalAddress,
   sanitizeDiscoveryError,
   testDiscovery,
 } from '../plugins/oidc.js';
@@ -414,6 +416,66 @@ describe('testDiscovery', () => {
     expect(result.error).toEqual(expect.any(String));
     expect(result.error).not.toHaveLength(0);
     expect(result.error).not.toContain('lcm-test-distinctive-secret');
+  });
+
+  it('rejects a private/loopback issuer host before any request when allowInsecure=false (#125 SSRF)', async () => {
+    const result = await testDiscovery({
+      issuerUrl: 'https://127.0.0.1/oidc',
+      clientId: 'lcm-test',
+      clientSecret: 'lcm-test-distinctive-secret',
+      allowInsecure: false,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/private, loopback, or link-local/i);
+  });
+});
+
+describe('isPrivateAddress (#125 SSRF deny-list)', () => {
+  it('flags loopback, private, link-local, CGNAT and unspecified addresses', () => {
+    for (const ip of [
+      '127.0.0.1',
+      '10.1.2.3',
+      '172.16.0.1',
+      '172.31.255.255',
+      '192.168.1.1',
+      '169.254.169.254', // cloud metadata
+      '100.64.0.1', // CGNAT
+      '0.0.0.0',
+      '::1',
+      'fc00::1',
+      'fd12::34',
+      'fe80::1',
+      '::ffff:127.0.0.1', // IPv4-mapped loopback
+    ]) {
+      expect(isPrivateAddress(ip)).toBe(true);
+    }
+  });
+
+  it('does not flag public addresses', () => {
+    for (const ip of ['8.8.8.8', '1.1.1.1', '172.32.0.1', '192.169.0.1', '2606:4700:4700::1111']) {
+      expect(isPrivateAddress(ip)).toBe(false);
+    }
+  });
+
+  it('fails closed for a malformed literal', () => {
+    expect(isPrivateAddress('not-an-ip')).toBe(true);
+  });
+});
+
+describe('issuerTargetsInternalAddress (#125 SSRF deny-list)', () => {
+  it('flags IP-literal internal hosts (v4 and bracketed v6)', async () => {
+    expect(await issuerTargetsInternalAddress('https://127.0.0.1/oidc')).toBe(true);
+    expect(await issuerTargetsInternalAddress('https://[::1]/oidc')).toBe(true);
+  });
+
+  it('flags hostnames that resolve to loopback (localhost)', async () => {
+    expect(await issuerTargetsInternalAddress('https://localhost/oidc')).toBe(true);
+  });
+
+  it('does not flag a public IP literal, and returns false for an unparseable URL', async () => {
+    expect(await issuerTargetsInternalAddress('https://8.8.8.8/oidc')).toBe(false);
+    expect(await issuerTargetsInternalAddress('not a url')).toBe(false);
   });
 });
 

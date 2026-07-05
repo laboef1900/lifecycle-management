@@ -185,6 +185,28 @@ describe('/api/settings/auth', () => {
       expect(get.json().mode).toBe('disabled');
     });
 
+    it('rejects enabling oidc when appBaseUrl is present but issuer/clientId/secret are missing: 422 INCOMPLETE_OIDC_CONFIG (#125)', async () => {
+      const server = await buildDisabledServer();
+
+      const response = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/auth',
+        payload: {
+          mode: 'oidc',
+          appBaseUrl: 'http://127.0.0.1:8080',
+          allowInsecure: true,
+        },
+      });
+
+      // A distinct code (not TEST_REQUIRED) so the UI can tell "fill in the
+      // fields" apart from "the connection test failed".
+      expect(response.statusCode).toBe(422);
+      expect(response.json().error.code).toBe('INCOMPLETE_OIDC_CONFIG');
+
+      const get = await server.inject({ method: 'GET', url: '/api/settings/auth' });
+      expect(get.json().mode).toBe('disabled');
+    });
+
     it('stores a client secret encrypted while switching to (or staying in) disabled mode', async () => {
       const server = await buildDisabledServer();
 
