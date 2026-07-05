@@ -69,8 +69,8 @@ describe('auth routes (oidc mode, mock IdP)', () => {
   }
 
   /** Drives login → IdP authorize → callback; returns the callback response. */
-  async function completeLogin(server: FastifyInstance) {
-    const login = await server.inject({ method: 'GET', url: '/api/auth/login' });
+  async function completeLogin(server: FastifyInstance, loginQuery = '') {
+    const login = await server.inject({ method: 'GET', url: `/api/auth/login${loginQuery}` });
     expect(login.statusCode).toBe(302);
     const authorizeUrl = login.headers.location as string;
     expect(authorizeUrl.startsWith(issuerUrl)).toBe(true);
@@ -121,6 +121,32 @@ describe('auth routes (oidc mode, mock IdP)', () => {
       cookies: { [SESSION_COOKIE]: (sessionCookie as { value: string }).value },
     });
     expect(clusters.statusCode).toBe(200);
+  });
+
+  it('returns to a validated deep-link path after login (#121)', async () => {
+    stubClaims({ email: 'ada@example.com' });
+    const server = await buildReadyServer();
+
+    const callback = await completeLogin(
+      server,
+      `?redirect=${encodeURIComponent('/clusters/abc123?tab=hosts')}`,
+    );
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe('/clusters/abc123?tab=hosts');
+  });
+
+  it('ignores an unsafe (open-redirect) target and falls back to / after login (#121)', async () => {
+    stubClaims({ email: 'ada@example.com' });
+    const server = await buildReadyServer();
+
+    const callback = await completeLogin(
+      server,
+      `?redirect=${encodeURIComponent('//evil.example.com/phish')}`,
+    );
+
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe('/');
   });
 
   it('rejects logins outside the email allowlist without creating a user', async () => {
