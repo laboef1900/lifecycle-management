@@ -43,6 +43,84 @@ architecture context start with the [`README`](../README.md).
    Browse to `http://<host>/` — you should see the dashboard with the four
    reference clusters.
 
+## Container hardening
+
+The production stack already runs every service with `cap_drop: ALL`,
+`no-new-privileges`, nonroot users, and mem/cpu/pid limits (see
+`docker/docker-compose.yml`). The notes below cover the remaining
+supply-chain and root-filesystem hardening (issue #94).
+
+### Verifying image provenance and SBOM
+
+The GHCR images (`lcm-{server,web}`) are built with **SLSA build provenance**
+and an **SPDX SBOM** attached as OCI attestations (`publish-images.yml` sets
+`provenance: true` + `sbom: true`). Inspect them from any host with Docker
+Buildx — no registry write access needed:
+
+```bash
+# Human-readable provenance (build inputs, source commit, workflow)
+docker buildx imagetools inspect ghcr.io/laboef1900/lcm-server:latest \
+  --format '{{ json .Provenance }}'
+
+# SBOM (SPDX package list) for the pulled image
+docker buildx imagetools inspect ghcr.io/laboef1900/lcm-server:latest \
+  --format '{{ json .SBOM }}'
+```
+
+Pin the digest you verified and deploy exactly that: set
+`LCM_IMAGE_TAG` to a release tag, or reference the image by
+`…@sha256:<digest>`.
+
+> **Signature caveat.** These are BuildKit attestations — attached, but **not
+> keyless-signed** by a Fulcio/Rekor identity, so `cosign verify-attestation`
+> has no signature to check yet. To make the images cryptographically
+> verifiable on pull, add a keyless signing step to `publish-images.yml`
+> (`actions/attest-build-provenance`, or `cosign sign`/`cosign attest` with the
+> already-present `id-token: write` permission). Once signed, verify on the
+> deploy host with:
+>
+> ```bash
+> gh attestation verify oci://ghcr.io/laboef1900/lcm-server:latest \
+>   --owner laboef1900
+> ```
+
+### Base-image digest pinning
+
+Done: both Dockerfiles pin their `dhi.io` base images by digest
+(`FROM dhi.io/node:26-alpine@sha256:…`, `dhi.io/nginx:1@sha256:…`), and the
+compose `db` image is pinned the same way. Dependabot's docker ecosystem bumps
+the pins — with the known caveat that `dhi.io` is a private registry without
+configured credentials, so DHI digest bumps are **not** proposed automatically
+(see `CLAUDE.md`); refresh them manually when the base images are updated.
+
+### Read-only root filesystem
+
+`server` runs with `read_only: true` + a `tmpfs` for `/tmp`. `db` and `web` do
+**not** yet, because each needs a verified set of writable `tmpfs` mounts for
+the paths its DHI base image writes to at runtime — and confirming those paths
+requires running the images, which needs authenticated `dhi.io` access. The
+candidate configuration (to validate against the actual images before
+enabling in prod) is:
+
+```yaml
+db: # dhi.io/postgres:18 — data dir stays on the named volume (writable)
+  read_only: true
+  tmpfs:
+    - /tmp
+    - /var/run/postgresql # unix socket
+web: # dhi.io/nginx:1 (distroless)
+  read_only: true
+  tmpfs:
+    - /tmp
+    - /var/cache/nginx
+    - /var/run
+```
+
+Verify a candidate by adding it, running `docker compose up -d`, and confirming
+the container reaches `healthy` (Postgres accepts connections; nginx serves the
+SPA) with no read-only-filesystem errors in the logs. Do **not** enable
+unverified — a missing writable path makes Postgres or nginx fail to boot.
+
 ## Daily operation
 
 | Action                                          | Command                                     |
