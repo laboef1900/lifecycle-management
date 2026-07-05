@@ -58,9 +58,9 @@ function makeEvent(): ItemResponse {
   };
 }
 
-function renderTab(canManage = true): void {
+function renderTab(canManage = true): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  return render(
     <QueryClientProvider client={client}>
       <ItemsTab clusterId="cl-1" canManage={canManage} />
     </QueryClientProvider>,
@@ -139,5 +139,37 @@ describe('ItemsTab', () => {
 
     expect(await screen.findByText('openshift-lab')).toBeInTheDocument();
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('renders the empty state (not an item row) when the cluster has no items', async () => {
+    vi.spyOn(api.items, 'listByCluster').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    expect(
+      await screen.findByText(
+        'Add an application to track its memory allocation, or an event to annotate the forecast.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('No apps or events yet.')).toBeInTheDocument();
+    expect(screen.queryByText('openshift-lab')).not.toBeInTheDocument();
+  });
+
+  it('shows skeleton placeholders while the items query is pending', () => {
+    // A never-resolving fetch keeps the query in its pending state.
+    vi.spyOn(api.items, 'listByCluster').mockReturnValue(new Promise<never>(() => {}));
+    const { container } = renderTab();
+
+    expect(container.querySelector('.animate-shimmer')).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Add an application to track its memory allocation, or an event to annotate the forecast.',
+      ),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('openshift-lab')).not.toBeInTheDocument();
   });
 });

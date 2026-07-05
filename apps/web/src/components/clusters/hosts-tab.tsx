@@ -16,6 +16,8 @@ import { Fragment, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Table,
   TableBody,
@@ -97,11 +99,14 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
         </header>
 
         {hostsQuery.isPending ? (
-          <Skeleton />
+          <div className="space-y-2">
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-12 w-full" />
+          </div>
         ) : hostsQuery.isError ? (
           <ErrorRow message={hostsQuery.error.message} />
         ) : hosts.length === 0 ? (
-          <EmptyRow message="Add a host to start contributing capacity." />
+          <EmptyState title="Add a host to start contributing capacity." />
         ) : (
           <Table>
             <TableHeader>
@@ -389,24 +394,6 @@ function CapacityTimeline({ rows }: { rows: HostResponse['capacities'] }): React
           );
         })}
       </ol>
-    </div>
-  );
-}
-
-function Skeleton(): React.JSX.Element {
-  return (
-    <div className="space-y-2">
-      {Array.from({ length: 2 }).map((_, i) => (
-        <div key={i} className="h-12 animate-pulse rounded bg-muted/60" />
-      ))}
-    </div>
-  );
-}
-
-function EmptyRow({ message }: { message: string }): React.JSX.Element {
-  return (
-    <div className="rounded-[var(--radius)] border border-dashed border-border py-8 text-center text-sm text-muted-foreground">
-      {message}
     </div>
   );
 }

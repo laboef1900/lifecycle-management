@@ -6,6 +6,7 @@ import { FleetClusterGrid } from '@/components/overview/fleet-cluster-grid';
 import { FleetUtilizationHeatmap } from '@/components/overview/fleet-utilization-heatmap';
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { Card } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { api } from '@/lib/api-client';
 import { collectForecastState, earliestOrderByFromFleet } from '@/lib/collect-forecast-state';
 import {
@@ -119,9 +120,10 @@ function OverviewPage(): React.JSX.Element {
       ) : null}
 
       {!isLoading && !isError && clusters.length === 0 ? (
-        <Card className="border-dashed p-8 text-center text-sm text-muted-foreground shadow-none">
-          No clusters yet. Add one from the Clusters page to see fleet overview.
-        </Card>
+        <EmptyState
+          title="No clusters yet."
+          description="Add one from the Clusters page to see fleet overview."
+        />
       ) : null}
 
       {!isLoading && !isError && clusters.length > 0 ? (

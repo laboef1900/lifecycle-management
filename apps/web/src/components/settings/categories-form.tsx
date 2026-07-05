@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
@@ -75,7 +76,10 @@ export function CategoriesForm(): React.JSX.Element {
       </header>
 
       {categoriesQuery.isPending ? (
-        <p className="text-sm text-fg-subtle">Loading…</p>
+        <div className="mb-4 space-y-2">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </div>
       ) : categories.length === 0 ? (
         <p className="text-sm text-fg-subtle">No categories yet. Add one below.</p>
       ) : (
