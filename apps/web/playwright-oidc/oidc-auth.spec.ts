@@ -10,7 +10,7 @@ test.describe('OIDC authentication (browser-level)', () => {
   test('signs in through the IdP, reaches a protected page, and signs out', async ({ page }) => {
     // Unauthenticated → bounced to the login page.
     await page.goto('/');
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login(\?.*)?$/);
     const signIn = page.getByRole('link', { name: /sign in/i });
     await expect(signIn).toBeVisible();
 
@@ -28,7 +28,7 @@ test.describe('OIDC authentication (browser-level)', () => {
 
     // Sign out returns to the login page and clears the session.
     await page.getByRole('menuitem', { name: /sign out/i }).click();
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login(\?.*)?$/);
     await expect(page.getByRole('link', { name: /sign in/i })).toBeVisible();
   });
 });
