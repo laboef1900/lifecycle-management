@@ -5,6 +5,17 @@ const emptyToUndefined = (value: unknown): unknown => (value === '' ? undefined 
 const optionalString = (): z.ZodType<string | undefined> =>
   z.preprocess(emptyToUndefined, z.string().optional());
 
+/**
+ * Treat '' as absent, then lowercase string values, so the closed-set enum vars
+ * (AUTH_MODE, OIDC_DEFAULT_ROLE, OIDC_ALLOW_INSECURE) match case-insensitively —
+ * `AUTH_MODE=OIDC` or `OIDC_ALLOW_INSECURE=TRUE` parse instead of failing. Only
+ * these fixed-vocabulary vars are lowercased; free-form values are untouched.
+ */
+const emptyToLowerUndefined = (value: unknown): unknown => {
+  const normalized = emptyToUndefined(value);
+  return typeof normalized === 'string' ? normalized.toLowerCase() : normalized;
+};
+
 export const envSchema = z
   .object({
     DATABASE_URL: z.url(),
@@ -17,7 +28,7 @@ export const envSchema = z
     CORS_ORIGIN: optionalString(),
     TRUST_PROXY: z.string().default('loopback,uniquelocal'),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
-    AUTH_MODE: z.preprocess(emptyToUndefined, z.enum(['disabled', 'oidc']).optional()),
+    AUTH_MODE: z.preprocess(emptyToLowerUndefined, z.enum(['disabled', 'oidc']).optional()),
     OIDC_ISSUER_URL: z.preprocess(emptyToUndefined, z.url().optional()),
     OIDC_CLIENT_ID: optionalString(),
     OIDC_CLIENT_SECRET: optionalString(),
@@ -30,11 +41,14 @@ export const envSchema = z
     OIDC_SCOPES: z.preprocess(emptyToUndefined, z.string().default('openid profile email')),
     OIDC_ROLE_CLAIM: optionalString(),
     OIDC_ADMIN_VALUES: optionalString(),
-    OIDC_DEFAULT_ROLE: z.preprocess(emptyToUndefined, z.enum(['admin', 'viewer']).default('admin')),
+    OIDC_DEFAULT_ROLE: z.preprocess(
+      emptyToLowerUndefined,
+      z.enum(['admin', 'viewer']).default('admin'),
+    ),
     OIDC_ALLOWED_EMAIL_DOMAINS: optionalString(),
     OIDC_ALLOWED_EMAILS: optionalString(),
     OIDC_ALLOW_INSECURE: z.preprocess(
-      emptyToUndefined,
+      emptyToLowerUndefined,
       z
         .enum(['true', 'false'])
         .default('false')
