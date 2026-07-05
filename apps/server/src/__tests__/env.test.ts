@@ -101,6 +101,21 @@ describe('AUTH_MODE / OIDC configuration', () => {
       parseEnv({ ...base, AUTH_MODE: 'oidc', ...oidcVars, LOGIN_STATE_SECRET: 'short' }),
     ).toThrowError(/LOGIN_STATE_SECRET/);
   });
+
+  it('parses AUTH_MODE case-insensitively (AUTH_MODE=OIDC)', () => {
+    expect(parseEnv({ ...base, AUTH_MODE: 'OIDC', ...oidcVars }).AUTH_MODE).toBe('oidc');
+    expect(parseEnv({ ...base, AUTH_MODE: 'Disabled' }).AUTH_MODE).toBe('disabled');
+  });
+
+  it('parses OIDC_DEFAULT_ROLE case-insensitively', () => {
+    expect(parseEnv({ ...base, OIDC_DEFAULT_ROLE: 'VIEWER' }).OIDC_DEFAULT_ROLE).toBe('viewer');
+    expect(parseEnv({ ...base, OIDC_DEFAULT_ROLE: 'Admin' }).OIDC_DEFAULT_ROLE).toBe('admin');
+  });
+
+  it('parses OIDC_ALLOW_INSECURE case-insensitively (TRUE -> true)', () => {
+    expect(parseEnv({ ...base, OIDC_ALLOW_INSECURE: 'TRUE' }).OIDC_ALLOW_INSECURE).toBe(true);
+    expect(parseEnv({ ...base, OIDC_ALLOW_INSECURE: 'False' }).OIDC_ALLOW_INSECURE).toBe(false);
+  });
 });
 
 describe('CONFIG_ENCRYPTION_KEY / RECOVERY_DISABLE_AUTH', () => {
