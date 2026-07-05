@@ -142,10 +142,12 @@ model Host {
   replacedByLinks HostReplacement[]    @relation("HostReplacementOld")
   replacesLinks   HostReplacement[]    @relation("HostReplacementNew")
 
-  /// Uniqueness is enforced via a partial unique index in the migration —
-  /// Prisma can't express `WHERE serial_number IS NOT NULL` natively, so we
-  /// declare a non-unique index here just to reserve the name.
-  @@index([tenantId, serialNumber], map: "hosts_tenant_serial_unique")
+  /// Per-tenant uniqueness of serial numbers. Declared as a full unique index
+  /// (not the historical partial `WHERE serial_number IS NOT NULL`): Postgres
+  /// treats NULLs as distinct, so NULL-serial rows never conflict under either
+  /// form — they are equivalent here, and `@@unique` is expressible natively so
+  /// schema and DB agree (no more spurious `migrate dev` index drift, #123).
+  @@unique([tenantId, serialNumber], map: "hosts_tenant_serial_unique")
   @@index([clusterId])
   @@index([state])
   @@index([eolAt])
