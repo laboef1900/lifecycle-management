@@ -71,18 +71,17 @@ Pin the digest you verified and deploy exactly that: set
 `LCM_IMAGE_TAG` to a release tag, or reference the image by
 `…@sha256:<digest>`.
 
-> **Signature caveat.** These are BuildKit attestations — attached, but **not
-> keyless-signed** by a Fulcio/Rekor identity, so `cosign verify-attestation`
-> has no signature to check yet. To make the images cryptographically
-> verifiable on pull, add a keyless signing step to `publish-images.yml`
-> (`actions/attest-build-provenance`, or `cosign sign`/`cosign attest` with the
-> already-present `id-token: write` permission). Once signed, verify on the
-> deploy host with:
->
-> ```bash
-> gh attestation verify oci://ghcr.io/laboef1900/lcm-server:latest \
->   --owner laboef1900
-> ```
+**Keyless signature.** On every publish, `publish-images.yml` also signs the
+pushed manifest with `actions/attest-build-provenance` — a keyless Sigstore
+attestation (Fulcio certificate + Rekor transparency-log entry) bound to the
+workflow's OIDC identity, with no long-lived keys held anywhere. Verify it on
+the deploy host before rolling out (the digest that `verify` prints is the one
+to pin):
+
+```bash
+gh attestation verify oci://ghcr.io/laboef1900/lcm-server:latest \
+  --owner laboef1900
+```
 
 ### Base-image digest pinning
 
