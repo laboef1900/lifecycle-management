@@ -68,11 +68,14 @@ const SINGLETON_ID = 'singleton';
  *     without decrypting, instead of calling service.load()/toEffective()
  *     again — those would throw the exact same error again since the
  *     ciphertext is still there by design.
- *  3b. Strict boot (opt-in): if `AUTH_STRICT_BOOT` is set and step 3's decrypt
- *     failure fired, abort boot with `AuthConfigStrictBootError` (before the
- *     force-disable update, leaving the configured row intact) instead of
- *     degrading to the open mode=disabled state — unless `RECOVERY_DISABLE_AUTH`
- *     is also set, which still wins as the deliberate override.
+ *  3b. Strict boot (opt-in): if `AUTH_STRICT_BOOT` is set, step 3's decrypt
+ *     failure fired, AND the row's stored mode is `oidc`, abort boot with
+ *     `AuthConfigStrictBootError` (before the force-disable update, leaving the
+ *     configured row intact) instead of degrading to the open mode=disabled
+ *     state — unless `RECOVERY_DISABLE_AUTH` is also set, which still wins as the
+ *     deliberate override. A row already stored as `disabled` that merely retains
+ *     a leftover encrypted secret degrades normally: failing open is not a
+ *     downgrade there, so refusing boot would be a spurious outage.
  *  4. Break-glass: if `RECOVERY_DISABLE_AUTH` is set, force mode=disabled the
  *     same direct way, warn loudly, and reload — but only re-run
  *     `service.load()` when step 2 actually succeeded at decrypting (a valid
@@ -102,12 +105,19 @@ const authConfigPlugin: FastifyPluginAsync<AuthConfigPluginOptions> = async (fas
       throw err;
     }
     decryptFailed = true;
-    // Opt-in strict boot: refuse to start rather than silently degrade to an
-    // open mode=disabled API. RECOVERY_DISABLE_AUTH still wins as the deliberate
-    // break-glass override. Throw BEFORE the force-disable update so the stored
-    // configured row is left untouched for recovery. Raised outside the guarded
-    // load() (in the catch), so it propagates and aborts boot.
-    if (env.AUTH_STRICT_BOOT && !env.RECOVERY_DISABLE_AUTH) {
+    // A decrypt failure only warrants refusing boot when the STORED mode is
+    // 'oidc' — that is the only case where degrading to mode=disabled is a
+    // genuine downgrade to an open API. A row already stored as 'disabled' that
+    // merely retains a leftover encrypted secret (oidc -> disabled via Settings)
+    // is already closed, so strict boot must not refuse it; it degrades normally.
+    const storedRow = await fastify.prisma.authConfig.findUnique({ where: { id: SINGLETON_ID } });
+    // Opt-in strict boot: refuse to start rather than silently degrade a
+    // configured oidc deployment to an open mode=disabled API. RECOVERY_DISABLE_AUTH
+    // still wins as the deliberate break-glass override. Throw BEFORE the
+    // force-disable update so the stored configured row is left untouched for
+    // recovery. Raised outside the guarded load() (in the catch), so it
+    // propagates and aborts boot.
+    if (storedRow?.mode === 'oidc' && env.AUTH_STRICT_BOOT && !env.RECOVERY_DISABLE_AUTH) {
       fastify.log.fatal(
         { err, event: 'auth_config.strict_boot_refused' },
         'AUTH_STRICT_BOOT is set and the stored auth configuration secret could not be decrypted ' +

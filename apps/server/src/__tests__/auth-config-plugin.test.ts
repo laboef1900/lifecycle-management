@@ -282,6 +282,34 @@ describe('auth-config plugin — AUTH_STRICT_BOOT', () => {
     expect(row!.clientSecretEnc).not.toBeNull();
   });
 
+  it('does not refuse boot for an intentionally-disabled row that still holds an undecryptable secret (#126 F1)', async () => {
+    // oidc -> disabled via Settings leaves clientSecretEnc populated; a later key
+    // rotation makes it undecryptable. The row is already disabled, so failing
+    // open is NOT a downgrade — strict boot must not refuse it.
+    await prisma.authConfig.create({
+      data: {
+        id: 'singleton',
+        mode: 'disabled',
+        clientId: 'legacy',
+        clientSecretEnc: encrypt('super-secret-client-secret', KEY),
+        signingSecretEnc: encrypt(generateSecret(), KEY),
+      },
+    });
+
+    const server = Fastify({ logger: false });
+    server.register(prismaPlugin, { prisma });
+    server.register(authConfigPlugin, {
+      env: makeTestEnv({ CONFIG_ENCRYPTION_KEY: WRONG_KEY_B64, AUTH_STRICT_BOOT: true }),
+    });
+    created.push(server);
+
+    await expect(server.ready()).resolves.toBeDefined();
+    expect(server.authConfig.current.mode).toBe('disabled');
+    // Leftover ciphertext is preserved so restoring the key can recover it.
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.clientSecretEnc).not.toBeNull();
+  });
+
   it('RECOVERY_DISABLE_AUTH overrides strict boot: degrades to disabled instead of crashing', async () => {
     await seedOidcRow();
 
