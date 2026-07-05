@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { prisma } from '../../__tests__/setup.js';
-import { SettingsService } from '../settings.js';
+import { prisma } from './setup.js';
+import { SettingsService } from '../services/settings.js';
 
 const TENANT_ID = 'default';
 

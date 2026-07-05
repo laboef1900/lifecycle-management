@@ -1,9 +1,9 @@
 import { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { prisma } from '../../__tests__/setup.js';
-import { makeCluster } from '../../__tests__/factories.js';
-import { HostLifecycleService } from '../host-lifecycle.js';
+import { prisma } from './setup.js';
+import { makeCluster } from './factories.js';
+import { HostLifecycleService } from '../services/host-lifecycle.js';
 
 let clusterId: string;
 let metricTypeId: string;

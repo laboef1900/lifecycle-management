@@ -6,7 +6,7 @@ import type { ApiErrorBody } from '@lcm/shared';
 
 import { ServiceError } from '../services/errors.js';
 
-const errorHandlerPlugin: FastifyPluginAsync = async (fastify) => {
+const errorHandlerPluginFn: FastifyPluginAsync = async (fastify) => {
   fastify.setErrorHandler((error: FastifyError, request, reply) => {
     if (error instanceof ZodError) {
       request.log.warn({ issues: error.issues }, 'Request validation failed');
@@ -71,4 +71,4 @@ const errorHandlerPlugin: FastifyPluginAsync = async (fastify) => {
   });
 };
 
-export default fp(errorHandlerPlugin, { name: 'error-handler' });
+export const errorHandlerPlugin = fp(errorHandlerPluginFn, { name: 'error-handler' });

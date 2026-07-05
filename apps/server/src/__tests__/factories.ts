@@ -1,3 +1,4 @@
+import type { HostState } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
 const DEFAULT_TENANT = 'default';
@@ -66,6 +67,8 @@ export interface MakeHostOptions {
   metricKey?: string;
   initialCapacity?: { effectiveFrom: Date; amount: number }[];
   tenantId?: string;
+  /** Lifecycle state; omitted uses the schema default (in_service). */
+  state?: HostState;
 }
 
 export async function makeHost(
@@ -88,6 +91,7 @@ export async function makeHost(
       name,
       commissionedAt,
       decommissionedAt: options.decommissionedAt ?? null,
+      ...(options.state !== undefined && { state: options.state }),
       capacities: {
         create: initialCapacity.map((row) => ({
           tenantId,
@@ -192,4 +196,50 @@ export async function makeEvent(
   });
 
   return { id: event.id, title: event.name };
+}
+
+export interface MakeUserOptions {
+  issuer?: string;
+  subject?: string;
+  email?: string | null;
+  displayName?: string | null;
+  role?: 'ADMIN' | 'VIEWER';
+}
+
+export async function makeUser(
+  prisma: PrismaClient,
+  options: MakeUserOptions = {},
+): Promise<{ id: string; email: string | null; role: 'ADMIN' | 'VIEWER' }> {
+  const suffix = nextSuffix();
+  const user = await prisma.user.create({
+    data: {
+      issuer: options.issuer ?? 'https://idp.test',
+      subject: options.subject ?? `sub-${suffix}`,
+      email: options.email === undefined ? `user-${suffix}@example.com` : options.email,
+      displayName: options.displayName ?? null,
+      role: options.role ?? 'ADMIN',
+    },
+  });
+  return { id: user.id, email: user.email, role: user.role };
+}
+
+export interface MakeSessionOptions {
+  userId: string;
+  tokenHash?: string;
+  expiresAt?: Date;
+}
+
+export async function makeSession(
+  prisma: PrismaClient,
+  options: MakeSessionOptions,
+): Promise<{ id: string; tokenHash: string }> {
+  const tokenHash = options.tokenHash ?? `hash-${nextSuffix()}`;
+  const session = await prisma.session.create({
+    data: {
+      userId: options.userId,
+      tokenHash,
+      expiresAt: options.expiresAt ?? new Date(Date.now() + 12 * 60 * 60 * 1000),
+    },
+  });
+  return { id: session.id, tokenHash };
 }

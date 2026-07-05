@@ -9,12 +9,12 @@ import type { PrismaClient } from '@prisma/client';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 
 import type { Env } from './env.js';
-import authConfigPlugin from './plugins/auth-config.js';
-import authPlugin, { authStartupWarnings } from './plugins/auth.js';
-import errorHandlerPlugin from './plugins/error-handler.js';
-import oidcPlugin from './plugins/oidc.js';
-import prismaPlugin from './plugins/prisma.js';
-import tenantContextPlugin from './plugins/tenant-context.js';
+import { authConfigPlugin } from './plugins/auth-config.js';
+import { authPlugin, authStartupWarnings } from './plugins/auth.js';
+import { errorHandlerPlugin } from './plugins/error-handler.js';
+import { oidcPlugin } from './plugins/oidc.js';
+import { prismaPlugin } from './plugins/prisma.js';
+import { tenantContextPlugin } from './plugins/tenant-context.js';
 import { authRoutes } from './routes/auth.js';
 import { categoriesRoutes } from './routes/categories.js';
 import { clusterRoutes } from './routes/clusters.js';

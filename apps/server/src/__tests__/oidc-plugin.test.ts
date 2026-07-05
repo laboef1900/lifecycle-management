@@ -4,10 +4,11 @@ import * as http from 'node:http';
 import { OAuth2Server } from 'oauth2-mock-server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import oidcPlugin, {
+import {
   discoveryBackoffMs,
   isPrivateAddress,
   issuerTargetsInternalAddress,
+  oidcPlugin,
   sanitizeDiscoveryError,
   testDiscovery,
 } from '../plugins/oidc.js';

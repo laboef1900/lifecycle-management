@@ -36,4 +36,16 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
     },
   },
+  {
+    // Plain browser scripts served as static assets (no bundler/module scope),
+    // so declare the browser globals here instead of a file-level eslint-disable.
+    files: ['apps/web/public/*.js'],
+    languageOptions: {
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        localStorage: 'readonly',
+      },
+    },
+  },
 );

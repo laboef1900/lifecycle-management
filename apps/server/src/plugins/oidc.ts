@@ -245,7 +245,7 @@ export async function testDiscovery(input: {
  * — the DB-backed AuthConfig singleton is the source of truth so the settings
  * UI can change it at runtime via `reconfigure()`.
  */
-const oidcPlugin: FastifyPluginAsync = async (fastify) => {
+const oidcPluginFn: FastifyPluginAsync = async (fastify) => {
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   let attempt = 0;
@@ -345,4 +345,4 @@ const oidcPlugin: FastifyPluginAsync = async (fastify) => {
   });
 };
 
-export default fp(oidcPlugin, { name: 'oidc', dependencies: ['auth-config'] });
+export const oidcPlugin = fp(oidcPluginFn, { name: 'oidc', dependencies: ['auth-config'] });

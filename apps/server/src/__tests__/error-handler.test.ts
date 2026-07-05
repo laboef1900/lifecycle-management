@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { buildServer } from '../server.js';
-import errorHandler from '../plugins/error-handler.js';
+import { errorHandlerPlugin as errorHandler } from '../plugins/error-handler.js';
 import {
   ConflictError,
   NotFoundError,
