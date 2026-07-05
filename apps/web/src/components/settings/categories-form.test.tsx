@@ -58,4 +58,11 @@ describe('<CategoriesForm>', () => {
     await userEvent.click(screen.getByRole('button', { name: /remove growth/i }));
     expect(await screen.findByText(/used by 2 item\(s\)/i)).toBeInTheDocument();
   });
+
+  it('shows skeleton placeholders while the categories query is pending', () => {
+    // A never-resolving fetch keeps the query in its pending state.
+    vi.mocked(api.settings.categories.list).mockReturnValue(new Promise<never>(() => {}));
+    const { container } = renderWithClient(<CategoriesForm />);
+    expect(container.querySelector('.animate-shimmer')).toBeInTheDocument();
+  });
 });

@@ -44,9 +44,9 @@ function makeHost(overrides: Partial<HostResponse> = {}): HostResponse {
   };
 }
 
-function renderTab(canManage = true): void {
+function renderTab(canManage = true): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  return render(
     <QueryClientProvider client={client}>
       <HostsTab clusterId="cl-1" canManage={canManage} />
     </QueryClientProvider>,
@@ -102,5 +102,32 @@ describe('HostsTab', () => {
 
     expect(await screen.findByText('esx-01')).toBeInTheDocument();
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('renders the empty state (not a host row) when the cluster has no hosts', async () => {
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    expect(
+      await screen.findByText('Add a host to start contributing capacity.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('No hosts yet.')).toBeInTheDocument();
+    expect(screen.queryByText('esx-01')).not.toBeInTheDocument();
+  });
+
+  it('shows skeleton placeholders while the hosts query is pending', () => {
+    // A never-resolving fetch keeps the query in its pending state.
+    vi.spyOn(api.hosts, 'listByCluster').mockReturnValue(new Promise<never>(() => {}));
+    const { container } = renderTab();
+
+    expect(container.querySelector('.animate-shimmer')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Add a host to start contributing capacity.'),
+    ).not.toBeInTheDocument();
   });
 });
