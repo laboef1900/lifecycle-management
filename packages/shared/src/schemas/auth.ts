@@ -19,3 +19,19 @@ export const authMeResponseSchema = z.object({
 
 export type AuthUser = z.infer<typeof authUserSchema>;
 export type AuthMeResponse = z.infer<typeof authMeResponseSchema>;
+
+/**
+ * Codes the server appends to `/login?error=<code>` when an OIDC login fails.
+ * Shared so the server (which emits them) and the web login page (which maps
+ * each to user-facing copy) can't drift — a new code forces a matching entry
+ * in the web's ERROR_COPY map.
+ */
+export const loginErrorCodeSchema = z.enum([
+  'login_failed',
+  'state_mismatch',
+  'idp_error',
+  'access_denied',
+  'idp_unavailable',
+  'scheme_mismatch',
+]);
+export type LoginErrorCode = z.infer<typeof loginErrorCodeSchema>;

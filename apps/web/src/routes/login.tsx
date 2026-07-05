@@ -2,6 +2,8 @@ import { createFileRoute, redirect } from '@tanstack/react-router';
 import { Activity } from 'lucide-react';
 import { z } from 'zod';
 
+import { type LoginErrorCode, loginErrorCodeSchema } from '@lcm/shared';
+
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 
@@ -9,7 +11,9 @@ const loginSearchSchema = z.object({
   error: z.string().optional(),
 });
 
-const ERROR_COPY: Record<string, string> = {
+// Keyed by the shared LoginErrorCode union so a new server code fails the build
+// here until copy is added, instead of silently degrading to the generic message.
+const ERROR_COPY: Record<LoginErrorCode, string> = {
   login_failed: 'Sign-in failed. Please try again.',
   state_mismatch: 'The sign-in attempt expired or was started in another tab. Please try again.',
   idp_error: 'The identity provider reported an error. Please try again.',
@@ -31,7 +35,12 @@ export const Route = createFileRoute('/login')({
 
 function LoginPage(): React.JSX.Element {
   const { error } = Route.useSearch();
-  const message = error ? (ERROR_COPY[error] ?? ERROR_COPY['login_failed']) : undefined;
+  const parsedError = loginErrorCodeSchema.safeParse(error);
+  const message = parsedError.success
+    ? ERROR_COPY[parsedError.data]
+    : error
+      ? ERROR_COPY.login_failed
+      : undefined;
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4 text-foreground">
       <Card className="w-full max-w-sm p-8">
