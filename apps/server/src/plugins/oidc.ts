@@ -164,6 +164,14 @@ function expandIpv6(
  * internal. Uncertainty (unparseable URL, resolution failure) returns false so
  * discovery fails on its own with a network error rather than a misleading
  * "private address" message — no internal service is reached either way.
+ *
+ * @ai-warning Best-effort, not a hard control: this DNS lookup is separate from
+ * the one openid-client performs when it connects, so a DNS-rebinding attacker
+ * could answer this resolution with a public address and the subsequent
+ * connection with a private one (TOCTOU). Fully closing that would require
+ * pinning resolution and forcing the connection to the vetted IP; here the
+ * residual rebinding risk is accepted as a defence-in-depth limitation of the
+ * bootstrap window.
  */
 export async function issuerTargetsInternalAddress(issuerUrl: string): Promise<boolean> {
   let host: string;
