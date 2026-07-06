@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { LocalUserService, MAX_FAILED_ATTEMPTS } from '../services/local-users.js';
+import { SessionService } from '../services/sessions.js';
 import { prisma } from './setup.js';
 
 const svc = new LocalUserService(prisma);
@@ -42,5 +43,13 @@ describe('LocalUserService', () => {
     expect(await svc.changeOwnPassword(u.id, 'nope-nope-nope', 'newtwelvechars!')).toBe(false);
     expect(await svc.changeOwnPassword(u.id, 'twelvecharsok!', 'newtwelvechars!')).toBe(true);
     expect((await svc.verifyLogin('changer', 'newtwelvechars!')).ok).toBe(true);
+  });
+
+  it('revokes existing sessions when the password changes', async () => {
+    const u = await svc.create({ username: 'revoke', password: 'twelvecharsok!', role: 'ADMIN' });
+    await new SessionService(prisma).create(u.id, 12);
+    expect(await prisma.session.count({ where: { userId: u.id } })).toBe(1);
+    expect(await svc.changeOwnPassword(u.id, 'twelvecharsok!', 'newtwelvechars!')).toBe(true);
+    expect(await prisma.session.count({ where: { userId: u.id } })).toBe(0);
   });
 });

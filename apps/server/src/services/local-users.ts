@@ -60,15 +60,17 @@ export class LocalUserService {
 
     const ok = await verifyPassword(user.passwordHash, password);
     if (!ok) {
-      const attempts = user.failedLoginAttempts + 1;
-      const minutes = lockMinutes(attempts);
-      await this.prisma.user.update({
+      const updated = await this.prisma.user.update({
         where: { id: user.id },
-        data: {
-          failedLoginAttempts: attempts,
-          lockedUntil: minutes > 0 ? new Date(Date.now() + minutes * 60_000) : null,
-        },
+        data: { failedLoginAttempts: { increment: 1 } },
       });
+      const minutes = lockMinutes(updated.failedLoginAttempts);
+      if (minutes > 0) {
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: { lockedUntil: new Date(Date.now() + minutes * 60_000) },
+        });
+      }
       return { ok: false };
     }
 
@@ -128,10 +130,14 @@ export class LocalUserService {
   }
 
   async update(userId: string, input: { disabled?: boolean; role?: UserRole }): Promise<void> {
-    await this.prisma.user.update({ where: { id: userId }, data: input });
     if (input.disabled === true) {
-      await this.prisma.session.deleteMany({ where: { userId } });
+      await this.prisma.$transaction([
+        this.prisma.user.update({ where: { id: userId }, data: input }),
+        this.prisma.session.deleteMany({ where: { userId } }),
+      ]);
+      return;
     }
+    await this.prisma.user.update({ where: { id: userId }, data: input });
   }
 
   async remove(userId: string): Promise<void> {
