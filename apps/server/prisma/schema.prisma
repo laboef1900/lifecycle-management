@@ -295,6 +295,12 @@ model User {
   updatedAt   DateTime  @updatedAt @map("updated_at")
   lastLoginAt DateTime? @map("last_login_at")
 
+  passwordHash        String?   @map("password_hash")
+  passwordUpdatedAt   DateTime? @map("password_updated_at")
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until")
+  disabled            Boolean   @default(false)
+
   tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sessions Session[]
 
