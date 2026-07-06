@@ -1,4 +1,5 @@
 export * from './schemas/auth.js';
+export * from './schemas/auth-local.js';
 export * from './schemas/auth-config.js';
 export * from './schemas/common.js';
 export * from './schemas/pagination.js';

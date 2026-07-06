@@ -7,6 +7,9 @@ export const authUserSchema = z.object({
   role: z.enum(['ADMIN', 'VIEWER']),
 });
 
+export const loginMethodsSchema = z.object({ local: z.boolean(), oidc: z.boolean() });
+export type LoginMethods = z.infer<typeof loginMethodsSchema>;
+
 /**
  * Response of GET /api/auth/me — the SPA's single source of truth.
  * authRequired=false means AUTH_MODE=disabled (app runs unauthenticated).
@@ -14,6 +17,7 @@ export const authUserSchema = z.object({
  */
 export const authMeResponseSchema = z.object({
   authRequired: z.boolean(),
+  loginMethods: loginMethodsSchema.optional(),
   user: authUserSchema.optional(),
 });
 
