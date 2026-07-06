@@ -1,10 +1,12 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import * as client from 'openid-client';
 
+import { changePasswordSchema, localLoginSchema } from '@lcm/shared';
 import type { AuthMeResponse, LoginErrorCode } from '@lcm/shared';
 
 import { sessionCookieName } from '../plugins/auth.js';
 import { signLoginState, verifyLoginState } from '../plugins/login-state-signer.js';
+import { LocalUserService } from '../services/local-users.js';
 import { SessionService } from '../services/sessions.js';
 import { UserService, isEmailAllowed } from '../services/users.js';
 
@@ -54,6 +56,7 @@ export function safeRedirectPath(value: unknown): string | null {
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
   const sessions = new SessionService(fastify.prisma);
   const users = new UserService(fastify.prisma);
+  const localUsers = new LocalUserService(fastify.prisma);
   // Mutable accessor: authConfig.current can be reloaded at runtime (settings
   // UI save → reconfigure()), so every request must read the CURRENT config
   // rather than a value captured once at plugin-registration time.
@@ -220,6 +223,47 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.redirect(safeRedirectPath(login.redirect) ?? '/');
   });
 
+  fastify.post('/auth/local/login', { config: authRateLimit }, async (request, reply) => {
+    const current = cfg();
+    if (current.mode === 'disabled') return reply.code(404).send();
+    const body = localLoginSchema.parse(request.body);
+    const result = await localUsers.verifyLogin(body.username, body.password);
+    if (!result.ok) {
+      request.log.warn({ username: body.username }, 'Local login failed');
+      return reply.code(401).send({ error: 'invalid_credentials' });
+    }
+    const session = await sessions.create(result.user.id, current.sessionTtlHours);
+    const base = current.appBaseUrl;
+    const secure = base ? base.startsWith('https://') : request.protocol === 'https';
+    reply.setCookie(sessionCookieName(current), session.token, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure,
+      expires: session.expiresAt,
+    });
+    return reply.code(204).send();
+  });
+
+  // NOTE: this route is under `/api/auth/*`, which the auth plugin's onRequest
+  // gate (plugins/auth.ts) deliberately leaves open — `request.user` is NEVER
+  // populated there for auth-flow routes, so "am I logged in" must be resolved
+  // locally from the session cookie, exactly like /auth/me and /auth/logout do.
+  fastify.post('/auth/local/password', async (request, reply) => {
+    const current = cfg();
+    const token = request.cookies[sessionCookieName(current)];
+    const caller = token === undefined ? null : await sessions.findUserByToken(token);
+    if (!caller) return reply.code(401).send({ error: 'unauthenticated' });
+    const body = changePasswordSchema.parse(request.body);
+    const ok = await localUsers.changeOwnPassword(
+      caller.id,
+      body.currentPassword,
+      body.newPassword,
+    );
+    if (!ok) return reply.code(422).send({ error: 'invalid_credentials' });
+    return reply.code(204).send();
+  });
+
   fastify.post('/auth/logout', async (request, reply) => {
     const current = cfg();
     const cookieName = sessionCookieName(current);
@@ -232,12 +276,17 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get('/auth/me', async (request): Promise<AuthMeResponse> => {
     const current = cfg();
-    if (current.mode !== 'oidc') return { authRequired: false };
+    if (current.mode === 'disabled') return { authRequired: false };
+    const loginMethods = {
+      local: (await localUsers.enabledCount()) > 0,
+      oidc: current.mode === 'oidc' && fastify.oidc.config !== null,
+    };
     const token = request.cookies[sessionCookieName(current)];
     const user = token === undefined ? null : await sessions.findUserByToken(token);
-    if (!user) return { authRequired: true };
+    if (!user) return { authRequired: true, loginMethods };
     return {
       authRequired: true,
+      loginMethods,
       user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
     };
   });
