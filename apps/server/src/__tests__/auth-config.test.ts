@@ -385,6 +385,14 @@ describe('AuthConfigService.update', () => {
   });
 });
 
+describe('AuthConfigService.toEffective', () => {
+  it('maps a local-mode row to effective mode "local"', async () => {
+    const svc = new AuthConfigService(prisma, null);
+    const row = await prisma.authConfig.create({ data: { id: 'singleton', mode: 'local' } });
+    expect(svc.toEffective(row).mode).toBe('local');
+  });
+});
+
 describe('AuthConfigService.sanitize', () => {
   it('never includes secret values', () => {
     const svc = new AuthConfigService(prisma, KEY);
