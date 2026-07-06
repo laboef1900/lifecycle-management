@@ -26,6 +26,7 @@
     "@fastify/sensible": "^6.0.4",
     "@fastify/under-pressure": "^9.0.3",
     "@lcm/shared": "workspace:*",
+    "@node-rs/argon2": "^2.0.2",
     "@prisma/adapter-pg": "7.8.0",
     "@prisma/client": "^7.8.0",
     "dotenv": "^17.4.2",
