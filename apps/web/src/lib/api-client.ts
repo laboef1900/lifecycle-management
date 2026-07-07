@@ -109,6 +109,23 @@ export function describeApiError(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
 
+/**
+ * Local admin login: POSTs username/password to the local-auth endpoint. On
+ * success the server sets the session cookie and responds 204; any other
+ * status (401 bad credentials, etc.) resolves to false rather than throwing,
+ * so the caller can show one generic "invalid credentials" message without
+ * distinguishing wrong-username from wrong-password.
+ */
+export async function localLogin(username: string, password: string): Promise<boolean> {
+  const res = await fetch('/api/auth/local/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  return res.status === 204;
+}
+
 // ---------- Wire body types ----------
 
 // Derived directly from the shared input schemas via `z.input`, which yields the
