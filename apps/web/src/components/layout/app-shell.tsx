@@ -16,12 +16,12 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 export function AppShell(): React.JSX.Element {
   return (
     <MobileNavProvider>
-      <div className="flex h-full min-h-screen flex-col bg-background text-foreground">
+      <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
         <Header />
         <div className="flex min-h-0 flex-1">
           <Sidebar />
           <MobileSidebarSheet />
-          <main className="min-w-0 flex-1 overflow-x-hidden">
+          <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
             <div className="mx-auto w-full max-w-screen-2xl px-4 py-6 sm:px-6">
               <Outlet />
             </div>
