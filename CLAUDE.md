@@ -80,7 +80,7 @@ Design tokens live in `apps/web/src/styles.css` (Tailwind v4 CSS-first `@theme` 
 
 ### 1. API & Configuration (Secure by Default)
 
-- **Authentication:** OIDC only (`openid-client`) — there are no local passwords, so no bcrypt/argon2. Two modes: `disabled` (default; every request gets an anonymous ADMIN principal) and `oidc` (all `/api/*` except `/api/auth/*` require a valid session cookie; `/healthz` and `/readyz` are never gated).
+- **Authentication:** Three modes: `disabled` (default; every request gets an anonymous ADMIN principal), `local` (username + password admin accounts, argon2id-hashed via `@node-rs/argon2` — still no bcrypt), and `oidc` (`openid-client`, IdP-backed). In both `local` and `oidc`, all `/api/*` except `/api/auth/*` require a valid session cookie; `/healthz` and `/readyz` are never gated.
 - **Roles:** `ADMIN`/`VIEWER` are stored on `users.role`, but route-level role enforcement is deferred in v1 — do NOT assume RBAC exists. The `settings/auth` endpoints are admin-gated once `oidc` mode is active. Restrict access via `OIDC_ALLOWED_EMAIL_DOMAINS`/`OIDC_ALLOWED_EMAILS` or IdP-side assignment.
 - **Sessions:** opaque tokens stored SHA-256-hashed (`Session.tokenHash`); cookie `lcm_session` (or `__Host-lcm_session` on https); TTL `SESSION_TTL_HOURS` (default 12). Revoke by deleting the `sessions` row.
 - **Secrets at rest:** the OIDC client secret and login-state signing secret are AES-GCM-encrypted under `CONFIG_ENCRYPTION_KEY` (`src/crypto/secret-box.ts`). A missing/wrong key **fails safe** — auth forces `mode=disabled` and preserves the encrypted columns. Never "fix" decryption errors by wiping columns; restoring the correct key recovers the config.
