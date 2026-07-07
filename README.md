@@ -20,7 +20,6 @@ A pnpm monorepo with three runtime services:
 - **Postgres 18** holds the lone source of truth. Schema-only multi-tenancy
   (`tenant_id` columns everywhere). OIDC authentication is available, off by
   default — see [`docs/operations.md`](docs/operations.md).
-  (The dev compose still uses `postgres:16-alpine` — see note below.)
 
 ## Prerequisites
 
@@ -34,7 +33,7 @@ A pnpm monorepo with three runtime services:
 # 1. install
 pnpm install
 
-# 2. bring up the dev DB (Postgres 16 with a named volume)
+# 2. bring up the dev DB (Postgres 18 with a named volume)
 pnpm db:dev:up
 
 # 3. apply migrations and seed the four reference clusters
@@ -86,11 +85,11 @@ All three containers run on [Docker Hardened Images](https://www.docker.com/prod
 
 | Container | Image                                  | Size    | Notes                                                                                                                             |
 | --------- | -------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `db`      | `dhi.io/postgres:18`                   | 1.14 GB | Hardened Postgres 18. Drop-in for postgres:16-alpine apart from `PGDATA=/var/lib/postgresql/18/data`.                             |
+| `db`      | `dhi.io/postgres:18`                   | 1.14 GB | Hardened Postgres 18. `PGDATA=/var/lib/postgresql/18/data` (versioned path — the named volume mounts there).                      |
 | `server`  | `ghcr.io/laboef1900/lcm-server:latest` | 604 MB  | Distroless Node 26 runtime; multi-stage build, Node entrypoint replaces a shell script. Was 1.6 GB on the unhardened base (-62%). |
 | `web`     | `ghcr.io/laboef1900/lcm-web:latest`    | 70 MB   | Distroless nginx; listens on container-side `:8080` (nonroot can't bind 80). Was 94 MB on `nginx:alpine` (-25%).                  |
 
-> **Dev DB**: `docker/docker-compose.dev.yml` still uses `postgres:16-alpine`. The dev/prod parity gap is intentional for now — dev volumes are throwaway, and we haven't needed PG18-only features yet. To match prod exactly, bump that image and recreate the dev volume.
+> **Dev DB**: `docker/docker-compose.dev.yml` uses the official `postgres:18-alpine` rather than the hardened `dhi.io/postgres:18` — same major, a lighter image for local use. Its volume mounts at `/var/lib/postgresql` (that image sets `PGDATA=/var/lib/postgresql/18/docker`); dev volumes are throwaway, so reset with `pnpm db:dev:reset`. See [`docker/README.md`](docker/README.md).
 
 ## Environment variables
 

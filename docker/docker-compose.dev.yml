@@ -11,7 +11,12 @@ services:
     ports:
       - '5432:5432'
     volumes:
-      - lcm-postgres-dev:/var/lib/postgresql/data
+      # Official postgres:18 sets PGDATA=/var/lib/postgresql/18/docker (a
+      # major-version subdir), NOT /var/lib/postgresql/data. Mount the PARENT so
+      # data persists on the volume — the image's recommended layout for 18+
+      # (also enables `pg_upgrade --link` across future majors). Mounting the old
+      # /data path leaves PG18 writing to an ephemeral container layer.
+      - lcm-postgres-dev:/var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U lcm -d lcm']
       interval: 5s
