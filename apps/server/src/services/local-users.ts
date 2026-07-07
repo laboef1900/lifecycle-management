@@ -152,6 +152,12 @@ export class LocalUserService {
     }));
   }
 
+  /**
+   * @ai-warning Bypasses the `LAST_LOCAL_ADMIN` self-lockout guard enforced by
+   * `disableOrDemoteGuarded`. Must NOT be called from route/HTTP code — routes
+   * must use `disableOrDemoteGuarded` instead. Retained only for direct
+   * service-level/unit-test use.
+   */
   async update(userId: string, input: UpdateLocalUser): Promise<void> {
     // Built explicitly (rather than passing `input` straight through) because
     // `exactOptionalPropertyTypes` rejects Prisma's update-input type when an
@@ -170,6 +176,12 @@ export class LocalUserService {
     await this.prisma.user.update({ where: { id: userId }, data });
   }
 
+  /**
+   * @ai-warning Bypasses the `LAST_LOCAL_ADMIN` self-lockout guard enforced by
+   * `removeGuarded`. Must NOT be called from route/HTTP code — routes must use
+   * `removeGuarded` instead. Retained only for direct service-level/unit-test
+   * use.
+   */
   async remove(userId: string): Promise<void> {
     await this.prisma.user.delete({ where: { id: userId } }); // sessions cascade
   }
