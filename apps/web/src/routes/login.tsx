@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { createFileRoute, redirect, useRouter } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 import { Activity } from 'lucide-react';
 import { z } from 'zod';
 
-import { type LoginErrorCode, loginErrorCodeSchema } from '@lcm/shared';
+import { type LoginErrorCode, loginErrorCodeSchema, safeRedirectPath } from '@lcm/shared';
 
 import { Field } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
@@ -12,8 +12,10 @@ import { localLogin } from '@/lib/api-client';
 
 const loginSearchSchema = z.object({
   error: z.string().optional(),
-  // The path the user was headed to before being bounced here. Forwarded to the
-  // server's login endpoint, which validates it before honouring it.
+  // The path the user was headed to before being bounced here. Two consumers:
+  // the OIDC button forwards it to the server (validated there), while the
+  // local-login form consumes it client-side and MUST validate it itself with
+  // safeRedirectPath before navigating.
   redirect: z.string().optional(),
 });
 
@@ -49,18 +51,17 @@ export const Route = createFileRoute('/login')({
 });
 
 /**
- * Username/password sign-in form for AUTH_MODE=oidc with a local admin
- * fallback (Task 6's `POST /api/auth/local/login`). Kept as a standalone,
- * router-agnostic component so it's cheap to unit test — it only reaches
- * into the router on submit, to refresh the auth-gated route context and
- * land the user back where they were headed.
+ * Username/password sign-in form for local-admin auth (Task 6's
+ * `POST /api/auth/local/login`). On a successful submit it triggers a
+ * full-page load rather than a client-side navigation: the root `auth`
+ * context is fetched once at startup (main.tsx), so only a fresh page load
+ * re-bootstraps it with the new session cookie.
  */
 export function LocalLoginForm({
   redirectTo,
 }: {
   redirectTo: string | undefined;
 }): React.JSX.Element {
-  const router = useRouter();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -74,20 +75,26 @@ export function LocalLoginForm({
       const ok = await localLogin(username, password);
       if (!ok) {
         setError('Invalid username or password.');
+        setPending(false);
         return;
       }
-      // Refresh the root route's `auth` context (re-runs fetchAuthState via
-      // the loader) before navigating, so /login's beforeLoad guard sees the
-      // new session and lets the redirect through instead of bouncing back
-      // here.
-      await router.invalidate();
-      await router.navigate({ to: redirectTo ?? '/' });
+      // The root `auth` context is fetched once at app startup (main.tsx), so a
+      // client-side navigate would keep the stale "logged out" state and bounce
+      // straight back here. Do a full-page load so the app re-bootstraps auth
+      // with the new session cookie — mirrors how the OIDC flow returns via a
+      // full navigation. safeRedirectPath rejects anything that isn't a
+      // same-origin path (backslash/control-char/protocol-relative bypasses
+      // included), so an attacker-supplied ?redirect= can't open-redirect us.
+      const dest = safeRedirectPath(redirectTo) ?? '/';
+      // Deliberately leave `pending` true: the page is unloading, and resetting
+      // it would flash the button back to enabled and permit a duplicate submit
+      // during the navigation window.
+      window.location.assign(dest);
     } catch {
-      // Covers fetch rejecting (offline/DNS/CORS) as well as invalidate()/
-      // navigate() throwing — without this, `pending` would stay stuck at
-      // `true` (button pinned to "Signing in…") with no feedback shown.
+      // localLogin() rejecting (offline/DNS/CORS) — without this, `pending`
+      // would stay stuck at `true` (button pinned to "Signing in…") with no
+      // feedback shown.
       setError('Something went wrong. Please try again.');
-    } finally {
       setPending(false);
     }
   }

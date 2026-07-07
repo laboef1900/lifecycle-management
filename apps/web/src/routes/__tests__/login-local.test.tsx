@@ -13,6 +13,7 @@ vi.mock('@/lib/api-client', () => ({
 describe('LocalLoginForm', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('renders username and password inputs', () => {
@@ -37,5 +38,75 @@ describe('LocalLoginForm', () => {
 
     expect(await screen.findByText(/invalid username or password/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sign in/i })).not.toBeDisabled();
+  });
+
+  // On success the form does a full-page load (not a client-side navigate) so
+  // the app re-bootstraps its startup-fetched auth state with the new session.
+  it('full-page-navigates to the redirect target on a successful login', async () => {
+    vi.mocked(localLogin).mockResolvedValue(true);
+    const assign = vi.fn();
+    vi.stubGlobal('location', { assign, href: 'http://localhost/', origin: 'http://localhost' });
+    const user = userEvent.setup();
+
+    render(<LocalLoginForm redirectTo="/clusters" />);
+    await user.type(screen.getByLabelText(/username/i), 'admin');
+    await user.type(screen.getByLabelText(/password/i), 'twelvecharsok!');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    await vi.waitFor(() => expect(assign).toHaveBeenCalledWith('/clusters'));
+  });
+
+  it('ignores an off-origin redirect target and lands on /', async () => {
+    vi.mocked(localLogin).mockResolvedValue(true);
+    const assign = vi.fn();
+    vi.stubGlobal('location', { assign, href: 'http://localhost/', origin: 'http://localhost' });
+    const user = userEvent.setup();
+
+    render(<LocalLoginForm redirectTo="//evil.example.com" />);
+    await user.type(screen.getByLabelText(/username/i), 'admin');
+    await user.type(screen.getByLabelText(/password/i), 'twelvecharsok!');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    await vi.waitFor(() => expect(assign).toHaveBeenCalledWith('/'));
+  });
+
+  // A naive `startsWith('/') && !startsWith('//')` check passes all of these,
+  // but the browser folds a leading backslash to `/` and strips TAB/CR/LF
+  // before parsing the authority — each would otherwise navigate off-origin.
+  // The shared safeRedirectPath guard must reject them down to '/'.
+  it.each([
+    ['/\\evil.example.com', 'backslash folded to /'],
+    ['/\t/evil.example.com', 'embedded TAB stripped'],
+    ['/\r/evil.example.com', 'embedded CR stripped'],
+  ])('rejects off-origin bypass vector %j (%s) and lands on /', async (target, _label) => {
+    vi.mocked(localLogin).mockResolvedValue(true);
+    const assign = vi.fn();
+    vi.stubGlobal('location', { assign, href: 'http://localhost/', origin: 'http://localhost' });
+    const user = userEvent.setup();
+
+    render(<LocalLoginForm redirectTo={target} />);
+    await user.type(screen.getByLabelText(/username/i), 'admin');
+    await user.type(screen.getByLabelText(/password/i), 'twelvecharsok!');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    await vi.waitFor(() => expect(assign).toHaveBeenCalledWith('/'));
+  });
+
+  // The success path starts a full-page load, so the component stays mounted;
+  // the button must stay disabled until the document unloads (no finally-reset
+  // that briefly re-enables it and permits a duplicate submit).
+  it('keeps the submit button disabled after a successful login', async () => {
+    vi.mocked(localLogin).mockResolvedValue(true);
+    const assign = vi.fn();
+    vi.stubGlobal('location', { assign, href: 'http://localhost/', origin: 'http://localhost' });
+    const user = userEvent.setup();
+
+    render(<LocalLoginForm redirectTo="/clusters" />);
+    await user.type(screen.getByLabelText(/username/i), 'admin');
+    await user.type(screen.getByLabelText(/password/i), 'twelvecharsok!');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    await vi.waitFor(() => expect(assign).toHaveBeenCalled());
+    expect(screen.getByRole('button')).toBeDisabled();
   });
 });
