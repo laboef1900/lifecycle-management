@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { safeRedirectPath } from '../routes/auth.js';
+import { safeRedirectPath } from '../redirect.js';
 
 describe('safeRedirectPath', () => {
   it('accepts same-origin path-absolute targets (canonicalized)', () => {
@@ -29,8 +29,13 @@ describe('safeRedirectPath', () => {
   });
 
   it('rejects backslash tricks, control chars, and non-path input', () => {
+    // Browsers fold `\`→`/` and strip TAB/CR/LF before parsing the authority,
+    // so each of these would otherwise navigate off-origin (#147).
     expect(safeRedirectPath('/\\evil.example.com')).toBeNull();
     expect(safeRedirectPath('\\\\evil.example.com')).toBeNull();
+    expect(safeRedirectPath('/\t/evil.example.com')).toBeNull();
+    expect(safeRedirectPath('/\r/evil.example.com')).toBeNull();
+    expect(safeRedirectPath('/\n/evil.example.com')).toBeNull();
     expect(safeRedirectPath('/foo\tbar')).toBeNull();
     expect(safeRedirectPath('/foo bar')).toBeNull();
     expect(safeRedirectPath('relative/path')).toBeNull();

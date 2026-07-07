@@ -4,7 +4,9 @@
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2023"],
+    // DOM provides the web-standard `URL` global (used by safeRedirectPath),
+    // which both runtimes that consume this package — browser and Node — supply.
+    "lib": ["ES2023", "DOM"],
     "outDir": "dist",
     "rootDir": "src",
     "declaration": true,
