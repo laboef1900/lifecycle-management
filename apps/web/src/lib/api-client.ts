@@ -3,7 +3,10 @@ import type {
   AuthConfigTest,
   AuthConfigUpdate,
   ClusterSettingsInput,
+  CreateLocalUser,
+  ResetPassword,
   TenantSettings,
+  UpdateLocalUser,
 } from '@lcm/shared';
 import {
   authConfigResponseSchema,
@@ -27,6 +30,7 @@ import {
   itemCreateInputSchema,
   itemResponseSchema,
   itemUpdateInputSchema,
+  localUserSummarySchema,
   paginatedSchema,
   rotateSigningSecretResponseSchema,
   scenarioSchema,
@@ -107,6 +111,23 @@ async function request<T>(path: string, init?: RequestInit, schema?: z.ZodType<T
 /** Human-readable message for a failed API call: the server's message when available. */
 export function describeApiError(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
+}
+
+/**
+ * Local admin login: POSTs username/password to the local-auth endpoint. On
+ * success the server sets the session cookie and responds 204; any other
+ * status (401 bad credentials, etc.) resolves to false rather than throwing,
+ * so the caller can show one generic "invalid credentials" message without
+ * distinguishing wrong-username from wrong-password.
+ */
+export async function localLogin(username: string, password: string): Promise<boolean> {
+  const res = await fetch('/api/auth/local/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  return res.status === 204;
 }
 
 // ---------- Wire body types ----------
@@ -322,6 +343,30 @@ export const api = {
           { method: 'POST' },
           rotateSigningSecretResponseSchema,
         ),
+      // Local admin accounts (mode: 'local', plus break-glass access while
+      // mode is 'oidc'). Scoped separately from oidc/get/update/test above.
+      localUsers: {
+        list: () =>
+          request('/api/settings/auth/local-users', undefined, z.array(localUserSummarySchema)),
+        create: (input: CreateLocalUser) =>
+          request(
+            '/api/settings/auth/local-users',
+            { method: 'POST', body: JSON.stringify(input) },
+            localUserSummarySchema,
+          ),
+        setDisabled: (id: string, disabled: boolean) =>
+          request<void>(`/api/settings/auth/local-users/${id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ disabled } satisfies UpdateLocalUser),
+          }),
+        resetPassword: (id: string, newPassword: string) =>
+          request<void>(`/api/settings/auth/local-users/${id}/reset-password`, {
+            method: 'POST',
+            body: JSON.stringify({ newPassword } satisfies ResetPassword),
+          }),
+        delete: (id: string) =>
+          request<void>(`/api/settings/auth/local-users/${id}`, { method: 'DELETE' }),
+      },
     },
   },
 };

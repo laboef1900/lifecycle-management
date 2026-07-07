@@ -5,7 +5,7 @@ const csvField = z.preprocess(emptyToNull, z.string().max(2000).nullable().optio
 const urlOrNull = z.preprocess(emptyToNull, z.url().nullable().optional());
 
 export const authConfigUpdateSchema = z.strictObject({
-  mode: z.enum(['disabled', 'oidc']),
+  mode: z.enum(['disabled', 'local', 'oidc']),
   issuerUrl: urlOrNull,
   clientId: z.preprocess(emptyToNull, z.string().max(255).nullable().optional()),
   // write-only: omitted = unchanged; null = clear; string = set
@@ -32,7 +32,7 @@ export const authConfigTestSchema = z.strictObject({
 export type AuthConfigTest = z.infer<typeof authConfigTestSchema>;
 
 export interface AuthConfigResponse {
-  mode: 'disabled' | 'oidc';
+  mode: 'disabled' | 'local' | 'oidc';
   issuerUrl: string | null;
   clientId: string | null;
   appBaseUrl: string | null;
@@ -52,7 +52,7 @@ export interface AuthConfigResponse {
 }
 
 export const authConfigResponseSchema: z.ZodType<AuthConfigResponse> = z.object({
-  mode: z.enum(['disabled', 'oidc']),
+  mode: z.enum(['disabled', 'local', 'oidc']),
   issuerUrl: z.string().nullable(),
   clientId: z.string().nullable(),
   appBaseUrl: z.string().nullable(),

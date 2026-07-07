@@ -112,6 +112,7 @@ describe('auth routes (oidc mode, mock IdP)', () => {
     });
     expect(me.json()).toEqual({
       authRequired: true,
+      loginMethods: { local: false, oidc: true },
       user: { id: user?.id, email: 'ada@example.com', displayName: 'Ada', role: 'ADMIN' },
     });
 
@@ -309,7 +310,10 @@ describe('auth routes (oidc mode, mock IdP)', () => {
       url: '/api/auth/me',
       cookies: { [SESSION_COOKIE]: token },
     });
-    expect(me.json()).toEqual({ authRequired: true });
+    expect(me.json()).toEqual({
+      authRequired: true,
+      loginMethods: { local: false, oidc: true },
+    });
   });
 });
 

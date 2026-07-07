@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 export interface SegmentedControlOption<T extends string> {
   value: T;
   label: string;
+  disabled?: boolean;
 }
 
 export interface SegmentedControlProps<T extends string> {
@@ -35,9 +36,10 @@ export function SegmentedControl<T extends string>({
             key={option.value}
             type="button"
             aria-pressed={active}
+            disabled={option.disabled}
             onClick={() => onValueChange(option.value)}
             className={cn(
-              'rounded-[6px] px-2.5 py-1 text-xs font-medium transition-colors duration-150',
+              'rounded-[6px] px-2.5 py-1 text-xs font-medium transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50',
               active
                 ? 'bg-card text-foreground shadow-[var(--shadow-card)]'
                 : 'text-fg-muted hover:text-foreground',

@@ -37,7 +37,7 @@ export class AuthSecretDecryptError extends Error {
  * unions that aren't assignable to the plain-scalar create type.
  */
 interface AuthConfigWriteData {
-  mode: 'disabled' | 'oidc';
+  mode: 'disabled' | 'local' | 'oidc';
   issuerUrl?: string | null;
   clientId?: string | null;
   clientSecretEnc?: string | null;
@@ -60,7 +60,7 @@ interface AuthConfigWriteData {
  * decrypted strings (or null) — only ever held in memory, never serialized.
  */
 export interface EffectiveAuthConfig {
-  mode: 'disabled' | 'oidc';
+  mode: 'disabled' | 'local' | 'oidc';
   issuerUrl: string | null;
   clientId: string | null;
   clientSecret: string | null;
@@ -275,7 +275,7 @@ export class AuthConfigService {
   /** Maps a raw `AuthConfig` row to the decrypted, in-memory effective shape. */
   toEffective(row: AuthConfig): EffectiveAuthConfig {
     return {
-      mode: row.mode === 'oidc' ? 'oidc' : 'disabled',
+      mode: row.mode === 'oidc' ? 'oidc' : row.mode === 'local' ? 'local' : 'disabled',
       issuerUrl: row.issuerUrl,
       clientId: row.clientId,
       clientSecret: this.decryptColumn(row.clientSecretEnc, 'client secret'),

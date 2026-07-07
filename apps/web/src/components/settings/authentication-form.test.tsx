@@ -46,6 +46,11 @@ describe('<AuthenticationForm>', () => {
     vi.spyOn(api.settings.auth, 'update').mockResolvedValue({ ...baseConfig });
     vi.spyOn(api.settings.auth, 'test').mockResolvedValue({ ok: true, error: null });
     vi.spyOn(api.settings.auth, 'rotateSigningSecret').mockResolvedValue({ rotated: true });
+    // The mode selector renders <LocalAccountsPanel /> (mounted, even if
+    // visually collapsed inside the oidc break-glass <details>) whenever
+    // computed.mode is 'local' or 'oidc' — stub its query so those renders
+    // don't attempt a real fetch.
+    vi.spyOn(api.settings.auth.localUsers, 'list').mockResolvedValue([]);
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
@@ -172,18 +177,18 @@ describe('<AuthenticationForm>', () => {
     await screen.findByText(/configured/i);
 
     // No edits yet: the server-verified oidc state stands in for a fresh
-    // test, so the hint is hidden and the toggle stays checked.
+    // test, so the hint is hidden and the mode selector stays on OIDC.
     expect(
       screen.queryByText(/run a successful connection test below to enable/i),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'OIDC', pressed: true })).toBeInTheDocument();
 
     // Editing a critical field invalidates that carry-over, even though
-    // computed.mode is still 'oidc' (the toggle is untouched).
+    // computed.mode is still 'oidc' (the mode selector is untouched).
     await userEvent.clear(screen.getByLabelText(/issuer url/i));
     await userEvent.type(screen.getByLabelText(/issuer url/i), 'https://idp2.example.com');
 
-    expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'OIDC', pressed: true })).toBeInTheDocument();
     expect(
       screen.getByText(/run a successful connection test below to enable/i),
     ).toBeInTheDocument();
@@ -209,23 +214,21 @@ describe('<AuthenticationForm>', () => {
     });
   });
 
-  it('unlocks the enable toggle after a successful Test connection', async () => {
+  it('unlocks the OIDC mode option after a successful Test connection', async () => {
     renderWithClient(<AuthenticationForm />);
-    await waitFor(() =>
-      expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeDisabled(),
-    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'OIDC' })).toBeDisabled());
 
     await userEvent.type(screen.getByLabelText(/issuer url/i), 'https://idp.example.com');
     await userEvent.type(screen.getByLabelText(/client id/i), 'client-123');
     await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
 
     await waitFor(() => {
-      expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'OIDC' })).toBeEnabled();
     });
     expect(screen.getByText(/connection succeeded/i)).toBeInTheDocument();
   });
 
-  it('keeps the enable toggle disabled and shows the error when Test connection fails', async () => {
+  it('keeps the OIDC mode option disabled and shows the error when Test connection fails', async () => {
     vi.mocked(api.settings.auth.test).mockResolvedValue({
       ok: false,
       error: 'Discovery document unreachable',
@@ -238,7 +241,7 @@ describe('<AuthenticationForm>', () => {
     await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
 
     expect(await screen.findByText(/discovery document unreachable/i)).toBeInTheDocument();
-    expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'OIDC' })).toBeDisabled();
   });
 
   it('blocks submit with a validation message when sessionTtlHours is out of range (0)', async () => {
@@ -276,29 +279,25 @@ describe('<AuthenticationForm>', () => {
     await userEvent.type(screen.getByLabelText(/issuer url/i), 'https://idp.example.com');
     await userEvent.type(screen.getByLabelText(/client id/i), 'client-123');
     await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
-    await waitFor(() =>
-      expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeEnabled(),
-    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'OIDC' })).toBeEnabled());
 
-    await userEvent.click(screen.getByRole('switch', { name: /enable oidc authentication/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'OIDC' }));
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     expect(await screen.findByText(/app base url is required/i)).toBeInTheDocument();
     expect(api.settings.auth.update).not.toHaveBeenCalled();
   });
 
-  it('saves successfully once tested, appBaseUrl set, and toggle enabled', async () => {
+  it('saves successfully once tested, appBaseUrl set, and OIDC mode selected', async () => {
     renderWithClient(<AuthenticationForm />);
     await waitFor(() => screen.getByLabelText(/issuer url/i));
 
     await userEvent.type(screen.getByLabelText(/issuer url/i), 'https://idp.example.com');
     await userEvent.type(screen.getByLabelText(/client id/i), 'client-123');
     await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
-    await waitFor(() =>
-      expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeEnabled(),
-    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'OIDC' })).toBeEnabled());
 
-    await userEvent.click(screen.getByRole('switch', { name: /enable oidc authentication/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'OIDC' }));
     await userEvent.type(screen.getByLabelText(/app base url/i), 'https://app.example.com');
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
@@ -332,10 +331,8 @@ describe('<AuthenticationForm>', () => {
     // Force a save call directly against the mocked mutation by satisfying
     // local gating: simulate having tested ok, appBaseUrl set.
     await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
-    await waitFor(() =>
-      expect(screen.getByRole('switch', { name: /enable oidc authentication/i })).toBeEnabled(),
-    );
-    await userEvent.click(screen.getByRole('switch', { name: /enable oidc authentication/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'OIDC' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'OIDC' }));
     await userEvent.type(screen.getByLabelText(/app base url/i), 'https://app.example.com');
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
@@ -390,5 +387,61 @@ describe('<AuthenticationForm>', () => {
     vi.mocked(api.settings.auth.get).mockReturnValue(new Promise<never>(() => {}));
     const { container } = renderWithClient(<AuthenticationForm />);
     expect(container.querySelector('.animate-shimmer')).toBeInTheDocument();
+  });
+
+  it('selecting "Local accounts" is never gated and renders the LocalAccountsPanel', async () => {
+    vi.mocked(api.settings.auth.localUsers.list).mockResolvedValue([
+      {
+        id: 'u1',
+        username: 'jsmith',
+        role: 'ADMIN',
+        disabled: false,
+        lastLoginAt: null,
+        createdAt: '2026-07-06T00:00:00.000Z',
+      },
+    ]);
+    renderWithClient(<AuthenticationForm />);
+    await waitFor(() => screen.getByLabelText(/issuer url/i));
+
+    // Untested, unconfigured OIDC — the OIDC option is gated, but Local
+    // accounts never is.
+    expect(screen.getByRole('button', { name: 'OIDC' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Local accounts' })).toBeEnabled();
+    expect(screen.queryByText('jsmith')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Local accounts' }));
+
+    expect(await screen.findByText('jsmith')).toBeInTheDocument();
+  });
+
+  it('renders the local-admin management section collapsed (break-glass) when mode is oidc', async () => {
+    vi.mocked(api.settings.auth.get).mockResolvedValue({
+      ...baseConfig,
+      mode: 'oidc',
+      issuerUrl: 'https://idp.example.com',
+      clientId: 'client-123',
+      appBaseUrl: 'https://app.example.com',
+      discoveryStatus: 'connected',
+    });
+    vi.mocked(api.settings.auth.localUsers.list).mockResolvedValue([
+      {
+        id: 'u1',
+        username: 'breakglass',
+        role: 'ADMIN',
+        disabled: false,
+        lastLoginAt: null,
+        createdAt: '2026-07-06T00:00:00.000Z',
+      },
+    ]);
+    renderWithClient(<AuthenticationForm />);
+
+    const summary = await screen.findByText(/local admin \(break-glass\)/i);
+    const details = summary.closest('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+
+    // The panel is mounted (its content is queryable) even while collapsed —
+    // <details> hides content visually, it doesn't unmount it.
+    expect(await screen.findByText('breakglass')).toBeInTheDocument();
   });
 });

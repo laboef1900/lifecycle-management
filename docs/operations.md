@@ -421,3 +421,27 @@ proxy or load balancer) before enabling auth on anything reachable outside
 localhost. Most IdPs also refuse to register or use `http://` redirect
 URIs except for `localhost`, so plain HTTP mainly only works for the local
 Keycloak dev loop described in [`docker/README.md`](../docker/README.md).
+
+## Local admin accounts
+
+A third auth mode, `local`, complements (or substitutes for) OIDC: username-and-password accounts stored in the `users` table, with the password argon2id-hashed (`@node-rs/argon2`) — never bcrypt. They're managed from the running app's **Settings → Authentication** panel (admin-gated, same as the OIDC config), in a "Local accounts" list. The password policy is a minimum of 12 characters (no composition rules — length beats complexity per OWASP); accounts default to the `ADMIN` role but `VIEWER` is also selectable.
+
+### Bootstrapping the first local admin
+
+1. While still in the default `disabled` mode — its admin gate is open, so every request is the anonymous ADMIN principal — open **Settings → Authentication** and create a local admin account.
+2. Switch `mode` to `local` and save. The server refuses the switch with a `422 NO_LOCAL_ADMIN` if there is no enabled local admin yet, so you can't flip to `local` and lock yourself out.
+3. Once `local` mode is active, the server also refuses to disable, demote to `VIEWER`, or delete the **last** enabled local admin (`422 LAST_LOCAL_ADMIN`) — there must always be at least one enabled local admin while `local` mode is on. This guard only applies while `local` mode is the active mode.
+
+### Break-glass alongside OIDC
+
+Local login (`POST /api/auth/local/login`) is not exclusive to `local` mode — it also works while `mode: oidc` is active, as long as at least one enabled local admin exists. This gives you a non-IdP way in if the IdP is unreachable or misbehaving, without having to change the stored mode. To enforce strict OIDC-only access, disable or delete the local accounts — the last-admin guard above only applies while `local` mode is active, so in `oidc` mode you're free to remove all of them. With none left, `/api/auth/me`'s `loginMethods.local` reports `false` and the local login form is hidden.
+
+### Lockout
+
+After 5 consecutive failed login attempts, an account locks with exponential backoff: 1 minute, doubling on each further consecutive failure, capped at 15 minutes. A successful login resets the failure counter (and any active lock).
+
+### Recovery
+
+The existing break-glass path covers local accounts too: set `RECOVERY_DISABLE_AUTH=true` in `.env` and `docker compose up -d` — this forces `mode=disabled` regardless of what's stored in the DB, so you can reset a password or create a fresh admin from **Settings → Authentication**, then set `RECOVERY_DISABLE_AUTH=false` (or remove it) and restart to resume normal operation. No new environment variable was introduced for local accounts — this reuses the same flag documented under "Break-glass: RECOVERY_DISABLE_AUTH" above.
+
+> `CONFIG_ENCRYPTION_KEY` is **not** required for `local` mode. The argon2id password hashes live directly on the `users` table, not in the AES-GCM-encrypted `auth_config` row — only `oidc` mode needs the encryption key, to store the OIDC client secret.
