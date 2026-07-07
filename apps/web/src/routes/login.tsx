@@ -55,7 +55,11 @@ export const Route = createFileRoute('/login')({
  * into the router on submit, to refresh the auth-gated route context and
  * land the user back where they were headed.
  */
-export function LocalLoginForm({ redirect }: { redirect: string | undefined }): React.JSX.Element {
+export function LocalLoginForm({
+  redirectTo,
+}: {
+  redirectTo: string | undefined;
+}): React.JSX.Element {
   const router = useRouter();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -66,17 +70,26 @@ export function LocalLoginForm({ redirect }: { redirect: string | undefined }): 
     e.preventDefault();
     setPending(true);
     setError(null);
-    const ok = await localLogin(username, password);
-    if (!ok) {
+    try {
+      const ok = await localLogin(username, password);
+      if (!ok) {
+        setError('Invalid username or password.');
+        return;
+      }
+      // Refresh the root route's `auth` context (re-runs fetchAuthState via
+      // the loader) before navigating, so /login's beforeLoad guard sees the
+      // new session and lets the redirect through instead of bouncing back
+      // here.
+      await router.invalidate();
+      await router.navigate({ to: redirectTo ?? '/' });
+    } catch {
+      // Covers fetch rejecting (offline/DNS/CORS) as well as invalidate()/
+      // navigate() throwing — without this, `pending` would stay stuck at
+      // `true` (button pinned to "Signing in…") with no feedback shown.
+      setError('Something went wrong. Please try again.');
+    } finally {
       setPending(false);
-      setError('Invalid username or password.');
-      return;
     }
-    // Refresh the root route's `auth` context (re-runs fetchAuthState via the
-    // loader) before navigating, so /login's beforeLoad guard sees the new
-    // session and lets the redirect through instead of bouncing back here.
-    await router.invalidate();
-    await router.navigate({ to: redirect ?? '/' });
   }
 
   return (
@@ -152,7 +165,7 @@ function LoginPage(): React.JSX.Element {
         {showLocal ? (
           <>
             <p className="mb-4 text-sm text-muted-foreground">Sign in with your admin account.</p>
-            <LocalLoginForm redirect={redirect} />
+            <LocalLoginForm redirectTo={redirect} />
           </>
         ) : null}
         {showLocal && showOidc ? (
