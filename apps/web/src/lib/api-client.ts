@@ -3,7 +3,10 @@ import type {
   AuthConfigTest,
   AuthConfigUpdate,
   ClusterSettingsInput,
+  CreateLocalUser,
+  ResetPassword,
   TenantSettings,
+  UpdateLocalUser,
 } from '@lcm/shared';
 import {
   authConfigResponseSchema,
@@ -27,6 +30,7 @@ import {
   itemCreateInputSchema,
   itemResponseSchema,
   itemUpdateInputSchema,
+  localUserSummarySchema,
   paginatedSchema,
   rotateSigningSecretResponseSchema,
   scenarioSchema,
@@ -339,6 +343,30 @@ export const api = {
           { method: 'POST' },
           rotateSigningSecretResponseSchema,
         ),
+      // Local admin accounts (mode: 'local', plus break-glass access while
+      // mode is 'oidc'). Scoped separately from oidc/get/update/test above.
+      localUsers: {
+        list: () =>
+          request('/api/settings/auth/local-users', undefined, z.array(localUserSummarySchema)),
+        create: (input: CreateLocalUser) =>
+          request(
+            '/api/settings/auth/local-users',
+            { method: 'POST', body: JSON.stringify(input) },
+            localUserSummarySchema,
+          ),
+        setDisabled: (id: string, disabled: boolean) =>
+          request<void>(`/api/settings/auth/local-users/${id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ disabled } satisfies UpdateLocalUser),
+          }),
+        resetPassword: (id: string, newPassword: string) =>
+          request<void>(`/api/settings/auth/local-users/${id}/reset-password`, {
+            method: 'POST',
+            body: JSON.stringify({ newPassword } satisfies ResetPassword),
+          }),
+        delete: (id: string) =>
+          request<void>(`/api/settings/auth/local-users/${id}`, { method: 'DELETE' }),
+      },
     },
   },
 };
