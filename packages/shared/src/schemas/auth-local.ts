@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import { cuid } from './common.js';
+
+export const localUserIdParamsSchema = z.object({ id: cuid });
+export type LocalUserIdParams = z.infer<typeof localUserIdParamsSchema>;
+
 export const localUsernameSchema = z
   .string()
   .trim()

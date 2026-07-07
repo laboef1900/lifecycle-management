@@ -1,6 +1,6 @@
-import type { PrismaClient, User, UserRole } from '@prisma/client';
+import type { Prisma, PrismaClient, User, UserRole } from '@prisma/client';
 
-import type { LocalUserSummary } from '@lcm/shared';
+import type { LocalUserSummary, UpdateLocalUser } from '@lcm/shared';
 
 import { hashPassword, verifyPassword } from '../crypto/password.js';
 
@@ -129,15 +129,22 @@ export class LocalUserService {
     }));
   }
 
-  async update(userId: string, input: { disabled?: boolean; role?: UserRole }): Promise<void> {
+  async update(userId: string, input: UpdateLocalUser): Promise<void> {
+    // Built explicitly (rather than passing `input` straight through) because
+    // `exactOptionalPropertyTypes` rejects Prisma's update-input type when an
+    // optional zod key is present-but-`undefined`.
+    const data: Prisma.UserUpdateInput = {};
+    if (input.disabled !== undefined) data.disabled = input.disabled;
+    if (input.role !== undefined) data.role = input.role;
+
     if (input.disabled === true) {
       await this.prisma.$transaction([
-        this.prisma.user.update({ where: { id: userId }, data: input }),
+        this.prisma.user.update({ where: { id: userId }, data }),
         this.prisma.session.deleteMany({ where: { userId } }),
       ]);
       return;
     }
-    await this.prisma.user.update({ where: { id: userId }, data: input });
+    await this.prisma.user.update({ where: { id: userId }, data });
   }
 
   async remove(userId: string): Promise<void> {

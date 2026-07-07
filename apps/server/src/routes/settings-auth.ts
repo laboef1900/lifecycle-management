@@ -1,15 +1,24 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 
-import { authConfigTestSchema, authConfigUpdateSchema } from '@lcm/shared';
+import {
+  authConfigTestSchema,
+  authConfigUpdateSchema,
+  createLocalUserSchema,
+  localUserIdParamsSchema,
+  resetPasswordSchema,
+  updateLocalUserSchema,
+} from '@lcm/shared';
 import type {
   AuthConfigResponse,
   AuthConfigTestResult,
+  LocalUserSummary,
   RotateSigningSecretResponse,
 } from '@lcm/shared';
 
 import { testDiscovery } from '../plugins/oidc.js';
 import { AuthSecretDecryptError } from '../services/auth-config.js';
-import { ForbiddenError, UnprocessableError } from '../services/errors.js';
+import { ForbiddenError, NotFoundError, UnprocessableError } from '../services/errors.js';
+import { LOCAL_ISSUER, LocalUserService } from '../services/local-users.js';
 
 export interface SettingsAuthRoutesOptions {
   /**
@@ -54,6 +63,7 @@ export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> =
   opts,
 ) => {
   const service = fastify.authConfig.service;
+  const localUsers = new LocalUserService(fastify.prisma);
   const { allowInternalIssuer } = opts;
 
   /**
@@ -127,6 +137,13 @@ export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> =
       }
     }
 
+    if (body.mode === 'local' && (await localUsers.enabledAdminCount()) === 0) {
+      throw new UnprocessableError(
+        'NO_LOCAL_ADMIN',
+        'Create an enabled local admin account before switching to local authentication.',
+      );
+    }
+
     await service.update(body, request.user?.id ?? null);
     await reloadOrUnprocessable(fastify);
     await fastify.oidc.reconfigure();
@@ -160,4 +177,94 @@ export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> =
       return { rotated: true };
     },
   );
+
+  /**
+   * Fetches a `local`-issued user by id, or throws `NotFoundError`. Scoped to
+   * `issuer: LOCAL_ISSUER` so this admin surface can only ever read/mutate
+   * local accounts — an OIDC-issued user id passed here 404s rather than
+   * being silently edited/deleted through the wrong management endpoint.
+   */
+  async function findLocalUserOrNotFound(id: string) {
+    const target = await fastify.prisma.user.findUnique({ where: { id } });
+    if (!target || target.issuer !== LOCAL_ISSUER) {
+      throw new NotFoundError('LocalUser', id);
+    }
+    return target;
+  }
+
+  fastify.get('/settings/auth/local-users', async (): Promise<LocalUserSummary[]> => {
+    return localUsers.list();
+  });
+
+  fastify.post('/settings/auth/local-users', async (request, reply): Promise<LocalUserSummary> => {
+    const body = createLocalUserSchema.parse(request.body);
+    const existing = await fastify.prisma.user.findUnique({
+      where: { issuer_subject: { issuer: LOCAL_ISSUER, subject: body.username } },
+    });
+    if (existing) {
+      throw new UnprocessableError('USERNAME_TAKEN', 'That username is already in use.');
+    }
+    const user = await localUsers.create(body);
+    reply.code(201);
+    return {
+      id: user.id,
+      username: user.subject,
+      role: user.role,
+      disabled: user.disabled,
+      lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
+      createdAt: user.createdAt.toISOString(),
+    };
+  });
+
+  fastify.patch('/settings/auth/local-users/:id', async (request, reply) => {
+    const { id } = localUserIdParamsSchema.parse(request.params);
+    const body = updateLocalUserSchema.parse(request.body);
+    const target = await findLocalUserOrNotFound(id);
+
+    // Guard: never leave `local` mode with zero enabled admins.
+    const wouldDisableOrDemote = body.disabled === true || body.role === 'VIEWER';
+    if (
+      wouldDisableOrDemote &&
+      fastify.authConfig.current.mode === 'local' &&
+      target.role === 'ADMIN' &&
+      !target.disabled &&
+      (await localUsers.enabledAdminCount()) <= 1
+    ) {
+      throw new UnprocessableError(
+        'LAST_LOCAL_ADMIN',
+        'Cannot disable or demote the last enabled local admin while local authentication is active.',
+      );
+    }
+
+    await localUsers.update(id, body);
+    return reply.code(204).send();
+  });
+
+  fastify.post('/settings/auth/local-users/:id/reset-password', async (request, reply) => {
+    const { id } = localUserIdParamsSchema.parse(request.params);
+    const body = resetPasswordSchema.parse(request.body);
+    await findLocalUserOrNotFound(id);
+    await localUsers.resetPassword(id, body.newPassword);
+    return reply.code(204).send();
+  });
+
+  fastify.delete('/settings/auth/local-users/:id', async (request, reply) => {
+    const { id } = localUserIdParamsSchema.parse(request.params);
+    const target = await findLocalUserOrNotFound(id);
+
+    if (
+      target.role === 'ADMIN' &&
+      !target.disabled &&
+      fastify.authConfig.current.mode === 'local' &&
+      (await localUsers.enabledAdminCount()) <= 1
+    ) {
+      throw new UnprocessableError(
+        'LAST_LOCAL_ADMIN',
+        'Cannot delete the last enabled local admin while local authentication is active.',
+      );
+    }
+
+    await localUsers.remove(id);
+    return reply.code(204).send();
+  });
 };
