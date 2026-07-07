@@ -81,7 +81,19 @@ restarting `server` is cheap. `prisma db seed` only runs when
 
 `docker-compose.dev.yml` (also in this directory) brings up just Postgres;
 the server and web run on the host via `pnpm dev` so HMR + watch mode work.
-Use `pnpm db:dev:up` / `pnpm db:dev:down` as convenience wrappers.
+Use `pnpm db:dev:up` / `pnpm db:dev:down` / `pnpm db:dev:reset` as convenience
+wrappers.
+
+The dev DB is the official `postgres:18-alpine` (production uses the hardened
+`dhi.io/postgres:18`). Its named volume `lcm-postgres-dev` mounts at the parent
+`/var/lib/postgresql`, because that image sets
+`PGDATA=/var/lib/postgresql/18/docker` — mounting the older
+`/var/lib/postgresql/data` path would leave the cluster in an ephemeral
+container layer. Dev data is throwaway: `pnpm db:dev:reset` (`down -v` + `up`)
+clears the volume and brings Postgres back up clean; re-migrate and seed
+afterwards. Note a plain `pnpm db:dev:down` now **preserves** the named volume,
+so reach for `db:dev:reset` when you need a genuinely empty DB. Carrying a
+pre-18 dev volume forward is a recreate, not an in-place upgrade.
 
 ### Local Keycloak (for testing OIDC login)
 
@@ -118,9 +130,10 @@ random bytes, base64); do not reuse it anywhere real — generate your own
 with `openssl rand -base64 32` if you'd rather not share this one.
 These vars are consumed once, on first boot against an empty dev DB, to
 pre-seed the config; if you've already booted the dev server before, either
-wipe the dev DB (`pnpm db:dev:down && pnpm db:dev:up`, then re-migrate) or
-just configure OIDC directly in Settings → Authentication instead of
-editing `.env`.
+reset the dev DB (`pnpm db:dev:reset`, then re-migrate) or just configure
+OIDC directly in Settings → Authentication instead of editing `.env`. (A
+plain `db:dev:down && db:dev:up` no longer clears `auth_config` — the named
+volume now persists, so `db:dev:reset`'s `down -v` is what actually wipes.)
 
 `OIDC_ALLOW_INSECURE=true` is required here because both the dev server and
 this Keycloak instance run over plain HTTP — never set it in production.

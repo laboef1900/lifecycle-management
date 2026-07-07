@@ -19,6 +19,7 @@
     "seed": "pnpm --filter @lcm/server seed",
     "db:dev:up": "docker compose -f docker/docker-compose.dev.yml up -d db",
     "db:dev:down": "docker compose -f docker/docker-compose.dev.yml down",
+    "db:dev:reset": "docker compose -f docker/docker-compose.dev.yml down -v && docker compose -f docker/docker-compose.dev.yml up -d db",
     "prepare": "husky"
   },
   "devDependencies": {
