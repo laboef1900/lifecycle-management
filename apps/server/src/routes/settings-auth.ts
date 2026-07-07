@@ -72,8 +72,8 @@ export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> =
    * settings UI itself is how an operator first turns oidc on. Once mode is
    * oidc, only an authenticated ADMIN may read or change auth settings.
    * Registered as a plugin-scoped preHandler (this file is registered as its
-   * own encapsulated context in server.ts), so it applies to all four routes
-   * below and nowhere else.
+   * own encapsulated context in server.ts), so it applies to every route in
+   * this file (all nine below) and nowhere else.
    */
   fastify.addHook('preHandler', async (request) => {
     if (fastify.authConfig.current.mode === 'disabled') return;
@@ -219,24 +219,10 @@ export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> =
   fastify.patch('/settings/auth/local-users/:id', async (request, reply) => {
     const { id } = localUserIdParamsSchema.parse(request.params);
     const body = updateLocalUserSchema.parse(request.body);
-    const target = await findLocalUserOrNotFound(id);
 
-    // Guard: never leave `local` mode with zero enabled admins.
-    const wouldDisableOrDemote = body.disabled === true || body.role === 'VIEWER';
-    if (
-      wouldDisableOrDemote &&
-      fastify.authConfig.current.mode === 'local' &&
-      target.role === 'ADMIN' &&
-      !target.disabled &&
-      (await localUsers.enabledAdminCount()) <= 1
-    ) {
-      throw new UnprocessableError(
-        'LAST_LOCAL_ADMIN',
-        'Cannot disable or demote the last enabled local admin while local authentication is active.',
-      );
-    }
-
-    await localUsers.update(id, body);
+    // Guard (never leave `local` mode with zero enabled admins) and mutation
+    // both run atomically inside `disableOrDemoteGuarded` — see its docstring.
+    await localUsers.disableOrDemoteGuarded(id, body, fastify.authConfig.current.mode);
     return reply.code(204).send();
   });
 
@@ -250,21 +236,9 @@ export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> =
 
   fastify.delete('/settings/auth/local-users/:id', async (request, reply) => {
     const { id } = localUserIdParamsSchema.parse(request.params);
-    const target = await findLocalUserOrNotFound(id);
 
-    if (
-      target.role === 'ADMIN' &&
-      !target.disabled &&
-      fastify.authConfig.current.mode === 'local' &&
-      (await localUsers.enabledAdminCount()) <= 1
-    ) {
-      throw new UnprocessableError(
-        'LAST_LOCAL_ADMIN',
-        'Cannot delete the last enabled local admin while local authentication is active.',
-      );
-    }
-
-    await localUsers.remove(id);
+    // Guard + delete run atomically inside `removeGuarded` — see its docstring.
+    await localUsers.removeGuarded(id, fastify.authConfig.current.mode);
     return reply.code(204).send();
   });
 };
