@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { createFileRoute, redirect, useRouter } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 import { Activity } from 'lucide-react';
 import { z } from 'zod';
 
@@ -49,18 +49,17 @@ export const Route = createFileRoute('/login')({
 });
 
 /**
- * Username/password sign-in form for AUTH_MODE=oidc with a local admin
- * fallback (Task 6's `POST /api/auth/local/login`). Kept as a standalone,
- * router-agnostic component so it's cheap to unit test — it only reaches
- * into the router on submit, to refresh the auth-gated route context and
- * land the user back where they were headed.
+ * Username/password sign-in form for local-admin auth (Task 6's
+ * `POST /api/auth/local/login`). On a successful submit it triggers a
+ * full-page load rather than a client-side navigation: the root `auth`
+ * context is fetched once at startup (main.tsx), so only a fresh page load
+ * re-bootstraps it with the new session cookie.
  */
 export function LocalLoginForm({
   redirectTo,
 }: {
   redirectTo: string | undefined;
 }): React.JSX.Element {
-  const router = useRouter();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -76,12 +75,15 @@ export function LocalLoginForm({
         setError('Invalid username or password.');
         return;
       }
-      // Refresh the root route's `auth` context (re-runs fetchAuthState via
-      // the loader) before navigating, so /login's beforeLoad guard sees the
-      // new session and lets the redirect through instead of bouncing back
-      // here.
-      await router.invalidate();
-      await router.navigate({ to: redirectTo ?? '/' });
+      // The root `auth` context is fetched once at app startup (main.tsx), so a
+      // client-side navigate would keep the stale "logged out" state and bounce
+      // straight back here. Do a full-page load so the app re-bootstraps auth
+      // with the new session cookie — mirrors how the OIDC flow returns via a
+      // full navigation. Guard the target to a same-origin path (no open
+      // redirect through an attacker-supplied ?redirect=).
+      const dest =
+        redirectTo && redirectTo.startsWith('/') && !redirectTo.startsWith('//') ? redirectTo : '/';
+      window.location.assign(dest);
     } catch {
       // Covers fetch rejecting (offline/DNS/CORS) as well as invalidate()/
       // navigate() throwing — without this, `pending` would stay stuck at

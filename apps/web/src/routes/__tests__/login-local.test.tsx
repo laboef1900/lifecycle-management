@@ -13,6 +13,7 @@ vi.mock('@/lib/api-client', () => ({
 describe('LocalLoginForm', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('renders username and password inputs', () => {
@@ -37,5 +38,35 @@ describe('LocalLoginForm', () => {
 
     expect(await screen.findByText(/invalid username or password/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sign in/i })).not.toBeDisabled();
+  });
+
+  // On success the form does a full-page load (not a client-side navigate) so
+  // the app re-bootstraps its startup-fetched auth state with the new session.
+  it('full-page-navigates to the redirect target on a successful login', async () => {
+    vi.mocked(localLogin).mockResolvedValue(true);
+    const assign = vi.fn();
+    vi.stubGlobal('location', { assign, href: 'http://localhost/', origin: 'http://localhost' });
+    const user = userEvent.setup();
+
+    render(<LocalLoginForm redirectTo="/clusters" />);
+    await user.type(screen.getByLabelText(/username/i), 'admin');
+    await user.type(screen.getByLabelText(/password/i), 'twelvecharsok!');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    await vi.waitFor(() => expect(assign).toHaveBeenCalledWith('/clusters'));
+  });
+
+  it('ignores an off-origin redirect target and lands on /', async () => {
+    vi.mocked(localLogin).mockResolvedValue(true);
+    const assign = vi.fn();
+    vi.stubGlobal('location', { assign, href: 'http://localhost/', origin: 'http://localhost' });
+    const user = userEvent.setup();
+
+    render(<LocalLoginForm redirectTo="//evil.example.com" />);
+    await user.type(screen.getByLabelText(/username/i), 'admin');
+    await user.type(screen.getByLabelText(/password/i), 'twelvecharsok!');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    await vi.waitFor(() => expect(assign).toHaveBeenCalledWith('/'));
   });
 });
