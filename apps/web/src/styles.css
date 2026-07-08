@@ -39,6 +39,27 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.025);
   --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.05);
   --overlay-shadow: 0 2px 4px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.1);
+
+  /* Chart colors — the single source of truth for Recharts, read at runtime by
+     use-chart-colors.ts. Semantic roles reference the shared tokens so charts
+     track the palette in both themes; the categorical event scale (--chart-1..7)
+     is chart-only. The token-referencing entries resolve per theme automatically
+     via the dark overrides above, so only the explicit categorical values below
+     are re-declared in html.dark. */
+  --chart-consumption: var(--accent);
+  --chart-capacity: var(--destructive);
+  --chart-grid: var(--border-strong);
+  --chart-axis: var(--fg-subtle);
+  --chart-utilization-ok: var(--fg-muted);
+  --chart-utilization-warn: var(--warning);
+  --chart-utilization-crit: var(--destructive);
+  --chart-1: #171717;
+  --chart-2: #525252;
+  --chart-3: #737373;
+  --chart-4: #a3a3a3;
+  --chart-5: var(--accent);
+  --chart-6: var(--warning);
+  --chart-7: #0f766e;
 }
 
 html.dark {
@@ -71,6 +92,14 @@ html.dark {
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.2);
   --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.3);
   --overlay-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.45);
+
+  /* Categorical event-scale overrides (the token-referencing --chart-* roles
+     resolve automatically from the dark --accent/--warning/etc. above). */
+  --chart-1: #e5e5e5;
+  --chart-2: #a3a3a3;
+  --chart-3: #737373;
+  --chart-4: #525252;
+  --chart-7: #2dd4bf;
 }
 
 @theme {
