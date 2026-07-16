@@ -11,7 +11,7 @@ export function HostEolPill({ eolAt }: { eolAt: string | null }): React.JSX.Elem
   return (
     <span
       className={`inline-flex items-center gap-1 text-xs ${
-        warn ? 'font-medium text-amber-700' : 'text-zinc-600'
+        warn ? 'font-medium text-warning' : 'text-fg-subtle'
       }`}
       title={warn ? `Expires in ${days} days` : undefined}
     >

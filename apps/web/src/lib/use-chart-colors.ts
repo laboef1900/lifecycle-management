@@ -45,25 +45,25 @@ interface ChartFallback {
 }
 
 const FALLBACK_LIGHT: ChartFallback = {
-  consumption: '#a16207', // --accent
-  capacity: '#b91c1c', // --destructive
-  grid: '#e7e5e4', // --border-strong
-  axis: '#78716c', // --fg-subtle
-  utilizationOk: '#57534e', // --fg-muted
-  utilizationWarn: '#92400e', // --warning
-  utilizationCrit: '#b91c1c', // --destructive
-  palette: ['#171717', '#525252', '#737373', '#a3a3a3', '#a16207', '#92400e', '#0f766e'],
+  consumption: '#8f6400', // --accent
+  capacity: '#3a455e', // --chart-capacity
+  grid: '#e3e8f2', // --chart-grid
+  axis: '#8a94ac', // --chart-axis
+  utilizationOk: '#5a6478', // --fg-muted
+  utilizationWarn: '#95610c', // --warning
+  utilizationCrit: '#c0343c', // --destructive
+  palette: ['#171c2c', '#5a6478', '#66708c', '#a8b0c4', '#8f6400', '#95610c', '#0f766e'],
 };
 
 const FALLBACK_DARK: ChartFallback = {
-  consumption: '#fbbf24', // --accent
-  capacity: '#f87171', // --destructive
-  grid: '#3a3633', // --border-strong
-  axis: '#8a8580', // --fg-subtle
-  utilizationOk: '#a8a29e', // --fg-muted
-  utilizationWarn: '#f59e0b', // --warning
-  utilizationCrit: '#f87171', // --destructive
-  palette: ['#e5e5e5', '#a3a3a3', '#737373', '#525252', '#fbbf24', '#f59e0b', '#2dd4bf'],
+  consumption: '#ffc53d', // --accent
+  capacity: '#c7d0e4', // --chart-capacity
+  grid: '#1b2236', // --chart-grid
+  axis: '#2a3450', // --chart-axis
+  utilizationOk: '#8b93a7', // --fg-muted
+  utilizationWarn: '#ffc53d', // --warning
+  utilizationCrit: '#ff6b6b', // --destructive
+  palette: ['#e8ecf5', '#8b93a7', '#7c86a0', '#4a5570', '#ffc53d', '#ffc53d', '#2dd4bf'],
 };
 
 /**

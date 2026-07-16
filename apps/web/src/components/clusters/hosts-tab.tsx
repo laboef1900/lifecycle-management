@@ -383,9 +383,7 @@ function CapacityTimeline({ rows }: { rows: HostResponse['capacities'] }): React
               <span className="font-mono text-xs text-muted-foreground">{row.effectiveFrom}</span>
               <span>{formatGb(row.amount)}</span>
               {delta !== null ? (
-                <span
-                  className={cn('text-xs', delta >= 0 ? 'text-emerald-700' : 'text-destructive')}
-                >
+                <span className={cn('text-xs', delta >= 0 ? 'text-success' : 'text-destructive')}>
                   {delta >= 0 ? '+' : ''}
                   {formatNumber(delta)} GB
                 </span>
