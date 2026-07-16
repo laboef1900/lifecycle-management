@@ -18,8 +18,8 @@ import { KpiTile } from '@/components/overview/kpi-tile';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { RunwayPill } from '@/components/ui/runway-pill';
+import { BulletMeter } from '@/components/fleet/bullet-meter';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { UtilizationGauge } from '@/components/ui/utilization-gauge';
 import { api, type ScenarioWire } from '@/lib/api-client';
 import { useIsAdmin } from '@/lib/auth';
 import { runwayToWarn, utilStatus } from '@/lib/forecast-summary';
@@ -187,21 +187,21 @@ function ClusterDetailKpiStrip({
         </Badge>
       ) : null}
       <div className="grid grid-cols-12 gap-2">
-        <Card className="col-span-12 flex items-center gap-4 p-3.5 sm:col-span-6 lg:col-span-3">
-          <UtilizationGauge
-            value={metric.utilization}
-            size="md"
-            warn={forecast.effectiveThresholds.warn}
-            crit={forecast.effectiveThresholds.crit}
+        <Card className="col-span-12 flex flex-col justify-center gap-1.5 p-3.5 sm:col-span-6 lg:col-span-3">
+          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+            Current utilization
+          </p>
+          <p className="font-mono text-xl font-medium tabular-nums text-foreground sm:text-2xl">
+            {(metric.utilization * 100).toFixed(1)}%
+          </p>
+          <BulletMeter
+            value={metric.utilization * 100}
+            warn={forecast.effectiveThresholds.warn * 100}
+            crit={forecast.effectiveThresholds.crit * 100}
           />
-          <div>
-            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-              Current utilization
-            </p>
-            <p className="mt-1.5 font-mono text-[11px] tabular-nums text-fg-muted">
-              {numberFormat.format(Math.round(metric.currentConsumption))} GB used
-            </p>
-          </div>
+          <p className="font-mono text-[11px] tabular-nums text-fg-muted">
+            {numberFormat.format(Math.round(metric.currentConsumption))} GB used
+          </p>
         </Card>
         <KpiTile
           className="col-span-12 sm:col-span-6 lg:col-span-3"

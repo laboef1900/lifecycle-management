@@ -60,6 +60,15 @@
      overridden with the real gradients in html.dark below. */
   --surface-backdrop: var(--background);
   --surface-card: var(--card);
+  /* Bullet-meter fill (spec §3: "amber meter gradient"). Light theme has no
+     literal recipe in the spec ("derive from light --accent") — a darker
+     shade of the light --accent to --accent itself keeps the same ramp
+     direction as the dark value below. */
+  --meter-gradient: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--accent) 70%, black),
+    var(--accent)
+  );
 
   /* Chart colors — the single source of truth for Recharts, read at runtime by
      use-chart-colors.ts. Semantic roles reference the shared tokens so charts
@@ -122,6 +131,8 @@ html.dark {
     var(--background) 60%
   );
   --surface-card: linear-gradient(180deg, #171e31, #131928);
+  /* Exact spec §3 value: linear-gradient(90deg,#D9A32C,#FFC53D). */
+  --meter-gradient: linear-gradient(90deg, #d9a32c, var(--accent));
 
   /* Categorical event-scale + independent chart roles (the var()-referencing
      roles above — consumption, chart-5, chart-6, and the chart-utilization-*

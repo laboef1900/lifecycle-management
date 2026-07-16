@@ -64,7 +64,7 @@ export function ClusterLifecycleCard({ clusterId }: ClusterLifecycleCardProps): 
       void invalidateClustersLists();
       setDeleteDialogOpen(false);
       toast.success('Cluster deleted.');
-      void navigate({ to: '/clusters' });
+      void navigate({ to: '/' });
     },
     onError: () => {
       toast.error('Could not delete cluster.');
