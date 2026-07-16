@@ -1,4 +1,5 @@
 import type { ForecastResponse } from '@lcm/shared';
+import { useState } from 'react';
 import {
   Area,
   CartesianGrid,
@@ -17,6 +18,16 @@ import { Card } from '@/components/ui/card';
 import { formatMonthShort } from '@/lib/format-month';
 import { eventColor, useChartColors } from '@/lib/use-chart-colors';
 
+import {
+  CHART_HEIGHT,
+  CHART_MARGIN,
+  X_AXIS_HEIGHT,
+  Y_AXIS_WIDTH,
+  layoutEventLabel,
+  planEventLabelOffsets,
+  type EventLabelViewBox,
+} from './forecast-label-layout';
+
 interface ForecastChartProps {
   forecast: ForecastResponse;
   compact?: boolean;
@@ -32,6 +43,9 @@ export function ForecastChart({
   scenario,
 }: ForecastChartProps): React.JSX.Element {
   const colors = useChartColors();
+  // Measured SVG width from ResponsiveContainer; the event-label planner needs
+  // it to resolve label collisions and clamp boxes in pixel space.
+  const [chartWidth, setChartWidth] = useState<number | null>(null);
   const { warn, crit } = forecast.effectiveThresholds;
   const scenarioByMonth = new Map<string, number>();
   if (scenario) {
@@ -61,6 +75,23 @@ export function ForecastChart({
     eventsByMonth.set(monthKey, bucket);
   }
 
+  const monthIndexByKey = new Map(data.map((d, index) => [d.month, index]));
+  // Events whose month falls inside the visible window — these render a dot
+  // and a boxed label on the chart.
+  const eventDots = forecast.events.flatMap((event) => {
+    const monthKey = `${event.effectiveDate.slice(0, 7)}-01`;
+    const monthIndex = monthIndexByKey.get(monthKey);
+    const datum = monthIndex === undefined ? undefined : data[monthIndex];
+    if (monthIndex === undefined || datum === undefined) return [];
+    return [{ event, monthKey, monthIndex, consumption: datum.consumption }];
+  });
+  const eventLabelOffsets = planEventLabelOffsets({
+    events: eventDots.map(({ event, monthIndex }) => ({ id: event.id, monthIndex })),
+    monthCount: data.length,
+    chartWidth,
+    compact,
+  });
+
   // Earliest projected end-of-life across all hosts in this forecast. The
   // chart X-axis is categorical (month strings), so snap the EOL date to the
   // first day of its month and only render if that month is within the
@@ -79,11 +110,25 @@ export function ForecastChart({
   return (
     <Card className="p-4">
       {/* TODO(a11y): fold cluster/metric identity into this label before any multi-chart layout (PR 2 Radix rebuild). */}
-      <div className="h-[320px] w-full" role="img" aria-label="Capacity forecast chart">
-        <ResponsiveContainer width="100%" height="100%">
+      <div
+        className="w-full"
+        style={{ height: CHART_HEIGHT }}
+        role="img"
+        aria-label="Capacity forecast chart"
+      >
+        <ResponsiveContainer
+          width="100%"
+          height="100%"
+          onResize={(width) => setChartWidth(width > 0 ? width : null)}
+        >
           <ComposedChart
             data={data}
-            margin={{ top: 12, right: compact ? 16 : 56, bottom: 0, left: 8 }}
+            margin={{
+              top: CHART_MARGIN.top,
+              right: compact ? CHART_MARGIN.rightCompact : CHART_MARGIN.right,
+              bottom: CHART_MARGIN.bottom,
+              left: CHART_MARGIN.left,
+            }}
             accessibilityLayer={false}
           >
             <defs>
@@ -95,6 +140,7 @@ export function ForecastChart({
             <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
             <XAxis
               dataKey="month"
+              height={X_AXIS_HEIGHT}
               tickFormatter={formatMonthShort}
               tick={{ fontSize: compact ? 10 : 11 }}
               stroke={colors.axis}
@@ -102,6 +148,7 @@ export function ForecastChart({
               minTickGap={24}
             />
             <YAxis
+              width={Y_AXIS_WIDTH}
               tick={{ fontSize: compact ? 10 : 11 }}
               stroke={colors.axis}
               tickFormatter={(v: number) => numberFormat.format(v)}
@@ -281,23 +328,24 @@ export function ForecastChart({
                 }}
               />
             ) : null}
-            {forecast.events.map((event) => {
-              const monthKey = `${event.effectiveDate.slice(0, 7)}-01`;
-              const datum = data.find((d) => d.month === monthKey);
-              if (!datum) return null;
-              return (
-                <ReferenceDot
-                  key={event.id}
-                  x={monthKey}
-                  y={datum.consumption}
-                  r={5}
-                  fill={eventColor(colors, event.category)}
-                  stroke="var(--card)"
-                  strokeWidth={1.5}
-                  ifOverflow="extendDomain"
-                />
-              );
-            })}
+            {eventDots.map(({ event, monthKey, consumption }) => (
+              <ReferenceDot
+                key={event.id}
+                x={monthKey}
+                y={consumption}
+                r={5}
+                fill={eventColor(colors, event.category)}
+                stroke="var(--card)"
+                strokeWidth={1.5}
+                ifOverflow="extendDomain"
+                label={renderEventLabel(
+                  event.title,
+                  eventColor(colors, event.category),
+                  compact,
+                  eventLabelOffsets.get(event.id) ?? 0,
+                )}
+              />
+            ))}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -330,6 +378,62 @@ function renderEndLabel(lastIndex: number, text: string, fill: string) {
       <text x={numericX + 4} y={numericY} dy={3} fontSize={10} fill={fill}>
         {text}
       </text>
+    );
+  };
+}
+
+// Recharts invokes a function-valued ReferenceDot `label` with a loosely typed
+// props bag whose `viewBox` is the dot's bounding box. Like EndLabelRenderProps
+// above, we accept a minimal structural shape and validate at runtime — no `any`.
+interface EventLabelRenderProps {
+  viewBox?: EventLabelViewBox | undefined;
+}
+
+// Draws an event's title as vertical text in a category-coloured box below
+// (or, when space below is tight, above) its dot, with a leader line back to
+// the datapoint. The card fill keeps the text readable over the chart area;
+// pointer events stay off so tooltip hover is unaffected.
+function renderEventLabel(title: string, color: string, compact: boolean, offsetX: number) {
+  return (props: EventLabelRenderProps): React.JSX.Element | null => {
+    const geometry = layoutEventLabel(props.viewBox, { title, compact, offsetX });
+    if (!geometry) return null;
+    const { box, leader } = geometry;
+    return (
+      <g style={{ pointerEvents: 'none' }}>
+        {/* The leader's dot-side end hides under the marker, so it reads as
+            coming out of the point. */}
+        <line
+          x1={leader.x1}
+          y1={leader.y1}
+          x2={leader.x2}
+          y2={leader.y2}
+          stroke={color}
+          strokeWidth={1}
+          strokeOpacity={0.75}
+        />
+        <rect
+          x={box.x}
+          y={box.y}
+          width={box.width}
+          height={box.height}
+          rx={3}
+          fill="var(--card)"
+          stroke={color}
+          strokeWidth={1.25}
+        />
+        <text
+          x={geometry.textX}
+          y={geometry.textY}
+          transform={`rotate(-90, ${geometry.textX}, ${geometry.textY})`}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize={geometry.fontSize}
+          fontWeight={600}
+          fill={color}
+        >
+          {geometry.text}
+        </text>
+      </g>
     );
   };
 }
