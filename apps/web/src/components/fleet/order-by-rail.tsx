@@ -1,3 +1,4 @@
+import { daysUntil } from '@/lib/dates';
 import { formatDateShort } from '@/lib/format-month';
 import { cn } from '@/lib/utils';
 
@@ -17,19 +18,11 @@ interface OrderByRailProps {
   onTickHover?: (id: string | null) => void;
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 /** Matches `deriveProcurementKpi`'s URGENT_DAYS — keeps rail/tile/KPI urgency language consistent. */
 const URGENT_DAYS = 28;
 const SOON_DAYS = 90;
 /** The rail always spans the next 12 months (spec §4.2). */
 const RAIL_WINDOW_DAYS = 365;
-
-/** Days from `today` (UTC midnight) until `dateStr` (also UTC midnight). Negative if past. */
-function daysUntil(dateStr: string, today: Date): number {
-  const target = new Date(`${dateStr}T00:00:00Z`).getTime();
-  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  return Math.round((target - todayUtc) / DAY_MS);
-}
 
 export type OrderByUrgencyTone = 'now' | 'soon' | 'planned' | 'none';
 

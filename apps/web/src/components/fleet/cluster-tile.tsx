@@ -41,6 +41,15 @@ interface RunwayInfo {
   plus: boolean;
   breachLabel: 'crit' | 'warn' | null;
   breachDate: string | null;
+  /**
+   * Set when the cluster is already past a threshold (warn or crit) and no
+   * further crossing was found in-window — distinguishes "already breached,
+   * nothing more to project" from a genuinely unbreached cluster, both of
+   * which otherwise share the same {@link value}/{@link plus} numeral.
+   */
+  pastLabel: 'warn' | 'crit' | null;
+  /** Whole-percent threshold that `pastLabel` refers to (e.g. 70 for warn). */
+  pastThresholdPct: number | null;
 }
 
 function computeRunway(
@@ -60,9 +69,23 @@ function computeRunway(
         plus: false,
         breachLabel: 'crit',
         breachDate: months[critIndex]!.month,
+        pastLabel: null,
+        pastThresholdPct: null,
       };
     }
-    return { value: horizon, plus: true, breachLabel: null, breachDate: null };
+    // Already past warn (or crit) as of the current month, but no month in
+    // the window crosses crit — the numeral still reads "{horizon}+ MO"
+    // (nothing further to project), but the sub-line/verdict must not claim
+    // "no breach": the fleet is already in breach right now.
+    const pastLabel = summary.alreadyBreached;
+    return {
+      value: horizon,
+      plus: true,
+      breachLabel: null,
+      breachDate: null,
+      pastLabel,
+      pastThresholdPct: Math.round(thresholds[pastLabel] * 100),
+    };
   }
   if (summary.months !== null) {
     return {
@@ -70,9 +93,18 @@ function computeRunway(
       plus: false,
       breachLabel: 'warn',
       breachDate: months[summary.months]!.month,
+      pastLabel: null,
+      pastThresholdPct: null,
     };
   }
-  return { value: horizon, plus: true, breachLabel: null, breachDate: null };
+  return {
+    value: horizon,
+    plus: true,
+    breachLabel: null,
+    breachDate: null,
+    pastLabel: null,
+    pastThresholdPct: null,
+  };
 }
 
 /**
@@ -124,6 +156,7 @@ export function ClusterTile({
   const badge = STATUS_BADGE[status];
   const orderByDate = forecast?.procurement.orderByDate ?? null;
   const urgency = orderByUrgency(orderByDate);
+  const isArchived = Boolean(cluster.archivedAt);
   const runway = computeRunway(entry, thresholds);
   const stale = isBaselineStale(cluster.baselineDate);
   const ageDays = baselineAgeDays(cluster.baselineDate);
@@ -131,14 +164,24 @@ export function ClusterTile({
 
   const runwaySub = runway.breachLabel
     ? `to ${runway.breachLabel} ${formatMonthShort(runway.breachDate!)}`
-    : 'no breach';
+    : runway.pastLabel === 'warn'
+      ? `past warn ${runway.pastThresholdPct}% — crit beyond window`
+      : runway.pastLabel === 'crit'
+        ? `past crit ${runway.pastThresholdPct}%`
+        : 'no breach';
   const verdict = runway.breachLabel
     ? `${(currentUtil * 100).toFixed(1)}% used — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
-    : `${(currentUtil * 100).toFixed(1)}% used — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
+    : runway.pastLabel === 'warn'
+      ? `${(currentUtil * 100).toFixed(1)}% used — already past warn; crit beyond the ${runway.value}-month window.`
+      : runway.pastLabel === 'crit'
+        ? `${(currentUtil * 100).toFixed(1)}% used — already past crit.`
+        : `${(currentUtil * 100).toFixed(1)}% used — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
 
   const ariaLabel = [
     `${cluster.name}: ${(currentUtil * 100).toFixed(1)} percent utilized`,
-    `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,
+    isArchived
+      ? 'archived — no forecast'
+      : `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,
     orderByDate
       ? `order by ${orderByDate} (${formatRelativeDays(orderByDate)})`
       : 'no order needed',
@@ -173,12 +216,23 @@ export function ClusterTile({
       </div>
 
       <div className="flex flex-wrap items-end gap-2">
-        <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-accent">
-          {runway.value}
-          {runway.plus ? '+' : ''}
-          <span className="ml-1 text-xs font-semibold text-fg-muted">MO</span>
-        </span>
-        <span className="pb-1 font-mono text-[10px] text-fg-muted">{runwaySub}</span>
+        {isArchived ? (
+          <span
+            className="font-mono text-[28px] font-bold leading-none tracking-tight text-fg-muted"
+            aria-label="archived — no forecast"
+          >
+            —
+          </span>
+        ) : (
+          <>
+            <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-accent">
+              {runway.value}
+              {runway.plus ? '+' : ''}
+              <span className="ml-1 text-xs font-semibold text-fg-muted">MO</span>
+            </span>
+            <span className="pb-1 font-mono text-[10px] text-fg-muted">{runwaySub}</span>
+          </>
+        )}
         <span
           className={cn(
             'ml-auto rounded border px-1.5 py-0.5 font-mono text-[9.5px] font-bold tracking-[0.08em]',
@@ -193,7 +247,9 @@ export function ClusterTile({
         </span>
       </div>
 
-      <p className="text-[11px] leading-[1.45] text-fg-muted">{verdict}</p>
+      <p className="text-[11px] leading-[1.45] text-fg-muted">
+        {isArchived ? 'Archived — no forecast.' : verdict}
+      </p>
 
       <div className="flex flex-wrap gap-1">
         {events.length > 0 ? (

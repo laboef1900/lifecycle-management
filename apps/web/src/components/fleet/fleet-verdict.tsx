@@ -18,6 +18,12 @@ export interface FleetVerdictProps {
   staleCount: number;
   /** Count of clusters with an order-by date within 90 days. */
   openOrderCount: number;
+  /**
+   * Total hosts across clusters with a resolved forecast (spec §4.3's
+   * "clusters · hosts" instrument). `null` while forecasts are still loading
+   * — the instrument falls back to showing the cluster count alone.
+   */
+  hostCount: number | null;
 }
 
 const HL = 'underline decoration-[3px] underline-offset-[3px]';
@@ -33,6 +39,7 @@ export function FleetVerdict({
   earliest,
   staleCount,
   openOrderCount,
+  hostCount,
 }: FleetVerdictProps): React.JSX.Element {
   const thresholds = useEffectiveThresholds();
   const runway = fleetRunwayToWarn(
@@ -110,7 +117,11 @@ export function FleetVerdict({
         </Instrument>
         <Separator />
         <Instrument label="Clusters">
-          <span className="font-mono text-base font-bold tabular-nums">{summary.clusterCount}</span>
+          <span className="font-mono text-base font-bold tabular-nums">
+            {hostCount != null
+              ? `${summary.clusterCount} CLUSTERS · ${hostCount} HOSTS`
+              : summary.clusterCount}
+          </span>
         </Instrument>
         <Separator />
         <Instrument label="Open orders">

@@ -1,5 +1,6 @@
 import type { ProcurementInfo } from '@lcm/shared';
 
+import { daysUntil } from '@/lib/dates';
 import { formatMonthLong } from '@/lib/format-month';
 
 export type ProcurementKpiStatus = 'ok' | 'attention' | 'warn' | 'crit';
@@ -10,15 +11,7 @@ export interface ProcurementKpi {
   status: ProcurementKpiStatus;
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const URGENT_DAYS = 28;
-
-/** Days from `today` (midnight UTC) until `dateStr` (also midnight UTC). Negative if past. */
-function daysUntil(dateStr: string, today: Date): number {
-  const target = new Date(`${dateStr}T00:00:00Z`).getTime();
-  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  return Math.round((target - todayUtc) / DAY_MS);
-}
 
 export function deriveProcurementKpi(
   info: ProcurementInfo,

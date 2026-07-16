@@ -178,6 +178,75 @@ describe('<ClusterTile>', () => {
     expect(link.getAttribute('aria-label')).toContain('2026-12-28');
   });
 
+  it('reflects an already-past-warn breach in the runway sub-line, badge, and verdict when crit is never reached in-window (finding 1)', () => {
+    // Default entry() fixture: summary.alreadyBreached === 'warn', and both
+    // months (0.777, 0.79) stay under the 0.9 crit threshold — crit is never
+    // reached in-window.
+    render(
+      <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+    );
+    expect(screen.getByText('WARN')).toBeInTheDocument();
+    expect(screen.getByText(/past warn 70%/i)).toBeInTheDocument();
+    expect(screen.getByText(/crit beyond window/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no breach/i)).toBeNull();
+    expect(
+      screen.getByText(/already past warn; crit beyond the 2-month window/i),
+    ).toBeInTheDocument();
+  });
+
+  it('reflects an already-past-crit breach analogously when crit is never crossed again in-window (finding 1, crit variant)', () => {
+    // summary.alreadyBreached is 'crit' (current month already over crit), but
+    // none of the in-window months (both under the 0.9 crit threshold) cross
+    // crit again — the defensive "no further crossing" branch for crit.
+    render(
+      <ClusterTile
+        entry={entry({
+          cluster: cluster({
+            metrics: [
+              {
+                metricTypeKey: 'memory_gb',
+                metricTypeDisplayName: 'Memory',
+                unit: 'GB',
+                baselineConsumption: 22900,
+                baselineCapacity: 24576,
+                currentConsumption: 22900,
+                currentCapacity: 24576,
+                utilization: 0.932,
+              },
+            ],
+          }),
+          summary: { months: 0, alreadyBreached: 'crit' },
+        })}
+        forecast={forecast()}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+      />,
+    );
+    expect(screen.getByText('CRIT')).toBeInTheDocument();
+    expect(screen.getByText(/past crit 90%/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no breach/i)).toBeNull();
+    expect(screen.getByText(/already past crit/i)).toBeInTheDocument();
+  });
+
+  it('renders an em dash instead of a synthetic "0+ MO" for an archived cluster with no forecast (finding 3)', () => {
+    render(
+      <ClusterTile
+        entry={{
+          cluster: cluster({ archivedAt: '2026-01-01T00:00:00Z' }),
+          months: [],
+          thresholds: { warn: 0.7, crit: 0.9 },
+          summary: { months: null, alreadyBreached: false },
+        }}
+        forecast={undefined}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+      />,
+    );
+    expect(screen.getByText('Archived')).toBeInTheDocument();
+    expect(screen.getByLabelText('archived — no forecast')).toHaveTextContent('—');
+    const link = screen.getByRole('link');
+    expect(link).not.toHaveTextContent('0+');
+    expect(link.getAttribute('aria-label')).toContain('archived — no forecast');
+  });
+
   it('renders a non-link error tile with a retry affordance when the entry failed to load', () => {
     render(
       <ClusterTile

@@ -112,6 +112,15 @@ export function FleetConsole(): React.JSX.Element {
 
   const pendingCount = clusters.length - clusterEntries.length;
 
+  // Spec §4.3's "clusters · hosts" instrument: sum ForecastEntityContribution
+  // rows across clusters with a resolved forecast (errored clusters have no
+  // entry in forecastsByClusterId and so contribute 0). `null` while any
+  // forecast is still in flight, so the verdict shows the cluster count alone
+  // rather than an undercount.
+  const hostCount = forecastsLoading
+    ? null
+    : clusters.reduce((sum, c) => sum + (forecastsByClusterId.get(c.id)?.hosts.length ?? 0), 0);
+
   const earliest = earliestOrderByFromFleet(clusters, procurementByClusterId);
   const staleCount = clusters.filter((c) => isBaselineStale(c.baselineDate)).length;
   const openOrderCount = clusters.filter((c) => {
@@ -199,6 +208,7 @@ export function FleetConsole(): React.JSX.Element {
                 earliest={earliest}
                 staleCount={staleCount}
                 openOrderCount={openOrderCount}
+                hostCount={hostCount}
               />
             </div>
 

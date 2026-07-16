@@ -93,6 +93,7 @@ describe('<FleetVerdict>', () => {
         earliest={{ cluster: cluster('c1', 'CL-Oracle'), procurement: procurement() }}
         staleCount={0}
         openOrderCount={1}
+        hostCount={null}
       />,
     );
     const heading = screen.getByRole('heading', { level: 1 });
@@ -103,7 +104,15 @@ describe('<FleetVerdict>', () => {
   });
 
   it('renders the all-clear sentence when there is no projected breach', () => {
-    render(<FleetVerdict summary={summary()} earliest={null} staleCount={0} openOrderCount={0} />);
+    render(
+      <FleetVerdict
+        summary={summary()}
+        earliest={null}
+        staleCount={0}
+        openOrderCount={0}
+        hostCount={null}
+      />,
+    );
     const heading = screen.getByRole('heading', { level: 1 });
     expect(heading).toHaveTextContent(/fleet is healthy/i);
     expect(heading).toHaveTextContent(/no orders due before/i);
@@ -111,23 +120,82 @@ describe('<FleetVerdict>', () => {
   });
 
   it('renders the verdict headline as the page h1', () => {
-    render(<FleetVerdict summary={summary()} earliest={null} staleCount={0} openOrderCount={0} />);
+    render(
+      <FleetVerdict
+        summary={summary()}
+        earliest={null}
+        staleCount={0}
+        openOrderCount={0}
+        hostCount={null}
+      />,
+    );
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 
   it('shows a warn-toned stale-baseline count when > 0', () => {
-    render(<FleetVerdict summary={summary()} earliest={null} staleCount={2} openOrderCount={0} />);
+    render(
+      <FleetVerdict
+        summary={summary()}
+        earliest={null}
+        staleCount={2}
+        openOrderCount={0}
+        hostCount={null}
+      />,
+    );
     expect(screen.getByText(/2 stale/i)).toBeInTheDocument();
   });
 
   it('shows "all fresh" when no baselines are stale', () => {
-    render(<FleetVerdict summary={summary()} earliest={null} staleCount={0} openOrderCount={0} />);
+    render(
+      <FleetVerdict
+        summary={summary()}
+        earliest={null}
+        staleCount={0}
+        openOrderCount={0}
+        hostCount={null}
+      />,
+    );
     expect(screen.getByText(/all fresh/i)).toBeInTheDocument();
   });
 
   it('shows the fleet utilization percentage and clusters count', () => {
-    render(<FleetVerdict summary={summary()} earliest={null} staleCount={0} openOrderCount={0} />);
+    render(
+      <FleetVerdict
+        summary={summary()}
+        earliest={null}
+        staleCount={0}
+        openOrderCount={0}
+        hostCount={null}
+      />,
+    );
     expect(screen.getByText('62.0%')).toBeInTheDocument();
     expect(screen.getByText('2')).toBeInTheDocument();
+  });
+
+  it('shows "N CLUSTERS · M HOSTS" once the host count has resolved (finding 2)', () => {
+    render(
+      <FleetVerdict
+        summary={summary()}
+        earliest={null}
+        staleCount={0}
+        openOrderCount={0}
+        hostCount={28}
+      />,
+    );
+    expect(screen.getByText('2 CLUSTERS · 28 HOSTS')).toBeInTheDocument();
+  });
+
+  it('shows the cluster count alone (no host count) while forecasts are still loading', () => {
+    render(
+      <FleetVerdict
+        summary={summary()}
+        earliest={null}
+        staleCount={0}
+        openOrderCount={0}
+        hostCount={null}
+      />,
+    );
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.queryByText(/HOSTS/)).toBeNull();
   });
 });
