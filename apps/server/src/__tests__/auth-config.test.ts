@@ -23,12 +23,16 @@ describe('AuthConfigService.load', () => {
   });
 
   it('seeds from env on first load, encrypting the client secret', async () => {
+    // The '*' cannot occur in the stored value (base64 segments joined by '.'),
+    // so the encrypted-at-rest assertion below is deterministic — a plain-word
+    // marker like 'shh' can appear in random base64 ciphertext by chance.
+    const plaintextSecret = 'shh*plaintext*marker';
     const svc = new AuthConfigService(prisma, KEY);
     const cfg = await svc.load(
       makeOidcTestEnv({
         OIDC_ISSUER_URL: 'https://idp',
         OIDC_CLIENT_ID: 'lcm',
-        OIDC_CLIENT_SECRET: 'shh',
+        OIDC_CLIENT_SECRET: plaintextSecret,
         APP_BASE_URL: 'https://app',
         OIDC_SCOPES: 'openid profile email',
         OIDC_DEFAULT_ROLE: 'admin',
@@ -36,12 +40,12 @@ describe('AuthConfigService.load', () => {
     );
     expect(cfg.mode).toBe('oidc');
     expect(cfg.clientId).toBe('lcm');
-    expect(cfg.clientSecret).toBe('shh'); // decrypted in-memory
+    expect(cfg.clientSecret).toBe(plaintextSecret); // decrypted in-memory
     expect(cfg.signingSecret).not.toBeNull(); // app-generated, not from LOGIN_STATE_SECRET
     expect(cfg.signingSecret).not.toBe('test-login-state-secret-0123456789abcdef');
     const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
     expect(row!.clientSecretEnc).not.toBeNull();
-    expect(row!.clientSecretEnc).not.toContain('shh'); // encrypted at rest
+    expect(row!.clientSecretEnc).not.toContain(plaintextSecret); // encrypted at rest
     expect(row!.signingSecretEnc).not.toBeNull();
   });
 
