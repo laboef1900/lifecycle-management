@@ -14,8 +14,7 @@ const ROWS: Row[] = [
   { keys: ['⌘', 'K'], label: 'Open command palette' },
   { keys: ['?'], label: 'Show this shortcuts list' },
   { keys: ['Esc'], label: 'Close any modal' },
-  { keys: ['g', 'o'], label: 'Go to overview' },
-  { keys: ['g', 'c'], label: 'Go to clusters' },
+  { keys: ['g', 'o'], label: 'Go to fleet' },
   { keys: ['g', 's'], label: 'Go to settings' },
 ];
 

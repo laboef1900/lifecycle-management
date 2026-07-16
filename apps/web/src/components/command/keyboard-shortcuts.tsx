@@ -50,9 +50,6 @@ export function KeyboardShortcuts(): React.JSX.Element {
         if (event.key === 'o') {
           event.preventDefault();
           navigate({ to: '/' });
-        } else if (event.key === 'c') {
-          event.preventDefault();
-          navigate({ to: '/clusters' });
         } else if (event.key === 's') {
           event.preventDefault();
           navigate({ to: '/settings' });
