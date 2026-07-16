@@ -10,7 +10,7 @@ This file provides foundational guidance for AI coding assistants (Gemini, Claud
 ## Mandatory Rules (The "Golden Rules")
 
 1.  **Tests Required** — Every change needs a test. No PR is complete without verification. Backend: Vitest integration tests against a real Postgres via Testcontainers (Docker required), centralized in `apps/server/src/__tests__/` — prefer `factories.ts` over hand-rolled fixtures. Frontend: Vitest + React Testing Library colocated with components; Playwright golden-path e2e in `apps/web/playwright/`.
-2.  **Branching Model** — Branch off `main` as `feat/<slug>`, `fix/<slug>`, or `chore/<slug>` (optionally issue-prefixed, e.g. `feat/13-dashboard-cluster-list`). Flow: `feat/* → main` via PR. Never push to `main` directly. An `origin/dev` branch exists but is stale (fully merged into `main`) — do not target it.
+2.  **Branching Model** — Branch off `dev` as `feat/<slug>`, `fix/<slug>`, or `chore/<slug>` (optionally issue-prefixed, e.g. `feat/13-dashboard-cluster-list`). Flow: `feat/* → dev` via PR; `dev` is the integration branch and reaches `main` through a `dev → main` sync PR. Never push to `main` or `dev` directly — both branches only receive merges via PR.
 3.  **Data Safety (Critical)** — NEVER wipe persistent data without explicit user authorization. Do not run `docker volume rm` (volumes: `lcm-postgres-18-data` prod, `lcm-dev_lcm-postgres-dev` dev), `DROP DATABASE`, or `TRUNCATE` as shortcuts. Propose targeted `UPDATE` or `DELETE` instead. Backups are `pg_dump` of the prod volume.
 4.  **No Secrets** — Never commit `.env`, API keys, or credentials (a real `.env` exists at the repo root — never print or stage it). Production fails closed: compose refuses to start without `POSTGRES_PASSWORD` and `CONFIG_ENCRYPTION_KEY` (base64 of 32 random bytes; `openssl rand -base64 32`).
 5.  **Strict Typing & Validation** — TypeScript `strict` plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` (see `tsconfig.base.json`). No `any`, no error-suppressing comments. Every API input/output is validated with a Zod schema from `@lcm/shared`, parsed explicitly inside the route handler.
@@ -195,10 +195,10 @@ packages/shared/src/schemas/   # Zod contracts shared by server + web
 - **Feature Development:** do NOT just checkout a branch in the main directory — create the feature branch in a separate `git worktree`:
   ```bash
   git fetch origin
-  git worktree add ../<slug> -b feat/<issue#>-<slug> origin/main
+  git worktree add ../<slug> -b feat/<issue#>-<slug> origin/dev
   ```
-- **PR Flow:** `feat/* → main` (CI runs: lint → typecheck → test → build). One branch/PR per concern.
-- **Merging:** merge commits (`gh pr merge --merge`) to preserve per-task TDD history; squash only for churn nobody will bisect (typos, lint sweeps, dep bumps). **Stacked PRs:** retarget the dependent PR's base to `main` BEFORE merging the current one, then merge with `--merge`.
+- **PR Flow:** `feat/* → dev` (CI runs: lint → typecheck → test → build). One branch/PR per concern. Promote to production with a `dev → main` sync PR — `main` is what builds the `:latest` images.
+- **Merging:** merge commits (`gh pr merge --merge`) to preserve per-task TDD history; squash only for churn nobody will bisect (typos, lint sweeps, dep bumps). **Stacked PRs:** retarget the dependent PR's base to `dev` BEFORE merging the current one, then merge with `--merge`.
 - **Cleanup:** ONLY AFTER the PR is fully merged, remove the worktree and delete the _local_ branch (never the remote):
   ```bash
   git worktree remove ../<slug>
