@@ -26,6 +26,15 @@ interface ForecastChartProps {
 
 const numberFormat = new Intl.NumberFormat('en-US');
 
+// The chart canvas is a fixed 320px tall (see the `h-[320px]` wrapper below).
+// Event labels are placed below their dot by default and flipped above when
+// they'd otherwise overflow the plotting band, so we need the approximate top
+// and bottom of that band in SVG coordinates. The bottom leaves room for the
+// categorical x-axis (~recharts default height).
+const CHART_HEIGHT = 320;
+const CHART_PLOT_TOP = 12; // matches the ComposedChart top margin
+const CHART_PLOT_BOTTOM = CHART_HEIGHT - 30; // leave room for the x-axis
+
 export function ForecastChart({
   forecast,
   compact = false,
@@ -59,6 +68,19 @@ export function ForecastChart({
     const bucket = eventsByMonth.get(monthKey) ?? [];
     bucket.push(event);
     eventsByMonth.set(monthKey, bucket);
+  }
+
+  // Vertical event labels share the same x as their dot, so multiple events in
+  // one month would stack on top of each other. Spread each month's labels into
+  // adjacent columns, centred over the dot, so their boxes stay clear of each
+  // other (gap is a touch wider than the box so boxes never touch).
+  const labelColumnGap = compact ? 22 : 24;
+  const eventLabelOffset = new Map<string, number>();
+  for (const bucket of eventsByMonth.values()) {
+    const total = bucket.length;
+    bucket.forEach((event, index) => {
+      eventLabelOffset.set(event.id, (index - (total - 1) / 2) * labelColumnGap);
+    });
   }
 
   // Earliest projected end-of-life across all hosts in this forecast. The
@@ -283,17 +305,24 @@ export function ForecastChart({
               const monthKey = `${event.effectiveDate.slice(0, 7)}-01`;
               const datum = data.find((d) => d.month === monthKey);
               if (!datum) return null;
+              const eventColor = colors.event[event.category];
               return (
                 <ReferenceDot
                   key={event.id}
                   x={monthKey}
                   y={datum.consumption}
                   r={5}
-                  fill={colors.event[event.category]}
+                  fill={eventColor}
                   stroke="var(--card)"
                   strokeWidth={1.5}
                   isFront
                   ifOverflow="extendDomain"
+                  label={renderEventLabel(
+                    event.title,
+                    eventColor,
+                    compact,
+                    eventLabelOffset.get(event.id) ?? 0,
+                  )}
                 />
               );
             })}
@@ -326,6 +355,103 @@ function renderEndLabel(lastIndex: number, text: string, fill: string) {
       </text>
     );
   };
+}
+
+// Renders an event's title as a boxed vertical text label sitting below its
+// dot, with a leader line pointing back up to the datapoint. The box border and
+// text are coloured to match the category. `offsetX` shifts labels of same-month
+// events into adjacent columns so they don't stack. Recharts invokes this as a
+// Label `content` component and passes the dot's `viewBox`
+// ({ x: cx - r, y: cy - r, width: 2r, height: 2r }).
+function renderEventLabel(title: string, color: string, compact: boolean, offsetX: number) {
+  // Recharts' `label` prop (ImplicitLabelType) types this render callback as
+  // returning a non-null SVG element, so guard branches return an empty <g/>
+  // (renders nothing) rather than null.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (props: any): React.JSX.Element => {
+    const viewBox = props?.viewBox;
+    if (!viewBox) return <g />;
+    const vbX = Number(viewBox.x);
+    const vbY = Number(viewBox.y);
+    const vbW = Number(viewBox.width);
+    const vbH = Number(viewBox.height);
+    if (![vbX, vbY, vbW, vbH].every(Number.isFinite)) return <g />;
+
+    const dotCx = vbX + vbW / 2;
+    const dotCy = vbY + vbH / 2;
+    const dotTop = vbY;
+    const dotBottom = vbY + vbH;
+    const centerX = dotCx + offsetX;
+
+    const fontSize = compact ? 9 : 10;
+    const text = truncateLabel(title, compact ? 12 : 18);
+    // Box wraps the rotated text: its height follows the text length, its width
+    // follows the glyph height. Estimates from the font size keep it snug
+    // without measuring the DOM.
+    const padX = 4;
+    const padY = 5;
+    const boxWidth = Math.round(fontSize * 1.2) + padX * 2;
+    const boxHeight = Math.round(text.length * fontSize * 0.6) + padY * 2;
+
+    const leaderGap = 8;
+    const needed = boxHeight + leaderGap;
+    // Default below the dot; flip above only when there isn't room below but
+    // there is above, so low datapoints near the x-axis don't clip.
+    const roomBelow = CHART_PLOT_BOTTOM - dotBottom;
+    const roomAbove = dotTop - CHART_PLOT_TOP;
+    const below = needed <= roomBelow || roomBelow >= roomAbove;
+
+    // Anchor the leader/box on the chosen side. `boxTop` is the box's upper
+    // edge; the leader runs from the dot to whichever box edge faces it.
+    const boxTop = below ? dotBottom + leaderGap : dotTop - leaderGap - boxHeight;
+    const leaderY = below ? boxTop : boxTop + boxHeight;
+    const boxLeft = centerX - boxWidth / 2;
+    const textY = boxTop + boxHeight / 2;
+
+    return (
+      <g style={{ pointerEvents: 'none' }}>
+        {/* Leader line from the datapoint to the box (its dot-side end is hidden
+            under the dot marker, so it reads as coming out of the dot). */}
+        <line
+          x1={dotCx}
+          y1={dotCy}
+          x2={centerX}
+          y2={leaderY}
+          stroke={color}
+          strokeWidth={1}
+          strokeOpacity={0.75}
+        />
+        <rect
+          x={boxLeft}
+          y={boxTop}
+          width={boxWidth}
+          height={boxHeight}
+          rx={3}
+          fill="var(--card)"
+          stroke={color}
+          strokeWidth={1.25}
+        />
+        <text
+          x={centerX}
+          y={textY}
+          transform={`rotate(-90, ${centerX}, ${textY})`}
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize={fontSize}
+          fontWeight={600}
+          fill={color}
+        >
+          {text}
+        </text>
+      </g>
+    );
+  };
+}
+
+function truncateLabel(title: string, max: number): string {
+  const trimmed = title.trim();
+  if (trimmed.length <= max) return trimmed;
+  return `${trimmed.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
 }
 
 function formatDelta(consumption: number | null, capacity: number | null): string {

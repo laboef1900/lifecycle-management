@@ -37,8 +37,23 @@ vi.mock('recharts', () => {
     Area: ({ dataKey }: { dataKey: string }) => <div data-testid={`area-${dataKey}`} />,
     Line: ({ dataKey }: { dataKey: string }) => <div data-testid={`line-${dataKey}`} />,
     LabelList: () => null,
-    ReferenceDot: ({ x, y, fill }: { x: string; y: number; fill: string }): React.JSX.Element => (
-      <div data-testid="reference-dot" data-x={x} data-y={y} data-fill={fill} />
+    ReferenceDot: ({
+      x,
+      y,
+      fill,
+      label,
+    }: {
+      x: string;
+      y: number;
+      fill: string;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      label?: (props: any) => React.ReactNode;
+    }): React.JSX.Element => (
+      <div data-testid="reference-dot" data-x={x} data-y={y} data-fill={fill}>
+        {typeof label === 'function'
+          ? label({ viewBox: { x: 0, y: 0, width: 10, height: 10 } })
+          : null}
+      </div>
     ),
     ReferenceLine: ({
       x,
@@ -253,5 +268,140 @@ describe('ForecastChart props mapping', () => {
     expect(screen.getByText('Consumption')).toBeInTheDocument();
     expect(screen.getByText('Capacity ceiling')).toBeInTheDocument();
     expect(screen.getByText('OpenShift')).toBeInTheDocument();
+  });
+
+  it('labels each event dot with vertical text of the event name, coloured by category', () => {
+    const forecast = makeForecast({
+      events: [
+        {
+          id: 'e1',
+          effectiveDate: '2026-06-15',
+          category: 'growth',
+          title: 'Wachstum',
+          description: null,
+          consumptionDelta: 50,
+          capacityDelta: null,
+        },
+        {
+          id: 'e2',
+          effectiveDate: '2026-07-01',
+          category: 'hardware_change',
+          title: 'HW Tausch',
+          description: null,
+          consumptionDelta: null,
+          capacityDelta: 100,
+        },
+      ],
+    });
+    renderChart(forecast);
+
+    const growthLabel = screen.getByText('Wachstum');
+    const hardwareLabel = screen.getByText('HW Tausch');
+
+    // Vertical orientation (matches the -90° y-axis label convention).
+    expect(growthLabel.getAttribute('transform')).toMatch(/rotate\(-90/);
+    expect(hardwareLabel.getAttribute('transform')).toMatch(/rotate\(-90/);
+
+    // Colour comes from the event category, so the two categories differ and
+    // each label matches its own dot's fill.
+    const dots = screen.getAllByTestId('reference-dot');
+    expect(growthLabel.getAttribute('fill')).toBe(dots[0]?.dataset.fill);
+    expect(hardwareLabel.getAttribute('fill')).toBe(dots[1]?.dataset.fill);
+    expect(growthLabel.getAttribute('fill')).not.toBe(hardwareLabel.getAttribute('fill'));
+  });
+
+  it('wraps each label in a category-coloured box with a leader line to the dot', () => {
+    const forecast = makeForecast({
+      events: [
+        {
+          id: 'e1',
+          effectiveDate: '2026-06-15',
+          category: 'growth',
+          title: 'Wachstum',
+          description: null,
+          consumptionDelta: 50,
+          capacityDelta: null,
+        },
+      ],
+    });
+    renderChart(forecast);
+
+    const dot = screen.getAllByTestId('reference-dot')[0];
+    const box = dot?.querySelector('rect');
+    const leader = dot?.querySelector('line');
+    const label = screen.getByText('Wachstum');
+    const categoryColor = label.getAttribute('fill');
+
+    // Box drawn in the category colour, filled with the card background so the
+    // text stays readable over the chart area.
+    expect(box).not.toBeNull();
+    expect(box?.getAttribute('stroke')).toBe(categoryColor);
+    expect(box?.getAttribute('fill')).toBe('var(--card)');
+
+    // Leader line points from the dot (viewBox centre) down to the box top, in
+    // the category colour.
+    expect(leader).not.toBeNull();
+    expect(leader?.getAttribute('stroke')).toBe(categoryColor);
+    const boxTop = Number(box?.getAttribute('y'));
+    const leaderStartY = Number(leader?.getAttribute('y1'));
+    const leaderEndY = Number(leader?.getAttribute('y2'));
+    // Label sits below the datapoint: the leader ends lower (larger y) than it
+    // starts, and meets the top of the box.
+    expect(leaderEndY).toBeGreaterThan(leaderStartY);
+    expect(leaderEndY).toBe(boxTop);
+  });
+
+  it('truncates long event titles in the vertical label', () => {
+    const longTitle = 'A very long event title that overflows the chart';
+    const forecast = makeForecast({
+      events: [
+        {
+          id: 'e1',
+          effectiveDate: '2026-06-15',
+          category: 'note',
+          title: longTitle,
+          description: null,
+          consumptionDelta: null,
+          capacityDelta: null,
+        },
+      ],
+    });
+    renderChart(forecast);
+
+    expect(screen.queryByText(longTitle)).not.toBeInTheDocument();
+    const label = screen.getByText(/…$/);
+    expect(label.textContent?.length).toBeLessThan(longTitle.length);
+    expect(label.textContent?.startsWith('A very long')).toBe(true);
+  });
+
+  it('spreads same-month event labels into separate columns so they do not stack', () => {
+    const forecast = makeForecast({
+      events: [
+        {
+          id: 'e1',
+          effectiveDate: '2026-06-05',
+          category: 'growth',
+          title: 'Erstes',
+          description: null,
+          consumptionDelta: 10,
+          capacityDelta: null,
+        },
+        {
+          id: 'e2',
+          effectiveDate: '2026-06-20',
+          category: 'openshift',
+          title: 'Zweites',
+          description: null,
+          consumptionDelta: 20,
+          capacityDelta: null,
+        },
+      ],
+    });
+    renderChart(forecast);
+
+    const first = screen.getByText('Erstes');
+    const second = screen.getByText('Zweites');
+    // Both dots land in June, but their labels get distinct x positions.
+    expect(first.getAttribute('x')).not.toBe(second.getAttribute('x'));
   });
 });
