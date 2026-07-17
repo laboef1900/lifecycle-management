@@ -1,9 +1,14 @@
-import type { VsphereConnectionResponse, VsphereProbeResult } from '@lcm/shared';
+import type {
+  VsphereConnectionResponse,
+  VsphereProbeResult,
+  VsphereSyncOutcome,
+} from '@lcm/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShieldCheck, ShieldAlert, Trash2 } from 'lucide-react';
+import { RefreshCw, ShieldCheck, ShieldAlert, Trash2 } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { AdminOnly } from '@/components/auth/admin-only';
 import { ConfirmDialog } from '@/components/form/confirm-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -88,6 +93,18 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
     onError: (err) => toast.error(describeApiError(err, 'Could not remove the connection')),
   });
 
+  // "Sync now" (#192): queue an immediate sync. The request returns 202 at once —
+  // the scheduler's next tick runs it. Refetch so the last-sync line updates once
+  // the run lands (the mutation itself never waits for vCenter).
+  const syncNowMutation = useMutation({
+    mutationFn: (id: string) => api.settings.vsphere.connections.syncNow(id),
+    onSuccess: () => {
+      invalidate();
+      toast.success('Sync queued — it runs within a minute');
+    },
+    onError: (err) => toast.error(describeApiError(err, 'Could not queue a sync')),
+  });
+
   const connections = connectionsQuery.data ?? [];
 
   return (
@@ -124,18 +141,39 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
                   {c.username}@{c.hostname}
                   {c.apiVersion ? ` · vCenter ${c.apiVersion}` : ''}
                 </p>
+                <SyncStateLine syncState={c.syncState} />
                 {c.lastError ? (
                   <p className="text-destructive mt-1 text-xs">{c.lastError}</p>
                 ) : null}
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Remove ${c.name}`}
-                onClick={() => setDeleteTarget(c)}
-              >
-                <Trash2 className="size-4" aria-hidden />
-              </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                {/* ADMIN-only: viewers never see the control, and the server 403s
+                    it regardless. Disabled connections are never syncable — the
+                    scheduler filters them out, so a queued run could never fire. */}
+                <AdminOnly>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-label={`Sync now: ${c.name}`}
+                    disabled={
+                      !c.enabled ||
+                      (syncNowMutation.isPending && syncNowMutation.variables === c.id)
+                    }
+                    onClick={() => syncNowMutation.mutate(c.id)}
+                  >
+                    <RefreshCw className="size-3.5" aria-hidden />
+                    Sync now
+                  </Button>
+                </AdminOnly>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Remove ${c.name}`}
+                  onClick={() => setDeleteTarget(c)}
+                >
+                  <Trash2 className="size-4" aria-hidden />
+                </Button>
+              </div>
             </li>
           ))}
         </ul>
@@ -248,6 +286,48 @@ function ConnectionStatusBadge({
       return <Badge variant="warning">Certificate not trusted</Badge>;
     default:
       return <Badge variant="warning">Unreachable</Badge>;
+  }
+}
+
+/**
+ * The connection's last scheduler-job outcome (#192): when it last synced and, if
+ * that sync did not succeed, why — stated in words, never colour alone (house
+ * style). Distinct from the status badge above, which reports reachability; a
+ * connection can be reachable while its last sync was skipped or failed.
+ */
+function SyncStateLine({
+  syncState,
+}: {
+  syncState: VsphereConnectionResponse['syncState'];
+}): React.JSX.Element {
+  if (!syncState || !syncState.lastSyncAt) {
+    return <p className="text-muted-foreground mt-1 text-xs">Not synced yet</p>;
+  }
+  const status = syncState.lastSyncStatus;
+  const problem = status !== null && status !== 'ok' ? describeSyncOutcome(status) : null;
+  return (
+    <p className="text-muted-foreground mt-1 text-xs">
+      Last synced {new Date(syncState.lastSyncAt).toLocaleString()}
+      {problem ? <span className="text-warning"> · {problem}</span> : null}
+    </p>
+  );
+}
+
+/** A vСenter sync outcome as a short human phrase. */
+function describeSyncOutcome(outcome: VsphereSyncOutcome): string {
+  switch (outcome) {
+    case 'ok':
+      return 'up to date';
+    case 'unreachable':
+      return 'vCenter unreachable';
+    case 'auth_failed':
+      return 'credentials rejected';
+    case 'tls_untrusted':
+      return 'certificate not trusted';
+    case 'identity_mismatch':
+      return 'different vCenter';
+    case 'skipped':
+      return 'skipped';
   }
 }
 

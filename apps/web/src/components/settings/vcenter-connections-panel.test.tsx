@@ -2,6 +2,7 @@ import type { VsphereConnectionResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
@@ -9,6 +10,12 @@ import { api } from '@/lib/api-client';
 import { VcenterConnectionsPanel } from './vcenter-connections-panel';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+// `AdminOnly` gates the "Sync now" button via `useIsAdmin`, which reads router
+// context. Mock the hook so the panel renders in isolation and each test controls
+// the role. Default admin; the VIEWER test flips it.
+const { useIsAdminMock } = vi.hoisted(() => ({ useIsAdminMock: vi.fn(() => true) }));
+vi.mock('@/lib/auth', () => ({ useIsAdmin: () => useIsAdminMock() }));
 
 function renderWithClient(ui: React.ReactNode) {
   const client = new QueryClient({
@@ -39,6 +46,7 @@ const connection = (
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  useIsAdminMock.mockReturnValue(true);
   vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([]);
 });
 
@@ -153,5 +161,57 @@ describe('<VcenterConnectionsPanel>', () => {
     expect(
       await screen.findByText(/no capacity data or baselines are deleted/i),
     ).toBeInTheDocument();
+  });
+
+  it('★ queues an immediate sync and confirms it with a toast', async () => {
+    vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([connection()]);
+    const syncNow = vi
+      .spyOn(api.settings.vsphere.connections, 'syncNow')
+      .mockResolvedValue({ dueAt: '2026-07-17T12:00:00.000Z' });
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /sync now/i }));
+
+    // The button POSTs to the queue endpoint — it never awaits vCenter itself.
+    await waitFor(() => expect(syncNow).toHaveBeenCalledWith('c1'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+  });
+
+  it('shows the last sync time and a non-ok status in words, not colour alone', async () => {
+    vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([
+      connection({
+        syncState: {
+          lastSyncAt: '2026-07-17T09:30:00.000Z',
+          lastSyncStatus: 'auth_failed',
+          lastSnapshotAt: null,
+          lastSnapshotStatus: null,
+          lastSuccessPeriod: null,
+          failureCount: 1,
+        },
+      }),
+    ]);
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    expect(await screen.findByText(/last synced/i)).toBeInTheDocument();
+    // House style: the outcome is stated in words, never colour alone.
+    expect(screen.getByText(/credentials rejected/i)).toBeInTheDocument();
+  });
+
+  it('hides Sync now from a VIEWER — the server still enforces it', async () => {
+    useIsAdminMock.mockReturnValue(false);
+    vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([connection()]);
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    expect(await screen.findByText('vc-prod')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /sync now/i })).not.toBeInTheDocument();
+  });
+
+  it('disables Sync now for a disabled connection — a queued run could never fire', async () => {
+    vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([
+      connection({ enabled: false }),
+    ]);
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    expect(await screen.findByRole('button', { name: /sync now/i })).toBeDisabled();
   });
 });

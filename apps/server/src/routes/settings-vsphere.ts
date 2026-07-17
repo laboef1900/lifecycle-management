@@ -9,6 +9,7 @@ import {
 import type {
   VsphereConnectionResponse,
   VsphereProbeResult,
+  VsphereSyncNowResponse,
   VsphereVerifyResult,
 } from '@lcm/shared';
 import type { FastifyPluginAsync } from 'fastify';
@@ -121,6 +122,27 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
     const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
     await service.delete(request.tenantId, id);
     return reply.code(204).send();
+  });
+
+  /**
+   * "Sync now" (#192, design §D22): queue an immediate sync for one connection.
+   *
+   * Sets the connection's scheduler job `dueAt = now()` and returns **202 at once**
+   * — it NEVER awaits vCenter (a request handler must not; see D25). The scheduler's
+   * next tick claims the row and runs it through the identical claim/run path as a
+   * scheduled job, so this cannot become a second, drifting code path, and the
+   * claim lock makes a double-click structurally unable to double-run.
+   *
+   * Admin-gated by the preHandler above (and the global `requiresAdmin` mutation
+   * hook). **No password required**, unlike the trust-material routes: this mutates
+   * no trust material and discloses nothing, so a password gate here would be
+   * friction on a benign action, not the control — see the file header.
+   */
+  fastify.post('/settings/vsphere/connections/:id/sync', async (request, reply) => {
+    const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
+    const { dueAt } = await service.requestSyncNow(request.tenantId, id);
+    const body: VsphereSyncNowResponse = { dueAt: dueAt.toISOString() };
+    return reply.code(202).send(body);
   });
 
   /**

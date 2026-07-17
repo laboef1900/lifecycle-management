@@ -206,6 +206,24 @@ export type VsphereTrustCa = z.infer<typeof vsphereTrustCaSchema>;
 export const vsphereConnectionIdParamsSchema = z.object({ id: cuid });
 
 /**
+ * The response to `POST /settings/vsphere/connections/:id/sync` — the admin
+ * **"Sync now"** action (#192, design §D22).
+ *
+ * **202 Accepted, never 200.** The sync is *queued*, not performed: the handler
+ * sets the connection's scheduler job `dueAt = now()` and returns immediately, and
+ * the scheduler's next tick claims and runs it through the **identical** claim/run
+ * path as a scheduled job. A request handler must never await vCenter — see D25.
+ *
+ * `dueAt` echoes the moment the job became due so the UI can say "queued, runs
+ * within a minute" without a refetch race, and so the endpoint has a deterministic,
+ * disclose-nothing return value (it is derived server-side, carries no secret, and
+ * reveals nothing an admin could not already see).
+ */
+export interface VsphereSyncNowResponse {
+  dueAt: string;
+}
+
+/**
  * A connection as served to clients.
  *
  * @ai-warning There is no `password` field and there must never be one — not even

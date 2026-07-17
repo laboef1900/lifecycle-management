@@ -32,6 +32,7 @@ import {
 import type {
   VsphereConnectionResponse,
   VsphereProbeResult,
+  VsphereSyncNowResponse,
   VsphereVerifyResult,
 } from './vsphere.js';
 
@@ -294,4 +295,13 @@ export const vsphereVerifyResultSchema: z.ZodType<VsphereVerifyResult> = z.objec
   outcome: z.enum(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter', 'auth_failed']),
   instanceUuid: z.string().nullable(),
   apiVersion: z.string().nullable(),
+});
+
+/**
+ * The "Sync now" 202 payload (#192). `dueAt` is a server-derived timestamp — no
+ * secret, nothing an admin could not already read — so this boundary discloses
+ * only that the sync is queued.
+ */
+export const vsphereSyncNowResponseSchema: z.ZodType<VsphereSyncNowResponse> = z.object({
+  dueAt: z.string(),
 });
