@@ -255,3 +255,195 @@ describe('VsphereClientInventoryCollector (vcsim)', () => {
     ).rejects.toThrow();
   });
 });
+
+/**
+ * Host inclusion policy — §D3 rule 1c (owner-approved 2026-07-17).
+ *
+ * @ai-context vcsim CANNOT reach these states: every simulated host is connected
+ * and has identical, non-null memory. So this exercise drives the same `transport`
+ * seam the pagination test uses, but with a fully-synthetic PropertyCollector
+ * response instead of delegating to `soapCall` — no vcsim, no Docker. That is the
+ * whole point: the defect (one disconnected/unreadable host aborting the ENTIRE
+ * vCenter's collection, then being mis-reported as an unreachable-network failure)
+ * is invisible to the vcsim suite by construction.
+ *
+ * The crafted response contains, all under the same cluster `domain-c1`:
+ *   (a) a normal CONNECTED host with readable memory,
+ *   (b) a DISCONNECTED host that still advertises a memorySize — proving exclusion
+ *       is driven by `connectionState`, not incidentally by missing memory,
+ *   (c) a CONNECTED host with NO `summary.hardware.memorySize`.
+ * The cluster's `summary.totalMemory` equals host (a) alone, so a silent drift
+ * check confirms the sum was taken over the INCLUDED hosts only (rule 5).
+ */
+/** Wrap a response payload in the SOAP envelope a vCenter would return. */
+function envelope(body: string): string {
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" ` +
+    `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
+    `<soapenv:Body>${body}</soapenv:Body></soapenv:Envelope>`
+  );
+}
+
+describe('VsphereClientInventoryCollector — host inclusion policy (§D3 rule 1c)', () => {
+  const HOST_A_MEMORY_BYTES = 4294430720; // counted
+  const HOST_B_MEMORY_BYTES = 8589934592; // advertised but MUST NOT be counted (disconnected)
+
+  const serviceContentBody = envelope(
+    `<RetrieveServiceContentResponse xmlns="urn:vim25"><returnval>` +
+      `<rootFolder type="Folder">group-d1</rootFolder>` +
+      `<propertyCollector type="PropertyCollector">propertyCollector</propertyCollector>` +
+      `<viewManager type="ViewManager">ViewManager</viewManager>` +
+      `<about><instanceUuid>aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee</instanceUuid>` +
+      `<apiVersion>8.0.3.0</apiVersion></about>` +
+      `<sessionManager type="SessionManager">SessionManager</sessionManager>` +
+      `</returnval></RetrieveServiceContentResponse>`,
+  );
+
+  const createViewBody = envelope(
+    `<CreateContainerViewResponse xmlns="urn:vim25">` +
+      `<returnval type="ContainerView">ContainerView-lcm</returnval>` +
+      `</CreateContainerViewResponse>`,
+  );
+
+  const retrieveBody = envelope(
+    `<RetrievePropertiesExResponse xmlns="urn:vim25"><returnval>` +
+      // (a) connected + readable → counted
+      `<objects><obj type="HostSystem">host-a</obj>` +
+      `<propSet><name>name</name><val>esx-a.example.test</val></propSet>` +
+      `<propSet><name>parent</name><val type="ClusterComputeResource">domain-c1</val></propSet>` +
+      `<propSet><name>summary.hardware.memorySize</name><val>${HOST_A_MEMORY_BYTES}</val></propSet>` +
+      `<propSet><name>summary.quickStats.overallMemoryUsage</name><val>1404</val></propSet>` +
+      `<propSet><name>runtime.inMaintenanceMode</name><val>false</val></propSet>` +
+      `<propSet><name>runtime.connectionState</name><val>connected</val></propSet></objects>` +
+      // (b) disconnected but advertises memory → EXCLUDED by policy, memory ignored
+      `<objects><obj type="HostSystem">host-b</obj>` +
+      `<propSet><name>name</name><val>esx-b.example.test</val></propSet>` +
+      `<propSet><name>parent</name><val type="ClusterComputeResource">domain-c1</val></propSet>` +
+      `<propSet><name>summary.hardware.memorySize</name><val>${HOST_B_MEMORY_BYTES}</val></propSet>` +
+      `<propSet><name>runtime.inMaintenanceMode</name><val>false</val></propSet>` +
+      `<propSet><name>runtime.connectionState</name><val>disconnected</val></propSet></objects>` +
+      // (c) connected but no readable memorySize → SKIPPED as an anomaly
+      `<objects><obj type="HostSystem">host-c</obj>` +
+      `<propSet><name>name</name><val>esx-c.example.test</val></propSet>` +
+      `<propSet><name>parent</name><val type="ClusterComputeResource">domain-c1</val></propSet>` +
+      `<propSet><name>runtime.inMaintenanceMode</name><val>false</val></propSet>` +
+      `<propSet><name>runtime.connectionState</name><val>connected</val></propSet></objects>` +
+      // the cluster: totalMemory == host (a) alone, so drift stays silent
+      `<objects><obj type="ClusterComputeResource">domain-c1</obj>` +
+      `<propSet><name>name</name><val>Production Cluster</val></propSet>` +
+      `<propSet><name>summary.totalMemory</name><val>${HOST_A_MEMORY_BYTES}</val></propSet></objects>` +
+      `</returnval></RetrievePropertiesExResponse>`,
+  );
+
+  function syntheticTransport(): SoapTransport {
+    // A canned response per SOAP action — the collector's full session sequence,
+    // no network. `_hostname`/`_pinnedRootPem` are unused: this transport never
+    // touches TLS or sockets.
+    return (_hostname, _pinnedRootPem, action) => {
+      switch (action) {
+        case 'RetrieveServiceContent':
+          return Promise.resolve({ status: 200, body: serviceContentBody, setCookie: null });
+        case 'Login':
+          return Promise.resolve({
+            status: 200,
+            body: envelope('<LoginResponse/>'),
+            setCookie: 'lcm=1',
+          });
+        case 'CreateContainerView':
+          return Promise.resolve({ status: 200, body: createViewBody, setCookie: null });
+        case 'RetrievePropertiesEx':
+          return Promise.resolve({ status: 200, body: retrieveBody, setCookie: null });
+        case 'DestroyView':
+          return Promise.resolve({
+            status: 200,
+            body: envelope('<DestroyViewResponse/>'),
+            setCookie: null,
+          });
+        case 'Logout':
+          return Promise.resolve({
+            status: 200,
+            body: envelope('<LogoutResponse/>'),
+            setCookie: null,
+          });
+        default:
+          return Promise.reject(new Error(`unexpected SOAP action ${action}`));
+      }
+    };
+  }
+
+  interface CapturedWarn {
+    details: Record<string, unknown>;
+    message: string;
+  }
+
+  async function collectSynthetic(): Promise<{
+    inventory: Awaited<ReturnType<VsphereClientInventoryCollector['collect']>>;
+    warnings: CapturedWarn[];
+  }> {
+    const warnings: CapturedWarn[] = [];
+    const logger: CollectorLogger = {
+      warn: (details, message) => warnings.push({ details, message }),
+    };
+    const collector = new VsphereClientInventoryCollector({
+      transport: syntheticTransport(),
+      logger,
+    });
+    const inventory = await collector.collect({
+      hostname: 'vcenter.example.test',
+      username: 'svc-lcm',
+      password: 'unused-by-the-synthetic-transport',
+      pinnedRootPem: null,
+    });
+    return { inventory, warnings };
+  }
+
+  it('excludes a disconnected host and skips an unreadable one WITHOUT aborting the vCenter', async () => {
+    // collect() resolving (not rejecting) is itself the fix: pre-change, host (c)'s
+    // missing memory threw out of collect() and took the whole vCenter down.
+    const { inventory } = await collectSynthetic();
+
+    expect(inventory.instanceUuid).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    expect(inventory.apiVersion).toBe('8.0.3.0');
+
+    // Only host (a) survives — one cluster, one host.
+    expect(inventory.clusters).toHaveLength(1);
+    const cluster = inventory.clusters[0];
+    expect(cluster?.moref).toBe('domain-c1');
+    expect(cluster?.name).toBe('Production Cluster');
+
+    const collectedHosts = inventory.clusters.flatMap((c) => c.hosts);
+    expect(collectedHosts.map((h) => h.moref)).toEqual(['host-a']);
+
+    // The disconnected host's advertised memory is NOT counted: the fleet total is
+    // host (a) alone, base-2, not host (a)+host (b).
+    const totalMemoryGiB = collectedHosts.reduce((sum, h) => sum + h.memoryGiB, 0);
+    expect(totalMemoryGiB).toBeCloseTo(HOST_A_MEMORY_BYTES / 1024 ** 3, 5);
+    expect(totalMemoryGiB).toBeCloseTo(collectedHosts[0]?.memoryGiB ?? 0, 10);
+  });
+
+  it('logs one WARN per excluded/skipped host and does not fire the drift warning', async () => {
+    const { warnings } = await collectSynthetic();
+
+    // Exactly two warnings: the disconnected exclusion and the unreadable skip. A
+    // third (drift) warning here would mean the excluded host leaked into the sum.
+    expect(warnings).toHaveLength(2);
+
+    const disconnected = warnings.find((w) => w.details.host === 'host-b');
+    expect(disconnected).toBeDefined();
+    expect(disconnected?.message).toMatch(/disconnect/i);
+    expect(disconnected?.details.connectionState).toBe('disconnected');
+    expect(disconnected?.details.name).toBe('esx-b.example.test');
+
+    const unreadable = warnings.find((w) => w.details.host === 'host-c');
+    expect(unreadable).toBeDefined();
+    expect(unreadable?.message).toMatch(/memory size/i);
+    expect(unreadable?.details.name).toBe('esx-c.example.test');
+
+    // None of the messages leaks a credential or trips the internal drift check.
+    for (const { message } of warnings) {
+      expect(message).not.toMatch(/drift/i);
+      expect(message).not.toContain('unused-by-the-synthetic-transport');
+    }
+  });
+});

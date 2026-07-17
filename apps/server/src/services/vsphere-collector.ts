@@ -45,6 +45,18 @@ import {
  *    matches the `ClusterComputeResource` subtype), and every host lands under its
  *    parent compute resource, standalone or clustered.
  *
+ * 4. **Host inclusion is a product policy, not an accident** (design §D3 rule 1c,
+ *    owner-approved 2026-07-17). A host whose `runtime.connectionState` is not
+ *    `connected` is EXCLUDED by policy — a disconnected host (racked-but-never-
+ *    connected is a normal infra state) provides no live capacity, so counting its
+ *    memory would be wrong and its absence must not be counted as loss. A host that
+ *    IS connected but whose `summary.hardware.memorySize` is missing is an anomaly:
+ *    that one host is SKIPPED. Both cases log a WARN and let the REST of the vCenter
+ *    collect — never throw, because a single bad host must not abort the whole
+ *    vCenter's sync (and its message would be mis-classified as an unreachable
+ *    NETWORK failure by `VsphereSyncService.classify()`, disguising a data problem
+ *    as an outage). Connected, readable hosts still sum `memorySize` exactly.
+ *
  * @ai-warning Thrown messages are matched by `VsphereSyncService.classify()`
  * (`/auth|login|credential/i` BEFORE `/cert|tls|self.signed/i`) and rendered by
  * `sanitize()` into `lastError`. They MUST be credential-free and MUST NOT name a
@@ -258,7 +270,12 @@ export class VsphereClientInventoryCollector implements VsphereInventoryCollecto
       const props = propMap(record['propSet']);
 
       if (type === 'HostSystem') {
-        hosts.push(readHost(moref, props));
+        // Policy (§D3 rule 1c): disconnected hosts are excluded and connected-but-
+        // unreadable hosts are skipped — both return null, so only live, readable
+        // hosts enter the sum. Skipping here (not in the group loop) keeps the drift
+        // check below consistent with what was actually counted.
+        const host = this.readHost(moref, props);
+        if (host !== null) hosts.push(host);
       } else {
         // ComputeResource and its ClusterComputeResource subtype both land here.
         computeResources.set(moref, {
@@ -286,6 +303,9 @@ export class VsphereClientInventoryCollector implements VsphereInventoryCollecto
       // compute resource's reported total. A mismatch means our capacity number
       // disagrees with vCenter's own aggregate — surface it, but never block the
       // sync on it, and never grow the interface to carry it (kept internal).
+      // `group` already contains only the INCLUDED hosts (disconnected/unreadable
+      // hosts were filtered out in the object loop), so the sum matches what was
+      // counted — an excluded host never trips this warning (§D3 rule 1c).
       if (cr?.totalMemoryBytes != null) {
         const sumBytes = group.reduce((acc, h) => acc + h.memoryBytes, 0);
         if (sumBytes !== cr.totalMemoryBytes) {
@@ -314,6 +334,58 @@ export class VsphereClientInventoryCollector implements VsphereInventoryCollecto
       clusters,
     };
   }
+
+  /**
+   * Read one host, applying the inclusion policy (§D3 rule 1c, owner-approved
+   * 2026-07-17). Returns `null` — never throws — for a host that must not be
+   * counted, so a single bad host cannot abort the whole vCenter's collection:
+   *
+   *   - **Disconnected** (`runtime.connectionState !== 'connected'`): EXCLUDED. A
+   *     disconnected host provides no live capacity; counting its memory would be
+   *     wrong. WARN naming the host and the connection state.
+   *   - **Connected but no readable `memorySize`**: SKIPPED as an anomaly. Refuse to
+   *     invent a capacity number — defaulting to 0 would under-count the fleet, the
+   *     exact failure this collector exists to prevent — but skip only this one host
+   *     with a WARN rather than throwing and taking the whole vCenter down.
+   *
+   * A connected, readable host is summed exactly as before.
+   */
+  private readHost(moref: string, props: Map<string, unknown>): RawHost | null {
+    const connectionState = textOf(props.get('runtime.connectionState'));
+    const connected = connectionState === 'connected';
+    const name = textOf(props.get('name')) ?? moref;
+
+    if (!connected) {
+      this.logger.warn(
+        { host: moref, name, connectionState: connectionState ?? 'unknown' },
+        'Excluding disconnected vCenter host from capacity (no live memory to count)',
+      );
+      return null;
+    }
+
+    const memoryBytes = numOf(props.get('summary.hardware.memorySize'));
+    if (memoryBytes === null) {
+      this.logger.warn(
+        { host: moref, name },
+        'Skipping connected vCenter host with no readable memory size',
+      );
+      return null;
+    }
+
+    const parentMoref = textOf(props.get('parent'));
+    if (parentMoref === null) {
+      throw new Error('vCenter returned a host without a parent.');
+    }
+    return {
+      moref,
+      name,
+      parentMoref,
+      memoryBytes,
+      usageMib: numOf(props.get('summary.quickStats.overallMemoryUsage')),
+      inMaintenanceMode: textOf(props.get('runtime.inMaintenanceMode')) === 'true',
+      connected,
+    };
+  }
 }
 
 function toCollectedHost(host: RawHost): CollectedHost {
@@ -324,28 +396,6 @@ function toCollectedHost(host: RawHost): CollectedHost {
     usageGiB: host.usageMib === null ? null : mibToGiB(host.usageMib),
     inMaintenanceMode: host.inMaintenanceMode,
     connected: host.connected,
-  };
-}
-
-function readHost(moref: string, props: Map<string, unknown>): RawHost {
-  const memoryBytes = numOf(props.get('summary.hardware.memorySize'));
-  if (memoryBytes === null) {
-    // Refuse to invent a capacity number. Silently defaulting to 0 would
-    // under-count the fleet — the exact failure this collector exists to prevent.
-    throw new Error('vCenter returned a host without a memory size.');
-  }
-  const parentMoref = textOf(props.get('parent'));
-  if (parentMoref === null) {
-    throw new Error('vCenter returned a host without a parent.');
-  }
-  return {
-    moref,
-    name: textOf(props.get('name')) ?? moref,
-    parentMoref,
-    memoryBytes,
-    usageMib: numOf(props.get('summary.quickStats.overallMemoryUsage')),
-    inMaintenanceMode: textOf(props.get('runtime.inMaintenanceMode')) === 'true',
-    connected: textOf(props.get('runtime.connectionState')) === 'connected',
   };
 }
 
