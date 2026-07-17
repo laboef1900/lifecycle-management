@@ -69,6 +69,7 @@ describe('clusterResponseSchema', () => {
       lastSyncedAt: '2026-07-17T09:00:00.000Z',
       externalName: 'Production',
       connection: { id: 'vc_1', name: 'vc-prod', status: 'active', enabled: true },
+      provisionalHostCount: 3,
     };
     const parsed = clusterResponseSchema.parse(synced);
     expect(parsed.source).toBe('vsphere');
@@ -80,6 +81,12 @@ describe('clusterResponseSchema', () => {
       status: 'active',
       enabled: true,
     });
+    expect(parsed.provisionalHostCount).toBe(3);
+  });
+
+  it('rejects a negative provisionalHostCount', () => {
+    const bad = { ...literal, provisionalHostCount: -1 };
+    expect(clusterResponseSchema.safeParse(bad).success).toBe(false);
   });
 
   it('distinguishes "never synced" (null) from "server does not know about sync" (absent)', () => {

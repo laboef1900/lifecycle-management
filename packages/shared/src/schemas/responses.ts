@@ -75,6 +75,7 @@ export const clusterResponseSchema: z.ZodType<ClusterResponse> = z.object({
     })
     .nullable()
     .exactOptional(),
+  provisionalHostCount: z.number().int().nonnegative().exactOptional(),
 });
 
 // ---------- Hosts ----------

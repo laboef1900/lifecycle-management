@@ -114,4 +114,13 @@ export interface ClusterResponse {
     status: VsphereConnectionStatus;
     enabled: boolean;
   } | null;
+  /**
+   * How many hosts in this cluster still carry a provisional (sync-imported,
+   * unconfirmed) `commissionedAt`. Drives the fleet-console "N hosts need
+   * commissioning dates" indicator so an incomplete cluster is visible without
+   * opening it. `0` = nothing to confirm; absent = server predates the field.
+   * Populated by the server from `Host.commissionedAtProvisional`; the admin
+   * confirm flow (#194) is what drives it back down.
+   */
+  provisionalHostCount?: number;
 }
