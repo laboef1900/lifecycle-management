@@ -81,6 +81,14 @@ export function makeFakePrisma(options: FakePrismaOptions = {}): PrismaClient {
       update: vi.fn().mockResolvedValue(defaultAuthConfigRow),
       upsert: vi.fn().mockResolvedValue(defaultAuthConfigRow),
     },
+    // Minimal stub so the vSphere scheduler plugin's onClose drain (#191) — which
+    // releases any claim it holds — does not crash when a test builds the server
+    // with a fake Prisma client. The scheduler never ticks in test, so these are
+    // only ever the belt-and-braces release path.
+    vsphereConnectionJob: {
+      findMany: vi.fn().mockResolvedValue([]),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
   };
   return fake as unknown as PrismaClient;
 }
