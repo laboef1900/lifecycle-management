@@ -289,6 +289,78 @@ Changing the hostname also clears the pinned certificate and the discovered vCen
 identity — the old vCenter's certificate proves nothing about a new host, so trust
 is re-established deliberately.
 
+### How syncing works
+
+Once a connection is saved and enabled, an in-process scheduler drives it — there is
+nothing to cron and no worker to run. On boot the server starts one scheduler that,
+per connection, does three things on their own cadences:
+
+- **Poll** (~every 5 minutes) — reads live memory usage into a Postgres cache. This
+  is what feeds the live-usage figures on the fleet console and cluster panel.
+- **Sync** (~every 6 hours) — reads the host/cluster inventory (the PropertyCollector
+  walk) and reconciles capacity. Hosts and clusters are created, updated, and marked
+  missing; nothing in vSphere is ever written. Six hours is why _Sync now_ exists.
+- **Snapshot** (monthly, on the first of the month) — captures the baseline the
+  forecast reads. A snapshot always syncs first, so a baseline is never taken off
+  stale inventory.
+
+A newly added or re-enabled connection imports on the next tick rather than waiting
+for a cadence boundary. Timestamps advance **on success only** — a failed poll or
+sync stays due and retries under capped exponential backoff, so a transient vCenter
+outage self-heals without operator action. A failure never silently becomes a
+success: the connection's status and last-error reflect the real outcome (see
+_Troubleshooting_).
+
+The connection panel shows **last synced**, the **sync status**, and a **live-usage**
+reading per synced cluster. "No sample yet" and a stale reading are shown as exactly
+that — never as `0`, which would read as "empty and available" and is the one lie the
+forecast must never tell.
+
+### Sync now
+
+**Settings → vCenter connections → Sync now** (admin only) schedules an immediate
+run and returns straight away — it does not block on vCenter. The scheduler picks it
+up within about a minute through the same path a scheduled run takes. If a full sync
+completed recently, "Sync now" runs the cheap poll instead of a redundant full walk;
+the 5-minute poll already covers "I just added a host in vCenter." Use it when you
+have made a change in vSphere and do not want to wait for the next cadence.
+
+### Disconnected and unreadable hosts
+
+A host that vCenter reports as **not connected** (powered off at the host level, in a
+failed-connection state, or otherwise not currently answering) is **excluded from
+capacity** while it is in that state, with a warning in the server log. A disconnected
+host is not providing memory to anything, so counting it would overstate capacity.
+The host row is **never deleted** — it is marked missing and returns to the fleet on
+the next successful sync once it reconnects.
+
+The same applies to a connected host whose memory size cannot be read: it is skipped
+with a log line rather than failing the whole vCenter's sync. One unreadable host no
+longer stales every cluster on that vCenter.
+
+### Provisional commissioning dates
+
+vCenter does not record when a host was commissioned, so sync stamps an imported host
+with a **provisional** commissioning date — the date LCM first saw it — and flags it.
+The forecast treats months before a host's commissioning date as "unknown" rather
+than zero, so the provisional date is safe but approximate. A cluster with unconfirmed
+hosts shows an **_N_ hosts need commissioning dates** hint; confirm the real dates
+under the cluster's **Hosts** tab (admin only, one date per host, applied atomically).
+Confirming clears the flag; a re-sync never overwrites a confirmed date.
+
+### Sync-owned fields
+
+On a **synced** cluster or host, the fields vSphere owns are read-only in LCM and
+reject edits with a clear error — change them in vCenter and let the next sync
+reconcile. Specifically: you cannot hand-add or delete a host under a synced cluster,
+and you cannot set a non-zero **baseline capacity** on a synced cluster (host memory
+carries the capacity; a non-zero baseline would double-count it and halve the
+reported utilisation — the failure mode that quietly defers a hardware purchase).
+Everything an operator legitimately owns stays editable: the display name (an edit
+pins it, and sync stops overwriting the label), description, thresholds, lifecycle
+transitions, archival, the commissioning-date confirmation above, and baseline
+_consumption_ corrections.
+
 ### There is no "ignore TLS errors" option, by design
 
 Self-signed vCenter certificates work through the fingerprint confirmation above,
