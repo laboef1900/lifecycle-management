@@ -846,22 +846,37 @@ Not premature, for a reason unrelated to replicas: **`docker compose up -d` over
 container drains for up to 10s (`index.ts:6,17-24`) while the new one boots and ticks — a genuine
 double-run window **on today's single-instance deployment**.
 
-```sql
-UPDATE scheduled_jobs SET running_since = now(), locked_by = $1
- WHERE name = $2 AND due_at <= now()
-   AND (running_since IS NULL OR running_since < now() - interval '15 minutes')
-RETURNING *;
+A **conditional claim UPDATE**, expressed in plain Prisma — **no raw SQL**:
+
+```ts
+const { count } = await prisma.vsphereConnectionJob.updateMany({
+  where: {
+    connectionId,
+    dueAt: { lte: now },
+    OR: [{ runningSince: null }, { runningSince: { lt: staleThreshold } }],  // 15-min stale lease
+  },
+  data: { runningSince: now, lockedBy: bootId },
+});
+if (count === 0) return;   // someone else owns it — skip
 ```
 
-Atomic; 0 rows ⇒ someone else owns it, skip. The 15-minute clause doubles as a **stale-lease breaker** so a
-hard-killed process self-heals instead of wedging forever.
+`updateMany` compiles to a single `UPDATE … WHERE`, which Postgres executes atomically: under READ
+COMMITTED a concurrent writer blocks, then **re-evaluates the WHERE against the new row version**, so the
+loser sees `runningSince` already set and gets `count === 0`. Same guarantee as raw SQL. The 15-minute
+clause doubles as a **stale-lease breaker** so a hard-killed process self-heals instead of wedging forever.
+
+> **Corrected from an earlier draft, which proposed `$queryRaw … RETURNING *` and justified it with
+> `routes/health.ts:10` as precedent.** That precedent is **weak and should not have been cited**: the only
+> raw query in the entire server is `SELECT 1` in a readiness probe — a liveness ping, not business logic.
+> `updateMany` gives identical atomicity with none of the grain against `CLAUDE.md`'s "don't use raw
+> queries", so **there is no reason to reach for raw SQL here at all.** (`RETURNING *` isn't needed either
+> — once the claim is held, a follow-up read is safe.)
 
 **Not `pg_advisory_lock` / `FOR UPDATE SKIP LOCKED`:** both bind to a session/transaction, and Prisma's pg
 adapter uses a **connection pool** (`plugins/prisma.ts:19-25`) — a session lock can't be reliably held
 across awaits without pinning a connection, and `pg_advisory_xact_lock` would hold a transaction open for
 the entire vCenter round-trip (`idle in transaction` for seconds-to-minutes). The claim-row UPDATE holds no
-lock while the job runs. Parameterized `$queryRaw` has precedent (`routes/health.ts:10`) and does not
-conflict with the "no raw queries" guidance, which is about SQLi.
+lock while the job runs.
 
 ### D19 — Time: **UTC, 1st of month, 00:00**
 
