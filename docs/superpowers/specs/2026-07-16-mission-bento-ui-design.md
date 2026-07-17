@@ -73,7 +73,7 @@ Radii: `--radius: 8px`, `--radius-card: 14px`, `--radius-modal: 16px`. Focus: gl
 
 ## 5. Detail slide-in panel (`/clusters/$id`)
 
-Fixed right panel, 58 vw (min 600 px; 100 vw < 1100 px), entering/exiting per the motion spec; the console remains beneath. Esc or ✕ navigates to `/`; focus is moved into the panel on open and restored on close. Content preserves the current detail page's functionality, restyled:
+Fixed right panel, 58 vw (min 600 px; 100 vw < 1100 px), entering/exiting per the motion spec; the console remains beneath. Esc or ✕ navigates to `/`; focus is moved into the panel on open and restored on close. Content preserves the current detail page's functionality, restyled: _Amended 2026-07-17:_ the panel opens as a fullscreen takeover — 100 vw at every width (the 58 vw / min-600 px / 1100 px-breakpoint geometry and the partial-panel left border/shadow are retired) — user decision after using the shipped UI; the slide-in/out motion, Esc/✕, focus management, and inert console beneath are unchanged.
 
 1. Header: name, description, baseline chip (with stale warning), archived badge.
 2. **Recommendation banner** (new): verb-first line from `deriveProcurementKpi` — e.g. "Order capacity — last safe order date 2026-12-28 (in 5 mo, 6-wk lead)."; crit tone when overdue/≤28 d; omitted when no breach ("No order needed in this window.").

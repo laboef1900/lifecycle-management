@@ -78,8 +78,8 @@ test.describe('mobile layout at 390x844', () => {
     await expect(panel).toBeVisible();
     const panelBox = await panel.boundingBox();
     expect(panelBox).not.toBeNull();
-    // Below the 1100px breakpoint the panel is 100vw (spec §5, styles.css
-    // `.cluster-panel`), not the desktop 58vw side panel.
+    // The panel is a fullscreen takeover: 100vw at every width (spec §5,
+    // styles.css `.cluster-panel`), so on this ~390px viewport it fills it.
     expect(Math.round(panelBox!.width)).toBeGreaterThanOrEqual(388);
     expect(Math.round(panelBox!.width)).toBeLessThanOrEqual(390);
 

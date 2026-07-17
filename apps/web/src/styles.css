@@ -262,17 +262,9 @@ body {
   }
 }
 
-/* Cluster detail slide-in panel (spec §5): 58vw, min 600px; full width below
-   the 1100px breakpoint where a side panel no longer fits alongside the
-   console. */
+/* Cluster detail slide-in panel (spec §5): fullscreen takeover — 100vw at
+   every width (user decision 2026-07-17, superseding the former 58vw side
+   panel with its 1100px breakpoint). The console beneath is fully covered. */
 .cluster-panel {
-  width: 58vw;
-  min-width: 600px;
-}
-
-@media (max-width: 1099px) {
-  .cluster-panel {
-    width: 100vw;
-    min-width: 0;
-  }
+  width: 100vw;
 }

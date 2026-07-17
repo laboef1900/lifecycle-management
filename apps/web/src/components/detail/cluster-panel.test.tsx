@@ -166,6 +166,19 @@ describe('<ClusterPanel>', () => {
     expect(dialog).toHaveAttribute('aria-modal', 'true');
   });
 
+  it('renders as a fullscreen takeover: keeps the .cluster-panel class and drops the partial-panel left border/shadow (user decision 2026-07-17)', async () => {
+    // The 100vw width lives in the `.cluster-panel` rule (styles.css), not
+    // inline — jsdom does not apply that stylesheet, so the fullscreen
+    // treatment is asserted via the class plus the removal of the partial-
+    // panel-only left border and left drop shadow (a fullscreen takeover has
+    // no left edge to separate from the console beneath).
+    render(<Harness show />);
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveClass('cluster-panel');
+    expect(dialog).not.toHaveClass('border-l');
+    expect(dialog.style.boxShadow).toBe('');
+  });
+
   it('gives the close button an accessible name of exactly "Close", not "Close Esc" (MINOR fix)', async () => {
     // The visible <kbd>Esc</kbd> hint must not concatenate into the
     // accessible name — it's decorative for sighted keyboard users only.
