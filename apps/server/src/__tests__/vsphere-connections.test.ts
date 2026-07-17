@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   VsphereConnectionsService,
