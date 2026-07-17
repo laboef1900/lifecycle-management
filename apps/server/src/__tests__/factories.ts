@@ -21,6 +21,13 @@ async function resolveMetricId(prisma: PrismaClient, key: string): Promise<strin
 }
 
 export interface MakeClusterOptions {
+  /**
+   * Explicit primary key. Omitted, Prisma generates a `cuid()`, which differs
+   * every run — fine for assertions, fatal for snapshots (ids surface in
+   * `ForecastResult.hosts[].id` / `applications[].id`). Snapshot tests pass a
+   * stable id so the committed snapshot is a function of behaviour only.
+   */
+  id?: string;
   name?: string;
   description?: string | null;
   baselineDate?: Date;
@@ -41,6 +48,7 @@ export async function makeCluster(
 
   const cluster = await prisma.cluster.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
       name,
       description: options.description ?? null,
@@ -60,6 +68,8 @@ export async function makeCluster(
 }
 
 export interface MakeHostOptions {
+  /** Explicit primary key — see `MakeClusterOptions.id`. */
+  id?: string;
   clusterId: string;
   name?: string;
   commissionedAt?: Date;
@@ -86,6 +96,7 @@ export async function makeHost(
 
   const host = await prisma.host.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
       clusterId: options.clusterId,
       name,
@@ -107,6 +118,8 @@ export async function makeHost(
 }
 
 export interface MakeApplicationOptions {
+  /** Explicit primary key — see `MakeClusterOptions.id`. */
+  id?: string;
   clusterId: string;
   name?: string;
   category?: string;
@@ -130,6 +143,7 @@ export async function makeApplication(
 
   const application = await prisma.item.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
       clusterId: options.clusterId,
       kind: 'application',
@@ -152,6 +166,8 @@ export async function makeApplication(
 }
 
 export interface MakeEventOptions {
+  /** Explicit primary key — see `MakeClusterOptions.id`. */
+  id?: string;
   clusterId: string;
   effectiveDate?: Date;
   category?: string;
@@ -174,6 +190,7 @@ export async function makeEvent(
 
   const event = await prisma.item.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
       clusterId: options.clusterId,
       kind: 'event',
