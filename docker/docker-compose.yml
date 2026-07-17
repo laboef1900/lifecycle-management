@@ -20,7 +20,7 @@ services:
   db:
     # Pinned tag@digest to the multi-arch index digest; Dependabot's
     # docker ecosystem bumps it.
-    image: dhi.io/postgres:18@sha256:436b4bd225b81e43aa8935dbf8d0f12d1c59d7dbe397ba55250bf15b74541d24
+    image: dhi.io/postgres:18@sha256:32ca0af8e77bfb8c6610c488e4691f83f972a3e9e64d3b02facf3ab111ad5500
     container_name: lcm-db
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lcm}
