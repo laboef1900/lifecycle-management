@@ -123,3 +123,117 @@ test('create cluster, add host + application, chart reflects updates', async ({
     }
   }
 });
+
+/**
+ * Live usage + sync state on the fleet console (#193).
+ *
+ * The vSphere collector (#190) and scheduler wiring (#191) are not landed yet,
+ * so the real dev stack cannot produce a synced cluster or a usage sample. To
+ * exercise the render path in a real browser we intercept exactly the three
+ * cluster read endpoints and let everything else (auth, settings) hit the real
+ * seeded server. This proves the sync badge + live-usage line render, and — the
+ * load-bearing assertion — that a synced cluster with no sample reads "not yet
+ * measured", never the "0% used" that would be the most dangerous wrong answer.
+ */
+test('live usage and sync state render on the fleet console', async ({ page }) => {
+  const freshId = 'clfresh00000000000000000';
+  const neverId = 'clnever00000000000000000';
+
+  const metric = {
+    metricTypeKey: 'memory_gb',
+    metricTypeDisplayName: 'Memory',
+    unit: 'GB',
+    baselineConsumption: 1000,
+    baselineCapacity: 5000,
+    currentConsumption: 1000,
+    currentCapacity: 5000,
+    utilization: 0.2,
+  };
+  const baseCluster = {
+    description: null,
+    baselineDate: '2026-06-01',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    archivedAt: null,
+    metrics: [metric],
+    source: 'vsphere' as const,
+    lastSyncedAt: '2026-08-01T09:00:00Z',
+    externalName: 'Production',
+    provisionalHostCount: 0,
+  };
+  const clusters = {
+    items: [
+      {
+        ...baseCluster,
+        id: freshId,
+        name: 'CL-Synced-Fresh',
+        connection: { id: 'conn1', name: 'vc-prod-zrh', status: 'active', enabled: true },
+      },
+      {
+        ...baseCluster,
+        id: neverId,
+        name: 'CL-Synced-New',
+        provisionalHostCount: 2,
+        connection: { id: 'conn1', name: 'vc-prod-zrh', status: 'active', enabled: true },
+      },
+    ],
+    total: 2,
+    limit: 100,
+    offset: 0,
+  };
+  const liveUsage = {
+    items: [
+      {
+        state: 'fresh',
+        clusterId: freshId,
+        connectionName: 'vc-prod-zrh',
+        memoryUsedGiB: 1234.5,
+        hostsSampled: 8,
+        hostsTotal: 8,
+        measuredAt: '2026-08-01T11:59:00Z',
+        ageSeconds: 120,
+      },
+      { state: 'never_fetched', clusterId: neverId, connectionName: 'vc-prod-zrh' },
+    ],
+  };
+  const forecast = {
+    fromMonth: '2026-07-01',
+    toMonth: '2027-06-01',
+    months: [
+      { month: '2026-07-01', consumption: 1000, capacity: 5000, utilization: 0.2 },
+      { month: '2026-08-01', consumption: 1100, capacity: 5000, utilization: 0.22 },
+    ],
+    events: [],
+    hosts: [],
+    applications: [],
+    effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'system' },
+    procurement: { leadTimeWeeks: 13, orderByDate: null, breachMonth: null },
+    baselineHistory: [],
+  };
+
+  // Most specific last — Playwright checks routes most-recently-added first.
+  await page.route(/\/api\/clusters(\?.*)?$/, (route) => route.fulfill({ json: clusters }));
+  await page.route(/\/api\/clusters\/[^/]+\/forecast/, (route) =>
+    route.fulfill({ json: forecast }),
+  );
+  await page.route(/\/api\/clusters\/live-usage$/, (route) => route.fulfill({ json: liveUsage }));
+
+  await page.goto('/');
+
+  const freshTile = page.locator('a[data-cluster-id="' + freshId + '"]');
+  const newTile = page.locator('a[data-cluster-id="' + neverId + '"]');
+  await expect(freshTile).toBeVisible();
+
+  // The synced source badge renders on both tiles.
+  await expect(freshTile.getByText('vSphere')).toBeVisible();
+
+  // Fresh reading: an absolute GiB figure + freshness — never a percentage.
+  await expect(freshTile.getByText('1,235 GiB')).toBeVisible();
+
+  // The load-bearing assertion: a synced cluster with no sample says so in
+  // words, and does NOT fabricate a 0.
+  await expect(newTile.getByText('not yet measured')).toBeVisible();
+  await expect(newTile).not.toContainText('0 GiB');
+  // …and its provisional-host hint is surfaced.
+  await expect(newTile.getByText(/HOSTS NEED DATES/)).toBeVisible();
+});

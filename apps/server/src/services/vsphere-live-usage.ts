@@ -88,29 +88,83 @@ export class VsphereLiveUsageService {
     // `{ used: 0 }` here would be the whole bug this design exists to prevent.
     if (!sample) return null;
 
-    const ageSeconds = Math.max(
-      0,
-      Math.floor((now.getTime() - sample.measuredAt.getTime()) / 1000),
-    );
-    const base = {
-      clusterId,
-      connectionName: sample.connection.name,
-      memoryUsedGiB: sample.memoryUsedGiB.toNumber(),
-      hostsSampled: sample.hostsSampled,
-      hostsTotal: sample.hostsTotal,
-      measuredAt: sample.measuredAt.toISOString(),
-      ageSeconds,
-    };
+    return reading(clusterId, sample, sample.connection, now);
+  }
 
-    const reason = staleReason(sample.connection, now.getTime() - sample.measuredAt.getTime());
-    if (reason) return { state: 'stale', ...base, reason };
-    return { state: 'fresh', ...base };
+  /**
+   * Live usage for every SYNCED cluster in the tenant, in one query — the fleet
+   * console renders N tiles and would otherwise issue N round-trips (D24/#193).
+   *
+   * @ai-warning Manual clusters (no `connectionId`) are ABSENT from the result,
+   * never `never_fetched`: `never_fetched` requires a `connectionName` a manual
+   * cluster does not have, and absence is the honest encoding of "no vCenter is
+   * involved here". A synced cluster with no sample maps to `never_fetched`, so
+   * the returned array is `LiveUsage[]` — never contains a `null` — and no
+   * caller can coalesce a missing reading into a 0.
+   *
+   * Reads the Postgres cache only; there is no path from here to a vCenter
+   * socket (D25). Archived clusters are excluded, matching the default fleet
+   * view.
+   */
+  async listForTenant(tenantId: string, now: Date): Promise<LiveUsage[]> {
+    const clusters = await this.prisma.cluster.findMany({
+      where: { tenantId, connectionId: { not: null }, archivedAt: null },
+      select: {
+        id: true,
+        connection: { select: { name: true, enabled: true, status: true } },
+        usageSample: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    const items: LiveUsage[] = [];
+    for (const cluster of clusters) {
+      // `connectionId` is non-null by the query filter, so the relation is
+      // present; the guard narrows the type rather than handling an expected case.
+      if (!cluster.connection) continue;
+      if (!cluster.usageSample) {
+        items.push(this.neverFetched(cluster.id, cluster.connection.name));
+        continue;
+      }
+      items.push(reading(cluster.id, cluster.usageSample, cluster.connection, now));
+    }
+    return items;
   }
 
   /** A cluster with no sample yet. Structurally carries no numbers — see the contract. */
   neverFetched(clusterId: string, connectionName: string): LiveUsage {
     return { state: 'never_fetched', clusterId, connectionName };
   }
+}
+
+/**
+ * Build a `fresh`/`stale` reading from a cached sample. Shared by the
+ * single-cluster and batch reads so staleness is computed one way, server-side.
+ */
+function reading(
+  clusterId: string,
+  sample: {
+    memoryUsedGiB: Prisma.Decimal;
+    hostsSampled: number;
+    hostsTotal: number;
+    measuredAt: Date;
+  },
+  connection: { name: string; enabled: boolean; status: string },
+  now: Date,
+): LiveUsage {
+  const ageMs = now.getTime() - sample.measuredAt.getTime();
+  const base = {
+    clusterId,
+    connectionName: connection.name,
+    memoryUsedGiB: sample.memoryUsedGiB.toNumber(),
+    hostsSampled: sample.hostsSampled,
+    hostsTotal: sample.hostsTotal,
+    measuredAt: sample.measuredAt.toISOString(),
+    ageSeconds: Math.max(0, Math.floor(ageMs / 1000)),
+  };
+  const reason = staleReason(connection, ageMs);
+  if (reason) return { state: 'stale', ...base, reason };
+  return { state: 'fresh', ...base };
 }
 
 function staleReason(
