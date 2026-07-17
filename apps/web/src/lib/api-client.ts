@@ -1,4 +1,9 @@
 import type {
+  VsphereConnectionCreate,
+  VsphereConnectionUpdate,
+  VsphereProbe,
+  VsphereTrustCa,
+  VsphereVerify,
   ApiErrorBody,
   AuthConfigTest,
   AuthConfigUpdate,
@@ -9,6 +14,10 @@ import type {
   UpdateLocalUser,
 } from '@lcm/shared';
 import {
+  vsphereConnectionResponseSchema,
+  vsphereProbeResultSchema,
+  vsphereSyncNowResponseSchema,
+  vsphereVerifyResultSchema,
   authConfigResponseSchema,
   authConfigTestResultSchema,
   capacityRowInputSchema,
@@ -18,6 +27,8 @@ import {
   clusterSettingsResponseSchema,
   clusterUpdateInputSchema,
   forecastResponseSchema,
+  hostCommissioningConfirmInputSchema,
+  liveUsageListResponseSchema,
   hostCreateInputSchema,
   hostLifecycleEventResponseSchema,
   hostReplacementCreateInputSchema,
@@ -147,6 +158,7 @@ export type ItemUpdateInputWire = z.input<typeof itemUpdateInputSchema>;
 export type ItemAllocationAppendInputWire = z.input<typeof itemAllocationRowInputSchema>;
 export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
 export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
+export type HostCommissioningConfirmInputWire = z.input<typeof hostCommissioningConfirmInputSchema>;
 
 // ---------- Query string helper ----------
 
@@ -172,6 +184,11 @@ export const api = {
         paginatedSchema(clusterResponseSchema),
       ),
     get: (id: string) => request(`/api/clusters/${id}`, undefined, clusterResponseSchema),
+    // Batch live usage for the fleet console — one entry per SYNCED cluster
+    // (#193). Manual clusters are absent from `items` (not `never_fetched`).
+    // The single-cluster panel reuses this same query via the shared React
+    // Query cache and picks out its cluster's item — no per-cluster endpoint.
+    liveUsage: () => request('/api/clusters/live-usage', undefined, liveUsageListResponseSchema),
     create: (input: ClusterCreateInputWire) =>
       request(
         '/api/clusters',
@@ -240,6 +257,12 @@ export const api = {
         hostResponseSchema,
       ),
     delete: (id: string) => request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
+    confirmCommissioning: (input: HostCommissioningConfirmInputWire) =>
+      request(
+        '/api/hosts/confirm-commissioning',
+        { method: 'POST', body: JSON.stringify(input) },
+        z.array(hostResponseSchema),
+      ),
     transition: (id: string, input: HostTransitionInputWire) =>
       request<void>(`/api/hosts/${id}/transitions`, {
         method: 'POST',
@@ -323,6 +346,59 @@ export const api = {
     // authConfigUpdateSchema/authConfigTestSchema have no Date fields (all
     // strings/enums/numbers/booleans), so the Zod-inferred types are already
     // the wire shape — no *Wire translation type needed here.
+    vsphere: {
+      connections: {
+        list: () =>
+          request(
+            '/api/settings/vsphere/connections',
+            undefined,
+            z.array(vsphereConnectionResponseSchema),
+          ),
+        create: (input: VsphereConnectionCreate) =>
+          request(
+            '/api/settings/vsphere/connections',
+            { method: 'POST', body: JSON.stringify(input) },
+            vsphereConnectionResponseSchema,
+          ),
+        update: (id: string, input: VsphereConnectionUpdate) =>
+          request(
+            `/api/settings/vsphere/connections/${id}`,
+            { method: 'PUT', body: JSON.stringify(input) },
+            vsphereConnectionResponseSchema,
+          ),
+        remove: (id: string) =>
+          request(`/api/settings/vsphere/connections/${id}`, { method: 'DELETE' }, z.void()),
+        // "Sync now" (#192): queues an immediate sync (202) — the scheduler's next
+        // tick runs it. Never awaits vCenter; there is no body to send.
+        syncNow: (id: string) =>
+          request(
+            `/api/settings/vsphere/connections/${id}/sync`,
+            { method: 'POST' },
+            vsphereSyncNowResponseSchema,
+          ),
+        trustCa: (id: string, input: VsphereTrustCa) =>
+          request(
+            `/api/settings/vsphere/connections/${id}/trust-ca`,
+            { method: 'POST', body: JSON.stringify(input) },
+            vsphereConnectionResponseSchema,
+          ),
+      },
+      // Phase 1: reachability + certificate capture. Sends NO credential.
+      probe: (input: VsphereProbe) =>
+        request(
+          '/api/settings/vsphere/probe',
+          { method: 'POST', body: JSON.stringify(input) },
+          vsphereProbeResultSchema,
+        ),
+      // Phase 2: verify the credential. The password is required by the contract
+      // and there is no stored fallback — see packages/shared/src/schemas/vsphere.ts.
+      verify: (input: VsphereVerify) =>
+        request(
+          '/api/settings/vsphere/verify',
+          { method: 'POST', body: JSON.stringify(input) },
+          vsphereVerifyResultSchema,
+        ),
+    },
     auth: {
       get: () => request('/api/settings/auth', undefined, authConfigResponseSchema),
       update: (input: AuthConfigUpdate) =>

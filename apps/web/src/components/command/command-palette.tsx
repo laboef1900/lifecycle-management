@@ -3,7 +3,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Command } from 'cmdk';
 import {
-  Database,
   LayoutPanelLeft,
   Monitor,
   Moon,
@@ -82,15 +81,9 @@ export function CommandPalette(): React.JSX.Element {
               <PaletteGroup heading="Navigation">
                 <PaletteItem
                   icon={LayoutPanelLeft}
-                  label="Go to overview"
+                  label="Go to fleet"
                   hint="g o"
                   onSelect={() => runAndClose(() => navigate({ to: '/' }))}
-                />
-                <PaletteItem
-                  icon={Database}
-                  label="Go to clusters"
-                  hint="g c"
-                  onSelect={() => runAndClose(() => navigate({ to: '/clusters' }))}
                 />
                 <PaletteItem
                   icon={Settings}

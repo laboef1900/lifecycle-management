@@ -90,7 +90,7 @@ export function ClusterIdentityForm({ clusterId }: ClusterIdentityFormProps): Re
             onChange={(e) => setDescriptionEdit(e.target.value)}
             maxLength={2000}
             rows={3}
-            className="mt-1 flex w-full rounded-[var(--radius)] border border-input bg-background px-2.5 py-1.5 text-sm placeholder:text-fg-subtle focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-1 flex w-full rounded-[var(--radius)] border border-input bg-background px-2.5 py-1.5 text-sm placeholder:text-fg-subtle disabled:cursor-not-allowed disabled:opacity-50"
           />
         </label>
         {validationError ? (

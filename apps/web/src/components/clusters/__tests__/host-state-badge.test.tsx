@@ -9,9 +9,9 @@ describe('HostStateBadge', () => {
     expect(screen.getByText(/in service/i)).toBeInTheDocument();
   });
 
-  it('uses the amber color class for degraded', () => {
+  it('uses the warning color class for degraded', () => {
     const { container } = render(<HostStateBadge state="degraded" />);
     expect(container.firstChild?.textContent).toMatch(/degraded/i);
-    expect((container.firstChild as HTMLElement).className).toMatch(/amber/);
+    expect((container.firstChild as HTMLElement).className).toMatch(/text-warning/);
   });
 });

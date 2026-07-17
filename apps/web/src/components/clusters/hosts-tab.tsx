@@ -2,6 +2,7 @@ import type { HostResponse } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowRightLeft,
+  CalendarClock,
   ChevronDown,
   ChevronRight,
   History,
@@ -13,6 +14,11 @@ import {
 } from 'lucide-react';
 import { Fragment, useState } from 'react';
 
+import {
+  ganttDomain,
+  HostLifecycleGanttAxis,
+  HostLifecycleGanttRow,
+} from '@/components/detail/host-lifecycle-gantt';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -33,6 +39,7 @@ import { cn } from '@/lib/utils';
 import { HostEolPill } from './host-eol-pill';
 import { HostStateBadge } from './host-state-badge';
 import {
+  ConfirmCommissioningDialog,
   CreateHostDialog,
   DecommissionHostDialog,
   DeleteHostDialog,
@@ -58,6 +65,7 @@ type DialogKind =
 
 export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [target, setTarget] = useState<{ host: HostResponse; kind: DialogKind } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -77,6 +85,13 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
 
   const hosts = hostsQuery.data?.items ?? [];
   const total = hostsQuery.data?.total;
+  // Synced hosts vCenter could not date carry a provisional commissioning date
+  // (Q9c, #194). Until an admin confirms them the cluster is forecasting from a
+  // guess, so surface them as an actionable, non-colour-only banner + CTA.
+  const provisionalHosts = hosts.filter((host) => host.commissionedAtProvisional === true);
+  // Shared time axis (spec §5.6) for every host's lifecycle bar, computed once
+  // so bars stay proportionally aligned across rows.
+  const domain = hosts.length > 0 ? ganttDomain(hosts) : null;
 
   return (
     <div className="space-y-3 py-4">
@@ -98,6 +113,13 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
           ) : null}
         </header>
 
+        {canManage && provisionalHosts.length > 0 ? (
+          <ProvisionalBanner
+            count={provisionalHosts.length}
+            onConfirm={() => setConfirmOpen(true)}
+          />
+        ) : null}
+
         {hostsQuery.isPending ? (
           <div className="space-y-2">
             <Skeleton className="h-12 w-full" />
@@ -110,17 +132,23 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
         ) : (
           <Table>
             <TableHeader>
-              <TableRow>
+              <TableRow className={domain ? 'border-b-0 hover:bg-transparent' : undefined}>
                 <TableHead className="w-8" />
                 <TableHead>Name</TableHead>
                 <TableHead>State</TableHead>
-                <TableHead>Commissioned</TableHead>
-                <TableHead>Decommissioned</TableHead>
-                <TableHead>Warranty</TableHead>
-                <TableHead>EOL</TableHead>
+                <TableHead className="min-w-[230px]">Lifecycle</TableHead>
                 <TableHead className="text-right">Current capacity</TableHead>
                 <TableHead className="w-24 text-right">Actions</TableHead>
               </TableRow>
+              {domain ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableHead colSpan={3} />
+                  <TableHead className="py-0">
+                    <HostLifecycleGanttAxis domain={domain} />
+                  </TableHead>
+                  <TableHead colSpan={2} />
+                </TableRow>
+              ) : null}
             </TableHeader>
             <TableBody>
               {hosts.map((host) => {
@@ -153,21 +181,8 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                       <TableCell>
                         <HostStateBadge state={host.state} />
                       </TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">
-                        {host.commissionedAt}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">
-                        {host.decommissionedAt ? (
-                          <Badge variant="outline">{host.decommissionedAt}</Badge>
-                        ) : (
-                          '—'
-                        )}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">
-                        {host.warrantyEndsAt ?? '—'}
-                      </TableCell>
-                      <TableCell className="tabular-nums">
-                        {host.eolAt ? <HostEolPill eolAt={host.eolAt} /> : '—'}
+                      <TableCell className="min-w-[230px] py-1">
+                        {domain ? <HostLifecycleGanttRow host={host} domain={domain} /> : '—'}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {latest ? formatGb(latest.amount) : '—'}
@@ -190,7 +205,8 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                     {isOpen ? (
                       <TableRow className="bg-muted/20 hover:bg-muted/20">
                         <TableCell />
-                        <TableCell colSpan={8} className="py-3">
+                        <TableCell colSpan={5} className="space-y-3 py-3">
+                          <LifecycleDates host={host} />
                           <CapacityTimeline rows={host.capacities} />
                         </TableCell>
                       </TableRow>
@@ -209,6 +225,15 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
       </Card>
 
       <CreateHostDialog open={createOpen} onOpenChange={setCreateOpen} clusterId={clusterId} />
+
+      {confirmOpen ? (
+        <ConfirmCommissioningDialog
+          open
+          onOpenChange={setConfirmOpen}
+          clusterId={clusterId}
+          hosts={provisionalHosts}
+        />
+      ) : null}
 
       {target?.kind === 'edit' ? (
         <EditHostDialog
@@ -367,6 +392,52 @@ function IconButton({
   );
 }
 
+/**
+ * Full lifecycle dates for a host (spec §5.6: "full dates remain in the
+ * existing expandable row content" now that the main row shows only the
+ * Lifecycle gantt cell).
+ */
+function LifecycleDates({ host }: { host: HostResponse }): React.JSX.Element {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Lifecycle dates
+      </p>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
+        <div>
+          <dt className="text-xs text-muted-foreground">Commissioned</dt>
+          <dd className="tabular-nums">
+            {host.commissionedAtProvisional ? (
+              <span className="flex flex-wrap items-center gap-1.5">
+                {host.commissionedAt}
+                <Badge variant="warning" dot>
+                  Provisional
+                </Badge>
+              </span>
+            ) : (
+              host.commissionedAt
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Decommissioned</dt>
+          <dd className="tabular-nums">
+            {host.decommissionedAt ? <Badge variant="outline">{host.decommissionedAt}</Badge> : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Warranty</dt>
+          <dd className="tabular-nums">{host.warrantyEndsAt ?? '—'}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">EOL</dt>
+          <dd className="tabular-nums">{host.eolAt ? <HostEolPill eolAt={host.eolAt} /> : '—'}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
 function CapacityTimeline({ rows }: { rows: HostResponse['capacities'] }): React.JSX.Element {
   const sorted = [...rows].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
   return (
@@ -383,9 +454,7 @@ function CapacityTimeline({ rows }: { rows: HostResponse['capacities'] }): React
               <span className="font-mono text-xs text-muted-foreground">{row.effectiveFrom}</span>
               <span>{formatGb(row.amount)}</span>
               {delta !== null ? (
-                <span
-                  className={cn('text-xs', delta >= 0 ? 'text-emerald-700' : 'text-destructive')}
-                >
+                <span className={cn('text-xs', delta >= 0 ? 'text-success' : 'text-destructive')}>
                   {delta >= 0 ? '+' : ''}
                   {formatNumber(delta)} GB
                 </span>
@@ -394,6 +463,42 @@ function CapacityTimeline({ rows }: { rows: HostResponse['capacities'] }): React
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+/**
+ * Actionable notice that one or more synced hosts still carry a provisional
+ * commissioning date (Q9c, #194). Colour is never the sole signal — an icon and
+ * explicit text carry the meaning, with a CTA to open the confirm dialog.
+ */
+function ProvisionalBanner({
+  count,
+  onConfirm,
+}: {
+  count: number;
+  onConfirm: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-warning/40 bg-warning/5 p-3">
+      <div className="flex items-start gap-2.5">
+        <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
+        <div className="text-sm">
+          <p className="font-medium">
+            {count === 1
+              ? '1 host needs a confirmed commissioning date'
+              : `${count} hosts need a confirmed commissioning date`}
+          </p>
+          <p className="text-fg-muted">
+            vCenter could not report when {count === 1 ? 'it was' : 'they were'} commissioned, so
+            the forecast is using a provisional date.
+          </p>
+        </div>
+      </div>
+      <Button size="sm" variant="outline" onClick={onConfirm}>
+        <CalendarClock className="h-4 w-4" />
+        {count === 1 ? 'Confirm date' : 'Confirm dates'}
+      </Button>
     </div>
   );
 }

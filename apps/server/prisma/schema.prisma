@@ -26,6 +26,8 @@ model Tenant {
 
   clusters            Cluster[]
   baselines           ClusterMetricBaseline[]
+  baselineHistory     ClusterBaselineHistory[]
+  vsphereConnections  VsphereConnection[]
   hosts               Host[]
   hostCapacities      HostMetricCapacity[]
   hostLifecycleEvents HostLifecycleEvent[]
@@ -59,6 +61,7 @@ model MetricType {
   unit        String
 
   baselines       ClusterMetricBaseline[]
+  baselineHistory ClusterBaselineHistory[]
   hostCapacities  HostMetricCapacity[]
   itemAllocations ItemAllocation[]
   items           Item[]
@@ -70,6 +73,24 @@ model MetricType {
 
 model Cluster {
   id           String    @id @default(cuid())
+  /// 'manual' | 'vsphere'. Defaults to manual, so the migration is a pure additive
+  /// column default: every existing cluster stays manual and untouched.
+  source       String    @default("manual")
+  /// The vCenter this cluster came from. onDelete: Restrict is deliberate and
+  /// load-bearing — see the VsphereConnection relation below.
+  connectionId String?   @map("vsphere_connection_id")
+  /// vCenter MoRef, e.g. `domain-c123`. Stable across renames; NOT stable across a
+  /// vCenter rebuild — which is what VsphereConnection.instanceUuid catches.
+  externalId   String?   @map("external_id")
+  /// The cluster's name in vCenter, verbatim and sync-owned. `name` is LCM's own
+  /// editable label: two vCenters may both have a cluster called "Production", and
+  /// the operator must be able to tell them apart in the fleet console.
+  externalName String?   @map("external_name")
+  /// Set once an operator edits `name`. Sync then never touches the label again —
+  /// a vCenter-side rename updates `externalName` and is surfaced as a hint rather
+  /// than clobbering a deliberate choice.
+  nameIsCustom Boolean   @default(false) @map("name_is_custom")
+  lastSyncedAt DateTime? @map("last_synced_at")
   tenantId     String    @default("default") @map("tenant_id")
   name         String
   description  String?
@@ -78,13 +99,36 @@ model Cluster {
   updatedAt    DateTime  @updatedAt @map("updated_at")
   archivedAt   DateTime? @map("archived_at")
 
-  tenant    Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  baselines ClusterMetricBaseline[]
-  hosts     Host[]
-  items     Item[]
-  settings  ClusterSettings?
+  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// @ai-warning `onDelete: Restrict`, NEVER Cascade. ClusterMetricBaseline and
+  /// ClusterBaselineHistory both cascade from Cluster, so a cascade here would
+  /// chain: delete connection -> delete clusters -> DELETE EVERY BASELINE. One
+  /// misclick in Settings would silently destroy the purchasing history this whole
+  /// epic exists to accumulate, and it would not even look destructive at the click
+  /// site. Restrict makes the database refuse; the API returns 409 and offers an
+  /// explicit detach that converts the clusters to manual and keeps every row.
+  ///
+  /// SetNull is also wrong: it would leave source='vsphere' with a null
+  /// connectionId — a row no code path expects — and would make the destructive
+  /// path automatic rather than deliberate.
+  connection      VsphereConnection?       @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  baselines       ClusterMetricBaseline[]
+  baselineHistory ClusterBaselineHistory[]
+  hosts           Host[]
+  items           Item[]
+  settings        ClusterSettings?
+  usageSample     VsphereUsageSample?
 
   @@unique([tenantId, name], map: "clusters_tenant_name_unique")
+  /// Cluster identity WITHIN a vCenter. A MoRef (`domain-c123`) is unique only
+  /// inside one vCenter, so it is meaningless without the connection — hence the
+  /// composite. Matching on NAME instead would treat a vCenter-side rename as
+  /// delete+create and DESTROY the baseline history; MoRefs survive renames.
+  ///
+  /// Both columns are NULL for manual clusters, and Postgres treats NULLs as
+  /// distinct, so every manual cluster coexists here (the same property
+  /// hosts_tenant_serial_unique relies on).
+  @@unique([connectionId, externalId], map: "clusters_connection_external_unique")
   @@map("clusters")
 }
 
@@ -114,26 +158,81 @@ model ClusterMetricBaseline {
   @@map("cluster_metric_baselines")
 }
 
+/// Append-only baseline history — the source of truth for the forecast anchor
+/// and the chart's historical series (#177).
+///
+/// @ai-warning `capturedAt` IS the period anchor, not merely "when we measured".
+/// Both manual entry and the vSphere snapshot job snap it to the first of the
+/// month, so `@@unique([clusterId, metricTypeId, capturedAt])` *is* monthly
+/// idempotency, enforced by Postgres rather than by application logic. A job that
+/// restarts and re-runs on a different day of the same month recomputes the same
+/// key and conflicts. Do not "fix" this to a timestamp — that silently drops the
+/// guarantee to day-granularity and lets one month hold two competing truths.
+/// `observedAt` carries the real instant, is informational only, and is read by
+/// nothing on the forecast path.
+///
+/// @ai-context `source` is deliberately NOT in the unique key. Including it would
+/// let a manual row and a vsphere row coexist for one period, making "the newest
+/// baseline" ambiguous on the number that drives hardware purchasing. Excluding it
+/// means exactly one truth per metric per period, and an admin correcting a bad
+/// sync is an explicit overwrite that flips `source` to manual.
+model ClusterBaselineHistory {
+  id                  String    @id @default(cuid())
+  clusterId           String    @map("cluster_id")
+  metricTypeId        String    @map("metric_type_id")
+  tenantId            String    @default("default") @map("tenant_id")
+  capturedAt          DateTime  @map("captured_at") @db.Date
+  source              String    @default("manual")
+  observedAt          DateTime? @map("observed_at") @db.Timestamptz(3)
+  baselineConsumption Decimal   @map("baseline_consumption") @db.Decimal(18, 3)
+  baselineCapacity    Decimal   @map("baseline_capacity") @db.Decimal(18, 3)
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  cluster    Cluster    @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  metricType MetricType @relation(fields: [metricTypeId], references: [id])
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+
+  @@unique([clusterId, metricTypeId, capturedAt], map: "cluster_baseline_history_period_unique")
+  @@map("cluster_baseline_history")
+}
+
 // ---------- Hosts (capacity providers) ----------
 
 model Host {
-  id               String    @id @default(cuid())
-  tenantId         String    @default("default") @map("tenant_id")
-  clusterId        String    @map("cluster_id")
-  name             String
-  description      String?
-  commissionedAt   DateTime  @map("commissioned_at") @db.Date
-  decommissionedAt DateTime? @map("decommissioned_at") @db.Date
-  serialNumber     String?   @map("serial_number")
-  vendor           String?
-  model            String?
-  purchasedAt      DateTime? @map("purchased_at") @db.Date
-  warrantyEndsAt   DateTime? @map("warranty_ends_at") @db.Date
-  eolAt            DateTime? @map("eol_at") @db.Date
-  runPastEol       Boolean   @default(false) @map("run_past_eol")
-  state            HostState @default(in_service)
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
+  id                        String    @id @default(cuid())
+  source                    String    @default("manual")
+  connectionId              String?   @map("vsphere_connection_id")
+  externalId                String?   @map("external_id")
+  externalName              String?   @map("external_name")
+  /// Set once an operator edits `name` (parity with Cluster.nameIsCustom, #196).
+  /// Sync then never touches the label again — a vCenter-side rename updates
+  /// `externalName` and is surfaced as a hint rather than clobbering a deliberate
+  /// choice. Before this, sync overwrote a synced host's `name` on every pass.
+  nameIsCustom              Boolean   @default(false) @map("name_is_custom")
+  lastSyncedAt              DateTime? @map("last_synced_at")
+  /// @ai-warning vCenter cannot tell us when a host was commissioned, so sync
+  /// imports a PROVISIONAL date and flags it. This matters more than it looks:
+  /// effectiveCapacityAt returns 0 before commissionedAt, and a wrong date silently
+  /// zeroes a host's capacity for every month before it — which the forecast then
+  /// renders as "unknown" utilization. The operator confirms the real date after
+  /// import (owner decision Q9c).
+  commissionedAtProvisional Boolean   @default(false) @map("commissioned_at_provisional")
+  tenantId                  String    @default("default") @map("tenant_id")
+  clusterId                 String    @map("cluster_id")
+  name                      String
+  description               String?
+  commissionedAt            DateTime  @map("commissioned_at") @db.Date
+  decommissionedAt          DateTime? @map("decommissioned_at") @db.Date
+  serialNumber              String?   @map("serial_number")
+  vendor                    String?
+  model                     String?
+  purchasedAt               DateTime? @map("purchased_at") @db.Date
+  warrantyEndsAt            DateTime? @map("warranty_ends_at") @db.Date
+  eolAt                     DateTime? @map("eol_at") @db.Date
+  runPastEol                Boolean   @default(false) @map("run_past_eol")
+  state                     HostState @default(in_service)
+  createdAt                 DateTime  @default(now()) @map("created_at")
+  updatedAt                 DateTime  @updatedAt @map("updated_at")
 
   tenant          Tenant               @relation(fields: [tenantId], references: [id])
   cluster         Cluster              @relation(fields: [clusterId], references: [id], onDelete: Cascade)
@@ -141,12 +240,18 @@ model Host {
   lifecycleEvents HostLifecycleEvent[]
   replacedByLinks HostReplacement[]    @relation("HostReplacementOld")
   replacesLinks   HostReplacement[]    @relation("HostReplacementNew")
+  /// @ai-warning onDelete: Restrict, NEVER Cascade — same reasoning as the Cluster
+  /// relation. A synced host carries HostMetricCapacity rows that feed the forecast;
+  /// cascading a connection delete into them would silently change fleet capacity.
+  connection      VsphereConnection?   @relation(fields: [connectionId], references: [id], onDelete: Restrict)
 
   /// Per-tenant uniqueness of serial numbers. Declared as a full unique index
   /// (not the historical partial `WHERE serial_number IS NOT NULL`): Postgres
   /// treats NULLs as distinct, so NULL-serial rows never conflict under either
   /// form — they are equivalent here, and `@@unique` is expressible natively so
   /// schema and DB agree (no more spurious `migrate dev` index drift, #123).
+  /// Host identity within a vCenter — same reasoning as clusters_connection_external_unique.
+  @@unique([connectionId, externalId], map: "hosts_connection_external_unique")
   @@unique([tenantId, serialNumber], map: "hosts_tenant_serial_unique")
   @@index([clusterId])
   @@index([state])
@@ -348,4 +453,164 @@ model AuthConfig {
 enum UserRole {
   ADMIN
   VIEWER
+}
+
+/// A configured vCenter, one row per instance (#175, epic #172).
+///
+/// @ai-warning This is NOT a singleton, and must not be "simplified" into one to
+/// match AuthConfig. The deployment has two or more vCenters, and the AuthConfig
+/// pattern does not transfer for two further reasons: degrade must be
+/// PER-CONNECTION (one undecryptable secret must not disable the others), and the
+/// decrypted secret must NOT be cached — AuthConfig caches because it sits on the
+/// hot path of every request, whereas these credentials are used by a background
+/// job every few minutes, so decrypt-on-use is affordable and keeps plaintext out
+/// of the long-lived heap.
+///
+/// @ai-warning `passwordEnc` is the ONLY secret here. `tlsPinnedCaPem` and its
+/// fingerprint are PUBLIC certificate data — vCenter serves the CA unauthenticated
+/// and presents it in every handshake — so encrypting them would protect a secret
+/// that does not exist.
+model VsphereConnection {
+  id          String @id @default(cuid())
+  tenantId    String @default("default") @map("tenant_id")
+  name        String
+  /// Bare hostname. The scheme and port are fixed server-side (https, 443) so a
+  /// URL can never be smuggled through this column.
+  hostname    String
+  username    String
+  /// AES-GCM under CONFIG_ENCRYPTION_KEY via crypto/secret-box.ts — reused as-is,
+  /// no new crypto. On a decrypt failure this column is NEVER nulled: the
+  /// ciphertext may be the only copy, and restoring the key recovers it. Same rule
+  /// and same reasoning as AuthConfig (plugins/auth-config.ts).
+  passwordEnc String @map("password_enc")
+
+  /// 'system' | 'pinned'. Exactly two values, both fail closed. There is no
+  /// insecure mode and there must never be one — see the shared contract.
+  tlsMode         String  @default("pinned") @map("tls_mode")
+  /// The pinned trust anchor: the ROOT of the presented chain, not the leaf.
+  /// vCenter auto-renews its leaf unattended, so a leaf pin would break by itself
+  /// on a ~2-year timer. Public data, stored in plaintext.
+  tlsPinnedCaPem  String? @map("tls_pinned_ca_pem")
+  tlsPinnedSha256 String? @map("tls_pinned_sha256")
+
+  /// ServiceContent.about.instanceUuid, discovered on connect — never entered by
+  /// an operator.
+  ///
+  /// @ai-warning This is the guard against silent cross-vCenter corruption. MoRefs
+  /// are unique only WITHIN a vCenter, so if this hostname is ever re-pointed (DNS
+  /// change, DR failover, a rebuilt appliance reusing the name), `domain-c123` at
+  /// the new target is a COMPLETELY DIFFERENT cluster — and sync would overwrite
+  /// the wrong cluster's hosts and capacity, feeding wrong numbers into a forecast
+  /// that buys hardware. On mismatch: refuse to sync, never auto-heal.
+  instanceUuid String? @map("instance_uuid")
+  apiVersion   String? @map("api_version")
+
+  enabled         Boolean   @default(true)
+  status          String    @default("never_connected")
+  /// Sanitized before storage — never a raw driver error, never secret-bearing.
+  lastError       String?   @map("last_error")
+  lastConnectedAt DateTime? @map("last_connected_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clusters     Cluster[]
+  hosts        Host[]
+  job          VsphereConnectionJob?
+  usageSamples VsphereUsageSample[]
+
+  @@unique([tenantId, name])
+  /// Stops the same vCenter being added twice under two names (FQDN and IP), which
+  /// would import every cluster twice and silently DOUBLE fleet capacity. NULLs are
+  /// distinct in Postgres, so many not-yet-connected rows coexist — the same
+  /// property hosts_tenant_serial_unique already relies on.
+  @@unique([tenantId, instanceUuid], map: "vsphere_connections_tenant_instance_unique")
+  @@map("vsphere_connections")
+}
+
+/// Scheduling state for one vCenter connection (#178, epic #172).
+///
+/// @ai-warning `connectionId` is BOTH primary key and foreign key. That is not
+/// tidiness — it is what makes the whole design work:
+///   - one claim per connection ⇒ intra-connection concurrency is STRUCTURALLY
+///     impossible rather than defended against, and "sync before snapshot" becomes
+///     sequential statements in one job body with no cross-job race to reason about;
+///   - the FK cascades, so a deleted connection cannot leave an orphan row ticking
+///     and failing forever against a vCenter that no longer exists.
+///
+/// @ai-context Cascade here does NOT contradict the Restrict on Cluster.connection.
+/// The rule is: **cascade is correct for regenerable operational state; forbidden
+/// for irreplaceable user data.** This row is pure derived state — the next tick
+/// rebuilds it. A baseline is irreplaceable: a destroyed August cannot be
+/// re-measured, the moment is gone.
+model VsphereConnectionJob {
+  connectionId String    @id @map("vsphere_connection_id")
+  /// The single scheduling primitive. `dueAt <= now()` IS catch-up: server down
+  /// three days ⇒ dueAt two days past ⇒ the first tick after boot runs it. There is
+  /// deliberately no "did I miss one?" branch to get wrong.
+  dueAt        DateTime  @map("due_at")
+  /// Claim lease. Non-null means someone is running it; a stale lease is reclaimed
+  /// so a hard-killed process self-heals instead of wedging forever.
+  runningSince DateTime? @map("running_since")
+  lockedBy     String?   @map("locked_by")
+  failureCount Int       @default(0) @map("failure_count")
+
+  lastPollAt         DateTime? @map("last_poll_at")
+  lastSyncAt         DateTime? @map("last_sync_at")
+  lastSyncStatus     String?   @map("last_sync_status")
+  lastSnapshotAt     DateTime? @map("last_snapshot_at")
+  lastSnapshotStatus String?   @map("last_snapshot_status")
+  /// The period the last snapshot ATTEMPTED.
+  lastSnapshotPeriod DateTime? @map("last_snapshot_period") @db.Date
+  /// The period the last snapshot SUCCEEDED for. Distinct from the above on
+  /// purpose: comparing them at recovery is how a missed month becomes visible
+  /// ("Missed: Aug 2026") rather than merely absent from a chart.
+  lastSuccessPeriod  DateTime? @map("last_success_period") @db.Date
+  lastError          String?   @map("last_error")
+
+  connection VsphereConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([dueAt])
+  @@map("vsphere_connection_jobs")
+}
+
+/// The latest live usage reading per cluster (#179, epic #172).
+///
+/// @ai-warning This is a CACHE, not history. Exactly one row per cluster —
+/// `clusterId` is the primary key, so a poll upserts and the table never grows and
+/// needs no retention policy. Do NOT turn it into a time series: history is what
+/// baselines are for, and conflating them would quietly promote a cache into
+/// purchasing data.
+///
+/// @ai-warning It lives in Postgres, not memory, and that is required rather than
+/// preferred. The server is stateless by invariant and must serve last-known data
+/// after a restart with a staleness indicator — an in-memory cache fails exactly
+/// when it matters most: a restart DURING a vCenter outage would leave the UI with
+/// "never fetched" (i.e. nothing) for the whole outage.
+///
+/// @ai-warning There is deliberately NO capacity column. Capacity is inventory —
+/// it changes when a host is physically installed, on a scale of months, and
+/// nothing about it is live. Duplicating it into a 5-minute cache with a different
+/// owner and cadence would guarantee the two disagree, and a live view whose
+/// denominator contradicts the forecast's is exactly how users stop trusting the
+/// tool (docs/vision.md anti-patterns). The synced inventory is the one owner.
+model VsphereUsageSample {
+  clusterId     String   @id @map("cluster_id")
+  connectionId  String   @map("vsphere_connection_id")
+  memoryUsedGiB Decimal  @map("memory_used_gib") @db.Decimal(18, 3)
+  /// `hostsSampled < hostsTotal` is its own honest signal ("2 of 12 didn't
+  /// report"). Without it, a partial read looks like a real DROP in consumption.
+  hostsSampled  Int      @map("hosts_sampled")
+  /// A count from vCenter, not a capacity. If it disagrees with LCM's synced host
+  /// count, inventory is behind — a cheap change-detector that self-heals the 6h
+  /// sync window for the only case that matters (a host was added).
+  hostsTotal    Int      @map("hosts_total")
+  /// When vCENTER measured it, not when we asked.
+  measuredAt    DateTime @map("measured_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  cluster    Cluster           @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  connection VsphereConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@map("vsphere_usage_samples")
 }

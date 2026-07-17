@@ -33,7 +33,33 @@ export interface ForecastMonthPoint {
   month: string;
   consumption: number;
   capacity: number;
-  utilization: number;
+  /**
+   * Fraction of capacity consumed, or **null when capacity is 0** — i.e. when
+   * utilization is not merely low but *unknowable*.
+   *
+   * @ai-warning Do NOT default this to 0. Zero capacity previously rendered as
+   * "0% utilised", which reads as *maximum headroom, healthy* — the single most
+   * dangerous wrong answer a capacity tool can give, since it is the state in
+   * which no hardware gets ordered. `null` forces every consumer to decide what
+   * "unknown" looks like instead of inheriting a reassuring lie. Recorded
+   * decision Q9d, 2026-07-17.
+   */
+  utilization: number | null;
+}
+
+/**
+ * One point in a cluster/metric's append-only baseline history (#177).
+ *
+ * `capturedAt` is the period anchor (first of the month), not the instant of
+ * measurement — see `ClusterBaselineHistory` in schema.prisma.
+ */
+export interface BaselineHistoryPoint {
+  capturedAt: string;
+  source: 'manual' | 'vsphere';
+  consumption: number;
+  capacity: number;
+  /** Fraction consumed at capture time; null when the captured capacity was 0. */
+  utilization: number | null;
 }
 
 export interface ForecastEventMarker {
@@ -70,6 +96,16 @@ export interface ForecastResponse {
   applications: ForecastEntityContribution[];
   effectiveThresholds: EffectiveThresholds;
   procurement: ProcurementInfo;
+  /**
+   * Every recorded baseline for this cluster/metric, oldest first — the measured
+   * actuals behind the modelled line. The forecast anchors on the LAST entry.
+   *
+   * A month absent from this series is an honest gap (a snapshot that could not
+   * be taken), never a zero. Renderers MUST break the line rather than
+   * interpolate across it: silently joining July to September turns a missed
+   * measurement into a fabricated trend, on the series that drives purchasing.
+   */
+  baselineHistory: BaselineHistoryPoint[];
 }
 
 // ---------- What-if scenarios ----------

@@ -1,75 +1,71 @@
 import { Link, Outlet } from '@tanstack/react-router';
-import { Activity, Search } from 'lucide-react';
+import { Activity, Search, Settings } from 'lucide-react';
 
 import { CommandPalette } from '@/components/command/command-palette';
 import { KeyboardShortcuts } from '@/components/command/keyboard-shortcuts';
 import { ShortcutsDialog } from '@/components/command/shortcuts-dialog';
-import { Breadcrumbs } from '@/components/layout/breadcrumbs';
-import { MobileNavProvider, MobileNavTrigger, useMobileNav } from '@/components/layout/mobile-nav';
-import { Sidebar, SidebarNav } from '@/components/layout/sidebar';
 import { UserMenu } from '@/components/layout/user-menu';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
-import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 
 export function AppShell(): React.JSX.Element {
   return (
-    <MobileNavProvider>
+    <>
       <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
         <Header />
-        <div className="flex min-h-0 flex-1">
-          <Sidebar />
-          <MobileSidebarSheet />
-          <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
-            <div className="mx-auto w-full max-w-screen-2xl px-4 py-6 sm:px-6">
-              <Outlet />
-            </div>
-          </main>
-        </div>
+        <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+          <div className="mx-auto w-full max-w-screen-2xl px-4 py-6 sm:px-6">
+            <Outlet />
+          </div>
+        </main>
       </div>
       <CommandPalette />
       <ShortcutsDialog />
       <KeyboardShortcuts />
-    </MobileNavProvider>
-  );
-}
-
-function MobileSidebarSheet(): React.JSX.Element {
-  const { open, setOpen } = useMobileNav();
-  return (
-    <Sheet open={open} onOpenChange={setOpen}>
-      <SheetContent>
-        <SheetTitle className="sr-only">Primary navigation</SheetTitle>
-        <SidebarNav onNavigate={() => setOpen(false)} />
-      </SheetContent>
-    </Sheet>
+    </>
   );
 }
 
 function Header(): React.JSX.Element {
   return (
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4 sm:gap-4">
-      <MobileNavTrigger />
-      <Link to="/" className="flex items-center gap-2.5 font-semibold">
+      <Link to="/" className="flex items-center gap-2.5 font-display font-semibold">
         <span
           aria-hidden
-          className="flex h-7 w-7 items-center justify-center rounded-[var(--radius)] bg-accent"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius)] bg-accent"
         >
           <Activity className="h-4 w-4 text-accent-foreground" />
         </span>
-        <span className="hidden sm:inline">Capacity Forecast</span>
+        <span>Capacity Forecast</span>
       </Link>
-      <div className="hidden h-6 w-px bg-border md:block" aria-hidden />
-      <div className="hidden min-w-0 flex-1 md:block">
-        <Breadcrumbs />
-      </div>
       <div className="ml-auto flex items-center gap-2">
         <CommandPaletteTrigger />
+        <nav aria-label="Primary navigation">
+          <SettingsLink />
+        </nav>
         <ThemeToggle />
         <UserMenu />
       </div>
     </header>
+  );
+}
+
+function SettingsLink(): React.JSX.Element {
+  return (
+    <>
+      <Button asChild type="button" variant="ghost" size="icon" className="sm:hidden">
+        <Link to="/settings" aria-label="Settings">
+          <Settings className="h-4 w-4" />
+        </Link>
+      </Button>
+      <Button asChild type="button" variant="ghost" size="sm" className="hidden sm:inline-flex">
+        <Link to="/settings">
+          <Settings className="h-4 w-4" />
+          <span>Settings</span>
+        </Link>
+      </Button>
+    </>
   );
 }
 

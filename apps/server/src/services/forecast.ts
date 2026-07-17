@@ -1,3 +1,4 @@
+import type { BaselineHistoryPoint } from '@lcm/shared';
 import type { EffectiveThresholds, ProcurementInfo } from '@lcm/shared';
 
 import { formatDate } from '../lib/dates.js';
@@ -36,6 +37,14 @@ export interface ForecastEvent {
 
 export interface ForecastInput {
   baselineDate: Date;
+  /**
+   * What the anchoring baseline MEANS — which decides whether a delta dated at or
+   * before it is already contained in the measurement. See `absorbsDeltas`.
+   *
+   * Defaults to `'manual'` when omitted, preserving the semantics every existing
+   * caller and test relies on.
+   */
+  baselineSource?: 'manual' | 'vsphere';
   baselineConsumption: number;
   baselineCapacity: number;
   hosts: ForecastHost[];
@@ -47,7 +56,8 @@ export interface MonthlyPoint {
   month: string;
   consumption: number;
   capacity: number;
-  utilization: number;
+  /** null when capacity is 0 — unknowable, not zero. See the shared contract. */
+  utilization: number | null;
 }
 
 export interface ForecastEventOutput {
@@ -68,6 +78,8 @@ export interface ForecastEntityContribution {
 }
 
 export interface ForecastResult {
+  /** The measured actuals behind the modelled line, oldest first (#177). */
+  baselineHistory: BaselineHistoryPoint[];
   fromMonth: string;
   toMonth: string;
   months: MonthlyPoint[];
@@ -78,7 +90,18 @@ export interface ForecastResult {
   procurement: ProcurementInfo;
 }
 
-export type ComputedForecast = Omit<ForecastResult, 'effectiveThresholds' | 'procurement'>;
+/**
+ * What the pure `computeForecast` produces. `baselineHistory` is omitted with the
+ * same intent as `effectiveThresholds`/`procurement`: it is assembled by the
+ * loader from the database, and the pure function must never learn that history
+ * exists. Keeping it ignorant is what lets the characterization snapshot mean
+ * something — the forecast maths is then unchanged by #177 by construction rather
+ * than by assertion.
+ */
+export type ComputedForecast = Omit<
+  ForecastResult,
+  'effectiveThresholds' | 'procurement' | 'baselineHistory'
+>;
 
 export function computeForecast(
   input: ForecastInput,
@@ -124,18 +147,22 @@ export function computeForecast(
     }
 
     for (const app of applications) {
-      const amount = effectiveAllocationAt(app, date);
+      const amount = absorbed(app.startedAt, input) ? 0 : effectiveAllocationAt(app, date);
       consumption += amount;
       applicationContributions.get(app.id)?.push({ month: monthLabel, amount });
     }
 
     for (const event of events) {
       if (event.effectiveDate > date) break;
+      if (absorbed(event.effectiveDate, input)) continue;
       if (event.capacityDelta !== null) capacity += event.capacityDelta;
       if (event.consumptionDelta !== null) consumption += event.consumptionDelta;
     }
 
-    const utilization = capacity === 0 ? 0 : consumption / capacity;
+    // @ai-warning `null`, never 0. Zero capacity means utilization is UNKNOWABLE,
+    // and rendering it as 0% reads as "maximum headroom, healthy" — the state in
+    // which nobody orders hardware. Recorded decision Q9d, 2026-07-17.
+    const utilization = capacity === 0 ? null : consumption / capacity;
 
     months.push({ month: monthLabel, consumption, capacity, utilization });
   }
@@ -171,6 +198,45 @@ export function computeForecast(
       contributions: applicationContributions.get(app.id) ?? [],
     })),
   };
+}
+
+/**
+ * Is a delta already contained in the anchoring baseline, and therefore not to be
+ * added again?
+ *
+ * @ai-warning The answer depends entirely on what the baseline MEANS, and the two
+ * sources mean different things. Getting this wrong is silent and
+ * purchasing-critical in both directions — filter too much and the forecast
+ * under-reports consumption (hardware ordered too late); filter too little and it
+ * double-counts (capacity that does not exist).
+ *
+ *   - `manual` — the admin enters the portion NOT modelled by tracked entities
+ *     (docs/vision.md, Invariant 1). A tracked delta is therefore *never* inside
+ *     it, whatever its date, so nothing is absorbed. This is long-standing,
+ *     deliberately tested behaviour: see forecast-events.test.ts, "keeps a
+ *     pre-window event active in every month of the window".
+ *   - `vsphere` — the monthly snapshot measures TOTAL actual usage, so any delta
+ *     dated at or before the capture is already inside the number and adding it
+ *     double-counts. That is the absorption the epic #172 gate found (§D35).
+ *
+ * The boundary is `<=`: a delta effective on the capture date is treated as
+ * already measured. A snapshot is taken at the first of the month, and an event
+ * dated that same day describes a change during a month the snapshot has already
+ * observed the start of — so the conservative reading (assume measured, do not
+ * add) is the one that cannot invent capacity.
+ *
+ * Filtering lives HERE, at forecast time, and must never move to write time: a
+ * create-time check on `startedAt > capturedAt` is true when written and made
+ * false by the passage of time — and by the very snapshot job that #178
+ * automates. It would be green at write and wrong a month later, with no warning.
+ * At forecast time it is self-correcting as the anchor advances.
+ *
+ * Recorded decisions Q9b (2026-07-17) and its source-aware amendment, raised when
+ * implementation showed the uniform rule contradicted Invariant 1.
+ */
+function absorbed(effectiveDate: Date, input: ForecastInput): boolean {
+  if (input.baselineSource !== 'vsphere') return false;
+  return effectiveDate <= input.baselineDate;
 }
 
 function effectiveCapacityAt(host: ForecastHost, date: Date): number {

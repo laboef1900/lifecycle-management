@@ -32,6 +32,24 @@ export function addUtcMonths(date: Date, months: number): Date {
   return result;
 }
 
+/**
+ * The first of `date`'s month at 00:00 UTC — the canonical **period anchor**.
+ *
+ * Every baseline's `capturedAt` is snapped through here, whether entered by hand
+ * or captured by the monthly vSphere snapshot. That is what makes
+ * `@@unique([clusterId, metricTypeId, capturedAt])` mean "one truth per month"
+ * rather than "one truth per day": a snapshot job that restarts and re-runs on a
+ * different day of the same month recomputes the same anchor and conflicts,
+ * instead of appending a second competing baseline for that period.
+ *
+ * @ai-note Anchoring on day 1 also sidesteps `addUtcMonths`' day-clamping — any
+ * other anchor would drift permanently to the 28th after one pass through
+ * February.
+ */
+export function startOfUtcMonth(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
 /** Whole-month difference between two UTC dates (to minus from). */
 export function monthsBetweenUtc(from: Date, to: Date): number {
   return (

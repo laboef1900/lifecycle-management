@@ -25,7 +25,14 @@ export function computeProcurementInfo({
   warnFraction,
   leadTimeWeeks,
 }: OrderByInput): ProcurementInfo {
-  const breach = months.find((m) => m.capacity > 0 && m.utilization >= warnFraction);
+  // `capacity > 0` already implies `utilization !== null` (null means capacity is
+  // exactly 0), so the null check is a type guard, not new behaviour — and both
+  // are kept deliberately. `capacity > 0` additionally excludes NEGATIVE capacity,
+  // which events can produce; dropping it for the null check alone would quietly
+  // change which months can breach.
+  const breach = months.find(
+    (m) => m.capacity > 0 && m.utilization !== null && m.utilization >= warnFraction,
+  );
   if (!breach) {
     return { leadTimeWeeks, orderByDate: null, breachMonth: null };
   }

@@ -6,6 +6,7 @@ import type {
   HostResponse,
   ItemResponse,
   TenantSettings,
+  VsphereConnectionResponse,
 } from '../../index.js';
 import {
   clusterResponseSchema,
@@ -13,6 +14,7 @@ import {
   hostResponseSchema,
   itemResponseSchema,
   tenantSettingsResponseSchema,
+  vsphereConnectionResponseSchema,
 } from '../responses.js';
 
 describe('clusterResponseSchema', () => {
@@ -47,6 +49,68 @@ describe('clusterResponseSchema', () => {
       ...literal,
       metrics: [{ ...literal.metrics[0], utilization: 'high' }],
     };
+    expect(clusterResponseSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it('accepts a response from a server build that predates sync metadata', () => {
+    // `literal` above carries no sync fields at all. This is the neutrality
+    // guarantee that lets this contract merge ahead of every producer: an old
+    // server's payload keeps parsing, so nothing has to ship in lockstep.
+    expect(clusterResponseSchema.safeParse(literal).success).toBe(true);
+  });
+
+  it('carries a synced cluster across the boundary WITHOUT stripping the fields', () => {
+    // Asserting on the parsed data, not on `.success`. `.success` alone is worth
+    // nothing here: z.object strips unknown keys, so an undeclared `source`
+    // parses "successfully" and arrives deleted. Stripping IS the bug.
+    const synced: ClusterResponse = {
+      ...literal,
+      source: 'vsphere',
+      lastSyncedAt: '2026-07-17T09:00:00.000Z',
+      externalName: 'Production',
+      connection: { id: 'vc_1', name: 'vc-prod', status: 'active', enabled: true },
+      provisionalHostCount: 3,
+    };
+    const parsed = clusterResponseSchema.parse(synced);
+    expect(parsed.source).toBe('vsphere');
+    expect(parsed.lastSyncedAt).toBe('2026-07-17T09:00:00.000Z');
+    expect(parsed.externalName).toBe('Production');
+    expect(parsed.connection).toEqual({
+      id: 'vc_1',
+      name: 'vc-prod',
+      status: 'active',
+      enabled: true,
+    });
+    expect(parsed.provisionalHostCount).toBe(3);
+  });
+
+  it('rejects a negative provisionalHostCount', () => {
+    const bad = { ...literal, provisionalHostCount: -1 };
+    expect(clusterResponseSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it('distinguishes "never synced" (null) from "server does not know about sync" (absent)', () => {
+    // Two different facts that must not collapse into one. Absent = this build
+    // predates sync metadata. null = it does not, and this cluster has simply
+    // never synced. #193's UI cannot tell an old deployment from a manual
+    // cluster if these merge.
+    const neverSynced: ClusterResponse = {
+      ...literal,
+      source: 'manual',
+      lastSyncedAt: null,
+      connection: null,
+    };
+    const parsed = clusterResponseSchema.parse(neverSynced);
+    expect(parsed.lastSyncedAt).toBeNull();
+    expect(parsed.connection).toBeNull();
+
+    const old = clusterResponseSchema.parse(literal);
+    expect('lastSyncedAt' in old).toBe(false);
+    expect('source' in old).toBe(false);
+  });
+
+  it('rejects a source outside the vocabulary', () => {
+    const bad = { ...literal, source: 'vcenter' };
     expect(clusterResponseSchema.safeParse(bad).success).toBe(false);
   });
 });
@@ -88,6 +152,31 @@ describe('hostResponseSchema', () => {
 
   it('rejects an unknown host state', () => {
     const bad = { ...literal, state: 'melted' };
+    expect(hostResponseSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it('accepts a response from a server build that predates sync metadata', () => {
+    expect(hostResponseSchema.safeParse(literal).success).toBe(true);
+  });
+
+  it('carries a synced host across the boundary WITHOUT stripping the fields', () => {
+    const synced: HostResponse = {
+      ...literal,
+      source: 'vsphere',
+      lastSyncedAt: '2026-07-17T09:00:00.000Z',
+      // vCenter cannot tell us when a host was commissioned, so sync imports a
+      // provisional date and flags it (Q9c). The flag is what lets the UI ask an
+      // admin to confirm instead of silently treating a guess as fact.
+      commissionedAtProvisional: true,
+    };
+    const parsed = hostResponseSchema.parse(synced);
+    expect(parsed.source).toBe('vsphere');
+    expect(parsed.lastSyncedAt).toBe('2026-07-17T09:00:00.000Z');
+    expect(parsed.commissionedAtProvisional).toBe(true);
+  });
+
+  it('rejects a non-boolean commissionedAtProvisional', () => {
+    const bad = { ...literal, commissionedAtProvisional: 'yes' };
     expect(hostResponseSchema.safeParse(bad).success).toBe(false);
   });
 });
@@ -133,7 +222,28 @@ describe('forecastResponseSchema', () => {
   const literal: ForecastResponse = {
     fromMonth: '2026-01',
     toMonth: '2026-03',
-    months: [{ month: '2026-01', consumption: 100, capacity: 200, utilization: 0.5 }],
+    months: [
+      { month: '2026-01', consumption: 100, capacity: 200, utilization: 0.5 },
+      // A zero-capacity month: utilization is null, never 0 — "unknowable", not
+      // "healthy". The DTO boundary must carry that distinction to the client.
+      { month: '2026-02', consumption: 100, capacity: 0, utilization: null },
+    ],
+    baselineHistory: [
+      {
+        capturedAt: '2026-01-01',
+        source: 'manual',
+        consumption: 100,
+        capacity: 200,
+        utilization: 0.5,
+      },
+      {
+        capturedAt: '2026-02-01',
+        source: 'vsphere',
+        consumption: 120,
+        capacity: 200,
+        utilization: 0.6,
+      },
+    ],
     events: [
       {
         id: 'evt_1',
@@ -174,6 +284,101 @@ describe('forecastResponseSchema', () => {
       effectiveThresholds: { ...literal.effectiveThresholds, source: 'unknown' },
     };
     expect(forecastResponseSchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe('vsphereConnectionResponseSchema', () => {
+  const literal: VsphereConnectionResponse = {
+    id: 'vc_1',
+    name: 'vc-prod',
+    hostname: 'vcenter.corp.local',
+    username: 'svc-lcm',
+    tlsMode: 'pinned',
+    pinnedRootFingerprintSha256: Array.from({ length: 32 }, () => 'AB').join(':'),
+    instanceUuid: '4c4c4544-0000-0000-0000-000000000000',
+    apiVersion: '8.0.2.0',
+    enabled: true,
+    status: 'active',
+    lastError: null,
+    lastConnectedAt: '2026-07-17T09:00:00.000Z',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-07-17T09:00:00.000Z',
+  };
+
+  it('round-trips a representative connection response', () => {
+    expect(vsphereConnectionResponseSchema.safeParse(literal).success).toBe(true);
+  });
+
+  it('strips a password that reaches the serialization boundary', () => {
+    // The standing guarantee in this schema's @ai-warning ("there is no
+    // `password` field and there must never be one"), asserted rather than
+    // asserted-by-docstring. If someone adds one, this fails.
+    const leaked = { ...literal, password: 'correct horse battery staple' };
+    const parsed = vsphereConnectionResponseSchema.parse(leaked);
+    expect('password' in parsed).toBe(false);
+  });
+
+  it('accepts a connection from a server build that predates syncState', () => {
+    const parsed = vsphereConnectionResponseSchema.parse(literal);
+    expect('syncState' in parsed).toBe(false);
+  });
+
+  it('carries syncState across the boundary WITHOUT stripping it', () => {
+    const withState: VsphereConnectionResponse = {
+      ...literal,
+      syncState: {
+        lastSyncAt: '2026-07-17T09:00:00.000Z',
+        lastSyncStatus: 'ok',
+        lastSnapshotAt: '2026-07-01T00:00:00.000Z',
+        lastSnapshotStatus: 'ok',
+        lastSuccessPeriod: '2026-07-01',
+        failureCount: 0,
+      },
+    };
+    const parsed = vsphereConnectionResponseSchema.parse(withState);
+    expect(parsed.syncState?.lastSyncStatus).toBe('ok');
+    expect(parsed.syncState?.failureCount).toBe(0);
+  });
+
+  it('distinguishes "no job row yet" (null) from "server does not know about jobs" (absent)', () => {
+    // The job row is a separate row that may not exist (PK=FK). One null says
+    // that in one place; six independent nulls could not tell "no job row" from
+    // "job row that has never run".
+    const parsed = vsphereConnectionResponseSchema.parse({ ...literal, syncState: null });
+    expect(parsed.syncState).toBeNull();
+  });
+
+  it('rejects a lastSyncStatus outside the sync outcome vocabulary', () => {
+    const bad = {
+      ...literal,
+      syncState: {
+        lastSyncAt: '2026-07-17T09:00:00.000Z',
+        lastSyncStatus: 'exploded',
+        lastSnapshotAt: null,
+        lastSnapshotStatus: null,
+        lastSuccessPeriod: null,
+        failureCount: 0,
+      },
+    };
+    expect(vsphereConnectionResponseSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("preserves 'skipped' as a sync status — it must survive to be rendered as not-a-failure", () => {
+    const skipped = {
+      ...literal,
+      status: 'identity_mismatch' as const,
+      syncState: {
+        lastSyncAt: '2026-07-17T09:00:00.000Z',
+        lastSyncStatus: 'skipped' as const,
+        lastSnapshotAt: null,
+        lastSnapshotStatus: null,
+        lastSuccessPeriod: null,
+        failureCount: 0,
+      },
+    };
+    expect(vsphereConnectionResponseSchema.parse(skipped).syncState?.lastSyncStatus).toBe(
+      'skipped',
+    );
   });
 });
 

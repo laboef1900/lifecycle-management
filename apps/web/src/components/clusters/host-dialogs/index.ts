@@ -1,3 +1,4 @@
+export { ConfirmCommissioningDialog } from './confirm-commissioning-dialog';
 export { CreateHostDialog } from './create-host-dialog';
 export { EditHostDialog } from './edit-host-dialog';
 export { ResizeHostDialog } from './resize-host-dialog';

@@ -1,104 +1,149 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
-@import '@fontsource/ibm-plex-sans/400.css';
-@import '@fontsource/ibm-plex-sans/500.css';
-@import '@fontsource/ibm-plex-sans/600.css';
-@import '@fontsource/ibm-plex-mono/400.css';
-@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/space-grotesk/500.css';
+@import '@fontsource/space-grotesk/600.css';
+@import '@fontsource/space-grotesk/700.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/600.css';
+@import '@fontsource/jetbrains-mono/700.css';
 
 :root {
-  --background: #fafaf9;
-  --foreground: #1c1917;
+  --background: #f4f6fa;
+  --foreground: #171c2c;
   --card: #ffffff;
-  --card-foreground: #1c1917;
-  --card-hover: #f5f5f4;
+  --card-foreground: var(--foreground);
+  --card-hover: #edf1f8;
   --popover: #ffffff;
-  --popover-foreground: #1c1917;
-  --muted: #f5f5f4;
-  --fg-muted: #57534e;
+  --popover-foreground: var(--foreground);
+  --muted: var(--card-hover);
+  --fg-muted: #5a6478;
   --muted-foreground: var(--fg-muted);
-  --fg-subtle: #78716c;
-  --sidebar: #fcfcfb;
-  --border: #eeedec;
-  --border-strong: #e7e5e4;
-  --input: #e7e5e4;
-  --ring: #a16207;
-  --accent: #a16207;
+  /* @ai-note spec §3 gives #76809A for --fg-subtle; that value is 3.65:1 on
+     --background and 3.94:1 on --card, short of the ≥4.5:1 AA floor for the
+     meaning-bearing labels/placeholders this token is used for (uppercase
+     micro-labels, empty-state copy, form hints). Darkened within the same
+     blue-gray hue family to #66708C (4.55:1 / 4.93:1) — see task-1-report.md. */
+  --fg-subtle: #66708c;
+  --border: #dce2ee;
+  --border-strong: #c2cce0;
+  --input: #c9d2e4;
+  --steel: #2f6bd8;
+  --ring: var(--steel);
+  --accent: #8f6400;
   --accent-foreground: #ffffff;
   --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
-  --accent-gradient: linear-gradient(135deg, #a16207, #854d0e);
-  --success: #166534;
+  --accent-gradient: linear-gradient(
+    135deg,
+    var(--accent),
+    color-mix(in oklab, var(--accent) 65%, black)
+  );
+  --success: #1e7f4f;
   --success-foreground: #ffffff;
-  --warning: #92400e;
+  --warning: #95610c;
   --warning-foreground: #ffffff;
-  --destructive: #b91c1c;
+  --destructive: #c0343c;
   --destructive-foreground: #ffffff;
   --radius: 8px;
-  --radius-card: 12px;
+  --radius-card: 14px;
   --radius-modal: 16px;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.025);
   --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.05);
   --overlay-shadow: 0 2px 4px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.1);
+  /* Surface gradients (spec §3). The dark theme is the mockup's richer,
+     gradient-lit chassis; the light sibling has no gradient recipe in the
+     spec, so it stays flat (solid --background / --card) here and is
+     overridden with the real gradients in html.dark below. */
+  --surface-backdrop: var(--background);
+  --surface-card: var(--card);
+  /* Bullet-meter fill (spec §3: "amber meter gradient"). Light theme has no
+     literal recipe in the spec ("derive from light --accent") — a darker
+     shade of the light --accent to --accent itself keeps the same ramp
+     direction as the dark value below. */
+  --meter-gradient: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--accent) 70%, black),
+    var(--accent)
+  );
 
   /* Chart colors — the single source of truth for Recharts, read at runtime by
      use-chart-colors.ts. Semantic roles reference the shared tokens so charts
      track the palette in both themes; the categorical event scale (--chart-1..7)
-     is chart-only. The token-referencing entries resolve per theme automatically
-     via the dark overrides above, so only the explicit categorical values below
-     are re-declared in html.dark. */
+     is chart-only. Tokens built from var() below resolve per theme automatically
+     via the dark overrides above/below, so only genuinely independent literals
+     (chart-capacity/grid/axis/1-4/7) are re-declared in html.dark. */
   --chart-consumption: var(--accent);
-  --chart-capacity: var(--destructive);
-  --chart-grid: var(--border-strong);
-  --chart-axis: var(--fg-subtle);
+  --chart-capacity: #3a455e;
+  --chart-grid: #e3e8f2;
+  --chart-axis: #8a94ac;
   --chart-utilization-ok: var(--fg-muted);
   --chart-utilization-warn: var(--warning);
   --chart-utilization-crit: var(--destructive);
-  --chart-1: #171717;
-  --chart-2: #525252;
-  --chart-3: #737373;
-  --chart-4: #a3a3a3;
+  --chart-1: #171c2c;
+  --chart-2: #5a6478;
+  --chart-3: #66708c;
+  --chart-4: #a8b0c4;
   --chart-5: var(--accent);
   --chart-6: var(--warning);
   --chart-7: #0f766e;
 }
 
 html.dark {
-  --background: #171514;
-  --foreground: #fafaf9;
-  --card: #1f1d1b;
-  --card-foreground: #fafaf9;
-  --card-hover: #262321;
-  --popover: #262321;
-  --popover-foreground: #fafaf9;
-  --muted: #2c2926;
-  --fg-muted: #a8a29e;
+  --background: #0e1220;
+  --foreground: #e8ecf5;
+  --card: #151b2c;
+  --card-foreground: var(--foreground);
+  --card-hover: #1a2136;
+  --popover: #10162a;
+  --popover-foreground: var(--foreground);
+  --muted: var(--card-hover);
+  --fg-muted: #8b93a7;
   --muted-foreground: var(--fg-muted);
-  --fg-subtle: #8a8580;
-  --sidebar: #1b1918;
-  --border: #2c2926;
-  --border-strong: #3a3633;
-  --input: #3a3633;
-  --ring: #fbbf24;
-  --accent: #fbbf24;
-  --accent-foreground: #1c1917;
+  --fg-subtle: #7c86a0;
+  --border: #232b40;
+  --border-strong: #314063;
+  --input: #10162a;
+  --steel: #6ea8ff;
+  --accent: #ffc53d;
+  --accent-foreground: #171c2c;
   --accent-soft: color-mix(in oklab, var(--accent) 15%, transparent);
-  --accent-gradient: linear-gradient(135deg, #fbbf24, #d97706);
-  --success: #4ade80;
-  --success-foreground: #052e16;
-  --warning: #f59e0b;
-  --warning-foreground: #1c1917;
-  --destructive: #f87171;
-  --destructive-foreground: #450a0a;
+  --accent-gradient: linear-gradient(
+    135deg,
+    var(--accent),
+    color-mix(in oklab, var(--accent) 65%, black)
+  );
+  --success: #3dd68c;
+  --success-foreground: #171c2c;
+  --warning: #ffc53d;
+  --warning-foreground: #171c2c;
+  --destructive: #ff6b6b;
+  --destructive-foreground: #171c2c;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.2);
   --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.3);
   --overlay-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.45);
+  --surface-backdrop: radial-gradient(
+    1200px 500px at 50% -220px,
+    #141b31 0%,
+    var(--background) 60%
+  );
+  --surface-card: linear-gradient(180deg, #171e31, #131928);
+  /* Exact spec §3 value: linear-gradient(90deg,#D9A32C,#FFC53D). */
+  --meter-gradient: linear-gradient(90deg, #d9a32c, var(--accent));
 
-  /* Categorical event-scale overrides (the token-referencing --chart-* roles
-     resolve automatically from the dark --accent/--warning/etc. above). */
-  --chart-1: #e5e5e5;
-  --chart-2: #a3a3a3;
-  --chart-3: #737373;
-  --chart-4: #525252;
+  /* Categorical event-scale + independent chart roles (the var()-referencing
+     roles above — consumption, chart-5, chart-6, and the chart-utilization-*
+     trio — resolve automatically from the dark tokens above). */
+  --chart-capacity: #c7d0e4;
+  --chart-grid: #1b2236;
+  --chart-axis: #2a3450;
+  --chart-1: #e8ecf5;
+  --chart-2: #8b93a7;
+  --chart-3: #7c86a0;
+  --chart-4: #4a5570;
   --chart-7: #2dd4bf;
 }
 
@@ -114,11 +159,11 @@ html.dark {
   --color-muted-foreground: var(--muted-foreground);
   --color-fg-muted: var(--fg-muted);
   --color-fg-subtle: var(--fg-subtle);
-  --color-sidebar: var(--sidebar);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-steel: var(--steel);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-soft: var(--accent-soft);
@@ -128,14 +173,15 @@ html.dark {
   --color-warning-foreground: var(--warning-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
-  /* Radius/shadow tokens live in :root and are consumed via arbitrary values
-     (rounded-[var(--radius-card)] etc.) — no @theme re-export, since
+  /* Radius/shadow/surface tokens live in :root and are consumed via arbitrary
+     values (rounded-[var(--radius-card)] etc.) — no @theme re-export, since
      `--x: var(--x)` inside @theme is a circular reference that invalidates
      the :root token. */
   /* Alias: exposed as shadow-overlay utility; the raw var is --overlay-shadow (legacy name kept for arbitrary-value usages). */
   --shadow-overlay: var(--overlay-shadow);
-  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   --text-display: 28px;
   --text-display--line-height: 1.1;
   --text-display--letter-spacing: -0.025em;
@@ -182,11 +228,26 @@ body,
 }
 
 body {
-  background: var(--background);
+  background: var(--surface-backdrop);
   color: var(--foreground);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Global two-layer focus ring (spec §3 / §6): an outer steel outline for
+   ≥3:1 visibility on every surface, separated from the element by a
+   surface-colored box-shadow so the ring never blends into whatever it sits
+   on. Deliberately no border-radius here: `outline` is a UA-drawn ring that
+   already contours to the focused element's own border-radius, so this rule
+   never has to know (or fight) any component's corner radius — a fixed
+   `border-radius: 3px` here previously clobbered every focused component's
+   actual radius, since this unlayered rule beats Tailwind's `@layer`
+   utilities regardless of a component's own specificity. */
+:focus-visible {
+  outline: 2px solid var(--steel);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--background);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -199,4 +260,11 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0s !important;
   }
+}
+
+/* Cluster detail slide-in panel (spec §5): fullscreen takeover — 100vw at
+   every width (user decision 2026-07-17, superseding the former 58vw side
+   panel with its 1100px breakpoint). The console beneath is fully covered. */
+.cluster-panel {
+  width: 100vw;
 }

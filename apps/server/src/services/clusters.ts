@@ -1,3 +1,4 @@
+import { entitySourceSchema, startOfUtcMonth, vsphereConnectionStatusSchema } from '@lcm/shared';
 import type {
   ClusterCreateInput,
   ClusterResponse,
@@ -13,6 +14,7 @@ import { NotFoundError, UnprocessableError } from './errors.js';
 import { computeForecast } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
+import { assertClusterDeletable, assertSyncedBaselineCapacityZero } from './sync-ownership.js';
 
 function clusterNameTaken(name: string): UniqueConstraintMapping {
   return {
@@ -33,6 +35,10 @@ const clusterInclude = {
     },
   },
   items: { include: { allocations: true } },
+  // Denormalized onto ClusterResponse so the fleet console can render a
+  // per-cluster source badge and connection health without a round-trip per
+  // tile (#193). `null` for manual clusters.
+  connection: { select: { id: true, name: true, status: true, enabled: true } },
 } satisfies Prisma.ClusterInclude;
 
 type ClusterRow = Prisma.ClusterGetPayload<{ include: typeof clusterInclude }>;
@@ -98,6 +104,26 @@ export class ClustersService {
               };
             }),
           },
+          // DUAL-WRITE (#177). `cluster_baseline_history` is the read side; the
+          // `baselines` relation above is the legacy table, retained and written
+          // for one release purely so an image rollback stays safe. See the
+          // @ai-warning on `writeBaselineHistory`.
+          baselineHistory: {
+            create: input.baselines.map((b) => {
+              const metricType = metricTypes.get(b.metricTypeKey);
+              if (!metricType) {
+                throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${b.metricTypeKey}`);
+              }
+              return {
+                tenantId,
+                metricTypeId: metricType.id,
+                capturedAt: startOfUtcMonth(input.baselineDate),
+                source: 'manual',
+                baselineConsumption: new Prisma.Decimal(b.baselineConsumption),
+                baselineCapacity: new Prisma.Decimal(b.baselineCapacity),
+              };
+            }),
+          },
         },
         include: clusterInclude,
       });
@@ -111,10 +137,18 @@ export class ClustersService {
   async update(tenantId: string, id: string, input: ClusterUpdateInput): Promise<ClusterResponse> {
     const existing = await this.prisma.cluster.findFirst({
       where: { id, tenantId },
-      select: { id: true },
+      select: { id: true, source: true },
     });
     if (!existing) {
       throw new NotFoundError('Cluster', id);
+    }
+
+    // Q9a write-time invariant (#196): name/description/baselineDate and
+    // baselineConsumption corrections stay open on a synced cluster — only a
+    // non-zero baselineCapacity is refused, since capacity comes from synced host
+    // inventory and a non-zero baseline double-counts the fleet.
+    if (input.baselines) {
+      assertSyncedBaselineCapacityZero(existing.source, id, input.baselines);
     }
 
     const data: Prisma.ClusterUpdateInput = {};
@@ -127,24 +161,89 @@ export class ClustersService {
         const metricTypes = await this.resolveMetricTypes(
           input.baselines.map((b) => b.metricTypeKey),
         );
+        const rows = input.baselines.map((b) => {
+          const metricType = metricTypes.get(b.metricTypeKey);
+          if (!metricType) {
+            throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${b.metricTypeKey}`);
+          }
+          return {
+            metricTypeId: metricType.id,
+            baselineConsumption: new Prisma.Decimal(b.baselineConsumption),
+            baselineCapacity: new Prisma.Decimal(b.baselineCapacity),
+          };
+        });
+        // @ai-warning: upsert per (clusterId, metricTypeId) — never delete-then-recreate.
+        // `baselines` is a partial array by contract (`.min(1)`, not "all of them"), so a
+        // delete scoped to clusterId destroys the baselines of every metric the caller
+        // simply didn't mention. Baselines drive hardware purchasing and this update path
+        // is the only writer, so an omitted metric must be untouched, not re-created from
+        // a payload that never described it. See #181.
+        // The period a manual entry lands in: the supplied baselineDate when the
+        // caller changed it, otherwise the cluster's existing one. Snapped to the
+        // first of the month so manual and vSphere baselines share one period key
+        // (recorded decision Q6) — without which a manual row at Aug-15 and a
+        // snapshot at Aug-01 would coexist and "the newest baseline" would be
+        // decided by accident of date.
+        const current = await this.prisma.cluster.findUniqueOrThrow({
+          where: { id },
+          select: { baselineDate: true },
+        });
+        const capturedAt = startOfUtcMonth(input.baselineDate ?? current.baselineDate);
+
         await this.prisma.$transaction([
           this.prisma.cluster.update({ where: { id }, data }),
-          this.prisma.clusterMetricBaseline.deleteMany({ where: { clusterId: id } }),
-          this.prisma.clusterMetricBaseline.createMany({
-            data: input.baselines.map((b) => {
-              const metricType = metricTypes.get(b.metricTypeKey);
-              if (!metricType) {
-                throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${b.metricTypeKey}`);
-              }
-              return {
+          // @ai-warning DUAL-WRITE, deliberate and temporary (#177, decision Q4).
+          // `cluster_baseline_history` is the ONLY read side; `cluster_metric_baselines`
+          // is written and never read by this code. It exists so that rolling
+          // LCM_IMAGE_TAG back to the previous image still finds the data it
+          // expects — the rollback window never closes. Do NOT "simplify" by
+          // deleting this write until the CONTRACT migration drops the table;
+          // doing so silently strands any rollback on stale data.
+          //
+          // The legacy table mirrors the NEWEST baseline only. A manual edit that
+          // backfills an OLDER period must append to history WITHOUT touching it,
+          // or the rollback target would show an old value as current.
+          ...rows.map((row) =>
+            this.prisma.clusterMetricBaseline.upsert({
+              where: {
+                clusterId_metricTypeId: { clusterId: id, metricTypeId: row.metricTypeId },
+              },
+              create: { clusterId: id, tenantId, ...row },
+              update: {
+                baselineConsumption: row.baselineConsumption,
+                baselineCapacity: row.baselineCapacity,
+              },
+            }),
+          ),
+          // Append-only history. Re-entering a period the admin already recorded
+          // is an explicit correction, so it upserts rather than erroring — and
+          // flips `source` back to manual, since a human has overridden whatever
+          // the sync captured.
+          ...rows.map((row) =>
+            this.prisma.clusterBaselineHistory.upsert({
+              where: {
+                clusterId_metricTypeId_capturedAt: {
+                  clusterId: id,
+                  metricTypeId: row.metricTypeId,
+                  capturedAt,
+                },
+              },
+              create: {
                 clusterId: id,
                 tenantId,
-                metricTypeId: metricType.id,
-                baselineConsumption: new Prisma.Decimal(b.baselineConsumption),
-                baselineCapacity: new Prisma.Decimal(b.baselineCapacity),
-              };
+                metricTypeId: row.metricTypeId,
+                capturedAt,
+                source: 'manual',
+                baselineConsumption: row.baselineConsumption,
+                baselineCapacity: row.baselineCapacity,
+              },
+              update: {
+                source: 'manual',
+                baselineConsumption: row.baselineConsumption,
+                baselineCapacity: row.baselineCapacity,
+              },
             }),
-          }),
+          ),
         ]);
       } else if (Object.keys(data).length > 0) {
         await this.prisma.cluster.update({ where: { id }, data });
@@ -158,10 +257,17 @@ export class ClustersService {
   }
 
   async delete(tenantId: string, id: string): Promise<void> {
-    const result = await this.prisma.cluster.deleteMany({ where: { id, tenantId } });
-    if (result.count === 0) {
+    const existing = await this.prisma.cluster.findFirst({
+      where: { id, tenantId },
+      select: { id: true, source: true },
+    });
+    if (!existing) {
       throw new NotFoundError('Cluster', id);
     }
+    // A synced cluster's existence is sync-owned: deleting it cascades away the
+    // baseline history and the next sync re-creates an empty twin (#196).
+    assertClusterDeletable(existing.source, id);
+    await this.prisma.cluster.deleteMany({ where: { id, tenantId } });
   }
 
   async archive(tenantId: string, id: string): Promise<ClusterResponse> {
@@ -287,6 +393,21 @@ export class ClustersService {
       updatedAt: row.updatedAt.toISOString(),
       archivedAt: row.archivedAt?.toISOString() ?? null,
       metrics,
+      // Sync provenance (#193). `source`/`status` are stored as untyped strings,
+      // so parse them at this boundary rather than casting — a corrupt value
+      // fails loudly instead of shipping garbage to the client.
+      source: entitySourceSchema.parse(row.source),
+      lastSyncedAt: row.lastSyncedAt?.toISOString() ?? null,
+      externalName: row.externalName,
+      connection: row.connection
+        ? {
+            id: row.connection.id,
+            name: row.connection.name,
+            status: vsphereConnectionStatusSchema.parse(row.connection.status),
+            enabled: row.connection.enabled,
+          }
+        : null,
+      provisionalHostCount: row.hosts.filter((h) => h.commissionedAtProvisional).length,
     };
   }
 }

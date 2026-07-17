@@ -7,6 +7,7 @@ import {
   forecastQuerySchema,
   hostCreateInputSchema,
   hostUpdateInputSchema,
+  vsphereSyncNowResponseSchema,
 } from '../index.js';
 
 /**
@@ -123,5 +124,16 @@ describe('forecast query schema', () => {
 
   it('rejects a YYYY-MM-DD value in a month field', () => {
     expect(() => forecastQuerySchema.parse({ metric: 'memory_gb', from: '2026-05-01' })).toThrow();
+  });
+});
+
+describe('vsphere sync-now response schema', () => {
+  it('accepts the 202 payload the "Sync now" endpoint returns', () => {
+    const parsed = vsphereSyncNowResponseSchema.parse({ dueAt: '2026-07-17T12:00:00.000Z' });
+    expect(parsed.dueAt).toBe('2026-07-17T12:00:00.000Z');
+  });
+
+  it('rejects a payload missing dueAt', () => {
+    expect(() => vsphereSyncNowResponseSchema.parse({})).toThrow();
   });
 });

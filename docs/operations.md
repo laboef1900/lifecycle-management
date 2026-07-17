@@ -168,6 +168,226 @@ docker compose exec -T db pg_restore -U lcm -d lcm --no-owner --no-acl \
 
 After restoring, restart the server so it re-verifies migrations: `docker compose restart server`.
 
+### Verifying a dump is actually restorable
+
+A dump you have never restored is a hypothesis, not a backup. Before any migration
+that touches baselines, prove it against a throwaway database — never over the live
+one:
+
+```bash
+# 1. Take the dump.
+docker compose exec -T db pg_dump -U lcm -d lcm --format=custom --compress=9 \
+  > /var/backups/lcm/pre-migration-$(date +%Y%m%d-%H%M%S).dump
+
+# 2. Restore it into a scratch database ALONGSIDE the live one.
+docker compose exec -T db psql -U lcm -d postgres -c 'CREATE DATABASE lcm_verify OWNER lcm;'
+docker compose exec -T db pg_restore -U lcm -d lcm_verify --no-owner --no-acl \
+  < /var/backups/lcm/pre-migration-<stamp>.dump
+
+# 3. Row counts must match the live database EXACTLY for the purchasing-critical
+#    tables. A dump that restores without error but is short a table is precisely
+#    the failure this step exists to catch.
+for t in clusters cluster_metric_baselines cluster_baseline_history hosts host_metric_capacities items item_allocations; do
+  live=$(docker compose exec -T db psql -U lcm -d lcm        -tAc "SELECT COUNT(*) FROM $t")
+  copy=$(docker compose exec -T db psql -U lcm -d lcm_verify -tAc "SELECT COUNT(*) FROM $t")
+  printf '%-28s live=%-8s restored=%-8s %s\n' "$t" "$live" "$copy" \
+    "$([ "$live" = "$copy" ] && echo OK || echo MISMATCH)"
+done
+
+# 4. Drop the scratch database once every line reads OK.
+docker compose exec -T db psql -U lcm -d postgres -c 'DROP DATABASE lcm_verify WITH (FORCE);'
+```
+
+## Baseline history migration (#177) — rollback
+
+The baseline-history migration is **expand + migrate only**: it creates
+`cluster_baseline_history`, backfills it from `cluster_metric_baselines`, and
+**drops nothing**. The application dual-writes both tables (and
+`clusters.baseline_date`) for this release, so:
+
+> **Rolling back is an ordinary image rollback, at any time, with no data loss:**
+>
+> ```bash
+> # Pin the previous image in .env, then:
+> docker compose up -d
+> ```
+>
+> The old code reads `cluster_metric_baselines`, which the new code has kept
+> current. The worst case is a baseline that is _stale_ — which the fleet tile's
+> existing staleness flag already surfaces — never one that is silently wrong.
+
+That property is the whole reason for the dual-write, and it is why the old table
+must **not** be tidied away before the contract migration. Migrating in place would
+have made an image rollback safe only until the first appended baseline, after
+which the old code would pair an _arbitrary_ baseline value with a _fresh_ date — a
+years-old capacity number displayed as current, tripping no staleness check, on the
+number that drives hardware purchasing.
+
+**If the migration itself fails, it fails safe with no action required.** Prisma
+runs each migration in a transaction, so the DDL and the backfill roll back
+together; the backfill's row-count assertion aborts the whole thing if it did not
+copy every row; and the container's `prisma migrate deploy` then exits non-zero, so
+**Fastify never starts**. The service serves nothing rather than serving wrong
+numbers. Fix forward and redeploy.
+
+> **`prisma migrate resolve --rolled-back` does NOT undo any DDL.** It only edits
+> the `_prisma_migrations` bookkeeping table so a failed migration stops blocking
+> the next `deploy`. Reading the flag name as "undo" leaves a database whose actual
+> shape and whose recorded history disagree — worse than either problem alone.
+> Prisma's documented recovery is roll **forward**.
+
+**Before the later contract migration** (which drops `cluster_metric_baselines` and
+`clusters.baseline_date`), take and _verify_ a dump as above: after it, an image
+rollback is no longer possible and restore-from-dump becomes the only recovery.
+
+## vCenter connections
+
+Configure under **Settings → vCenter connections**. LCM reads capacity and never
+writes to vSphere.
+
+### Give LCM a read-only service account
+
+**This is the single most valuable thing you can do for this integration**, and it
+takes five minutes. Create a dedicated vCenter account with a read-only role
+(`System.Read` on the relevant objects is sufficient) and use it here.
+
+Every other control assumes the credential stays where it was put. This one assumes
+it will not: it turns "virtualization estate compromise" into "capacity data
+disclosure" — data LCM already serves from its own API in the default auth mode.
+
+### Adding a connection
+
+1. Enter a name, hostname, username and password.
+2. **Check certificate** — this contacts the host and reads its certificate. **No
+   credential is sent at this step**, deliberately: the certificate is vetted
+   _before_ the password is ever transmitted.
+3. If the certificate is self-signed (the VMCA default), LCM shows its SHA-256
+   fingerprint. **Confirm it against vCenter before saving.** On a host with `govc`:
+   ```bash
+   govc about.cert -k -thumbprint -u <vcenter-host>
+   ```
+   The vSphere Client shows the same value under Administration → Certificates.
+4. **Save connection.**
+
+If the certificate is signed by a CA your system already trusts, there is nothing
+to confirm and the panel says so.
+
+### Changing a saved connection
+
+**Changing the hostname or username requires re-entering the password.** This is
+not a UI nicety — it is the control that protects the credential. In the default
+`disabled` auth mode every request carries an anonymous ADMIN principal, so the only
+thing distinguishing you from anyone else who can reach the server is knowledge of
+the vCenter password. Without that gate, anyone could repoint a saved connection at
+a host they control and simply wait for the next scheduled poll to hand them the
+credential.
+
+Renaming a connection or disabling it needs no password: neither can disclose
+anything.
+
+Changing the hostname also clears the pinned certificate and the discovered vCenter
+identity — the old vCenter's certificate proves nothing about a new host, so trust
+is re-established deliberately.
+
+### How syncing works
+
+Once a connection is saved and enabled, an in-process scheduler drives it — there is
+nothing to cron and no worker to run. On boot the server starts one scheduler that,
+per connection, does three things on their own cadences:
+
+- **Poll** (~every 5 minutes) — reads live memory usage into a Postgres cache. This
+  is what feeds the live-usage figures on the fleet console and cluster panel.
+- **Sync** (~every 6 hours) — reads the host/cluster inventory (the PropertyCollector
+  walk) and reconciles capacity. Hosts and clusters are created, updated, and marked
+  missing; nothing in vSphere is ever written. Six hours is why _Sync now_ exists.
+- **Snapshot** (monthly, on the first of the month) — captures the baseline the
+  forecast reads. A snapshot always syncs first, so a baseline is never taken off
+  stale inventory.
+
+A newly added or re-enabled connection imports on the next tick rather than waiting
+for a cadence boundary. Timestamps advance **on success only** — a failed poll or
+sync stays due and retries under capped exponential backoff, so a transient vCenter
+outage self-heals without operator action. A failure never silently becomes a
+success: the connection's status and last-error reflect the real outcome (see
+_Troubleshooting_).
+
+The connection panel shows **last synced**, the **sync status**, and a **live-usage**
+reading per synced cluster. "No sample yet" and a stale reading are shown as exactly
+that — never as `0`, which would read as "empty and available" and is the one lie the
+forecast must never tell.
+
+### Sync now
+
+**Settings → vCenter connections → Sync now** (admin only) schedules an immediate
+run and returns straight away — it does not block on vCenter. The scheduler picks it
+up within about a minute through the same path a scheduled run takes. If a full sync
+completed recently, "Sync now" runs the cheap poll instead of a redundant full walk;
+the 5-minute poll already covers "I just added a host in vCenter." Use it when you
+have made a change in vSphere and do not want to wait for the next cadence.
+
+### Disconnected and unreadable hosts
+
+A host that vCenter reports as **not connected** (powered off at the host level, in a
+failed-connection state, or otherwise not currently answering) is **excluded from
+capacity** while it is in that state, with a warning in the server log. A disconnected
+host is not providing memory to anything, so counting it would overstate capacity.
+The host row is **never deleted** — it is marked missing and returns to the fleet on
+the next successful sync once it reconnects.
+
+The same applies to a connected host whose memory size cannot be read: it is skipped
+with a log line rather than failing the whole vCenter's sync. One unreadable host no
+longer stales every cluster on that vCenter.
+
+### Provisional commissioning dates
+
+vCenter does not record when a host was commissioned, so sync stamps an imported host
+with a **provisional** commissioning date — the date LCM first saw it — and flags it.
+The forecast treats months before a host's commissioning date as "unknown" rather
+than zero, so the provisional date is safe but approximate. A cluster with unconfirmed
+hosts shows an **_N_ hosts need commissioning dates** hint; confirm the real dates
+under the cluster's **Hosts** tab (admin only, one date per host, applied atomically).
+Confirming clears the flag; a re-sync never overwrites a confirmed date.
+
+### Sync-owned fields
+
+On a **synced** cluster or host, the fields vSphere owns are read-only in LCM and
+reject edits with a clear error — change them in vCenter and let the next sync
+reconcile. Specifically: you cannot hand-add or delete a host under a synced cluster,
+and you cannot set a non-zero **baseline capacity** on a synced cluster (host memory
+carries the capacity; a non-zero baseline would double-count it and halve the
+reported utilisation — the failure mode that quietly defers a hardware purchase).
+Everything an operator legitimately owns stays editable: the display name (an edit
+pins it, and sync stops overwriting the label), description, thresholds, lifecycle
+transitions, archival, the commissioning-date confirmation above, and baseline
+_consumption_ corrections.
+
+### There is no "ignore TLS errors" option, by design
+
+Self-signed vCenter certificates work through the fingerprint confirmation above,
+with verification fully **on**. An insecure toggle would look like a convenience
+setting and behave like a credential-disclosure channel: with verification off, the
+saved hostname identifies a _name_ rather than a _host_, so anyone able to spoof
+internal DNS collects the service-account password on **every poll**, silently, on
+the happy path. Self-service internal DNS is common and needs no network position at
+all.
+
+If a connection reports **Certificate changed**, LCM has stopped talking to it on
+purpose. Either the VMCA root was deliberately regenerated — in which case confirm
+the new fingerprint and re-pin — or something is wrong. LCM will not decide which,
+and will not re-pin by itself.
+
+### Troubleshooting
+
+| Status                      | Meaning                                                                                                                                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Not yet connected**       | Saved, never contacted.                                                                                                                                                                                              |
+| **Certificate not trusted** | Self-signed and not yet confirmed. Use _Check certificate_.                                                                                                                                                          |
+| **Certificate changed**     | The presented CA differs from the pinned one. Confirm and re-pin, or investigate.                                                                                                                                    |
+| **Sign-in failed**          | Host reachable, credentials rejected.                                                                                                                                                                                |
+| **Different vCenter**       | The hostname now answers as a _different_ vCenter instance. Sync is blocked deliberately: cluster ids are only unique within one vCenter, so syncing would overwrite the wrong clusters' capacity.                   |
+| **Credential unreadable**   | `CONFIG_ENCRYPTION_KEY` is missing, wrong, or rotated. The encrypted password is **preserved** — restore the correct key and the connection recovers. Never re-enter it as a "fix" until you have ruled the key out. |
+| **Unreachable**             | No answer. Detail is in the server log, correlated by request id — the API response is deliberately coarse, because a precise one would let anyone reachable use this endpoint to map your internal network.         |
+
 ## Upgrade
 
 ```bash

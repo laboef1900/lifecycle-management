@@ -1,262 +1,35 @@
-import type { ClusterResponse, ForecastResponse } from '@lcm/shared';
-import { useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
-import { AlertTriangle } from 'lucide-react';
-import { useState } from 'react';
 
-import { ForecastChart } from '@/components/clusters/forecast-chart';
-import { HostsTab } from '@/components/clusters/hosts-tab';
-import { ItemsTab } from '@/components/clusters/items-tab';
-import { ScenarioControls, describeScenario } from '@/components/clusters/scenario-controls';
-import { SettingsTab } from '@/components/clusters/settings-tab';
-import {
-  WindowControls,
-  resolveWindow,
-  type ForecastWindow,
-} from '@/components/clusters/window-controls';
-import { KpiTile } from '@/components/overview/kpi-tile';
-import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
-import { RunwayPill } from '@/components/ui/runway-pill';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { UtilizationGauge } from '@/components/ui/utilization-gauge';
-import { api, type ScenarioWire } from '@/lib/api-client';
-import { useIsAdmin } from '@/lib/auth';
-import { runwayToWarn, utilStatus } from '@/lib/forecast-summary';
-import { deriveProcurementKpi } from '@/lib/procurement-kpi';
-import { useMediaQuery } from '@/lib/use-media-query';
-
-const numberFormat = new Intl.NumberFormat('en-US');
+import { ClusterPanel } from '@/components/detail/cluster-panel';
+import { FleetConsole } from '@/components/fleet/fleet-console';
 
 export const Route = createFileRoute('/_app/clusters/$id')({
-  component: ClusterDetailPage,
+  component: ClusterDetailRoute,
 });
 
-function ClusterDetailPage(): React.JSX.Element {
+/**
+ * The fleet console stays mounted underneath the slide-in panel (spec §2):
+ * this URL is the console with the detail panel open, not a separate page.
+ *
+ * The panel is a modal dialog (`aria-modal="true"`, see `cluster-panel.tsx`)
+ * — everything outside it must be excluded from the tab order and assistive
+ * tech while it's open (PR review fix 3). `inert` on the console wrapper
+ * does that (React 19 supports the `inert` prop natively on DOM elements).
+ * The topbar, rendered one level up by the parent `_app.tsx` layout route
+ * and not wrappable from here, deliberately stays reachable — a narrow,
+ * accepted exception: Esc still closes the panel from anywhere, and
+ * `aria-modal` only asserts modal semantics for the dialog's own subtree, so
+ * a technically-reachable topbar outside that subtree doesn't violate the
+ * modal contract.
+ */
+function ClusterDetailRoute(): React.JSX.Element {
   const { id } = Route.useParams();
-  const [windowSelection, setWindowSelection] = useState<ForecastWindow>('24mo');
-  const [scenario, setScenario] = useState<ScenarioWire | null>(null);
-  const isWide = useMediaQuery('(min-width: 640px)');
-  const canManage = useIsAdmin();
-
-  const clusterQuery = useQuery({
-    queryKey: ['cluster', id],
-    queryFn: () => api.clusters.get(id),
-  });
-
-  const baselineDate = clusterQuery.data?.baselineDate;
-  const metric = clusterQuery.data?.metrics[0];
-  const range = baselineDate ? resolveWindow(windowSelection, baselineDate) : null;
-
-  const forecastQuery = useQuery({
-    queryKey: ['forecast', id, metric?.metricTypeKey, range?.from, range?.to],
-    queryFn: () =>
-      api.clusters.forecast(id, {
-        metric: metric!.metricTypeKey,
-        from: range!.from,
-        to: range!.to,
-      }),
-    enabled: Boolean(metric && range),
-  });
-
-  const scenarioQuery = useQuery({
-    queryKey: ['forecast', id, metric?.metricTypeKey, range?.from, range?.to, 'scenario', scenario],
-    queryFn: () =>
-      api.clusters.forecastScenario(
-        id,
-        {
-          metric: metric!.metricTypeKey,
-          from: range!.from,
-          to: range!.to,
-        },
-        scenario!,
-      ),
-    enabled: Boolean(metric && range && scenario),
-  });
-
   return (
-    <div className="space-y-6">
-      <div>
-        {clusterQuery.isPending ? (
-          <HeaderSkeleton />
-        ) : clusterQuery.isError || !clusterQuery.data ? (
-          <ErrorCard message={clusterQuery.error?.message ?? 'Cluster not found'} />
-        ) : (
-          <header>
-            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-              Cluster
-            </p>
-            <div className="mt-1 flex flex-wrap items-baseline gap-2">
-              <h1 className="text-[26px] font-semibold leading-[1.1] tracking-[-0.02em] [overflow-wrap:anywhere]">
-                {clusterQuery.data.name}
-              </h1>
-              {clusterQuery.data.archivedAt ? (
-                <Badge variant="outline">
-                  Archived {clusterQuery.data.archivedAt.slice(0, 10)}
-                </Badge>
-              ) : null}
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Baseline {clusterQuery.data.baselineDate}
-              {clusterQuery.data.description ? ` · ${clusterQuery.data.description}` : null}
-            </p>
-          </header>
-        )}
+    <>
+      <div inert data-testid="console-wrapper">
+        <FleetConsole />
       </div>
-
-      {clusterQuery.data && metric ? (
-        <>
-          {forecastQuery.data ? (
-            <ClusterDetailKpiStrip
-              forecast={scenarioQuery.data ?? forecastQuery.data}
-              metric={metric}
-              isScenario={Boolean(scenario && scenarioQuery.data)}
-            />
-          ) : null}
-
-          <div className="flex items-center justify-between">
-            <div className="space-y-1">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Forecast
-              </p>
-              <h2 className="text-lg font-semibold">Capacity forecast</h2>
-            </div>
-            <WindowControls value={windowSelection} onChange={setWindowSelection} />
-          </div>
-
-          {forecastQuery.isPending ? (
-            <ChartSkeleton />
-          ) : forecastQuery.isError || !forecastQuery.data ? (
-            <ErrorCard message={forecastQuery.error?.message ?? 'Could not load forecast'} />
-          ) : (
-            <ForecastChart
-              forecast={forecastQuery.data}
-              compact={!isWide}
-              scenario={
-                scenario && scenarioQuery.data
-                  ? {
-                      label: describeScenario(scenario),
-                      months: scenarioQuery.data.months,
-                    }
-                  : null
-              }
-            />
-          )}
-
-          <ScenarioControls active={scenario} onChange={setScenario} />
-
-          <Tabs defaultValue="hosts" className="pt-2">
-            <TabsList>
-              <TabsTrigger value="hosts">Hosts</TabsTrigger>
-              <TabsTrigger value="items">Apps &amp; Events</TabsTrigger>
-              <TabsTrigger value="settings">Settings</TabsTrigger>
-            </TabsList>
-            <TabsContent value="hosts">
-              <HostsTab clusterId={id} canManage={canManage} />
-            </TabsContent>
-            <TabsContent value="items">
-              <ItemsTab clusterId={id} canManage={canManage} />
-            </TabsContent>
-            <TabsContent value="settings">
-              <SettingsTab clusterId={id} />
-            </TabsContent>
-          </Tabs>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-function ClusterDetailKpiStrip({
-  forecast,
-  metric,
-  isScenario = false,
-}: {
-  forecast: ForecastResponse;
-  metric: NonNullable<ClusterResponse['metrics'][number]>;
-  isScenario?: boolean;
-}): React.JSX.Element {
-  const headroom = Math.max(0, metric.currentCapacity - metric.currentConsumption);
-  const summary = runwayToWarn(forecast.months, forecast.effectiveThresholds);
-  const procurementKpi = deriveProcurementKpi(forecast.procurement);
-  return (
-    <div data-testid="kpi-strip" className="space-y-2">
-      {isScenario ? (
-        <Badge variant="outline" data-testid="scenario-badge">
-          Scenario active — KPIs reflect the hypothetical forecast
-        </Badge>
-      ) : null}
-      <div className="grid grid-cols-12 gap-2">
-        <Card className="col-span-12 flex items-center gap-4 p-3.5 sm:col-span-6 lg:col-span-3">
-          <UtilizationGauge
-            value={metric.utilization}
-            size="md"
-            warn={forecast.effectiveThresholds.warn}
-            crit={forecast.effectiveThresholds.crit}
-          />
-          <div>
-            <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-              Current utilization
-            </p>
-            <p className="mt-1.5 font-mono text-[11px] tabular-nums text-fg-muted">
-              {numberFormat.format(Math.round(metric.currentConsumption))} GB used
-            </p>
-          </div>
-        </Card>
-        <KpiTile
-          className="col-span-12 sm:col-span-6 lg:col-span-3"
-          label="Headroom"
-          value={`${numberFormat.format(Math.round(headroom))} GB`}
-          caption={`of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`}
-          status={utilStatus(metric.utilization, forecast.effectiveThresholds)}
-        />
-        <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-6 lg:col-span-3">
-          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            Runway
-          </p>
-          <div className="mt-1.5">
-            <RunwayPill
-              summary={summary}
-              horizonMonths={forecast.months.length}
-              thresholds={forecast.effectiveThresholds}
-            />
-          </div>
-        </Card>
-        <KpiTile
-          className="col-span-12 sm:col-span-6 lg:col-span-3"
-          label="Order by"
-          value={procurementKpi.value}
-          caption={procurementKpi.caption}
-          status={procurementKpi.status}
-        />
-      </div>
-    </div>
-  );
-}
-
-function HeaderSkeleton(): React.JSX.Element {
-  return (
-    <div className="space-y-2">
-      <div className="h-7 w-48 animate-pulse rounded bg-muted" />
-      <div className="h-4 w-64 animate-pulse rounded bg-muted" />
-    </div>
-  );
-}
-
-function ChartSkeleton(): React.JSX.Element {
-  return (
-    <div className="space-y-4">
-      <Card className="h-[320px] animate-pulse" />
-      <Card className="h-[140px] animate-pulse" />
-    </div>
-  );
-}
-
-function ErrorCard({ message }: { message: string }): React.JSX.Element {
-  return (
-    <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive shadow-none">
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-      <span>{message}</span>
-    </Card>
+      <ClusterPanel clusterId={id} />
+    </>
   );
 }

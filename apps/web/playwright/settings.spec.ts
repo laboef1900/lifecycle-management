@@ -6,11 +6,12 @@ const API_BASE = 'http://localhost:8090';
  * E2E for configurable warn/crit thresholds.
  *
  * Walks the full settings flow:
- *   1. Tenant defaults — save new values on /settings, verify the Overview
- *      tile charts expose the new thresholds via their accessible name.
- *   2. Cluster override — open the Settings tab on cluster detail, save an
- *      override, verify the cluster's forecast chart picks up the new
- *      percentages, then reset back to inherited.
+ *   1. Tenant defaults — save new values on /settings, verify the fleet
+ *      console's cluster tile charts expose the new thresholds via their
+ *      accessible name.
+ *   2. Cluster override — open the Settings tab on the cluster detail panel
+ *      (`/clusters/:id`), save an override, verify the cluster's forecast
+ *      chart picks up the new percentages, then reset back to inherited.
  *
  * `afterEach` resets tenant defaults to 70/90 so subsequent runs are
  * deterministic, even if a test bails mid-flow.
@@ -30,7 +31,7 @@ test.describe('configurable thresholds', () => {
     expect(reset.ok()).toBe(true);
   });
 
-  test('saves tenant thresholds and overview tiles reflect new values', async ({ page }) => {
+  test('saves tenant thresholds and fleet tiles reflect new values', async ({ page }) => {
     await page.goto('/settings');
     await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
 
@@ -43,22 +44,30 @@ test.describe('configurable thresholds', () => {
     await crit.fill('85');
 
     // Submit and wait for the PUT to land before navigating away — otherwise
-    // we can race the fleet chart's cached thresholds.
+    // we can race the fleet console's cached thresholds. Scoped to the
+    // ForecastThresholdsForm's own <form>: in disabled auth mode the
+    // Authentication panel also renders on this page with its own
+    // identically-labeled "Save" button (pre-existing, unrelated to the
+    // fleet console redesign), so an unscoped role lookup is ambiguous here.
+    const thresholdsForm = page.locator('form').filter({ has: warn });
     const putPromise = page.waitForResponse(
       (r) => r.url().endsWith('/api/settings/tenant') && r.request().method() === 'PUT',
     );
-    await page.getByRole('button', { name: /^save$/i }).click();
+    await thresholdsForm.getByRole('button', { name: /^save$/i }).click();
     const putResp = await putPromise;
     expect(putResp.ok()).toBe(true);
     await expect(page.getByText(/source: saved tenant settings/i)).toBeVisible();
 
-    // Navigate to overview: the per-cluster tile charts draw the thresholds
-    // as label-less ReferenceArea bands, so propagation is asserted via the
-    // chart's accessible name, which carries the effective warn/crit values.
+    // Navigate to the fleet console: each cluster tile's compact forecast
+    // chart draws the thresholds as label-less ReferenceLines, so propagation
+    // is asserted via the chart's accessible name, which carries the
+    // effective warn/crit values (spec §4.4's ClusterTileChart).
     await page.goto('/');
-    await expect(page.getByRole('img', { name: /warn 65%.*crit 85%/i }).first()).toBeVisible({
-      timeout: 10_000,
-    });
+    await expect(
+      page
+        .getByRole('img', { name: /warn threshold 65 percent.*critical threshold 85 percent/i })
+        .first(),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test('cluster override flips chart labels and source pill', async ({ page, request }) => {
@@ -75,7 +84,8 @@ test.describe('configurable thresholds', () => {
     await request.delete(`${API_BASE}/api/clusters/${clusterId}/settings`);
 
     await page.goto(`/clusters/${clusterId}`);
-    await page.getByRole('tab', { name: 'Settings' }).click();
+    const panel = page.locator('.cluster-panel');
+    await panel.getByRole('tab', { name: 'Settings' }).click();
     await expect(page.getByText(/inherited from tenant defaults/i)).toBeVisible();
 
     await page.getByLabel('Warn %').fill('60');
@@ -92,14 +102,14 @@ test.describe('configurable thresholds', () => {
 
     // The cluster forecast query is cached with a 5-minute stale time and
     // the save mutation only patches `cluster-settings` — the forecast won't
-    // refetch on its own. Reload to force a fresh fetch so the chart picks
-    // up the new effectiveThresholds.
+    // refetch on its own. Reload to force a fresh fetch so the panel's chart
+    // picks up the new effectiveThresholds.
     await page.reload();
     await expect(page.getByText('Warn 60%').first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('Crit 85%').first()).toBeVisible();
 
     // Reset back to inherited.
-    await page.getByRole('tab', { name: 'Settings' }).click();
+    await page.locator('.cluster-panel').getByRole('tab', { name: 'Settings' }).click();
     const resetPromise = page.waitForResponse(
       (r) =>
         r.url().includes(`/api/clusters/${clusterId}/settings`) &&
@@ -113,7 +123,7 @@ test.describe('configurable thresholds', () => {
 });
 
 test.describe('cluster identity + baseline edit', () => {
-  test('renames cluster — header updates immediately', async ({ page, request }) => {
+  test('renames cluster — panel header updates immediately', async ({ page, request }) => {
     const clustersRes = await request.get('/api/clusters');
     const { items: clusters } = (await clustersRes.json()) as {
       items: Array<{ id: string; name: string }>;
@@ -125,9 +135,12 @@ test.describe('cluster identity + baseline edit', () => {
 
     try {
       await page.goto(`/clusters/${cluster.id}`);
-      await expect(page.getByRole('heading', { name: originalName, level: 1 })).toBeVisible();
+      const panel = page.locator('.cluster-panel');
+      // The panel header name is an h2 (spec §5.1) — the page's only h1 is
+      // the fleet verdict headline computed on the console beneath.
+      await expect(panel.getByRole('heading', { name: originalName, level: 2 })).toBeVisible();
 
-      await page.getByRole('tab', { name: 'Settings' }).click();
+      await panel.getByRole('tab', { name: 'Settings' }).click();
 
       const nameInput = page.getByLabel('Name');
       await expect(nameInput).toHaveValue(originalName);
@@ -144,7 +157,7 @@ test.describe('cluster identity + baseline edit', () => {
       await page.getByRole('button', { name: /^save$/i }).click();
       await putResponse;
 
-      await expect(page.getByRole('heading', { name: newName, level: 1 })).toBeVisible();
+      await expect(panel.getByRole('heading', { name: newName, level: 2 })).toBeVisible();
     } finally {
       // Restore the cluster name so subsequent runs are deterministic.
       await request.put(`/api/clusters/${cluster.id}`, { data: { name: originalName } });
@@ -172,7 +185,7 @@ test.describe('cluster identity + baseline edit', () => {
 
     try {
       await page.goto(`/clusters/${cluster.id}`);
-      await page.getByRole('tab', { name: 'Settings' }).click();
+      await page.locator('.cluster-panel').getByRole('tab', { name: 'Settings' }).click();
 
       const consumptionInput = page.getByLabel(/memory.*baseline consumption/i);
       await consumptionInput.fill(String(newConsumption));
@@ -237,9 +250,10 @@ test.describe('cluster lifecycle', () => {
     const { id } = (await createRes.json()) as { id: string };
 
     try {
-      // Archive via UI.
+      // Archive via UI (the panel's Settings tab).
       await page.goto(`/clusters/${id}`);
-      await page.getByRole('tab', { name: 'Settings' }).click();
+      const panel = page.locator('.cluster-panel');
+      await panel.getByRole('tab', { name: 'Settings' }).click();
       await page.getByRole('button', { name: /^archive$/i }).click();
       const archiveResponse = page.waitForResponse(
         (r) => r.url().endsWith(`/api/clusters/${id}/archive`) && r.request().method() === 'POST',
@@ -247,20 +261,20 @@ test.describe('cluster lifecycle', () => {
       await page.getByRole('button', { name: /^archive cluster$/i }).click();
       await archiveResponse;
 
-      // Detail page now shows the Archived badge.
+      // Panel header now shows the Archived badge.
       await expect(page.getByText(/^Archived \d{4}-\d{2}-\d{2}$/)).toBeVisible();
 
-      // Cluster is hidden from /clusters list by default.
-      await page.goto('/clusters');
-      await expect(page.getByRole('row', { name: new RegExp(name) })).toHaveCount(0);
+      // Cluster is hidden from the fleet console by default.
+      await page.goto('/');
+      await expect(page.getByRole('link', { name: new RegExp(name) })).toHaveCount(0);
 
-      // Show archived toggle reveals the cluster.
+      // Show archived toggle reveals the cluster's (muted) tile.
       await page.getByRole('button', { name: /show archived/i }).click();
-      await expect(page.getByRole('row', { name: new RegExp(name) })).toBeVisible();
+      await expect(page.getByRole('link', { name: new RegExp(name) })).toBeVisible();
 
       // Unarchive via UI.
       await page.goto(`/clusters/${id}`);
-      await page.getByRole('tab', { name: 'Settings' }).click();
+      await panel.getByRole('tab', { name: 'Settings' }).click();
       await page.getByRole('button', { name: /^unarchive$/i }).click();
       const unarchiveResponse = page.waitForResponse(
         (r) => r.url().endsWith(`/api/clusters/${id}/unarchive`) && r.request().method() === 'POST',
@@ -268,9 +282,10 @@ test.describe('cluster lifecycle', () => {
       await page.getByRole('button', { name: /^unarchive cluster$/i }).click();
       await unarchiveResponse;
 
-      // Cluster reappears in the default /clusters list (toggle off).
-      await page.goto('/clusters');
-      await expect(page.getByRole('row', { name: new RegExp(name) })).toBeVisible();
+      // Cluster reappears in the default fleet console (toggle resets on
+      // navigation — showArchived is local component state).
+      await page.goto('/');
+      await expect(page.getByRole('link', { name: new RegExp(name) })).toBeVisible();
     } finally {
       // Clean up the throwaway cluster.
       await request.delete(`/api/clusters/${id}`);
@@ -292,7 +307,8 @@ test.describe('cluster lifecycle', () => {
     const { id } = (await createRes.json()) as { id: string };
 
     await page.goto(`/clusters/${id}`);
-    await page.getByRole('tab', { name: 'Settings' }).click();
+    const panel = page.locator('.cluster-panel');
+    await panel.getByRole('tab', { name: 'Settings' }).click();
     await page.getByRole('button', { name: /^delete$/i }).click();
     const deleteResponse = page.waitForResponse(
       (r) =>
@@ -301,13 +317,13 @@ test.describe('cluster lifecycle', () => {
     await page.getByRole('button', { name: /delete forever/i }).click();
     await deleteResponse;
 
-    // Page navigated to /clusters.
-    await expect(page).toHaveURL(/\/clusters$/);
+    // The lifecycle card now navigates to `/` (spec §5.6), not `/clusters`.
+    await expect(page).toHaveURL('/');
 
     // Cluster gone from default and showArchived lists.
-    await expect(page.getByRole('row', { name: new RegExp(name) })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: new RegExp(name) })).toHaveCount(0);
     await page.getByRole('button', { name: /show archived/i }).click();
-    await expect(page.getByRole('row', { name: new RegExp(name) })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: new RegExp(name) })).toHaveCount(0);
 
     // API confirms 404.
     const getRes = await request.get(`/api/clusters/${id}`);

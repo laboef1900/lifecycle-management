@@ -22,7 +22,9 @@ Self-hosted via Docker Compose on an internal Linux server. Three containers: ba
 
 ## Non-goals
 
-The following are explicitly out of scope for v1: live vSphere API integration (all data is entered manually), CPU and storage capacity tracking (memory only), authentication and OIDC (deferred to the 3-month milestone), Excel import/export or any synchronisation with spreadsheets, mobile-optimised layout, and alerting or threshold notifications.
+The following were explicitly out of scope **for v1**: live vSphere API integration (all data is entered manually), CPU and storage capacity tracking (memory only), authentication and OIDC (deferred to the 3-month milestone), Excel import/export or any synchronisation with spreadsheets, mobile-optimised layout, and alerting or threshold notifications.
+
+> **Amendment (2026-07-17) — v1 has shipped, and live vSphere integration is now the active horizon.** Horizons (below) has always named it as the long-term direction; epic [#172](https://github.com/laboef1900/lifecycle-management/issues/172) implements it against the approved design in [`vsphere-integration-design.md`](vsphere-integration-design.md). The v1 non-goal above and the "premature hypervisor API integration" anti-pattern below are **retained as history, not as current constraints** — they existed to stop hypervisor plumbing derailing the v1 data-entry UX, and that risk has passed. **The remaining v1 non-goals still stand:** CPU/storage tracking, Excel sync, mobile layout, and alerting are all still out of scope. OIDC shipped.
 
 ## Principles
 
@@ -32,9 +34,25 @@ The following are explicitly out of scope for v1: live vSphere API integration (
 
 **1 month (v1):** All data currently in the Excel spreadsheet is visible and editable in the app — clusters, monthly memory usage, hardware limits, consumption deltas, and event annotations. **3 months:** OIDC/Auth integration so access is controlled and auditable. **Long-term:** Evolution into a multi-tenant SaaS product capable of serving thousands of users across different organisations, with tenant-isolated data, subscription management, and self-service onboarding. Capacity tracking expands beyond memory to include **CPU and disk forecasting**. The manual data entry model is progressively replaced by **live hypervisor integrations** — starting with vSphere, then extending to Proxmox and other platforms — so that current utilisation is pulled automatically and forecasts are built on real-time baselines.
 
+## Forecast modelling semantics
+
+Recorded 2026-07-17 (epic #172 design gate). **This is purchasing-critical arithmetic that was previously implicit in `services/forecast.ts` and written down nowhere.** Two invariants govern how the forecast composes a number, and violating either produces a _plausible wrong answer_ rather than an error.
+
+**1. `baseline*` is the portion NOT modelled by tracked entities.** `computeForecast` treats `baselineConsumption`/`baselineCapacity` as an **offset**, then **adds** each tracked host's capacity and each tracked application's allocation to it. So a baseline that already contains a tracked entity double-counts it. `baseline* = 0` is the _special case_ where tracked entities account for 100% — which is how vSphere-synced clusters are modelled (vCenter supplies authoritative per-host capacity), and is **not** automatically true of manually-maintained clusters, where the baseline legitimately carries capacity that no host row describes.
+
+**2. Deltas are filtered by the anchor; measurements are not.** The forecast anchors on the **newest** baseline and projects forward. Anything that _describes a change_ — applications, and events carrying `consumptionDelta`/`capacityDelta` — must only apply **after** the anchor's capture date (`effectiveDate > capturedAt`), because a delta dated before the anchor is already _inside_ the measurement. Anything that _carries the measurement_ — hosts, `baselineConsumption`, `baselineCapacity` — is never filtered. This is why hosts are exempt: **they are the measurement**, distributed per host rather than collapsed into a scalar.
+
+The mechanism both invariants guard against is the same one: **an advancing anchor absorbs a delta that was legitimately forward-looking when it was written.** A rollout modelled for next quarter becomes historical once a later baseline measures its effect — the model must stop adding it, or the forecast reports capacity the fleet does not have. Filtering happens **at forecast time**, never at write time: a write-time check validates a predicate that the passage of time (and the monthly snapshot job) later falsifies.
+
+Corollary: **the monthly re-anchor is the error-correction mechanism.** Anchored permanently on the first baseline, every modelling error would compound forever with nothing to correct it.
+
+**Units:** the `memory_gb` metric stores **GiB (2³⁰)**, despite the `GB` label — matching vCenter, which uses base-2 arithmetic with SI prefixes throughout (govmomi's `units` package defines `GB` as `1 << 30`; `govc cluster.usage` converts `quickStats` "MB" with `<< 20`). The label is a known mislabel, retained because the numbers agree with what the vSphere UI shows and with every baseline entered by hand. **Do not "fix" it to 10⁹** — that would silently shift every forecast by 7.4% and defer hardware purchases that are actually needed.
+
 ## Anti-patterns
 
-The tool becomes as cumbersome to use as the Excel it replaced — complex forms, hidden dependencies, or confusing navigation. Charts are cluttered or misleading, causing people to distrust the data and revert to spreadsheets. Data entry for a new host or application takes more than a few clicks. **Premature hypervisor API integration** is attempted in v1, over-complicating the data entry UX that matters most right now — live integrations are a long-term goal, not a v1 concern. The codebase accumulates premature SaaS features that complicate the v1 experience. Any situation where team members maintain a parallel Excel 'just to be safe' is a clear failure signal.
+The tool becomes as cumbersome to use as the Excel it replaced — complex forms, hidden dependencies, or confusing navigation. Charts are cluttered or misleading, causing people to distrust the data and revert to spreadsheets. Data entry for a new host or application takes more than a few clicks. ~~**Premature hypervisor API integration** is attempted in v1, over-complicating the data entry UX that matters most right now — live integrations are a long-term goal, not a v1 concern.~~ _(Retired 2026-07-17: v1 has shipped and vSphere integration is the active horizon — see the Non-goals amendment. The concern it encoded — hypervisor plumbing derailing data-entry UX — is spent.)_ The codebase accumulates premature SaaS features that complicate the v1 experience. Any situation where team members maintain a parallel Excel 'just to be safe' is a clear failure signal.
+
+**A forecast that is confidently wrong is worse than one that admits it doesn't know.** Zero capacity rendered as "0% utilised, healthy"; a missed month interpolated into a smooth line; a synced value silently disagreeing with a hand-entered one — each reads as a reassuring fact and is why this tool would lose the team's trust. Where the honest answer is "unknown" or "gap", say so.
 
 ## References
 

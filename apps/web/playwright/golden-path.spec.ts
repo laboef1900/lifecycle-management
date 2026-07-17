@@ -6,8 +6,10 @@ const suffix = (): string =>
   `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
 
 /**
- * Walks the v1 golden path: create cluster → add host → add application,
- * observing that the dashboard, table, and detail chart pick up each change.
+ * Walks the v1 golden path on the fleet console (spec §2/§4/§5): create
+ * cluster → its tile appears in the grid → open the detail slide-in panel →
+ * add host → add application, observing that the panel's KPI strip, tabs, and
+ * forecast chart pick up each change.
  *
  * The test cleans up its own cluster via the API at the end so the dev DB
  * stays tidy for subsequent runs.
@@ -28,20 +30,15 @@ test('create cluster, add host + application, chart reflects updates', async ({
       }
     });
 
-    // Sanity-check the overview page renders gauges + runway pills on cluster cards
-    // (if any seeded clusters exist; skip silently when the DB is empty).
     await page.goto('/');
-    const sampleGauge = page
-      .getByRole('img', { name: /, status: (ok|warning|critical|empty)/i })
-      .first();
-    if (await sampleGauge.count()) {
-      await expect(sampleGauge).toBeVisible();
-    }
 
-    await page.goto('/clusters');
-    await expect(page.getByRole('heading', { name: 'Clusters', level: 1 })).toBeVisible();
+    // The fleet console always has exactly one h1 — the verdict headline on
+    // the happy path, or an sr-only fallback while loading/empty/errored.
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+      /^(Fleet runway is|Fleet is healthy|Fleet capacity console)/,
+    );
 
-    // Create the cluster from the dashboard.
+    // Create the cluster from the console's toolbar row (spec §4.5).
     await page.getByRole('button', { name: '+ Add cluster' }).click();
     const createDialog = page.getByRole('dialog', { name: 'New cluster' });
     await createDialog.getByRole('textbox', { name: 'Name' }).fill(clusterName);
@@ -50,34 +47,33 @@ test('create cluster, add host + application, chart reflects updates', async ({
     await createDialog.getByRole('button', { name: 'Create cluster' }).click();
     await expect(createDialog).toBeHidden();
 
-    // Fleet KPI banner is now visible above the table.
-    await expect(page.getByText(/^Used$/)).toBeVisible();
-    await expect(page.getByText(/^Headroom$/)).toBeVisible();
-    await expect(page.getByText(/^Fleet runway$/)).toBeVisible();
+    // The cluster's uniform tile appears in the grid, linking to its detail
+    // panel, showing the right utilization (1000/5000 = 20.0%, spec §4.4).
+    const tile = page.getByRole('link', { name: clusterName });
+    await expect(tile).toBeVisible();
+    await expect(tile).toContainText('20.0%');
 
-    // Runway column header is present; Actions column is gone.
-    await expect(page.getByRole('columnheader', { name: /^Runway/i })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: /^Actions/i })).toHaveCount(0);
+    // Open the detail slide-in panel via the tile link.
+    await tile.click();
+    await expect(page).toHaveURL(/\/clusters\/[^/]+$/);
 
-    // Row should now appear in the dashboard table with the right utilization.
-    const newRow = page.getByRole('row', { name: new RegExp(clusterName) });
-    await expect(newRow).toBeVisible();
-    await expect(newRow).toContainText('20.0%'); // 1000/5000
+    // The panel is a role=dialog overlay (spec §5) — scope subsequent
+    // lookups to its `.cluster-panel` class so a nested host/item dialog
+    // (also role=dialog, portalled to document.body) never collides.
+    const panel = page.locator('.cluster-panel');
+    await expect(panel).toHaveAttribute('role', 'dialog');
+    await expect(panel.getByRole('heading', { name: clusterName, level: 2 })).toBeVisible();
 
-    // Open detail page.
-    await newRow.getByRole('link', { name: clusterName }).click();
-    await expect(page.getByRole('heading', { name: clusterName, level: 1 })).toBeVisible();
-
-    // KPI strip below the title — 3 tiles (gauge, headroom, runway).
+    // KPI strip below the header — 4 tiles (utilization, headroom, runway, order-by).
     // Scope to the strip; "Headroom" also appears in the forecast-chart legend.
     const kpiStrip = page.getByTestId('kpi-strip');
     await expect(kpiStrip.getByText('Current utilization')).toBeVisible();
     await expect(kpiStrip.getByText('Headroom', { exact: true })).toBeVisible();
     await expect(kpiStrip.getByText('Runway', { exact: true })).toBeVisible();
 
-    // Add a host.
-    await page.getByRole('tab', { name: 'Hosts' }).click();
-    await page.getByRole('button', { name: 'Add host' }).click();
+    // Add a host via the panel's Hosts tab.
+    await panel.getByRole('tab', { name: 'Hosts' }).click();
+    await panel.getByRole('button', { name: 'Add host' }).click();
     const hostDialog = page.getByRole('dialog', { name: 'Add host' });
     await hostDialog.getByRole('textbox', { name: 'Name' }).fill('host-e2e');
     await hostDialog.getByRole('spinbutton', { name: 'Initial memory capacity (GB)' }).fill('2000');
@@ -86,10 +82,10 @@ test('create cluster, add host + application, chart reflects updates', async ({
     await expect(page.getByText('1 host providing capacity')).toBeVisible();
     await expect(page.getByRole('cell', { name: '2,000 GB' })).toBeVisible();
 
-    // Add an application (the "Apps & Events" tab hosts both item kinds behind
-    // a single "Add item" dialog defaulting to the application form).
-    await page.getByRole('tab', { name: 'Apps & Events' }).click();
-    await page.getByRole('button', { name: 'Add item' }).click();
+    // Add an application via the "Apps & Events" tab (a single "Add item"
+    // dialog hosts both item kinds, defaulting to the application form).
+    await panel.getByRole('tab', { name: 'Apps & Events' }).click();
+    await panel.getByRole('button', { name: 'Add item' }).click();
     const appDialog = page.getByRole('dialog', { name: 'Add item' });
     await appDialog.getByRole('textbox', { name: 'Name' }).fill('app-e2e');
     await appDialog.getByLabel('Category').fill('OpenShift');
@@ -99,8 +95,9 @@ test('create cluster, add host + application, chart reflects updates', async ({
     await expect(page.getByText('1 item on the forecast')).toBeVisible();
     await expect(page.getByRole('cell', { name: '400 GB' })).toBeVisible();
 
-    // The chart legend stays present after each mutation invalidates the
-    // forecast query; that's our marker that the chart re-rendered cleanly.
+    // The panel's forecast-chart legend stays present after each mutation
+    // invalidates the forecast query; that's our marker that the chart
+    // re-rendered cleanly.
     await expect(page.getByText('Consumption', { exact: true })).toBeVisible();
     await expect(page.getByText('Capacity ceiling')).toBeVisible();
 
@@ -115,7 +112,7 @@ test('create cluster, add host + application, chart reflects updates', async ({
     // so just assert the aria-label is back to "System".
     await expect(toggle).toHaveAccessibleName(/Theme: System/);
 
-    // Capture the cluster id for cleanup via the dashboard URL.
+    // Capture the cluster id for cleanup via the panel URL.
     const url = page.url();
     const match = /\/clusters\/([^/?#]+)/.exec(url);
     clusterId = match?.[1] ?? null;
@@ -125,4 +122,118 @@ test('create cluster, add host + application, chart reflects updates', async ({
       expect(deleteResp.status()).toBe(204);
     }
   }
+});
+
+/**
+ * Live usage + sync state on the fleet console (#193).
+ *
+ * The vSphere collector (#190) and scheduler wiring (#191) are not landed yet,
+ * so the real dev stack cannot produce a synced cluster or a usage sample. To
+ * exercise the render path in a real browser we intercept exactly the three
+ * cluster read endpoints and let everything else (auth, settings) hit the real
+ * seeded server. This proves the sync badge + live-usage line render, and — the
+ * load-bearing assertion — that a synced cluster with no sample reads "not yet
+ * measured", never the "0% used" that would be the most dangerous wrong answer.
+ */
+test('live usage and sync state render on the fleet console', async ({ page }) => {
+  const freshId = 'clfresh00000000000000000';
+  const neverId = 'clnever00000000000000000';
+
+  const metric = {
+    metricTypeKey: 'memory_gb',
+    metricTypeDisplayName: 'Memory',
+    unit: 'GB',
+    baselineConsumption: 1000,
+    baselineCapacity: 5000,
+    currentConsumption: 1000,
+    currentCapacity: 5000,
+    utilization: 0.2,
+  };
+  const baseCluster = {
+    description: null,
+    baselineDate: '2026-06-01',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    archivedAt: null,
+    metrics: [metric],
+    source: 'vsphere' as const,
+    lastSyncedAt: '2026-08-01T09:00:00Z',
+    externalName: 'Production',
+    provisionalHostCount: 0,
+  };
+  const clusters = {
+    items: [
+      {
+        ...baseCluster,
+        id: freshId,
+        name: 'CL-Synced-Fresh',
+        connection: { id: 'conn1', name: 'vc-prod-zrh', status: 'active', enabled: true },
+      },
+      {
+        ...baseCluster,
+        id: neverId,
+        name: 'CL-Synced-New',
+        provisionalHostCount: 2,
+        connection: { id: 'conn1', name: 'vc-prod-zrh', status: 'active', enabled: true },
+      },
+    ],
+    total: 2,
+    limit: 100,
+    offset: 0,
+  };
+  const liveUsage = {
+    items: [
+      {
+        state: 'fresh',
+        clusterId: freshId,
+        connectionName: 'vc-prod-zrh',
+        memoryUsedGiB: 1234.5,
+        hostsSampled: 8,
+        hostsTotal: 8,
+        measuredAt: '2026-08-01T11:59:00Z',
+        ageSeconds: 120,
+      },
+      { state: 'never_fetched', clusterId: neverId, connectionName: 'vc-prod-zrh' },
+    ],
+  };
+  const forecast = {
+    fromMonth: '2026-07-01',
+    toMonth: '2027-06-01',
+    months: [
+      { month: '2026-07-01', consumption: 1000, capacity: 5000, utilization: 0.2 },
+      { month: '2026-08-01', consumption: 1100, capacity: 5000, utilization: 0.22 },
+    ],
+    events: [],
+    hosts: [],
+    applications: [],
+    effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'system' },
+    procurement: { leadTimeWeeks: 13, orderByDate: null, breachMonth: null },
+    baselineHistory: [],
+  };
+
+  // Most specific last — Playwright checks routes most-recently-added first.
+  await page.route(/\/api\/clusters(\?.*)?$/, (route) => route.fulfill({ json: clusters }));
+  await page.route(/\/api\/clusters\/[^/]+\/forecast/, (route) =>
+    route.fulfill({ json: forecast }),
+  );
+  await page.route(/\/api\/clusters\/live-usage$/, (route) => route.fulfill({ json: liveUsage }));
+
+  await page.goto('/');
+
+  const freshTile = page.locator('a[data-cluster-id="' + freshId + '"]');
+  const newTile = page.locator('a[data-cluster-id="' + neverId + '"]');
+  await expect(freshTile).toBeVisible();
+
+  // The synced source badge renders on both tiles.
+  await expect(freshTile.getByText('vSphere')).toBeVisible();
+
+  // Fresh reading: an absolute GiB figure + freshness — never a percentage.
+  await expect(freshTile.getByText('1,235 GiB')).toBeVisible();
+
+  // The load-bearing assertion: a synced cluster with no sample says so in
+  // words, and does NOT fabricate a 0.
+  await expect(newTile.getByText('not yet measured')).toBeVisible();
+  await expect(newTile).not.toContainText('0 GiB');
+  // …and its provisional-host hint is surfaced.
+  await expect(newTile.getByText(/HOSTS NEED DATES/)).toBeVisible();
 });

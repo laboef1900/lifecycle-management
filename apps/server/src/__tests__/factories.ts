@@ -1,5 +1,8 @@
-import type { HostState } from '@lcm/shared';
+import { startOfUtcMonth } from '@lcm/shared';
+import type { EntitySource, HostState, VsphereConnectionStatus } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
+
+import { encrypt } from '../crypto/secret-box.js';
 
 const DEFAULT_TENANT = 'default';
 const DEFAULT_METRIC_KEY = 'memory_gb';
@@ -21,6 +24,13 @@ async function resolveMetricId(prisma: PrismaClient, key: string): Promise<strin
 }
 
 export interface MakeClusterOptions {
+  /**
+   * Explicit primary key. Omitted, Prisma generates a `cuid()`, which differs
+   * every run — fine for assertions, fatal for snapshots (ids surface in
+   * `ForecastResult.hosts[].id` / `applications[].id`). Snapshot tests pass a
+   * stable id so the committed snapshot is a function of behaviour only.
+   */
+  id?: string;
   name?: string;
   description?: string | null;
   baselineDate?: Date;
@@ -28,6 +38,18 @@ export interface MakeClusterOptions {
   baselineConsumption?: number;
   baselineCapacity?: number;
   tenantId?: string;
+  /**
+   * Sync provenance. Omitted leaves the schema default (`manual`) with null sync
+   * fields — an ordinary manual cluster. Pass `source: 'vsphere'` (with a
+   * `connectionId`) to fabricate a synced cluster for the live-usage / sync-state
+   * surfaces (#193) and the #196 sync-owned-field guard. `externalId` is required
+   * by the DB's `(connectionId, externalId)` identity once a connection is set.
+   */
+  source?: EntitySource;
+  connectionId?: string;
+  externalId?: string;
+  externalName?: string;
+  lastSyncedAt?: Date;
 }
 
 export async function makeCluster(
@@ -41,14 +63,34 @@ export async function makeCluster(
 
   const cluster = await prisma.cluster.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
       name,
       description: options.description ?? null,
       baselineDate: options.baselineDate ?? DEFAULT_BASELINE_DATE,
+      ...(options.source !== undefined ? { source: options.source } : {}),
+      ...(options.connectionId !== undefined ? { connectionId: options.connectionId } : {}),
+      ...(options.externalId !== undefined ? { externalId: options.externalId } : {}),
+      ...(options.externalName !== undefined ? { externalName: options.externalName } : {}),
+      ...(options.lastSyncedAt !== undefined ? { lastSyncedAt: options.lastSyncedAt } : {}),
       baselines: {
         create: {
           tenantId,
           metricTypeId,
+          baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
+          baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
+        },
+      },
+      // Mirrors ClustersService's dual-write (#177): `cluster_baseline_history`
+      // is what the forecast reads, `cluster_metric_baselines` is the legacy
+      // table kept for rollback safety. A fixture that writes only the legacy
+      // table produces a cluster the forecast reports as METRIC_NOT_TRACKED.
+      baselineHistory: {
+        create: {
+          tenantId,
+          metricTypeId,
+          capturedAt: startOfUtcMonth(options.baselineDate ?? DEFAULT_BASELINE_DATE),
+          source: 'manual',
           baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
           baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
         },
@@ -60,6 +102,8 @@ export async function makeCluster(
 }
 
 export interface MakeHostOptions {
+  /** Explicit primary key — see `MakeClusterOptions.id`. */
+  id?: string;
   clusterId: string;
   name?: string;
   commissionedAt?: Date;
@@ -69,6 +113,18 @@ export interface MakeHostOptions {
   tenantId?: string;
   /** Lifecycle state; omitted uses the schema default (in_service). */
   state?: HostState;
+  /**
+   * A synced host whose commissioning date vCenter could not supply (Q9c, #194).
+   * Marks the imported `commissionedAt` as provisional (sync-imported,
+   * unconfirmed). Drives the fleet-console "N hosts need commissioning dates"
+   * hint (#193/#194). Omitted leaves the schema default (`false`). Set `true`
+   * alongside `source: 'vsphere'` to fabricate the provisional state the confirm
+   * flow operates on.
+   */
+  commissionedAtProvisional?: boolean;
+  source?: EntitySource;
+  connectionId?: string;
+  externalId?: string;
 }
 
 export async function makeHost(
@@ -86,12 +142,19 @@ export async function makeHost(
 
   const host = await prisma.host.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
       clusterId: options.clusterId,
       name,
       commissionedAt,
       decommissionedAt: options.decommissionedAt ?? null,
       ...(options.state !== undefined && { state: options.state }),
+      ...(options.commissionedAtProvisional !== undefined && {
+        commissionedAtProvisional: options.commissionedAtProvisional,
+      }),
+      ...(options.source !== undefined && { source: options.source }),
+      ...(options.connectionId !== undefined && { connectionId: options.connectionId }),
+      ...(options.externalId !== undefined && { externalId: options.externalId }),
       capacities: {
         create: initialCapacity.map((row) => ({
           tenantId,
@@ -107,6 +170,8 @@ export async function makeHost(
 }
 
 export interface MakeApplicationOptions {
+  /** Explicit primary key — see `MakeClusterOptions.id`. */
+  id?: string;
   clusterId: string;
   name?: string;
   category?: string;
@@ -130,6 +195,7 @@ export async function makeApplication(
 
   const application = await prisma.item.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
       clusterId: options.clusterId,
       kind: 'application',
@@ -152,6 +218,8 @@ export async function makeApplication(
 }
 
 export interface MakeEventOptions {
+  /** Explicit primary key — see `MakeClusterOptions.id`. */
+  id?: string;
   clusterId: string;
   effectiveDate?: Date;
   category?: string;
@@ -174,6 +242,7 @@ export async function makeEvent(
 
   const event = await prisma.item.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
       clusterId: options.clusterId,
       kind: 'event',
@@ -196,6 +265,103 @@ export async function makeEvent(
   });
 
   return { id: event.id, title: event.name };
+}
+
+export interface MakeVsphereConnectionOptions {
+  id?: string;
+  name?: string;
+  hostname?: string;
+  username?: string;
+  password?: string;
+  enabled?: boolean;
+  status?: VsphereConnectionStatus;
+  tenantId?: string;
+  instanceUuid?: string;
+  /** The PEM pinned as the trust anchor; null (default) verifies against system roots. */
+  tlsPinnedCaPem?: string | null;
+  /**
+   * The AES-GCM key the password is encrypted under — must match the service that
+   * reveals it. Supply it to write a REAL encrypted `passwordEnc` (so
+   * `revealPassword` round-trips, as the scheduler/job tests need). Omit it and the
+   * row gets a non-secret placeholder ciphertext instead — fine for read-path tests
+   * (live usage, sync-state surfaces — #193) that never decrypt the credential.
+   */
+  key?: Buffer;
+}
+
+/**
+ * A vCenter connection row. Writes the row directly (no scheduler job — pair with
+ * {@link makeVsphereConnectionJob} when a due job is needed) so a test controls the
+ * job's timestamps precisely.
+ *
+ * With a `key`, `passwordEnc` is a real AES-GCM ciphertext that `revealPassword`
+ * round-trips; without one it is a placeholder, which is all the read paths that
+ * only ever read `name`/`status`/`enabled` require. Do NOT rely on the placeholder
+ * for tests that decrypt the credential — pass `key` (or use the service).
+ */
+export async function makeVsphereConnection(
+  prisma: PrismaClient,
+  options: MakeVsphereConnectionOptions = {},
+): Promise<{ id: string; name: string; tenantId: string }> {
+  const tenantId = options.tenantId ?? DEFAULT_TENANT;
+  const name = options.name ?? `vc-${nextSuffix()}`;
+  const passwordEnc =
+    options.key !== undefined
+      ? encrypt(options.password ?? 'p', options.key)
+      : 'factory-placeholder-not-a-real-secret';
+  const connection = await prisma.vsphereConnection.create({
+    data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
+      tenantId,
+      name,
+      hostname: options.hostname ?? 'vcenter.corp.local',
+      username: options.username ?? 'svc-lcm',
+      passwordEnc,
+      ...(options.enabled !== undefined ? { enabled: options.enabled } : {}),
+      ...(options.status !== undefined ? { status: options.status } : {}),
+      ...(options.instanceUuid !== undefined ? { instanceUuid: options.instanceUuid } : {}),
+      ...(options.tlsPinnedCaPem !== undefined ? { tlsPinnedCaPem: options.tlsPinnedCaPem } : {}),
+    },
+  });
+  return { id: connection.id, name: connection.name, tenantId: connection.tenantId };
+}
+
+export interface MakeVsphereConnectionJobOptions {
+  connectionId: string;
+  dueAt?: Date;
+  lastPollAt?: Date | null;
+  lastSyncAt?: Date | null;
+  lastSyncStatus?: string | null;
+  lastSnapshotAt?: Date | null;
+  lastSnapshotStatus?: string | null;
+  lastSnapshotPeriod?: Date | null;
+  lastSuccessPeriod?: Date | null;
+  failureCount?: number;
+  runningSince?: Date | null;
+  lockedBy?: string | null;
+}
+
+/** A scheduler job row for a connection, with every last-run timestamp controllable. */
+export async function makeVsphereConnectionJob(
+  prisma: PrismaClient,
+  options: MakeVsphereConnectionJobOptions,
+): Promise<void> {
+  await prisma.vsphereConnectionJob.create({
+    data: {
+      connectionId: options.connectionId,
+      dueAt: options.dueAt ?? new Date(0),
+      lastPollAt: options.lastPollAt ?? null,
+      lastSyncAt: options.lastSyncAt ?? null,
+      lastSyncStatus: options.lastSyncStatus ?? null,
+      lastSnapshotAt: options.lastSnapshotAt ?? null,
+      lastSnapshotStatus: options.lastSnapshotStatus ?? null,
+      lastSnapshotPeriod: options.lastSnapshotPeriod ?? null,
+      lastSuccessPeriod: options.lastSuccessPeriod ?? null,
+      failureCount: options.failureCount ?? 0,
+      runningSince: options.runningSince ?? null,
+      lockedBy: options.lockedBy ?? null,
+    },
+  });
 }
 
 export interface MakeUserOptions {

@@ -175,7 +175,7 @@ export function HostReplaceDialog({
                 maxLength={2000}
                 rows={3}
                 placeholder="Optional context (e.g. RMA, capacity upgrade)"
-                className="flex w-full rounded-[var(--radius)] border border-input bg-background px-2.5 py-1.5 text-sm placeholder:text-fg-subtle focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex w-full rounded-[var(--radius)] border border-input bg-background px-2.5 py-1.5 text-sm placeholder:text-fg-subtle disabled:cursor-not-allowed disabled:opacity-50"
                 aria-invalid={errors.reason ? 'true' : undefined}
               />
               {errors.reason ? <p className="text-xs text-destructive">{errors.reason}</p> : null}

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { CategoryResponse } from './category.js';
 import type { ClusterResponse, MetricStateResponse } from './cluster.js';
 import type {
+  BaselineHistoryPoint,
   ForecastEntityContribution,
   ForecastEventMarker,
   ForecastMonthPoint,
@@ -22,6 +23,18 @@ import {
   procurementLeadTimeWeeksSchema,
 } from './settings.js';
 import type { TenantSettings } from './settings.js';
+import {
+  entitySourceSchema,
+  vsphereConnectionStatusSchema,
+  vsphereSyncOutcomeSchema,
+  vsphereTlsModeSchema,
+} from './vsphere.js';
+import type {
+  VsphereConnectionResponse,
+  VsphereProbeResult,
+  VsphereSyncNowResponse,
+  VsphereVerifyResult,
+} from './vsphere.js';
 
 // ---------- Clusters ----------
 
@@ -36,6 +49,12 @@ export const metricStateResponseSchema: z.ZodType<MetricStateResponse> = z.objec
   utilization: z.number(),
 });
 
+// The sync fields use `.exactOptional()`, NOT `.optional()`. Under
+// `exactOptionalPropertyTypes` a `.optional()` here does not compile against
+// `source?: EntitySource` (TS2375), and the compiler's suggested fix — widen the
+// interface to `EntitySource | undefined` — must NOT be taken: it makes
+// `{ source: undefined }` legal everywhere and reopens the hole these fields are
+// shaped to close. See `forecastEntityContributionSchema` for the same pattern.
 export const clusterResponseSchema: z.ZodType<ClusterResponse> = z.object({
   id: z.string(),
   name: z.string(),
@@ -45,6 +64,19 @@ export const clusterResponseSchema: z.ZodType<ClusterResponse> = z.object({
   updatedAt: z.string(),
   archivedAt: z.string().nullable(),
   metrics: z.array(metricStateResponseSchema),
+  source: entitySourceSchema.exactOptional(),
+  lastSyncedAt: z.string().nullable().exactOptional(),
+  externalName: z.string().nullable().exactOptional(),
+  connection: z
+    .object({
+      id: z.string(),
+      name: z.string(),
+      status: vsphereConnectionStatusSchema,
+      enabled: z.boolean(),
+    })
+    .nullable()
+    .exactOptional(),
+  provisionalHostCount: z.number().int().nonnegative().exactOptional(),
 });
 
 // ---------- Hosts ----------
@@ -77,6 +109,9 @@ export const hostResponseSchema: z.ZodType<HostResponse> = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   capacities: z.array(capacityResponseRowSchema),
+  source: entitySourceSchema.exactOptional(),
+  lastSyncedAt: z.string().nullable().exactOptional(),
+  commissionedAtProvisional: z.boolean().exactOptional(),
 });
 
 // ---------- Items ----------
@@ -113,7 +148,17 @@ export const forecastMonthPointSchema: z.ZodType<ForecastMonthPoint> = z.object(
   month: z.string(),
   consumption: z.number(),
   capacity: z.number(),
-  utilization: z.number(),
+  // Nullable by contract: null means "capacity is 0, so utilization is
+  // unknowable" — never 0. See ForecastMonthPoint in forecast.ts (Q9d).
+  utilization: z.number().nullable(),
+});
+
+export const baselineHistoryPointSchema: z.ZodType<BaselineHistoryPoint> = z.object({
+  capturedAt: z.string(),
+  source: z.enum(['manual', 'vsphere']),
+  consumption: z.number(),
+  capacity: z.number(),
+  utilization: z.number().nullable(),
 });
 
 export const forecastEventMarkerSchema: z.ZodType<ForecastEventMarker> = z.object({
@@ -148,6 +193,7 @@ export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   applications: z.array(forecastEntityContributionSchema),
   effectiveThresholds: effectiveThresholdsSchema,
   procurement: procurementInfoSchema,
+  baselineHistory: z.array(baselineHistoryPointSchema),
 });
 
 // ---------- Categories ----------
@@ -200,3 +246,62 @@ export function paginatedSchema<T>(item: z.ZodType<T>): z.ZodType<Paginated<T>> 
     offset: z.number().int(),
   });
 }
+
+// ---------- vSphere connections ----------
+
+/**
+ * @ai-warning There is no `password` field, and there must never be one — not even
+ * redacted. This schema is the serialization boundary, so a field added here is a
+ * field that reaches the client.
+ */
+export const vsphereConnectionResponseSchema: z.ZodType<VsphereConnectionResponse> = z.object({
+  id: z.string(),
+  name: z.string(),
+  hostname: z.string(),
+  username: z.string(),
+  tlsMode: vsphereTlsModeSchema,
+  pinnedRootFingerprintSha256: z.string().nullable(),
+  instanceUuid: z.string().nullable(),
+  apiVersion: z.string().nullable(),
+  enabled: z.boolean(),
+  status: vsphereConnectionStatusSchema,
+  lastError: z.string().nullable(),
+  lastConnectedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  syncState: z
+    .object({
+      lastSyncAt: z.string().nullable(),
+      lastSyncStatus: vsphereSyncOutcomeSchema.nullable(),
+      lastSnapshotAt: z.string().nullable(),
+      lastSnapshotStatus: z.string().nullable(),
+      lastSuccessPeriod: z.string().nullable(),
+      failureCount: z.number().int(),
+    })
+    .nullable()
+    .exactOptional(),
+});
+
+export const vsphereProbeResultSchema: z.ZodType<VsphereProbeResult> = z.object({
+  reachable: z.boolean(),
+  trustedBySystemRoots: z.boolean(),
+  rootFingerprintSha256: z.string().nullable(),
+  validFrom: z.string().nullable(),
+  validTo: z.string().nullable(),
+  outcome: z.enum(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter']),
+});
+
+export const vsphereVerifyResultSchema: z.ZodType<VsphereVerifyResult> = z.object({
+  outcome: z.enum(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter', 'auth_failed']),
+  instanceUuid: z.string().nullable(),
+  apiVersion: z.string().nullable(),
+});
+
+/**
+ * The "Sync now" 202 payload (#192). `dueAt` is a server-derived timestamp — no
+ * secret, nothing an admin could not already read — so this boundary discloses
+ * only that the sync is queued.
+ */
+export const vsphereSyncNowResponseSchema: z.ZodType<VsphereSyncNowResponse> = z.object({
+  dueAt: z.string(),
+});

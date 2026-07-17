@@ -194,6 +194,109 @@ describe('PUT /api/clusters/:id', () => {
     expect(body.description).toBe('updated');
   });
 
+  /**
+   * Regression for #181. `update` replaced baselines with deleteMany + createMany
+   * scoped to `clusterId` only, so a partial `baselines` array silently destroyed
+   * the omitted metrics' baselines. The update schema permits a partial array
+   * (`.min(1)` — "at least one", not "all of them"), and baselines drive hardware
+   * purchasing, so the loss has to be impossible rather than merely unlikely.
+   */
+  it('leaves omitted metrics untouched when baselines is partial', async () => {
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_181' },
+      update: {},
+      create: { key: 'cpu_cores_181', displayName: 'CPU (test)', unit: 'cores' },
+    });
+
+    const name = uniqueName('partial-baselines');
+    const created = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name,
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+          { metricTypeKey: 'cpu_cores_181', baselineConsumption: 8, baselineCapacity: 64 },
+        ],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const { id } = created.json() as { id: string };
+
+    // Update ONLY memory — cpu_cores_181 is absent from the payload.
+    const response = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${id}`,
+      payload: {
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 150, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const rows = await prisma.clusterMetricBaseline.findMany({
+      where: { clusterId: id },
+      include: { metricType: { select: { key: true } } },
+    });
+    const byKey = new Map(rows.map((r) => [r.metricType.key, r]));
+
+    // The omitted metric survives, unchanged.
+    expect(byKey.get('cpu_cores_181')).toBeDefined();
+    expect(byKey.get('cpu_cores_181')?.baselineConsumption.toNumber()).toBe(8);
+    expect(byKey.get('cpu_cores_181')?.baselineCapacity.toNumber()).toBe(64);
+
+    // The supplied metric is updated.
+    expect(byKey.get('memory_gb')?.baselineConsumption.toNumber()).toBe(150);
+  });
+
+  it('updates every supplied metric when baselines covers them all', async () => {
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_181' },
+      update: {},
+      create: { key: 'cpu_cores_181', displayName: 'CPU (test)', unit: 'cores' },
+    });
+
+    const name = uniqueName('full-baselines');
+    const created = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name,
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+          { metricTypeKey: 'cpu_cores_181', baselineConsumption: 8, baselineCapacity: 64 },
+        ],
+      },
+    });
+    const { id } = created.json() as { id: string };
+
+    const response = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${id}`,
+      payload: {
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 150, baselineCapacity: 1200 },
+          { metricTypeKey: 'cpu_cores_181', baselineConsumption: 16, baselineCapacity: 96 },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const rows = await prisma.clusterMetricBaseline.findMany({
+      where: { clusterId: id },
+      include: { metricType: { select: { key: true } } },
+    });
+    expect(rows).toHaveLength(2);
+    const byKey = new Map(rows.map((r) => [r.metricType.key, r]));
+    expect(byKey.get('memory_gb')?.baselineConsumption.toNumber()).toBe(150);
+    expect(byKey.get('memory_gb')?.baselineCapacity.toNumber()).toBe(1200);
+    expect(byKey.get('cpu_cores_181')?.baselineConsumption.toNumber()).toBe(16);
+    expect(byKey.get('cpu_cores_181')?.baselineCapacity.toNumber()).toBe(96);
+  });
+
   it('returns 404 for unknown id', async () => {
     const response = await server.inject({
       method: 'PUT',

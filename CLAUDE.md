@@ -121,13 +121,16 @@ pnpm --filter @lcm/web generate-routes           # TanStack route tree (routeTre
 
 ## UI/UX: House Style
 
-Design tokens live in `apps/web/src/styles.css` (Tailwind v4 CSS-first `@theme` — there is **no** `tailwind.config.*`). Follow the tokens; don't invent new colors.
+"Mission Bento" (shipped 2026-07). Design tokens live in `apps/web/src/styles.css` (Tailwind v4 CSS-first `@theme` — there is **no** `tailwind.config.*`). Follow the tokens; don't invent new colors.
 
-- **Look:** warm stone-gray neutrals with an amber/gold accent, IBM Plex Sans + IBM Plex Mono, radii 8/12/16px, soft card shadows. No glassmorphism — `backdrop-blur` is reserved for modal overlay scrims.
-- **Theme:** light and dark via `html.dark` class; `ThemeProvider` defaults to `system`. Every styling change MUST work in both themes.
+- **Look:** dark-primary UI (near-black slate background) with an amber/gold accent for brand and data (chart consumption line, CTAs) plus a steel-blue accent for interaction/info/focus (links, the focus ring, linked-tile highlights); self-hosted @fontsource fonts — Space Grotesk (`--font-display`, headings/verdict text), Inter (`--font-sans`, body/UI), JetBrains Mono (`--font-mono`, all data numerals, `tabular-nums`); radii 8px/14px (`--radius-card`)/16px (`--radius-modal`); soft card shadows. No glassmorphism — `backdrop-blur` is reserved for modal overlay scrims.
+- **Theme:** light and dark via `html.dark` class; `ThemeProvider` defaults to `system`. The light theme is a designed sibling (same hue system, not an afterthought). Every styling change MUST work in both themes.
+- **Chrome:** no sidebar — a single sticky topbar (brand, ⌘K search trigger, Settings link, theme toggle, user menu). Cluster detail is a slide-in panel (`role="dialog"`, `.cluster-panel`) over the fleet console, not a separate page — `/clusters` redirects to `/`.
+- **Focus:** global two-layer `:focus-visible` ring — `outline: 2px solid var(--steel); outline-offset: 2px` plus a `box-shadow` separator in the surface color — applied everywhere, not just form controls.
 - **Components:** Radix UI primitives wrapped in `src/components/ui/`, composed with `cva` variants and the `cn()` helper.
+- **Meters, not gauges:** the radial `UtilizationGauge` is retired. `BulletMeter` (a linear fill with warn/crit threshold ticks) is the one utilization visualization everywhere — fleet verdict instrument row, cluster KPI strip, and anywhere else utilization is shown.
 - **Feedback:** `Skeleton` shimmer loaders while loading, `EmptyState` for empty results, `sonner` toasts for actions.
-- **Status colors — semantic tokens only:** `--success` (green/healthy), `--warning` (amber), `--destructive` (red/critical), `--accent` (amber/info) via `Badge`, `StatusDot`, `RunwayPill`, and `KpiTile`. Do NOT hardcode raw palette classes (`bg-emerald-100` etc.); the few files that do (`host-state-badge.tsx`, `host-eol-pill.tsx`, and `text-emerald-700` deltas in `hosts-tab.tsx`/`items-tab.tsx`) are legacy exceptions, not precedent. Color MUST NOT be the only way status or required action is communicated — pair it with text, icons, or patterns.
+- **Status colors — semantic tokens only:** `--success` (green/healthy), `--warning` (amber), `--destructive` (red/critical), `--accent` (amber/brand+data), `--steel` (interaction/info/focus) via `Badge`, `BulletMeter`, `RunwayPill`, and `KpiTile`. Do NOT hardcode raw palette classes (`bg-emerald-100` etc.) — none remain in the codebase; keep it that way. Color MUST NOT be the only way status or required action is communicated — pair it with text, icons, or patterns.
 - **Charts:** Recharts.
 
 ### Accessibility and High-Impact Actions
