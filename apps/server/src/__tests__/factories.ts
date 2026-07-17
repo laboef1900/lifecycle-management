@@ -268,44 +268,62 @@ export async function makeEvent(
 }
 
 export interface MakeVsphereConnectionOptions {
-  /** The AES-GCM key the password is encrypted under — must match the service that reveals it. */
-  key: Buffer;
+  id?: string;
   name?: string;
   hostname?: string;
   username?: string;
   password?: string;
   enabled?: boolean;
+  status?: VsphereConnectionStatus;
   tenantId?: string;
   instanceUuid?: string;
   /** The PEM pinned as the trust anchor; null (default) verifies against system roots. */
   tlsPinnedCaPem?: string | null;
+  /**
+   * The AES-GCM key the password is encrypted under — must match the service that
+   * reveals it. Supply it to write a REAL encrypted `passwordEnc` (so
+   * `revealPassword` round-trips, as the scheduler/job tests need). Omit it and the
+   * row gets a non-secret placeholder ciphertext instead — fine for read-path tests
+   * (live usage, sync-state surfaces — #193) that never decrypt the credential.
+   */
+  key?: Buffer;
 }
 
 /**
- * A vCenter connection row with a real encrypted password, so `revealPassword`
- * round-trips. Writes the row directly (no scheduler job — pair with
+ * A vCenter connection row. Writes the row directly (no scheduler job — pair with
  * {@link makeVsphereConnectionJob} when a due job is needed) so a test controls the
  * job's timestamps precisely.
+ *
+ * With a `key`, `passwordEnc` is a real AES-GCM ciphertext that `revealPassword`
+ * round-trips; without one it is a placeholder, which is all the read paths that
+ * only ever read `name`/`status`/`enabled` require. Do NOT rely on the placeholder
+ * for tests that decrypt the credential — pass `key` (or use the service).
  */
 export async function makeVsphereConnection(
   prisma: PrismaClient,
-  options: MakeVsphereConnectionOptions,
-): Promise<{ id: string; tenantId: string }> {
+  options: MakeVsphereConnectionOptions = {},
+): Promise<{ id: string; name: string; tenantId: string }> {
   const tenantId = options.tenantId ?? DEFAULT_TENANT;
-  const suffix = nextSuffix();
-  const row = await prisma.vsphereConnection.create({
+  const name = options.name ?? `vc-${nextSuffix()}`;
+  const passwordEnc =
+    options.key !== undefined
+      ? encrypt(options.password ?? 'p', options.key)
+      : 'factory-placeholder-not-a-real-secret';
+  const connection = await prisma.vsphereConnection.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
-      name: options.name ?? `vc-${suffix}`,
+      name,
       hostname: options.hostname ?? 'vcenter.corp.local',
       username: options.username ?? 'svc-lcm',
-      passwordEnc: encrypt(options.password ?? 'p', options.key),
-      enabled: options.enabled ?? true,
+      passwordEnc,
+      ...(options.enabled !== undefined ? { enabled: options.enabled } : {}),
+      ...(options.status !== undefined ? { status: options.status } : {}),
       ...(options.instanceUuid !== undefined ? { instanceUuid: options.instanceUuid } : {}),
       ...(options.tlsPinnedCaPem !== undefined ? { tlsPinnedCaPem: options.tlsPinnedCaPem } : {}),
     },
   });
-  return { id: row.id, tenantId: row.tenantId };
+  return { id: connection.id, name: connection.name, tenantId: connection.tenantId };
 }
 
 export interface MakeVsphereConnectionJobOptions {
@@ -390,45 +408,4 @@ export async function makeSession(
     },
   });
   return { id: session.id, tokenHash };
-}
-
-export interface MakeVsphereConnectionOptions {
-  id?: string;
-  name?: string;
-  hostname?: string;
-  username?: string;
-  enabled?: boolean;
-  status?: VsphereConnectionStatus;
-  tenantId?: string;
-}
-
-/**
- * A vCenter connection row for tests that need synced clusters/hosts to exist
- * (live usage, sync-state surfaces — #193).
- *
- * Writes a placeholder `passwordEnc` directly rather than going through
- * `VsphereConnectionsService.create` (which encrypts): the read paths this
- * factory supports only ever read `name`/`status`/`enabled`, never the secret,
- * so a real ciphertext would be dead weight. Do NOT use this factory for tests
- * that decrypt the credential — use the service for those.
- */
-export async function makeVsphereConnection(
-  prisma: PrismaClient,
-  options: MakeVsphereConnectionOptions = {},
-): Promise<{ id: string; name: string }> {
-  const tenantId = options.tenantId ?? DEFAULT_TENANT;
-  const name = options.name ?? `vc-${nextSuffix()}`;
-  const connection = await prisma.vsphereConnection.create({
-    data: {
-      ...(options.id !== undefined ? { id: options.id } : {}),
-      tenantId,
-      name,
-      hostname: options.hostname ?? 'vcenter.corp.local',
-      username: options.username ?? 'svc-lcm',
-      passwordEnc: 'factory-placeholder-not-a-real-secret',
-      ...(options.enabled !== undefined ? { enabled: options.enabled } : {}),
-      ...(options.status !== undefined ? { status: options.status } : {}),
-    },
-  });
-  return { id: connection.id, name: connection.name };
 }
