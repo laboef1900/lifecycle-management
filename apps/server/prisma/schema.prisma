@@ -117,6 +117,7 @@ model Cluster {
   hosts           Host[]
   items           Item[]
   settings        ClusterSettings?
+  usageSample     VsphereUsageSample?
 
   @@unique([tenantId, name], map: "clusters_tenant_name_unique")
   /// Cluster identity WITHIN a vCenter. A MoRef (`domain-c123`) is unique only
@@ -507,10 +508,11 @@ model VsphereConnection {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  clusters Cluster[]
-  hosts    Host[]
-  job      VsphereConnectionJob?
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clusters     Cluster[]
+  hosts        Host[]
+  job          VsphereConnectionJob?
+  usageSamples VsphereUsageSample[]
 
   @@unique([tenantId, name])
   /// Stops the same vCenter being added twice under two names (FQDN and IP), which
@@ -565,4 +567,45 @@ model VsphereConnectionJob {
 
   @@index([dueAt])
   @@map("vsphere_connection_jobs")
+}
+
+/// The latest live usage reading per cluster (#179, epic #172).
+///
+/// @ai-warning This is a CACHE, not history. Exactly one row per cluster —
+/// `clusterId` is the primary key, so a poll upserts and the table never grows and
+/// needs no retention policy. Do NOT turn it into a time series: history is what
+/// baselines are for, and conflating them would quietly promote a cache into
+/// purchasing data.
+///
+/// @ai-warning It lives in Postgres, not memory, and that is required rather than
+/// preferred. The server is stateless by invariant and must serve last-known data
+/// after a restart with a staleness indicator — an in-memory cache fails exactly
+/// when it matters most: a restart DURING a vCenter outage would leave the UI with
+/// "never fetched" (i.e. nothing) for the whole outage.
+///
+/// @ai-warning There is deliberately NO capacity column. Capacity is inventory —
+/// it changes when a host is physically installed, on a scale of months, and
+/// nothing about it is live. Duplicating it into a 5-minute cache with a different
+/// owner and cadence would guarantee the two disagree, and a live view whose
+/// denominator contradicts the forecast's is exactly how users stop trusting the
+/// tool (docs/vision.md anti-patterns). The synced inventory is the one owner.
+model VsphereUsageSample {
+  clusterId     String   @id @map("cluster_id")
+  connectionId  String   @map("vsphere_connection_id")
+  memoryUsedGiB Decimal  @map("memory_used_gib") @db.Decimal(18, 3)
+  /// `hostsSampled < hostsTotal` is its own honest signal ("2 of 12 didn't
+  /// report"). Without it, a partial read looks like a real DROP in consumption.
+  hostsSampled  Int      @map("hosts_sampled")
+  /// A count from vCenter, not a capacity. If it disagrees with LCM's synced host
+  /// count, inventory is behind — a cheap change-detector that self-heals the 6h
+  /// sync window for the only case that matters (a host was added).
+  hostsTotal    Int      @map("hosts_total")
+  /// When vCENTER measured it, not when we asked.
+  measuredAt    DateTime @map("measured_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  cluster    Cluster           @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  connection VsphereConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@map("vsphere_usage_samples")
 }
