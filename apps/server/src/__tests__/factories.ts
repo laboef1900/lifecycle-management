@@ -38,10 +38,10 @@ export interface MakeClusterOptions {
   tenantId?: string;
   /**
    * Sync provenance. Omitted leaves the schema default (`manual`) with null sync
-   * fields — an ordinary manual cluster. Pass `source: 'vsphere'` plus a
-   * `connectionId` to build a synced cluster for the live-usage / sync-state
-   * surfaces (#193). `externalId` is required by the DB's
-   * `(connectionId, externalId)` identity once a connection is set.
+   * fields — an ordinary manual cluster. Pass `source: 'vsphere'` (with a
+   * `connectionId`) to fabricate a synced cluster for the live-usage / sync-state
+   * surfaces (#193) and the #196 sync-owned-field guard. `externalId` is required
+   * by the DB's `(connectionId, externalId)` identity once a connection is set.
    */
   source?: EntitySource;
   connectionId?: string;

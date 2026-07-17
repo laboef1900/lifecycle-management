@@ -204,6 +204,11 @@ model Host {
   connectionId              String?   @map("vsphere_connection_id")
   externalId                String?   @map("external_id")
   externalName              String?   @map("external_name")
+  /// Set once an operator edits `name` (parity with Cluster.nameIsCustom, #196).
+  /// Sync then never touches the label again — a vCenter-side rename updates
+  /// `externalName` and is surfaced as a hint rather than clobbering a deliberate
+  /// choice. Before this, sync overwrote a synced host's `name` on every pass.
+  nameIsCustom              Boolean   @default(false) @map("name_is_custom")
   lastSyncedAt              DateTime? @map("last_synced_at")
   /// @ai-warning vCenter cannot tell us when a host was commissioned, so sync
   /// imports a PROVISIONAL date and flags it. This matters more than it looks:
