@@ -1,0 +1,1204 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`forecast characterization (behaviour as of pre-#177 dev) > applications are additive, including one backdated before the baseline 1`] = `
+{
+  "applications": [
+    {
+      "contributions": [
+        {
+          "amount": 256,
+          "month": "2026-05-01",
+        },
+        {
+          "amount": 256,
+          "month": "2026-06-01",
+        },
+        {
+          "amount": 256,
+          "month": "2026-07-01",
+        },
+        {
+          "amount": 256,
+          "month": "2026-08-01",
+        },
+        {
+          "amount": 256,
+          "month": "2026-09-01",
+        },
+        {
+          "amount": 256,
+          "month": "2026-10-01",
+        },
+        {
+          "amount": 256,
+          "month": "2026-11-01",
+        },
+        {
+          "amount": 256,
+          "month": "2026-12-01",
+        },
+        {
+          "amount": 256,
+          "month": "2027-01-01",
+        },
+        {
+          "amount": 256,
+          "month": "2027-02-01",
+        },
+        {
+          "amount": 256,
+          "month": "2027-03-01",
+        },
+        {
+          "amount": 256,
+          "month": "2027-04-01",
+        },
+      ],
+      "id": "fc-app-backdated",
+      "name": "fc-app-backdated",
+    },
+    {
+      "contributions": [
+        {
+          "amount": 0,
+          "month": "2026-05-01",
+        },
+        {
+          "amount": 0,
+          "month": "2026-06-01",
+        },
+        {
+          "amount": 0,
+          "month": "2026-07-01",
+        },
+        {
+          "amount": 0,
+          "month": "2026-08-01",
+        },
+        {
+          "amount": 880,
+          "month": "2026-09-01",
+        },
+        {
+          "amount": 880,
+          "month": "2026-10-01",
+        },
+        {
+          "amount": 880,
+          "month": "2026-11-01",
+        },
+        {
+          "amount": 880,
+          "month": "2026-12-01",
+        },
+        {
+          "amount": 880,
+          "month": "2027-01-01",
+        },
+        {
+          "amount": 880,
+          "month": "2027-02-01",
+        },
+        {
+          "amount": 880,
+          "month": "2027-03-01",
+        },
+        {
+          "amount": 880,
+          "month": "2027-04-01",
+        },
+      ],
+      "id": "fc-app-future",
+      "name": "fc-app-future",
+    },
+  ],
+  "effectiveThresholds": {
+    "crit": 0.9,
+    "source": "tenant",
+    "warn": 0.7,
+  },
+  "events": [],
+  "fromMonth": "2026-05-01",
+  "hosts": [],
+  "months": [
+    {
+      "capacity": 8192,
+      "consumption": 4256,
+      "month": "2026-05-01",
+      "utilization": 0.51953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 4256,
+      "month": "2026-06-01",
+      "utilization": 0.51953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 4256,
+      "month": "2026-07-01",
+      "utilization": 0.51953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 4256,
+      "month": "2026-08-01",
+      "utilization": 0.51953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 5136,
+      "month": "2026-09-01",
+      "utilization": 0.626953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 5136,
+      "month": "2026-10-01",
+      "utilization": 0.626953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 5136,
+      "month": "2026-11-01",
+      "utilization": 0.626953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 5136,
+      "month": "2026-12-01",
+      "utilization": 0.626953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 5136,
+      "month": "2027-01-01",
+      "utilization": 0.626953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 5136,
+      "month": "2027-02-01",
+      "utilization": 0.626953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 5136,
+      "month": "2027-03-01",
+      "utilization": 0.626953125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 5136,
+      "month": "2027-04-01",
+      "utilization": 0.626953125,
+    },
+  ],
+  "procurement": {
+    "breachMonth": null,
+    "leadTimeWeeks": 8,
+    "orderByDate": null,
+  },
+  "toMonth": "2027-04-01",
+}
+`;
+
+exports[`forecast characterization (behaviour as of pre-#177 dev) > archived cluster still forecasts 1`] = `
+{
+  "applications": [],
+  "effectiveThresholds": {
+    "crit": 0.9,
+    "source": "tenant",
+    "warn": 0.7,
+  },
+  "events": [],
+  "fromMonth": "2026-05-01",
+  "hosts": [],
+  "months": [
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2026-05-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2026-06-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2026-07-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2026-08-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2026-09-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2026-10-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2026-11-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2026-12-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2027-01-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2027-02-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2027-03-01",
+      "utilization": 0.244140625,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 1000,
+      "month": "2027-04-01",
+      "utilization": 0.244140625,
+    },
+  ],
+  "procurement": {
+    "breachMonth": null,
+    "leadTimeWeeks": 8,
+    "orderByDate": null,
+  },
+  "toMonth": "2027-04-01",
+}
+`;
+
+exports[`forecast characterization (behaviour as of pre-#177 dev) > default window anchors on the cluster baselineDate 1`] = `
+{
+  "fromMonth": "2026-03-01",
+  "toMonth": "2028-03-01",
+}
+`;
+
+exports[`forecast characterization (behaviour as of pre-#177 dev) > events with consumption and capacity deltas 1`] = `
+{
+  "applications": [],
+  "effectiveThresholds": {
+    "crit": 0.9,
+    "source": "tenant",
+    "warn": 0.7,
+  },
+  "events": [
+    {
+      "capacityDelta": null,
+      "category": "growth",
+      "consumptionDelta": 500,
+      "description": null,
+      "effectiveDate": "2026-07-01",
+      "id": "fc-event-consumption",
+      "title": "fc-event-consumption",
+    },
+    {
+      "capacityDelta": 2560,
+      "category": "growth",
+      "consumptionDelta": null,
+      "description": null,
+      "effectiveDate": "2026-10-01",
+      "id": "fc-event-capacity",
+      "title": "fc-event-capacity",
+    },
+  ],
+  "fromMonth": "2026-05-01",
+  "hosts": [],
+  "months": [
+    {
+      "capacity": 8192,
+      "consumption": 4000,
+      "month": "2026-05-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 4000,
+      "month": "2026-06-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 4500,
+      "month": "2026-07-01",
+      "utilization": 0.54931640625,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 4500,
+      "month": "2026-08-01",
+      "utilization": 0.54931640625,
+    },
+    {
+      "capacity": 8192,
+      "consumption": 4500,
+      "month": "2026-09-01",
+      "utilization": 0.54931640625,
+    },
+    {
+      "capacity": 10752,
+      "consumption": 4500,
+      "month": "2026-10-01",
+      "utilization": 0.4185267857142857,
+    },
+    {
+      "capacity": 10752,
+      "consumption": 4500,
+      "month": "2026-11-01",
+      "utilization": 0.4185267857142857,
+    },
+    {
+      "capacity": 10752,
+      "consumption": 4500,
+      "month": "2026-12-01",
+      "utilization": 0.4185267857142857,
+    },
+    {
+      "capacity": 10752,
+      "consumption": 4500,
+      "month": "2027-01-01",
+      "utilization": 0.4185267857142857,
+    },
+    {
+      "capacity": 10752,
+      "consumption": 4500,
+      "month": "2027-02-01",
+      "utilization": 0.4185267857142857,
+    },
+    {
+      "capacity": 10752,
+      "consumption": 4500,
+      "month": "2027-03-01",
+      "utilization": 0.4185267857142857,
+    },
+    {
+      "capacity": 10752,
+      "consumption": 4500,
+      "month": "2027-04-01",
+      "utilization": 0.4185267857142857,
+    },
+  ],
+  "procurement": {
+    "breachMonth": null,
+    "leadTimeWeeks": 8,
+    "orderByDate": null,
+  },
+  "toMonth": "2027-04-01",
+}
+`;
+
+exports[`forecast characterization (behaviour as of pre-#177 dev) > hosts are ADDITIVE to a non-zero baselineCapacity (the mixed quadrant) 1`] = `
+{
+  "applications": [],
+  "effectiveThresholds": {
+    "crit": 0.9,
+    "source": "tenant",
+    "warn": 0.7,
+  },
+  "events": [],
+  "fromMonth": "2026-05-01",
+  "hosts": [
+    {
+      "contributions": [
+        {
+          "amount": 1024,
+          "month": "2026-05-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-06-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-07-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-08-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-09-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-10-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-11-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-12-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2027-01-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2027-02-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2027-03-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2027-04-01",
+        },
+      ],
+      "id": "fc-mixed-host-a",
+      "name": "fc-mixed-host-a",
+      "projectedDecommissionAt": null,
+    },
+  ],
+  "months": [
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2026-05-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2026-06-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2026-07-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2026-08-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2026-09-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2026-10-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2026-11-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2026-12-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2027-01-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2027-02-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2027-03-01",
+      "utilization": 0.45955882352941174,
+    },
+    {
+      "capacity": 8704,
+      "consumption": 4000,
+      "month": "2027-04-01",
+      "utilization": 0.45955882352941174,
+    },
+  ],
+  "procurement": {
+    "breachMonth": null,
+    "leadTimeWeeks": 8,
+    "orderByDate": null,
+  },
+  "toMonth": "2027-04-01",
+}
+`;
+
+exports[`forecast characterization (behaviour as of pre-#177 dev) > multi-metric cluster shares one cluster-level baselineDate across metrics 1`] = `
+{
+  "cpu": {
+    "applications": [],
+    "effectiveThresholds": {
+      "crit": 0.9,
+      "source": "tenant",
+      "warn": 0.7,
+    },
+    "events": [],
+    "fromMonth": "2026-05-01",
+    "hosts": [],
+    "months": [
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2026-05-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2026-06-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2026-07-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2026-08-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2026-09-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2026-10-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2026-11-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2026-12-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2027-01-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2027-02-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2027-03-01",
+        "utilization": 0.25,
+      },
+      {
+        "capacity": 128,
+        "consumption": 32,
+        "month": "2027-04-01",
+        "utilization": 0.25,
+      },
+    ],
+    "procurement": {
+      "breachMonth": null,
+      "leadTimeWeeks": 8,
+      "orderByDate": null,
+    },
+    "toMonth": "2027-04-01",
+  },
+  "memory": {
+    "applications": [],
+    "effectiveThresholds": {
+      "crit": 0.9,
+      "source": "tenant",
+      "warn": 0.7,
+    },
+    "events": [],
+    "fromMonth": "2026-05-01",
+    "hosts": [],
+    "months": [
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2026-05-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2026-06-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2026-07-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2026-08-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2026-09-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2026-10-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2026-11-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2026-12-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2027-01-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2027-02-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2027-03-01",
+        "utilization": 0.48828125,
+      },
+      {
+        "capacity": 8192,
+        "consumption": 4000,
+        "month": "2027-04-01",
+        "utilization": 0.48828125,
+      },
+    ],
+    "procurement": {
+      "breachMonth": null,
+      "leadTimeWeeks": 8,
+      "orderByDate": null,
+    },
+    "toMonth": "2027-04-01",
+  },
+}
+`;
+
+exports[`forecast characterization (behaviour as of pre-#177 dev) > single-metric cluster with one baseline and no tracked entities 1`] = `
+{
+  "applications": [],
+  "effectiveThresholds": {
+    "crit": 0.9,
+    "source": "tenant",
+    "warn": 0.7,
+  },
+  "events": [],
+  "fromMonth": "2026-05-01",
+  "hosts": [],
+  "months": [
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2026-05-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2026-06-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2026-07-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2026-08-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2026-09-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2026-10-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2026-11-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2026-12-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2027-01-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2027-02-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2027-03-01",
+      "utilization": 0.5208333333333334,
+    },
+    {
+      "capacity": 7680,
+      "consumption": 4000,
+      "month": "2027-04-01",
+      "utilization": 0.5208333333333334,
+    },
+  ],
+  "procurement": {
+    "breachMonth": null,
+    "leadTimeWeeks": 8,
+    "orderByDate": null,
+  },
+  "toMonth": "2027-04-01",
+}
+`;
+
+exports[`forecast characterization (behaviour as of pre-#177 dev) > zero baselineCapacity with hosts carrying all capacity, incl. a capacity step 1`] = `
+{
+  "applications": [],
+  "effectiveThresholds": {
+    "crit": 0.9,
+    "source": "tenant",
+    "warn": 0.7,
+  },
+  "events": [],
+  "fromMonth": "2026-05-01",
+  "hosts": [
+    {
+      "contributions": [
+        {
+          "amount": 2048,
+          "month": "2026-05-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2026-06-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2026-07-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2026-08-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2026-09-01",
+        },
+        {
+          "amount": 4096,
+          "month": "2026-10-01",
+        },
+        {
+          "amount": 4096,
+          "month": "2026-11-01",
+        },
+        {
+          "amount": 4096,
+          "month": "2026-12-01",
+        },
+        {
+          "amount": 4096,
+          "month": "2027-01-01",
+        },
+        {
+          "amount": 4096,
+          "month": "2027-02-01",
+        },
+        {
+          "amount": 4096,
+          "month": "2027-03-01",
+        },
+        {
+          "amount": 4096,
+          "month": "2027-04-01",
+        },
+      ],
+      "id": "fc-step-host-a",
+      "name": "fc-step-host-a",
+      "projectedDecommissionAt": null,
+    },
+    {
+      "contributions": [
+        {
+          "amount": 0,
+          "month": "2026-05-01",
+        },
+        {
+          "amount": 0,
+          "month": "2026-06-01",
+        },
+        {
+          "amount": 0,
+          "month": "2026-07-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2026-08-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2026-09-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2026-10-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2026-11-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2026-12-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2027-01-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2027-02-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2027-03-01",
+        },
+        {
+          "amount": 2048,
+          "month": "2027-04-01",
+        },
+      ],
+      "id": "fc-step-host-b",
+      "name": "fc-step-host-b",
+      "projectedDecommissionAt": null,
+    },
+  ],
+  "months": [
+    {
+      "capacity": 2048,
+      "consumption": 3000,
+      "month": "2026-05-01",
+      "utilization": 1.46484375,
+    },
+    {
+      "capacity": 2048,
+      "consumption": 3000,
+      "month": "2026-06-01",
+      "utilization": 1.46484375,
+    },
+    {
+      "capacity": 2048,
+      "consumption": 3000,
+      "month": "2026-07-01",
+      "utilization": 1.46484375,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 3000,
+      "month": "2026-08-01",
+      "utilization": 0.732421875,
+    },
+    {
+      "capacity": 4096,
+      "consumption": 3000,
+      "month": "2026-09-01",
+      "utilization": 0.732421875,
+    },
+    {
+      "capacity": 6144,
+      "consumption": 3000,
+      "month": "2026-10-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 6144,
+      "consumption": 3000,
+      "month": "2026-11-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 6144,
+      "consumption": 3000,
+      "month": "2026-12-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 6144,
+      "consumption": 3000,
+      "month": "2027-01-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 6144,
+      "consumption": 3000,
+      "month": "2027-02-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 6144,
+      "consumption": 3000,
+      "month": "2027-03-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 6144,
+      "consumption": 3000,
+      "month": "2027-04-01",
+      "utilization": 0.48828125,
+    },
+  ],
+  "procurement": {
+    "breachMonth": "2026-05-01",
+    "leadTimeWeeks": 8,
+    "orderByDate": "2026-03-06",
+  },
+  "toMonth": "2027-04-01",
+}
+`;
+
+exports[`forecast characterization (behaviour as of pre-#177 dev) > zero-capacity months render as 0% utilization 1`] = `
+{
+  "applications": [],
+  "effectiveThresholds": {
+    "crit": 0.9,
+    "source": "tenant",
+    "warn": 0.7,
+  },
+  "events": [],
+  "fromMonth": "2026-05-01",
+  "hosts": [
+    {
+      "contributions": [
+        {
+          "amount": 0,
+          "month": "2026-05-01",
+        },
+        {
+          "amount": 0,
+          "month": "2026-06-01",
+        },
+        {
+          "amount": 0,
+          "month": "2026-07-01",
+        },
+        {
+          "amount": 0,
+          "month": "2026-08-01",
+        },
+        {
+          "amount": 0,
+          "month": "2026-09-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-10-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-11-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2026-12-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2027-01-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2027-02-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2027-03-01",
+        },
+        {
+          "amount": 1024,
+          "month": "2027-04-01",
+        },
+      ],
+      "id": "fc-late-host",
+      "name": "fc-late-host",
+      "projectedDecommissionAt": null,
+    },
+  ],
+  "months": [
+    {
+      "capacity": 0,
+      "consumption": 500,
+      "month": "2026-05-01",
+      "utilization": 0,
+    },
+    {
+      "capacity": 0,
+      "consumption": 500,
+      "month": "2026-06-01",
+      "utilization": 0,
+    },
+    {
+      "capacity": 0,
+      "consumption": 500,
+      "month": "2026-07-01",
+      "utilization": 0,
+    },
+    {
+      "capacity": 0,
+      "consumption": 500,
+      "month": "2026-08-01",
+      "utilization": 0,
+    },
+    {
+      "capacity": 0,
+      "consumption": 500,
+      "month": "2026-09-01",
+      "utilization": 0,
+    },
+    {
+      "capacity": 1024,
+      "consumption": 500,
+      "month": "2026-10-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 1024,
+      "consumption": 500,
+      "month": "2026-11-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 1024,
+      "consumption": 500,
+      "month": "2026-12-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 1024,
+      "consumption": 500,
+      "month": "2027-01-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 1024,
+      "consumption": 500,
+      "month": "2027-02-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 1024,
+      "consumption": 500,
+      "month": "2027-03-01",
+      "utilization": 0.48828125,
+    },
+    {
+      "capacity": 1024,
+      "consumption": 500,
+      "month": "2027-04-01",
+      "utilization": 0.48828125,
+    },
+  ],
+  "procurement": {
+    "breachMonth": null,
+    "leadTimeWeeks": 8,
+    "orderByDate": null,
+  },
+  "toMonth": "2027-04-01",
+}
+`;
