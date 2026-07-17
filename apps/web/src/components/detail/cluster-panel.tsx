@@ -76,10 +76,15 @@ export function isEscapeTargetInsidePanel(
 
 /**
  * Cluster detail slide-in panel (spec §5). Fixed right overlay rendered
- * alongside the fleet console (never dims/inerts it — tiles stay mouse-
- * reachable). Owns the entire former detail-page composition: header,
- * recommendation banner, KPI strip, forecast chart + scenario controls, and
- * the Hosts/Apps & Events/Settings tabs.
+ * alongside the fleet console, as a true modal dialog (`aria-modal="true"`)
+ * — the route (`_app.clusters.$id.tsx`) makes the console `inert` while this
+ * panel is mounted, so it's excluded from the tab order and assistive tech
+ * (PR review fix 3, review round 2 finding 3: `aria-modal="false"` used to
+ * contradict the hand-rolled Tab trap below, which already scoped focus to
+ * the panel — this makes the accessibility contract match the real
+ * behavior instead of the reverse). Owns the entire former detail-page
+ * composition: header, recommendation banner, KPI strip, forecast chart +
+ * scenario controls, and the Hosts/Apps & Events/Settings tabs.
  */
 export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Element {
   const navigate = useNavigate();
@@ -228,7 +233,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     <m.div
       ref={panelRef}
       role="dialog"
-      aria-modal="false"
+      aria-modal="true"
       aria-labelledby={headingId}
       className="cluster-panel fixed bottom-0 right-0 top-14 z-40 overflow-y-auto border-l border-border"
       style={{ background: 'var(--surface-card)', boxShadow: 'var(--overlay-shadow)' }}

@@ -38,8 +38,8 @@ vi.mock('recharts', () => {
     ReferenceLine: ({ x, y }: { x?: string; y?: number }) => (
       <div data-testid={x !== undefined ? `refline-x-${x}` : `refline-y-${y}`} />
     ),
-    ReferenceDot: ({ x, y }: { x: string; y: number }) => (
-      <div data-testid="breach-dot" data-x={x} data-y={y} />
+    ReferenceDot: ({ x, y, fill }: { x: string; y: number; fill?: string }) => (
+      <div data-testid="breach-dot" data-x={x} data-y={y} data-fill={fill} />
     ),
   };
 });
@@ -93,12 +93,16 @@ describe('<ClusterTileChart>', () => {
     expect(screen.getByTestId('refline-y-100')).toBeInTheDocument();
   });
 
-  it('marks the first month at or above warn with a breach dot', () => {
+  it('marks the first month at or above warn with a breach dot filled in the warn color, not crit (PR review fix 4a)', () => {
+    // The dot is positioned at the warn-threshold crossing (`thresholds.warn`
+    // in `breachIndex`), so its fill must be `utilizationWarn` — filling it
+    // with `utilizationCrit` visually mislabels a warn breach as a crit one.
     render(
       <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
     );
     const dot = screen.getByTestId('breach-dot');
     expect(dot.dataset.x).toBe('2026-07-01');
+    expect(dot.dataset.fill).toBe('#b45309'); // utilizationWarn — not utilizationCrit (#b91c1c)
   });
 
   it('omits the breach dot when no month reaches warn', () => {

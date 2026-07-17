@@ -103,6 +103,69 @@ describe('<FleetVerdict>', () => {
     expect(screen.getByText('Sep 14')).toBeInTheDocument();
   });
 
+  it('renders "{horizon}+ mo" — not "0 mo" — when a cluster is urgent but the fleet-wide aggregate never breaches (PR review fix 1)', () => {
+    // The flagship fixture: c1 alone is individually at 84%/85% utilization
+    // (`earliest` below), but the fleet-wide aggregate (consumption summed
+    // across both clusters, divided by summed capacity) stays under the 70%
+    // warn threshold for both months in `summary()`'s 2-month series — so
+    // `fleetRunwayToWarn` never breaches (months: null, alreadyBreached:
+    // false). The old `runwayMonths()` coerced that `null` to 0 via `?? 0`,
+    // rendering the nonsensical "Fleet runway is 0 mo". The horizon (here 2,
+    // matching `summary().fleetMonths.length`) must come from the actual
+    // aggregated series length, not a hardcoded constant.
+    render(
+      <FleetVerdict
+        summary={summary()}
+        earliest={{ cluster: cluster('c1', 'CL-Oracle'), procurement: procurement() }}
+        staleCount={0}
+        openOrderCount={1}
+        hostCount={null}
+      />,
+    );
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading).toHaveTextContent(/fleet runway is 2\+ mo/i);
+    expect(heading).not.toHaveTextContent(/fleet runway is 0 mo/i);
+  });
+
+  it('renders the real breach month number (no "+") when the fleet-wide aggregate itself crosses warn', () => {
+    // Distinct from the "+" case above: here the aggregate (not just one
+    // cluster) crosses the 70% warn threshold at month index 1 (consumption
+    // 4700+2900=7600 / capacity 4096+5904=10000 = 76%), so
+    // `fleetRunwayToWarn` resolves a real index and the numeral must render
+    // that index verbatim, not a horizon-derived "+" figure.
+    const breachingSummary = summary({
+      perClusterSeries: [
+        {
+          clusterId: 'c1',
+          clusterName: 'CL-Oracle',
+          months: months([
+            ['2026-07-01', 3440, 4096],
+            ['2026-08-01', 4700, 4096],
+          ]),
+        },
+        {
+          clusterId: 'c2',
+          clusterName: 'CL-P1',
+          months: months([
+            ['2026-07-01', 2760, 5904],
+            ['2026-08-01', 2900, 5904],
+          ]),
+        },
+      ],
+    });
+    render(
+      <FleetVerdict
+        summary={breachingSummary}
+        earliest={{ cluster: cluster('c1', 'CL-Oracle'), procurement: procurement() }}
+        staleCount={0}
+        openOrderCount={1}
+        hostCount={null}
+      />,
+    );
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading).toHaveTextContent(/fleet runway is 1 mo/i);
+  });
+
   it('renders the all-clear sentence when there is no projected breach', () => {
     render(
       <FleetVerdict

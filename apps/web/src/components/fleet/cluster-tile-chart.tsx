@@ -140,18 +140,22 @@ export function ClusterTileChart({
             connectNulls={false}
           />
           {breachRow ? (
+            // Positioned at the WARN-threshold crossing (breachIndex above
+            // uses thresholds.warn, not crit), so it must render in the warn
+            // color — filling it with utilizationCrit mislabeled a warn
+            // breach as a crit one (PR review fix 4a).
             <ReferenceDot
               x={breachRow.month}
               y={Math.min(breachRow.actual ?? breachRow.forecast ?? 0, Y_MAX)}
               r={4}
-              fill={colors.utilizationCrit}
+              fill={colors.utilizationWarn}
               stroke="var(--card)"
               strokeWidth={1.5}
               label={{
                 value: `BREACH ${formatMonthShort(breachRow.month).toUpperCase()}`,
                 position: 'top',
                 fontSize: 8,
-                fill: colors.utilizationCrit,
+                fill: colors.utilizationWarn,
                 style: { paintOrder: 'stroke', stroke: 'var(--card)', strokeWidth: 3 },
               }}
             />

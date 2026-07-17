@@ -1,7 +1,7 @@
 import type { ClusterResponse, ProcurementInfo } from '@lcm/shared';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { AlertTriangle } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { AdminOnly } from '@/components/auth/admin-only';
 import { CreateClusterDialog } from '@/components/clusters/create-cluster-dialog';
@@ -58,6 +58,11 @@ export function sortClustersByUrgency(entries: SortEntry[]): SortEntry[] {
 export function FleetConsole(): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false);
   const [linkedClusterId, setLinkedClusterId] = useState<string | null>(null);
+  // Stable across renders (PR review fix 4d) so the per-tile wrapper's
+  // hover/focus props don't force `ClusterTile` (now `memo`-wrapped) to
+  // treat every tile as changed just because FleetConsole re-rendered.
+  const handleTileLinkStart = useCallback((id: string) => setLinkedClusterId(id), []);
+  const handleTileLinkEnd = useCallback(() => setLinkedClusterId(null), []);
 
   const clustersQuery = useQuery({
     queryKey: ['clusters', { includeArchived: false }],
@@ -236,10 +241,10 @@ export function FleetConsole(): React.JSX.Element {
               <div
                 key={entry.cluster.id}
                 className="col-span-12 min-[820px]:col-span-6 min-[1280px]:col-span-4"
-                onMouseEnter={() => setLinkedClusterId(entry.cluster.id)}
-                onMouseLeave={() => setLinkedClusterId(null)}
-                onFocus={() => setLinkedClusterId(entry.cluster.id)}
-                onBlur={() => setLinkedClusterId(null)}
+                onMouseEnter={() => handleTileLinkStart(entry.cluster.id)}
+                onMouseLeave={handleTileLinkEnd}
+                onFocus={() => handleTileLinkStart(entry.cluster.id)}
+                onBlur={handleTileLinkEnd}
               >
                 <ClusterTile
                   entry={entry}

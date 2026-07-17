@@ -61,7 +61,7 @@ export function FleetVerdict({
           <>
             Fleet runway is{' '}
             <strong className={cn('text-accent', HL, 'decoration-accent')}>
-              {runwayMonths(runway)} mo
+              {runwayMonths(runway, summary.fleetMonths.length)} mo
             </strong>{' '}
             {'—'}{' '}
             <Link
@@ -116,7 +116,7 @@ export function FleetVerdict({
           </span>
         </Instrument>
         <Separator />
-        <Instrument label="Clusters">
+        <Instrument label="Fleet">
           <span className="font-mono text-base font-bold tabular-nums">
             {hostCount != null
               ? `${summary.clusterCount} CLUSTERS · ${hostCount} HOSTS`
@@ -140,9 +140,21 @@ export function FleetVerdict({
   );
 }
 
-function runwayMonths(runway: RunwaySummary): number {
-  if (runway.alreadyBreached) return 0;
-  return runway.months ?? 0;
+/**
+ * Numeral for the urgent headline. `runway` is the *fleet-wide aggregate*
+ * breach (from `fleetRunwayToWarn`), which is independent of `earliest` (the
+ * individually-earliest-breaching cluster) — a single urgent cluster can
+ * coexist with a fleet aggregate that never breaches at all
+ * (`alreadyBreached: false`, `months: null`). Coercing that `null` to `0`
+ * (PR review fix 1) rendered the nonsensical "Fleet runway is 0 mo" even
+ * though the aggregate is healthy; render "{horizon}+ mo" instead, deriving
+ * the horizon from the actual aggregated series length passed in rather than
+ * hardcoding the default 24-month window.
+ */
+function runwayMonths(runway: RunwaySummary, horizonMonths: number): string {
+  if (runway.alreadyBreached) return '0';
+  if (runway.months !== null) return String(runway.months);
+  return `${horizonMonths}+`;
 }
 
 function Instrument({

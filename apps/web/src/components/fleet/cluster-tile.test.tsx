@@ -227,6 +227,35 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText(/already past crit/i)).toBeInTheDocument();
   });
 
+  it('shows past-warn numeral treatment — not a "to crit" countdown — when already past warn and crit is reached in-window (PR review fix 2)', () => {
+    // summary.alreadyBreached is 'warn' (current month already over warn,
+    // under crit) but a later in-window month (index 1) crosses crit. Per
+    // the spec's recorded amendment, the numeral must keep tracking warn
+    // (the same "{horizon}+ MO" treatment as when crit is never reached) —
+    // crit surfaces only in the sub-line/verdict, never promotes the
+    // numeral to a "to crit" countdown. Otherwise the numeral (which reads
+    // as a countdown to crit) contradicts the panel's RunwayPill, which
+    // reports "Over 70%" (warn) semantics for this exact state.
+    const pastWarnCritInWindowMonths: ForecastMonthPoint[] = [
+      { month: '2026-07-01', consumption: 18000, capacity: 24576, utilization: 18000 / 24576 },
+      { month: '2026-08-01', consumption: 22500, capacity: 24576, utilization: 22500 / 24576 },
+    ];
+    render(
+      <ClusterTile
+        entry={entry({
+          months: pastWarnCritInWindowMonths,
+          summary: { months: 0, alreadyBreached: 'warn' },
+        })}
+        forecast={forecast()}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+      />,
+    );
+    expect(screen.getByText('WARN')).toBeInTheDocument();
+    expect(screen.getByText(/past warn 70% — crit ≈ Aug 26/i)).toBeInTheDocument();
+    expect(screen.getByText(/already past warn; reaches crit ≈ Aug 26/i)).toBeInTheDocument();
+    expect(screen.queryByText(/to crit/i)).toBeNull();
+  });
+
   it('renders an em dash instead of a synthetic "0+ MO" for an archived cluster with no forecast (finding 3)', () => {
     render(
       <ClusterTile

@@ -1,3 +1,5 @@
+import { daysUntil } from '@/lib/dates';
+
 /**
  * Forecast reliability degrades once a cluster's memory baseline has not been
  * re-measured in a while — 90 days matches the mockup's demo constant and is
@@ -5,13 +7,17 @@
  */
 export const STALE_BASELINE_DAYS = 90;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Whole UTC calendar days between `baselineDate` (`YYYY-MM-DD`) and `today`. */
+/**
+ * Whole UTC calendar days between `baselineDate` (`YYYY-MM-DD`) and `today`.
+ * Reimplemented on the shared `daysUntil` (PR review fix 4b) instead of a
+ * private duplicate of the same UTC-midnight day-math — `daysUntil` counts
+ * from `today` to a future date (negative when in the past), so the age is
+ * just its negation. `|| 0` normalizes the `-0` that plain negation produces
+ * when the baseline is today (`-0 !== 0` under `Object.is`/`toBe`, even
+ * though both print as "0" and compare `===` equal).
+ */
 export function baselineAgeDays(baselineDate: string, today: Date = new Date()): number {
-  const baseline = new Date(`${baselineDate}T00:00:00Z`).getTime();
-  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  return Math.round((todayUtc - baseline) / DAY_MS);
+  return -daysUntil(baselineDate, today) || 0;
 }
 
 /** True once a baseline is more than {@link STALE_BASELINE_DAYS} old. */

@@ -150,14 +150,19 @@ describe('<ClusterPanel>', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders as a non-modal dialog and moves focus to the close button on open', async () => {
+  it('renders as a modal dialog and moves focus to the close button on open (PR review fix 3)', async () => {
+    // aria-modal="true" now matches reality: the route wraps the fleet
+    // console in an `inert` container while this panel is open (see
+    // apps/web/src/routes/_app.clusters.$id.tsx), and the hand-rolled Tab
+    // trap below already scoped focus to the panel — aria-modal="false" was
+    // a contradiction, not a deliberate design choice.
     render(<Harness show />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /close/i })).toHaveFocus();
     });
     const dialog = screen.getByRole('dialog');
-    expect(dialog).toHaveAttribute('aria-modal', 'false');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
   });
 
   it('gives the close button an accessible name of exactly "Close", not "Close Esc" (MINOR fix)', async () => {

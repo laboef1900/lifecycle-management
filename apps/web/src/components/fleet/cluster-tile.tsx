@@ -1,6 +1,7 @@
 import type { ForecastResponse } from '@lcm/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
+import { memo } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,6 +51,16 @@ interface RunwayInfo {
   pastLabel: 'warn' | 'crit' | null;
   /** Whole-percent threshold that `pastLabel` refers to (e.g. 70 for warn). */
   pastThresholdPct: number | null;
+  /**
+   * Whole-month crit-breach date, set only when `pastLabel === 'warn'` and a
+   * later in-window month also crosses crit. Per the spec's recorded
+   * amendment, the runway numeral tracks warn (not crit) once warn has been
+   * breached — this surfaces the crit month in the sub-line/verdict text
+   * only, never promoting the numeral to a "to crit" countdown (PR review
+   * fix 2: the numeral previously contradicted the panel's "Over 70%"
+   * RunwayPill for this exact state).
+   */
+  pastCritDate: string | null;
 }
 
 function computeRunway(
@@ -62,7 +73,7 @@ function computeRunway(
     (m) => m.capacity > 0 && m.consumption / m.capacity >= thresholds.crit,
   );
 
-  if (summary.alreadyBreached) {
+  if (summary.alreadyBreached === 'crit') {
     if (critIndex >= 0) {
       return {
         value: critIndex,
@@ -71,20 +82,36 @@ function computeRunway(
         breachDate: months[critIndex]!.month,
         pastLabel: null,
         pastThresholdPct: null,
+        pastCritDate: null,
       };
     }
-    // Already past warn (or crit) as of the current month, but no month in
-    // the window crosses crit — the numeral still reads "{horizon}+ MO"
-    // (nothing further to project), but the sub-line/verdict must not claim
-    // "no breach": the fleet is already in breach right now.
-    const pastLabel = summary.alreadyBreached;
+    // Already past crit as of the current month, but no month in the window
+    // crosses crit again — the numeral reads "{horizon}+ MO" (nothing
+    // further to project), but the sub-line/verdict must not claim "no
+    // breach": the cluster is already in breach right now.
     return {
       value: horizon,
       plus: true,
       breachLabel: null,
       breachDate: null,
-      pastLabel,
-      pastThresholdPct: Math.round(thresholds[pastLabel] * 100),
+      pastLabel: 'crit',
+      pastThresholdPct: Math.round(thresholds.crit * 100),
+      pastCritDate: null,
+    };
+  }
+  if (summary.alreadyBreached === 'warn') {
+    // Already past warn as of the current month. The numeral always keeps
+    // the "past warn" treatment here — even when a later in-window month
+    // also crosses crit, that crit month surfaces only in the sub-line and
+    // verdict text below, never as a "to crit" countdown numeral.
+    return {
+      value: horizon,
+      plus: true,
+      breachLabel: null,
+      breachDate: null,
+      pastLabel: 'warn',
+      pastThresholdPct: Math.round(thresholds.warn * 100),
+      pastCritDate: critIndex >= 0 ? months[critIndex]!.month : null,
     };
   }
   if (summary.months !== null) {
@@ -95,6 +122,7 @@ function computeRunway(
       breachDate: months[summary.months]!.month,
       pastLabel: null,
       pastThresholdPct: null,
+      pastCritDate: null,
     };
   }
   return {
@@ -104,6 +132,7 @@ function computeRunway(
     breachDate: null,
     pastLabel: null,
     pastThresholdPct: null,
+    pastCritDate: null,
   };
 }
 
@@ -112,8 +141,12 @@ function computeRunway(
  * order-by chip, one-line verdict, flag chips (event-in-window, stale
  * baseline), and the compact forecast chart. Renders a non-link error state
  * when the forecast failed to load.
+ *
+ * Wrapped in `memo` (PR review fix 4d) so mousing across the fleet grid —
+ * which only flips one tile's `linked` prop via `fleet-console.tsx`'s hover
+ * state — doesn't force every other tile's chart to re-render along with it.
  */
-export function ClusterTile({
+export const ClusterTile = memo(function ClusterTile({
   entry,
   forecast,
   thresholds,
@@ -165,14 +198,18 @@ export function ClusterTile({
   const runwaySub = runway.breachLabel
     ? `to ${runway.breachLabel} ${formatMonthShort(runway.breachDate!)}`
     : runway.pastLabel === 'warn'
-      ? `past warn ${runway.pastThresholdPct}% — crit beyond window`
+      ? runway.pastCritDate
+        ? `past warn ${runway.pastThresholdPct}% — crit ≈ ${formatMonthShort(runway.pastCritDate)}`
+        : `past warn ${runway.pastThresholdPct}% — crit beyond window`
       : runway.pastLabel === 'crit'
         ? `past crit ${runway.pastThresholdPct}%`
         : 'no breach';
   const verdict = runway.breachLabel
     ? `${(currentUtil * 100).toFixed(1)}% used — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
     : runway.pastLabel === 'warn'
-      ? `${(currentUtil * 100).toFixed(1)}% used — already past warn; crit beyond the ${runway.value}-month window.`
+      ? runway.pastCritDate
+        ? `${(currentUtil * 100).toFixed(1)}% used — already past warn; reaches crit ≈ ${formatMonthShort(runway.pastCritDate)}.`
+        : `${(currentUtil * 100).toFixed(1)}% used — already past warn; crit beyond the ${runway.value}-month window.`
       : runway.pastLabel === 'crit'
         ? `${(currentUtil * 100).toFixed(1)}% used — already past crit.`
         : `${(currentUtil * 100).toFixed(1)}% used — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
@@ -272,7 +309,7 @@ export function ClusterTile({
       </div>
     </Link>
   );
-}
+});
 
 function FlagChip({
   tone,
