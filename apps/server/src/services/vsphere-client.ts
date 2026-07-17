@@ -55,7 +55,7 @@ function envelope(body: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:urn="urn:vim25"><soapenv:Body>${body}</soapenv:Body></soapenv:Envelope>`;
 }
 
-function escapeXml(value: string): string {
+export function escapeXml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -64,10 +64,27 @@ function escapeXml(value: string): string {
     .replace(/'/g, '&apos;');
 }
 
-interface SoapCallResult {
+export interface SoapCallResult {
   status: number;
   body: string;
   setCookie: string | null;
+}
+
+export interface SoapCallOptions {
+  /**
+   * Cancellation token, threaded into `node:https` so an in-flight request is torn
+   * down on abort (design §D21 — every vCenter call carries an `AbortSignal`). When
+   * omitted the call is bounded only by `REQUEST_TIMEOUT_MS`.
+   */
+  signal?: AbortSignal;
+  /**
+   * Destination TCP port. **Defaults to 443 and production never sets it.** The
+   * ONLY caller that passes a value is the integration test suite, so a
+   * Testcontainers-mapped vcsim port is reachable (#199 owns a real, configurable
+   * port). This is a port number, not a TLS relaxation: `verifiedTlsOptions` keeps
+   * `rejectUnauthorized: true` and the `ca:` root pin regardless of port.
+   */
+  port?: number;
 }
 
 /**
@@ -78,18 +95,20 @@ interface SoapCallResult {
  * call and no extra dependency is needed to express it.
  *
  * @ai-warning `verifiedTlsOptions` always sets `rejectUnauthorized: true` and has
- * no branch that relaxes it. Do not add an options parameter that could. See
+ * no branch that relaxes it. Do not add an options parameter that could. The
+ * `options.port` seam is a destination port only — it cannot weaken trust. See
  * `vsphere-tls.ts` for why the intuitive `checkServerIdentity` alternative fails
  * open.
  */
-async function soapCall(
+export async function soapCall(
   hostname: string,
   pinnedRootPem: string | null,
   action: string,
   body: string,
   cookie: string | null,
+  options: SoapCallOptions = {},
 ): Promise<SoapCallResult> {
-  const tls = verifiedTlsOptions(hostname, pinnedRootPem);
+  const tls = verifiedTlsOptions(hostname, pinnedRootPem, options.port);
   const payload = envelope(body);
 
   return new Promise((resolve, reject) => {
@@ -103,6 +122,7 @@ async function soapCall(
         path: '/sdk',
         method: 'POST',
         timeout: REQUEST_TIMEOUT_MS,
+        ...(options.signal ? { signal: options.signal } : {}),
         headers: {
           'Content-Type': 'text/xml; charset=utf-8',
           'Content-Length': Buffer.byteLength(payload),
@@ -218,7 +238,18 @@ export async function verifyLogin(input: {
   }
 }
 
-function walk(node: unknown, key: string): unknown {
+/** Parse a SOAP response body with the module's namespace-stripping XML parser. */
+export function parseSoap(body: string): unknown {
+  return parser.parse(body) as unknown;
+}
+
+/**
+ * Depth-first search for the first value under `key`, ignoring namespace nesting.
+ * The vim25 envelope wraps every payload in `Envelope > Body > *Response`, and the
+ * property names we want (`about`, `returnval`, `token`, …) are unique within a
+ * response — so a keyed walk is simpler and more robust than hard-coding the path.
+ */
+export function walk(node: unknown, key: string): unknown {
   if (node === null || typeof node !== 'object') return undefined;
   const record = node as Record<string, unknown>;
   if (key in record) return record[key];

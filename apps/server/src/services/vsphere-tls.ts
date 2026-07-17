@@ -147,10 +147,17 @@ export async function probeCertificate(hostname: string): Promise<TlsProbeResult
 export function verifiedTlsOptions(
   hostname: string,
   pinnedRootPem: string | null,
+  port: number = VCENTER_PORT,
 ): { host: string; port: number; servername: string; rejectUnauthorized: true; ca?: string[] } {
+  // @ai-warning `port` defaults to 443 and production never overrides it (the
+  // hostname regex in `@lcm/shared` carries no port, and app config has none — that
+  // is #199). A non-default value is supplied ONLY by the integration test suite so
+  // a Testcontainers-mapped vcsim port is reachable. It changes the destination
+  // socket ONLY: `rejectUnauthorized: true` and the `ca:` root pin are unaffected,
+  // so there is still no code path that relaxes trust.
   return {
     host: hostname,
-    port: VCENTER_PORT,
+    port,
     servername: hostname,
     rejectUnauthorized: true,
     ...(pinnedRootPem ? { ca: [pinnedRootPem] } : {}),

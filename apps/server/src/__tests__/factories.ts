@@ -1,5 +1,5 @@
 import { startOfUtcMonth } from '@lcm/shared';
-import type { HostState } from '@lcm/shared';
+import type { EntitySource, HostState, VsphereConnectionStatus } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
 const DEFAULT_TENANT = 'default';
@@ -37,11 +37,17 @@ export interface MakeClusterOptions {
   baselineCapacity?: number;
   tenantId?: string;
   /**
-   * Provenance; omitted uses the schema default (`manual`). Set `'vsphere'` to
-   * fabricate a synced cluster the #196 sync-owned-field guard operates on — no
-   * VsphereConnection FK is required (connectionId stays null).
+   * Sync provenance. Omitted leaves the schema default (`manual`) with null sync
+   * fields — an ordinary manual cluster. Pass `source: 'vsphere'` (with a
+   * `connectionId`) to fabricate a synced cluster for the live-usage / sync-state
+   * surfaces (#193) and the #196 sync-owned-field guard. `externalId` is required
+   * by the DB's `(connectionId, externalId)` identity once a connection is set.
    */
-  source?: 'manual' | 'vsphere';
+  source?: EntitySource;
+  connectionId?: string;
+  externalId?: string;
+  externalName?: string;
+  lastSyncedAt?: Date;
 }
 
 export async function makeCluster(
@@ -59,8 +65,12 @@ export async function makeCluster(
       tenantId,
       name,
       description: options.description ?? null,
-      ...(options.source !== undefined && { source: options.source }),
       baselineDate: options.baselineDate ?? DEFAULT_BASELINE_DATE,
+      ...(options.source !== undefined ? { source: options.source } : {}),
+      ...(options.connectionId !== undefined ? { connectionId: options.connectionId } : {}),
+      ...(options.externalId !== undefined ? { externalId: options.externalId } : {}),
+      ...(options.externalName !== undefined ? { externalName: options.externalName } : {}),
+      ...(options.lastSyncedAt !== undefined ? { lastSyncedAt: options.lastSyncedAt } : {}),
       baselines: {
         create: {
           tenantId,
@@ -101,15 +111,18 @@ export interface MakeHostOptions {
   tenantId?: string;
   /** Lifecycle state; omitted uses the schema default (in_service). */
   state?: HostState;
-  /** Provenance; omitted uses the schema default (`manual`). */
-  source?: 'manual' | 'vsphere';
   /**
    * A synced host whose commissioning date vCenter could not supply (Q9c, #194).
-   * Omitted uses the schema default (false). Set `true` alongside
-   * `source: 'vsphere'` to fabricate the provisional state the confirm flow
-   * operates on — no VsphereConnection FK is required (connectionId stays null).
+   * Marks the imported `commissionedAt` as provisional (sync-imported,
+   * unconfirmed). Drives the fleet-console "N hosts need commissioning dates"
+   * hint (#193/#194). Omitted leaves the schema default (`false`). Set `true`
+   * alongside `source: 'vsphere'` to fabricate the provisional state the confirm
+   * flow operates on.
    */
   commissionedAtProvisional?: boolean;
+  source?: EntitySource;
+  connectionId?: string;
+  externalId?: string;
 }
 
 export async function makeHost(
@@ -134,10 +147,12 @@ export async function makeHost(
       commissionedAt,
       decommissionedAt: options.decommissionedAt ?? null,
       ...(options.state !== undefined && { state: options.state }),
-      ...(options.source !== undefined && { source: options.source }),
       ...(options.commissionedAtProvisional !== undefined && {
         commissionedAtProvisional: options.commissionedAtProvisional,
       }),
+      ...(options.source !== undefined && { source: options.source }),
+      ...(options.connectionId !== undefined && { connectionId: options.connectionId }),
+      ...(options.externalId !== undefined && { externalId: options.externalId }),
       capacities: {
         create: initialCapacity.map((row) => ({
           tenantId,
@@ -294,4 +309,45 @@ export async function makeSession(
     },
   });
   return { id: session.id, tokenHash };
+}
+
+export interface MakeVsphereConnectionOptions {
+  id?: string;
+  name?: string;
+  hostname?: string;
+  username?: string;
+  enabled?: boolean;
+  status?: VsphereConnectionStatus;
+  tenantId?: string;
+}
+
+/**
+ * A vCenter connection row for tests that need synced clusters/hosts to exist
+ * (live usage, sync-state surfaces — #193).
+ *
+ * Writes a placeholder `passwordEnc` directly rather than going through
+ * `VsphereConnectionsService.create` (which encrypts): the read paths this
+ * factory supports only ever read `name`/`status`/`enabled`, never the secret,
+ * so a real ciphertext would be dead weight. Do NOT use this factory for tests
+ * that decrypt the credential — use the service for those.
+ */
+export async function makeVsphereConnection(
+  prisma: PrismaClient,
+  options: MakeVsphereConnectionOptions = {},
+): Promise<{ id: string; name: string }> {
+  const tenantId = options.tenantId ?? DEFAULT_TENANT;
+  const name = options.name ?? `vc-${nextSuffix()}`;
+  const connection = await prisma.vsphereConnection.create({
+    data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
+      tenantId,
+      name,
+      hostname: options.hostname ?? 'vcenter.corp.local',
+      username: options.username ?? 'svc-lcm',
+      passwordEnc: 'factory-placeholder-not-a-real-secret',
+      ...(options.enabled !== undefined ? { enabled: options.enabled } : {}),
+      ...(options.status !== undefined ? { status: options.status } : {}),
+    },
+  });
+  return { id: connection.id, name: connection.name };
 }

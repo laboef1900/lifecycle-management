@@ -1,4 +1,4 @@
-import { startOfUtcMonth } from '@lcm/shared';
+import { entitySourceSchema, startOfUtcMonth, vsphereConnectionStatusSchema } from '@lcm/shared';
 import type {
   ClusterCreateInput,
   ClusterResponse,
@@ -35,6 +35,10 @@ const clusterInclude = {
     },
   },
   items: { include: { allocations: true } },
+  // Denormalized onto ClusterResponse so the fleet console can render a
+  // per-cluster source badge and connection health without a round-trip per
+  // tile (#193). `null` for manual clusters.
+  connection: { select: { id: true, name: true, status: true, enabled: true } },
 } satisfies Prisma.ClusterInclude;
 
 type ClusterRow = Prisma.ClusterGetPayload<{ include: typeof clusterInclude }>;
@@ -389,6 +393,21 @@ export class ClustersService {
       updatedAt: row.updatedAt.toISOString(),
       archivedAt: row.archivedAt?.toISOString() ?? null,
       metrics,
+      // Sync provenance (#193). `source`/`status` are stored as untyped strings,
+      // so parse them at this boundary rather than casting — a corrupt value
+      // fails loudly instead of shipping garbage to the client.
+      source: entitySourceSchema.parse(row.source),
+      lastSyncedAt: row.lastSyncedAt?.toISOString() ?? null,
+      externalName: row.externalName,
+      connection: row.connection
+        ? {
+            id: row.connection.id,
+            name: row.connection.name,
+            status: vsphereConnectionStatusSchema.parse(row.connection.status),
+            enabled: row.connection.enabled,
+          }
+        : null,
+      provisionalHostCount: row.hosts.filter((h) => h.commissionedAtProvisional).length,
     };
   }
 }
