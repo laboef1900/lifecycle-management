@@ -23,7 +23,9 @@ import { healthRoutes } from './routes/health.js';
 import { hostReplacementRoutes } from './routes/host-replacements.js';
 import { hostRoutes } from './routes/hosts.js';
 import { itemsRoutes } from './routes/items.js';
+import { loadKey } from './crypto/secret-box.js';
 import { settingsAuthRoutes } from './routes/settings-auth.js';
+import { settingsVsphereRoutes } from './routes/settings-vsphere.js';
 import { settingsRoutes } from './routes/settings.js';
 
 export interface BuildServerOptions {
@@ -104,6 +106,16 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(settingsAuthRoutes, {
     prefix: '/api',
     allowInternalIssuer: env.NODE_ENV !== 'production' || env.OIDC_ALLOW_INSECURE,
+  });
+
+  // vCenter connections. Note there is no `allowInternal…` option here and there
+  // must never be one: a vCenter IS private, so the OIDC guard's deny-list is
+  // inverted rather than reused (see services/vsphere-guard.ts). The control that
+  // actually protects the credential is the password gate on trust material, not a
+  // network predicate.
+  await server.register(settingsVsphereRoutes, {
+    prefix: '/api',
+    configKey: env.CONFIG_ENCRYPTION_KEY ? loadKey(env.CONFIG_ENCRYPTION_KEY) : null,
   });
 
   return server;
