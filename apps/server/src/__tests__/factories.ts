@@ -36,6 +36,12 @@ export interface MakeClusterOptions {
   baselineConsumption?: number;
   baselineCapacity?: number;
   tenantId?: string;
+  /**
+   * Provenance; omitted uses the schema default (`manual`). Set `'vsphere'` to
+   * fabricate a synced cluster the #196 sync-owned-field guard operates on — no
+   * VsphereConnection FK is required (connectionId stays null).
+   */
+  source?: 'manual' | 'vsphere';
 }
 
 export async function makeCluster(
@@ -53,6 +59,7 @@ export async function makeCluster(
       tenantId,
       name,
       description: options.description ?? null,
+      ...(options.source !== undefined && { source: options.source }),
       baselineDate: options.baselineDate ?? DEFAULT_BASELINE_DATE,
       baselines: {
         create: {

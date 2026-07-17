@@ -203,11 +203,20 @@ export class VsphereSyncService {
         // @ai-note commissionedAt and commissionedAtProvisional are deliberately
         // NOT in this update. They are operator-owned (Q9c, #194): once an admin
         // confirms the real commissioning date, re-sync must never overwrite it.
-        // The invariant holds by OMISSION here — there is no host `nameIsCustom`
-        // flag (that is Cluster-only). host-commissioning.test.ts pins it.
+        // The invariant holds by OMISSION here. host-commissioning.test.ts pins it.
+        //
+        // `externalName` always tracks vCenter verbatim. `name` is LCM's own label
+        // and is only SEEDED — once an operator renames the host, nameIsCustom
+        // pins it and this pass stops clobbering the label (#196, parity with the
+        // Cluster branch above). Before #196 sync overwrote `name` every pass.
         await this.prisma.host.update({
           where: { id: existing.id },
-          data: { externalName: host.name, name: host.name, clusterId, lastSyncedAt: new Date() },
+          data: {
+            externalName: host.name,
+            ...(existing.nameIsCustom ? {} : { name: host.name }),
+            clusterId,
+            lastSyncedAt: new Date(),
+          },
         });
         hostsUpdated += 1;
       } else {

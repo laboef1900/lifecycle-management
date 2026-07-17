@@ -14,6 +14,7 @@ import { NotFoundError, UnprocessableError } from './errors.js';
 import { computeForecast } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
+import { assertClusterDeletable } from './sync-ownership.js';
 
 function clusterNameTaken(name: string): UniqueConstraintMapping {
   return {
@@ -244,10 +245,17 @@ export class ClustersService {
   }
 
   async delete(tenantId: string, id: string): Promise<void> {
-    const result = await this.prisma.cluster.deleteMany({ where: { id, tenantId } });
-    if (result.count === 0) {
+    const existing = await this.prisma.cluster.findFirst({
+      where: { id, tenantId },
+      select: { id: true, source: true },
+    });
+    if (!existing) {
       throw new NotFoundError('Cluster', id);
     }
+    // A synced cluster's existence is sync-owned: deleting it cascades away the
+    // baseline history and the next sync re-creates an empty twin (#196).
+    assertClusterDeletable(existing.source, id);
+    await this.prisma.cluster.deleteMany({ where: { id, tenantId } });
   }
 
   async archive(tenantId: string, id: string): Promise<ClusterResponse> {
