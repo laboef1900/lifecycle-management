@@ -15,6 +15,7 @@ import {
 } from 'recharts';
 
 import { Card } from '@/components/ui/card';
+import { todayIso } from '@/lib/format';
 import { formatMonthShort } from '@/lib/format-month';
 import { eventColor, useChartColors } from '@/lib/use-chart-colors';
 
@@ -31,8 +32,14 @@ import {
 interface ForecastChartProps {
   forecast: ForecastResponse;
   compact?: boolean;
-  /** Optional scenario overlay — consumption line drawn dashed on top of baseline. */
-  scenario?: { label: string; months: ForecastResponse['months'] } | null;
+  /**
+   * Active what-if scenario (spec §5.4). When set, the scenario's forecast
+   * becomes the primary consumption/capacity/threshold series and `forecast`
+   * (the baseline) renders as a muted dashed "was: baseline" ghost.
+   */
+  scenario?: { label: string; forecast: ForecastResponse } | null;
+  /** Delta callout rendered as text under the legend (e.g. "▲ warn 5 mo earlier"). */
+  scenarioDeltaLabel?: string;
 }
 
 const numberFormat = new Intl.NumberFormat('en-US');
@@ -41,26 +48,42 @@ export function ForecastChart({
   forecast,
   compact = false,
   scenario,
+  scenarioDeltaLabel,
 }: ForecastChartProps): React.JSX.Element {
   const colors = useChartColors();
   // Measured SVG width from ResponsiveContainer; the event-label planner needs
   // it to resolve label collisions and clamp boxes in pixel space.
   const [chartWidth, setChartWidth] = useState<number | null>(null);
-  const { warn, crit } = forecast.effectiveThresholds;
-  const scenarioByMonth = new Map<string, number>();
+  // The scenario forecast (when active) drives every series — consumption,
+  // capacity, thresholds, hosts, events — per spec §5.4; the baseline
+  // `forecast` prop then only supplies the "was: baseline" ghost values.
+  const activeForecast = scenario ? scenario.forecast : forecast;
+  const { warn, crit } = activeForecast.effectiveThresholds;
+
+  const baselineByMonth = new Map<string, number>();
   if (scenario) {
-    for (const p of scenario.months) scenarioByMonth.set(p.month, Math.round(p.consumption));
+    for (const p of forecast.months) baselineByMonth.set(p.month, Math.round(p.consumption));
   }
-  const data = forecast.months.map((point) => {
+
+  const currentMonth = todayIso();
+  const foundCurrentIndex = activeForecast.months.findIndex((m) => m.month === currentMonth);
+  const currentIndex = foundCurrentIndex === -1 ? 0 : foundCurrentIndex;
+
+  const data = activeForecast.months.map((point, index) => {
     const capacity = Math.round(point.capacity);
+    const consumption = Math.round(point.consumption);
     return {
       month: point.month,
-      consumption: Math.round(point.consumption),
-      headroom: Math.max(0, Math.round(point.capacity - point.consumption)),
+      consumption,
+      // Solid up to "now", dashed from "now" on — same split-series approach
+      // as the fleet tile chart, sharing the current-month anchor point.
+      actual: index <= currentIndex ? consumption : null,
+      forecast: index >= currentIndex ? consumption : null,
+      headroom: Math.max(0, capacity - consumption),
       capacity,
-      warnLevel: Math.round(point.capacity * warn),
-      critLevel: Math.round(point.capacity * crit),
-      scenarioConsumption: scenarioByMonth.get(point.month) ?? null,
+      warnLevel: Math.round(capacity * warn),
+      critLevel: Math.round(capacity * crit),
+      baselineConsumption: scenario ? (baselineByMonth.get(point.month) ?? null) : null,
     };
   });
   const maxCeiling = data.reduce((max, d) => Math.max(max, d.capacity), 0);
@@ -68,7 +91,7 @@ export function ForecastChart({
   const lastIndex = data.length - 1;
 
   const eventsByMonth = new Map<string, ForecastResponse['events']>();
-  for (const event of forecast.events) {
+  for (const event of activeForecast.events) {
     const monthKey = `${event.effectiveDate.slice(0, 7)}-01`;
     const bucket = eventsByMonth.get(monthKey) ?? [];
     bucket.push(event);
@@ -78,7 +101,7 @@ export function ForecastChart({
   const monthIndexByKey = new Map(data.map((d, index) => [d.month, index]));
   // Events whose month falls inside the visible window — these render a dot
   // and a boxed label on the chart.
-  const eventDots = forecast.events.flatMap((event) => {
+  const eventDots = activeForecast.events.flatMap((event) => {
     const monthKey = `${event.effectiveDate.slice(0, 7)}-01`;
     const monthIndex = monthIndexByKey.get(monthKey);
     const datum = monthIndex === undefined ? undefined : data[monthIndex];
@@ -96,7 +119,7 @@ export function ForecastChart({
   // chart X-axis is categorical (month strings), so snap the EOL date to the
   // first day of its month and only render if that month is within the
   // visible window.
-  const earliestEolHost = forecast.hosts
+  const earliestEolHost = activeForecast.hosts
     .filter(
       (h): h is typeof h & { projectedDecommissionAt: string } =>
         typeof h.projectedDecommissionAt === 'string' && h.projectedDecommissionAt.length > 0,
@@ -142,14 +165,18 @@ export function ForecastChart({
               dataKey="month"
               height={X_AXIS_HEIGHT}
               tickFormatter={formatMonthShort}
-              tick={{ fontSize: compact ? 10 : 11 }}
+              // Recharts paints tick text from `fill` (falling back to `stroke`
+              // when unset) — `colors.axis` is tuned as a line color (~1.4:1 as
+              // text on dark), so tick text needs the separate `--fg-subtle`
+              // text token while the axis line itself keeps `colors.axis`.
+              tick={{ fontSize: compact ? 10 : 11, fill: 'var(--fg-subtle)' }}
               stroke={colors.axis}
               interval="preserveStartEnd"
               minTickGap={24}
             />
             <YAxis
               width={Y_AXIS_WIDTH}
-              tick={{ fontSize: compact ? 10 : 11 }}
+              tick={{ fontSize: compact ? 10 : 11, fill: 'var(--fg-subtle)' }}
               stroke={colors.axis}
               tickFormatter={(v: number) => numberFormat.format(v)}
               domain={ceilingForDomain ? [0, ceilingForDomain] : ['auto', 'auto']}
@@ -157,7 +184,7 @@ export function ForecastChart({
                 value: 'GB',
                 angle: -90,
                 position: 'insideLeft',
-                style: { fontSize: compact ? 10 : 11, fill: colors.axis },
+                style: { fontSize: compact ? 10 : 11, fill: 'var(--fg-subtle)' },
               }}
             />
             <Tooltip
@@ -221,10 +248,34 @@ export function ForecastChart({
               dataKey="consumption"
               name="Consumption"
               stackId="capacity"
-              stroke={colors.consumption}
-              strokeWidth={2}
+              stroke="none"
               fill="url(#forecast-consumption)"
               isAnimationActive={false}
+            />
+            {/* Actual/forecast split (spec §5.4): solid up to "now", dashed from
+                "now" on, sharing the current-month anchor point. Tracks the
+                scenario forecast when one is active. */}
+            <Line
+              type="monotone"
+              dataKey="actual"
+              name="Consumption"
+              stroke={colors.consumption}
+              strokeWidth={2}
+              dot={false}
+              isAnimationActive={false}
+              connectNulls={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="forecast"
+              name="Consumption (forecast)"
+              stroke={colors.consumption}
+              strokeWidth={2}
+              strokeDasharray="6 4"
+              dot={false}
+              isAnimationActive={false}
+              connectNulls={false}
+              legendType="none"
             />
             {maxCeiling > 0 ? (
               <Area
@@ -303,11 +354,12 @@ export function ForecastChart({
             {scenario ? (
               <Line
                 type="monotone"
-                dataKey="scenarioConsumption"
-                name="Scenario"
-                stroke={colors.consumption}
-                strokeWidth={2}
-                strokeDasharray="6 4"
+                dataKey="baselineConsumption"
+                name="was: baseline"
+                stroke={colors.utilizationOk}
+                strokeWidth={1.5}
+                strokeDasharray="5 4"
+                strokeOpacity={0.8}
                 dot={false}
                 activeDot={{ r: 3 }}
                 isAnimationActive={false}
@@ -351,10 +403,18 @@ export function ForecastChart({
       </div>
 
       <ChartLegend
-        events={forecast.events}
+        events={activeForecast.events}
         colors={colors}
-        scenarioLabel={scenario?.label ?? null}
+        showBaselineGhost={Boolean(scenario)}
       />
+      {scenarioDeltaLabel ? (
+        <p
+          data-testid="scenario-delta-label"
+          className="mt-1 font-mono text-[11px] font-medium text-fg-muted"
+        >
+          {scenarioDeltaLabel}
+        </p>
+      ) : null}
     </Card>
   );
 }
@@ -452,18 +512,19 @@ function formatDelta(consumption: number | null, capacity: number | null): strin
 interface ChartLegendProps {
   events: ForecastResponse['events'];
   colors: ReturnType<typeof useChartColors>;
-  scenarioLabel: string | null;
+  /** True when a scenario is active — adds the "was: baseline" ghost entry. */
+  showBaselineGhost: boolean;
 }
 
-function ChartLegend({ events, colors, scenarioLabel }: ChartLegendProps): React.JSX.Element {
+function ChartLegend({ events, colors, showBaselineGhost }: ChartLegendProps): React.JSX.Element {
   const categories = Array.from(new Set(events.map((e) => e.category)));
   return (
     <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
       <LegendItem swatch={colors.consumption} label="Consumption" />
       <LegendItem swatch={colors.capacity} label="Capacity ceiling" dashed />
       <LegendItem swatch={colors.capacity} label="Headroom" dashed faint />
-      {scenarioLabel ? (
-        <LegendItem swatch={colors.consumption} label={`Scenario: ${scenarioLabel}`} dashed />
+      {showBaselineGhost ? (
+        <LegendItem swatch={colors.utilizationOk} label="was: baseline" dashed />
       ) : null}
       {categories.length > 0 ? (
         <span aria-hidden className="mx-1">

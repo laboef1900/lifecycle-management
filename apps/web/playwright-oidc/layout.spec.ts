@@ -9,7 +9,7 @@ import { assertShellContainsScroll } from '../playwright/support/scroll-containm
  * verify the invariant here too — post-login, on the real app shell.
  */
 test.describe('app-shell scroll containment (authenticated)', () => {
-  test('document does not scroll; sidebar stays pinned while main scrolls', async ({ page }) => {
+  test('document does not scroll; topbar stays pinned while main scrolls', async ({ page }) => {
     // Reuse the mock-IdP auto-approve login the OIDC auth spec relies on.
     await page.goto('/');
     await page.getByRole('link', { name: /sign in/i }).click();

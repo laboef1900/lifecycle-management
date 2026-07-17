@@ -118,7 +118,7 @@ describe('<ClusterLifecycleCard>', () => {
     await userEvent.click(screen.getByRole('button', { name: /delete forever/i }));
     await waitFor(() => {
       expect(deleteSpy).toHaveBeenCalledWith(CLUSTER_ID);
-      expect(navigateMock).toHaveBeenCalledWith({ to: '/clusters' });
+      expect(navigateMock).toHaveBeenCalledWith({ to: '/' });
     });
   });
 });

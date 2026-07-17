@@ -13,6 +13,11 @@ import {
 } from 'lucide-react';
 import { Fragment, useState } from 'react';
 
+import {
+  ganttDomain,
+  HostLifecycleGanttAxis,
+  HostLifecycleGanttRow,
+} from '@/components/detail/host-lifecycle-gantt';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -77,6 +82,9 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
 
   const hosts = hostsQuery.data?.items ?? [];
   const total = hostsQuery.data?.total;
+  // Shared time axis (spec §5.6) for every host's lifecycle bar, computed once
+  // so bars stay proportionally aligned across rows.
+  const domain = hosts.length > 0 ? ganttDomain(hosts) : null;
 
   return (
     <div className="space-y-3 py-4">
@@ -110,17 +118,23 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
         ) : (
           <Table>
             <TableHeader>
-              <TableRow>
+              <TableRow className={domain ? 'border-b-0 hover:bg-transparent' : undefined}>
                 <TableHead className="w-8" />
                 <TableHead>Name</TableHead>
                 <TableHead>State</TableHead>
-                <TableHead>Commissioned</TableHead>
-                <TableHead>Decommissioned</TableHead>
-                <TableHead>Warranty</TableHead>
-                <TableHead>EOL</TableHead>
+                <TableHead className="min-w-[230px]">Lifecycle</TableHead>
                 <TableHead className="text-right">Current capacity</TableHead>
                 <TableHead className="w-24 text-right">Actions</TableHead>
               </TableRow>
+              {domain ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableHead colSpan={3} />
+                  <TableHead className="py-0">
+                    <HostLifecycleGanttAxis domain={domain} />
+                  </TableHead>
+                  <TableHead colSpan={2} />
+                </TableRow>
+              ) : null}
             </TableHeader>
             <TableBody>
               {hosts.map((host) => {
@@ -153,21 +167,8 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                       <TableCell>
                         <HostStateBadge state={host.state} />
                       </TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">
-                        {host.commissionedAt}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">
-                        {host.decommissionedAt ? (
-                          <Badge variant="outline">{host.decommissionedAt}</Badge>
-                        ) : (
-                          '—'
-                        )}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">
-                        {host.warrantyEndsAt ?? '—'}
-                      </TableCell>
-                      <TableCell className="tabular-nums">
-                        {host.eolAt ? <HostEolPill eolAt={host.eolAt} /> : '—'}
+                      <TableCell className="min-w-[230px] py-1">
+                        {domain ? <HostLifecycleGanttRow host={host} domain={domain} /> : '—'}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {latest ? formatGb(latest.amount) : '—'}
@@ -190,7 +191,8 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                     {isOpen ? (
                       <TableRow className="bg-muted/20 hover:bg-muted/20">
                         <TableCell />
-                        <TableCell colSpan={8} className="py-3">
+                        <TableCell colSpan={5} className="space-y-3 py-3">
+                          <LifecycleDates host={host} />
                           <CapacityTimeline rows={host.capacities} />
                         </TableCell>
                       </TableRow>
@@ -367,6 +369,41 @@ function IconButton({
   );
 }
 
+/**
+ * Full lifecycle dates for a host (spec §5.6: "full dates remain in the
+ * existing expandable row content" now that the main row shows only the
+ * Lifecycle gantt cell).
+ */
+function LifecycleDates({ host }: { host: HostResponse }): React.JSX.Element {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Lifecycle dates
+      </p>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
+        <div>
+          <dt className="text-xs text-muted-foreground">Commissioned</dt>
+          <dd className="tabular-nums">{host.commissionedAt}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Decommissioned</dt>
+          <dd className="tabular-nums">
+            {host.decommissionedAt ? <Badge variant="outline">{host.decommissionedAt}</Badge> : '—'}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Warranty</dt>
+          <dd className="tabular-nums">{host.warrantyEndsAt ?? '—'}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">EOL</dt>
+          <dd className="tabular-nums">{host.eolAt ? <HostEolPill eolAt={host.eolAt} /> : '—'}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
 function CapacityTimeline({ rows }: { rows: HostResponse['capacities'] }): React.JSX.Element {
   const sorted = [...rows].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
   return (
@@ -383,9 +420,7 @@ function CapacityTimeline({ rows }: { rows: HostResponse['capacities'] }): React
               <span className="font-mono text-xs text-muted-foreground">{row.effectiveFrom}</span>
               <span>{formatGb(row.amount)}</span>
               {delta !== null ? (
-                <span
-                  className={cn('text-xs', delta >= 0 ? 'text-emerald-700' : 'text-destructive')}
-                >
+                <span className={cn('text-xs', delta >= 0 ? 'text-success' : 'text-destructive')}>
                   {delta >= 0 ? '+' : ''}
                   {formatNumber(delta)} GB
                 </span>

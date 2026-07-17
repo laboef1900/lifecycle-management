@@ -56,17 +56,20 @@ function wrap(router: ReturnType<typeof buildRouter>): React.ReactElement {
 }
 
 describe('KeyboardShortcuts (real router context)', () => {
-  test('g c navigates to /clusters', async () => {
+  test('g c does nothing (binding removed)', async () => {
     const user = userEvent.setup();
     const router = buildRouter();
     render(wrap(router));
+
+    // Start somewhere else so a stray navigation would be observable.
+    await router.navigate({ to: '/settings' });
 
     await user.keyboard('g');
     await user.keyboard('c');
 
     // Allow router to flush state
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(router.state.location.pathname).toBe('/clusters');
+    expect(router.state.location.pathname).toBe('/settings');
   });
 
   test('g o navigates to /', async () => {

@@ -96,4 +96,39 @@ describe('CommandPalette', () => {
       params: { id: 'cluster-xyz' },
     });
   });
+
+  test('navigation group offers "Go to fleet" and "Go to settings", not the old overview/clusters split', async () => {
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    render(wrap(<CommandPalette />));
+
+    window.dispatchEvent(new CustomEvent('lcm:open-command-palette'));
+    await screen.findByPlaceholderText(/search/i);
+
+    expect(screen.getByText('Go to fleet')).toBeInTheDocument();
+    expect(screen.getByText('Go to settings')).toBeInTheDocument();
+    expect(screen.queryByText('Go to overview')).not.toBeInTheDocument();
+    expect(screen.queryByText('Go to clusters')).not.toBeInTheDocument();
+  });
+
+  test('selecting "Go to fleet" navigates to /', async () => {
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    const user = userEvent.setup();
+    render(wrap(<CommandPalette />));
+
+    window.dispatchEvent(new CustomEvent('lcm:open-command-palette'));
+    await screen.findByPlaceholderText(/search/i);
+    await user.click(screen.getByText('Go to fleet'));
+
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/' });
+  });
 });

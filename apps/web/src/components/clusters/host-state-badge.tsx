@@ -10,12 +10,12 @@ const LABELS: Record<HostState, string> = {
 };
 
 const COLORS: Record<HostState, string> = {
-  ordered: 'bg-blue-100 text-blue-800',
-  racked: 'bg-blue-100 text-blue-800',
-  in_service: 'bg-emerald-100 text-emerald-800',
-  degraded: 'bg-amber-100 text-amber-800',
-  decommissioned: 'bg-zinc-100 text-zinc-700',
-  disposed: 'bg-neutral-100 text-neutral-600',
+  ordered: 'text-[var(--steel)] bg-[color-mix(in_oklab,var(--steel)_12%,transparent)]',
+  racked: 'text-[var(--steel)] bg-[color-mix(in_oklab,var(--steel)_12%,transparent)]',
+  in_service: 'text-success bg-success/10',
+  degraded: 'text-warning bg-warning/10',
+  decommissioned: 'text-muted-foreground bg-muted',
+  disposed: 'text-muted-foreground bg-muted',
 };
 
 export function HostStateBadge({ state }: { state: HostState }): React.JSX.Element {

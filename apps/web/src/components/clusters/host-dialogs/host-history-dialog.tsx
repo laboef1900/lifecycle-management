@@ -16,10 +16,8 @@ import { STATE_LABELS, type WithHostProps } from './shared';
 /**
  * Read-only side panel that lists every lifecycle event recorded for a host,
  * oldest first (the API already returns them sorted by occurredAt). Uses a
- * Dialog for consistency with the other host actions — the codebase's Sheet
- * primitive is a fixed-width left-side nav drawer rather than a general
- * content panel, so reusing Dialog here keeps the look uniform across all
- * "host row" actions.
+ * Dialog for consistency with the other host actions, keeping the look
+ * uniform across all "host row" actions.
  *
  * Fetching is gated by `open` so the query doesn't fire until the user
  * actually opens the panel; the `host.id`-scoped key means re-opening a
