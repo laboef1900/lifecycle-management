@@ -8,7 +8,7 @@ import type {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
 
@@ -214,6 +214,11 @@ function renderConsole(): ReturnType<typeof render> {
 }
 
 describe('<FleetConsole> (render)', () => {
+  beforeEach(() => {
+    // Default: no synced clusters. Individual tests override as needed. Keeps
+    // the batch live-usage query off the real network (#193).
+    vi.spyOn(api.clusters, 'liveUsage').mockResolvedValue({ items: [] });
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -288,6 +293,9 @@ describe('<FleetConsole> (render)', () => {
 });
 
 describe('<FleetConsole> heading (every render branch has an h1)', () => {
+  beforeEach(() => {
+    vi.spyOn(api.clusters, 'liveUsage').mockResolvedValue({ items: [] });
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });

@@ -22,6 +22,7 @@ import {
 } from '@/components/clusters/window-controls';
 import { RecommendationBanner } from '@/components/detail/recommendation-banner';
 import { BulletMeter } from '@/components/fleet/bullet-meter';
+import { LiveUsageSection } from '@/components/fleet/live-usage';
 import { baselineAgeDays, isBaselineStale } from '@/components/fleet/stale-baseline';
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { Badge } from '@/components/ui/badge';
@@ -108,6 +109,15 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     queryFn: () => api.clusters.get(clusterId),
   });
   const clusterName = clusterQuery.data?.name;
+
+  // Reuses the fleet console's batch live-usage cache (identical query key) and
+  // picks out this cluster's item — no per-cluster endpoint (#193). Absent =
+  // manual cluster; the section renders nothing in that case.
+  const liveUsageQuery = useQuery({
+    queryKey: ['clusters', 'live-usage'],
+    queryFn: () => api.clusters.liveUsage(),
+  });
+  const liveUsage = liveUsageQuery.data?.items.find((u) => u.clusterId === clusterId);
 
   useEffect(() => {
     return () => {
@@ -291,6 +301,12 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                 isScenario={Boolean(scenario && scenarioQuery.data)}
               />
             ) : null}
+
+            <LiveUsageSection
+              cluster={clusterQuery.data}
+              live={liveUsage}
+              isPending={liveUsageQuery.isPending}
+            />
 
             <div className="flex items-center justify-between gap-3">
               <div className="space-y-1">
