@@ -325,6 +325,16 @@ inconsistent row no code path expects.
 4. **Steer operators to `enabled=false`, not delete.** "Stop syncing" is the common intent; disable keeps
    every mapping intact. Delete stays rare and deliberate.
 
+> **A late team disagreement, resolved in favour of `Restrict`.** It was argued that `Restrict` "deadlocks
+> detach" and that `SetNull` should be used instead. **It does not**, provided the detach transaction nulls
+> the referencing FKs *before* deleting the connection — at `DELETE` time no rows reference it, so the
+> constraint is satisfied. `SetNull` is rejected on the original grounds (which that same teammate argued
+> in round 1): it would leave `source='vsphere'` with a null `connectionId` — an inconsistent row no code
+> path expects — and, more importantly, it makes the destructive path **automatic** rather than deliberate.
+> `Restrict` is the DB-level backstop that guarantees **no application bug can delete purchasing history**;
+> that guarantee is the entire point and must not be traded for convenience. **Order the detach explicitly
+> and comment why.**
+
 ### D9 — Per-connection status
 
 `status ∈ { never_connected, active, unreachable, auth_failed, tls_untrusted, cert_mismatch,
@@ -1192,11 +1202,57 @@ writes `baselineCapacity` = measured fleet capacity, then:
 
 It is silent, produces a plausible number, and **no existing test would catch it.**
 
-**Recommended direction (§12 Q9 — the owner's call, not the design's):** for **synced** clusters,
-`baselineCapacity = 0` and let synced hosts carry 100% of capacity. vCenter gives authoritative per-host
-`hardware.memorySize`, and that is what makes the existing EOL / decommission / replacement machinery
-operate on real numbers — which is the point of syncing hosts at all. `baselineConsumption` remains a
-genuine cluster-level measurement. Manual clusters are untouched.
+### D34a — ⚠️ The same trap exists for **consumption**, and the fix must cover both halves
+
+`forecast.ts:118` + `:126-130` is **structurally identical**:
+
+```ts
+let consumption = input.baselineConsumption;                       // :118
+for (const app of applications) consumption += effectiveAllocationAt(app, date);  // :126-130
+```
+
+So *"`baselineCapacity = 0` but `baselineConsumption` stays a genuine measurement"* **double-counts
+consumption** whenever a tracked application has `effectiveDate <= capturedAt` — the app's memory is
+already inside the measured baseline *and* added again as an addend.
+
+> **The real invariant, which must be stated once and applied to both halves:**
+> **`baseline*` is the portion NOT modelled by tracked entities.**
+> `= 0` is the *special case* where tracked entities cover 100%. That is true for **capacity** on a synced
+> cluster; it is **not** automatically true for **consumption**.
+
+> **⚠️ This trap is live in `dev` today — vSphere only makes it systematic.** Hand-enter a May baseline,
+> add an application backdated to January, and the forecast already double-counts a workload that was
+> inside the measurement. The monthly snapshot turns an occasional hand-entry mistake into a **monthly,
+> automatic** one.
+
+**The missing test, named precisely:** `forecast.test.ts` covers `baselineCapacity: 0` with hosts carrying
+everything (`:108`) **and** nonzero baselines (`:34` = 7680, `:253` = 5000) — while the seed uses a nonzero
+baseline with hosts carrying **nothing** (`seed.ts:56-85`, `:148-192`). Both *pure* modes are covered.
+**The mixed quadrant — a nonzero `baseline*` AND tracked entities both accounting for the same physical
+capacity — is what nothing tests, and it is exactly what sync creates.**
+
+### D34b — ⚠️ Zero capacity renders as **0% utilization = maximum headroom = healthy**
+
+`forecast.ts:138`: `const utilization = capacity === 0 ? 0 : consumption / capacity;`
+
+A synced cluster whose window predates any host — or a sync that writes 0 capacity — displays a reassuring
+**0%** exactly where the truth is **"unknown"**. Same silent-plausible-wrong shape as the double-count, in
+the opposite direction, and it **defeats the staleness detector we were relying on as the backstop**.
+
+Fixing it (`null` rather than `0`) changes forecast output for **every zero-capacity month** — so it is
+high-risk, belongs to this gate, and **must not be a quiet edit inside #177.** → **§12 Q9.**
+
+### D34c — Recommended direction (§12 Q9 — the owner's call, not the design's)
+
+For **synced** clusters, `baselineCapacity = 0` and let synced hosts carry 100% of capacity. vCenter gives
+authoritative per-host `hardware.memorySize`, and that is what makes the existing EOL / decommission /
+replacement machinery operate on real numbers — the point of syncing hosts at all. **`baselineConsumption`
+must then be reconciled against tracked applications per D34a's invariant, not simply left as a
+measurement.** Manual clusters are untouched.
+
+> **These modelling semantics are documented nowhere.** `docs/vision.md` does not describe them.
+> Purchasing-critical arithmetic resting on an *undocumented* modelling convention is itself a finding —
+> **this gate should produce that documentation** (§11.7).
 
 > **⚠️ Knock-on that MUST be solved with it, or the chart silently flatlines.** `effectiveCapacityAt`
 > returns **0 before `commissionedAt`** (`forecast.ts:177`), and **vCenter cannot tell us when a host was
@@ -1243,6 +1299,10 @@ anyway.
    builds (§2).
 6. **A new issue is needed** for the pre-existing `clusters.ts:132` data-loss bug (D26) — it is not this
    epic's to fix, but it should not go unrecorded.
+7. **The forecast's modelling semantics must be documented** (D34/D34a) — that `baseline*` is *the portion
+   not modelled by tracked entities* is purchasing-critical arithmetic currently recorded **nowhere**, and
+   the double-count trap it guards against is **already reachable in `dev` today** via a backdated
+   application. This gate should produce that documentation regardless of what else is approved.
 
 ---
 
@@ -1250,7 +1310,7 @@ anyway.
 
 | # | Question | Why it blocks |
 | --- | --- | --- |
-| **Q9** ⚠️ | **THE BIG ONE — for synced clusters, should `baselineCapacity` be 0 with synced hosts carrying 100% of capacity?** And **what should a synced host's `commissionedAt` be**, given vCenter cannot tell us? | Otherwise capacity **double-counts** (`2 × real` ⇒ utilization halves ⇒ *"plenty of headroom"* ⇒ **hardware not purchased**). Silent, plausible, and untested today (**D34**). The `commissionedAt` half decides whether the historical chart flatlines at 0%. |
+| **Q9** ⚠️ | **THE BIG ONE — the forecast modelling semantics.** Four linked parts: **(a)** for synced clusters, `baselineCapacity = 0` with hosts carrying 100%? **(b)** how is `baselineConsumption` reconciled against tracked applications (the same double-count applies — D34a)? **(c)** what should a synced host's `commissionedAt` be, given vCenter cannot tell us? **(d)** should `utilization` return `null` instead of `0` when capacity is 0 (D34b)? | Otherwise capacity **double-counts** (`2 × real` ⇒ utilization halves ⇒ *"plenty of headroom"* ⇒ **hardware not purchased**). Silent, plausible, and **the mixed quadrant is untested today**. (c) decides whether the historical chart flatlines at 0%; (d) changes forecast output for every zero-capacity month, so it is gate-level, not a quiet #177 edit. |
 | **Q1** ✅ | **Confirm: LCM's `'GB'` is GiB (2³⁰).** The evidence is strong (govmomi's `units` is 1024-based; `govc cluster.usage` does `<< 20`; VMware states the base-2 convention). **Confirm your spreadsheet figures came from the vSphere UI** — i.e. round numbers like 512/768/1024. | Answered by research (D3a), but it is **your data** — a wrong call is a silent 7.4% on every synced host. Also: do you want the `unit` label corrected to `GiB` (product decision), or just documented? |
 | **Q2** | **Will LCM address the vCenters by FQDN or by IP?** | By IP, default VMCA certs have **no IP SAN**, so hostname verification fails regardless of trust — `ERR_TLS_CERT_ALTNAME_INVALID` (D11). Changes what ships. |
 | **Q3** | **Is your vCenter management network segmented from user VLANs?** | Sets the true severity of R1. If not segmented, the residual scan risk drops to ~zero and C5 could be dropped (§6.7). |
