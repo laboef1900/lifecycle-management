@@ -3,6 +3,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { AuthenticationForm } from '@/components/settings/authentication-form';
 import { CategoriesForm } from '@/components/settings/categories-form';
 import { ForecastThresholdsForm } from '@/components/settings/forecast-thresholds-form';
+import { VcenterConnectionsPanel } from '@/components/settings/vcenter-connections-panel';
 
 export const Route = createFileRoute('/_app/settings')({
   component: SettingsPage,
@@ -26,6 +27,7 @@ function SettingsPage(): React.JSX.Element {
       </header>
       <ForecastThresholdsForm />
       <CategoriesForm />
+      <VcenterConnectionsPanel />
       {canManageAuth ? <AuthenticationForm /> : null}
     </div>
   );

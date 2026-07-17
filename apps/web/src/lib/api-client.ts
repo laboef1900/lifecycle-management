@@ -1,4 +1,9 @@
 import type {
+  VsphereConnectionCreate,
+  VsphereConnectionUpdate,
+  VsphereProbe,
+  VsphereTrustCa,
+  VsphereVerify,
   ApiErrorBody,
   AuthConfigTest,
   AuthConfigUpdate,
@@ -9,6 +14,9 @@ import type {
   UpdateLocalUser,
 } from '@lcm/shared';
 import {
+  vsphereConnectionResponseSchema,
+  vsphereProbeResultSchema,
+  vsphereVerifyResultSchema,
   authConfigResponseSchema,
   authConfigTestResultSchema,
   capacityRowInputSchema,
@@ -323,6 +331,51 @@ export const api = {
     // authConfigUpdateSchema/authConfigTestSchema have no Date fields (all
     // strings/enums/numbers/booleans), so the Zod-inferred types are already
     // the wire shape — no *Wire translation type needed here.
+    vsphere: {
+      connections: {
+        list: () =>
+          request(
+            '/api/settings/vsphere/connections',
+            undefined,
+            z.array(vsphereConnectionResponseSchema),
+          ),
+        create: (input: VsphereConnectionCreate) =>
+          request(
+            '/api/settings/vsphere/connections',
+            { method: 'POST', body: JSON.stringify(input) },
+            vsphereConnectionResponseSchema,
+          ),
+        update: (id: string, input: VsphereConnectionUpdate) =>
+          request(
+            `/api/settings/vsphere/connections/${id}`,
+            { method: 'PUT', body: JSON.stringify(input) },
+            vsphereConnectionResponseSchema,
+          ),
+        remove: (id: string) =>
+          request(`/api/settings/vsphere/connections/${id}`, { method: 'DELETE' }, z.void()),
+        trustCa: (id: string, input: VsphereTrustCa) =>
+          request(
+            `/api/settings/vsphere/connections/${id}/trust-ca`,
+            { method: 'POST', body: JSON.stringify(input) },
+            vsphereConnectionResponseSchema,
+          ),
+      },
+      // Phase 1: reachability + certificate capture. Sends NO credential.
+      probe: (input: VsphereProbe) =>
+        request(
+          '/api/settings/vsphere/probe',
+          { method: 'POST', body: JSON.stringify(input) },
+          vsphereProbeResultSchema,
+        ),
+      // Phase 2: verify the credential. The password is required by the contract
+      // and there is no stored fallback — see packages/shared/src/schemas/vsphere.ts.
+      verify: (input: VsphereVerify) =>
+        request(
+          '/api/settings/vsphere/verify',
+          { method: 'POST', body: JSON.stringify(input) },
+          vsphereVerifyResultSchema,
+        ),
+    },
     auth: {
       get: () => request('/api/settings/auth', undefined, authConfigResponseSchema),
       update: (input: AuthConfigUpdate) =>

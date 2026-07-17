@@ -23,6 +23,12 @@ import {
   procurementLeadTimeWeeksSchema,
 } from './settings.js';
 import type { TenantSettings } from './settings.js';
+import { vsphereConnectionStatusSchema, vsphereTlsModeSchema } from './vsphere.js';
+import type {
+  VsphereConnectionResponse,
+  VsphereProbeResult,
+  VsphereVerifyResult,
+} from './vsphere.js';
 
 // ---------- Clusters ----------
 
@@ -212,3 +218,42 @@ export function paginatedSchema<T>(item: z.ZodType<T>): z.ZodType<Paginated<T>> 
     offset: z.number().int(),
   });
 }
+
+// ---------- vSphere connections ----------
+
+/**
+ * @ai-warning There is no `password` field, and there must never be one — not even
+ * redacted. This schema is the serialization boundary, so a field added here is a
+ * field that reaches the client.
+ */
+export const vsphereConnectionResponseSchema: z.ZodType<VsphereConnectionResponse> = z.object({
+  id: z.string(),
+  name: z.string(),
+  hostname: z.string(),
+  username: z.string(),
+  tlsMode: vsphereTlsModeSchema,
+  pinnedRootFingerprintSha256: z.string().nullable(),
+  instanceUuid: z.string().nullable(),
+  apiVersion: z.string().nullable(),
+  enabled: z.boolean(),
+  status: vsphereConnectionStatusSchema,
+  lastError: z.string().nullable(),
+  lastConnectedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const vsphereProbeResultSchema: z.ZodType<VsphereProbeResult> = z.object({
+  reachable: z.boolean(),
+  trustedBySystemRoots: z.boolean(),
+  rootFingerprintSha256: z.string().nullable(),
+  validFrom: z.string().nullable(),
+  validTo: z.string().nullable(),
+  outcome: z.enum(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter']),
+});
+
+export const vsphereVerifyResultSchema: z.ZodType<VsphereVerifyResult> = z.object({
+  outcome: z.enum(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter', 'auth_failed']),
+  instanceUuid: z.string().nullable(),
+  apiVersion: z.string().nullable(),
+});

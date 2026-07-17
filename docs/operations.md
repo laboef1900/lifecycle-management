@@ -240,6 +240,82 @@ numbers. Fix forward and redeploy.
 `clusters.baseline_date`), take and _verify_ a dump as above: after it, an image
 rollback is no longer possible and restore-from-dump becomes the only recovery.
 
+## vCenter connections
+
+Configure under **Settings → vCenter connections**. LCM reads capacity and never
+writes to vSphere.
+
+### Give LCM a read-only service account
+
+**This is the single most valuable thing you can do for this integration**, and it
+takes five minutes. Create a dedicated vCenter account with a read-only role
+(`System.Read` on the relevant objects is sufficient) and use it here.
+
+Every other control assumes the credential stays where it was put. This one assumes
+it will not: it turns "virtualization estate compromise" into "capacity data
+disclosure" — data LCM already serves from its own API in the default auth mode.
+
+### Adding a connection
+
+1. Enter a name, hostname, username and password.
+2. **Check certificate** — this contacts the host and reads its certificate. **No
+   credential is sent at this step**, deliberately: the certificate is vetted
+   _before_ the password is ever transmitted.
+3. If the certificate is self-signed (the VMCA default), LCM shows its SHA-256
+   fingerprint. **Confirm it against vCenter before saving.** On a host with `govc`:
+   ```bash
+   govc about.cert -k -thumbprint -u <vcenter-host>
+   ```
+   The vSphere Client shows the same value under Administration → Certificates.
+4. **Save connection.**
+
+If the certificate is signed by a CA your system already trusts, there is nothing
+to confirm and the panel says so.
+
+### Changing a saved connection
+
+**Changing the hostname or username requires re-entering the password.** This is
+not a UI nicety — it is the control that protects the credential. In the default
+`disabled` auth mode every request carries an anonymous ADMIN principal, so the only
+thing distinguishing you from anyone else who can reach the server is knowledge of
+the vCenter password. Without that gate, anyone could repoint a saved connection at
+a host they control and simply wait for the next scheduled poll to hand them the
+credential.
+
+Renaming a connection or disabling it needs no password: neither can disclose
+anything.
+
+Changing the hostname also clears the pinned certificate and the discovered vCenter
+identity — the old vCenter's certificate proves nothing about a new host, so trust
+is re-established deliberately.
+
+### There is no "ignore TLS errors" option, by design
+
+Self-signed vCenter certificates work through the fingerprint confirmation above,
+with verification fully **on**. An insecure toggle would look like a convenience
+setting and behave like a credential-disclosure channel: with verification off, the
+saved hostname identifies a _name_ rather than a _host_, so anyone able to spoof
+internal DNS collects the service-account password on **every poll**, silently, on
+the happy path. Self-service internal DNS is common and needs no network position at
+all.
+
+If a connection reports **Certificate changed**, LCM has stopped talking to it on
+purpose. Either the VMCA root was deliberately regenerated — in which case confirm
+the new fingerprint and re-pin — or something is wrong. LCM will not decide which,
+and will not re-pin by itself.
+
+### Troubleshooting
+
+| Status                      | Meaning                                                                                                                                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Not yet connected**       | Saved, never contacted.                                                                                                                                                                                              |
+| **Certificate not trusted** | Self-signed and not yet confirmed. Use _Check certificate_.                                                                                                                                                          |
+| **Certificate changed**     | The presented CA differs from the pinned one. Confirm and re-pin, or investigate.                                                                                                                                    |
+| **Sign-in failed**          | Host reachable, credentials rejected.                                                                                                                                                                                |
+| **Different vCenter**       | The hostname now answers as a _different_ vCenter instance. Sync is blocked deliberately: cluster ids are only unique within one vCenter, so syncing would overwrite the wrong clusters' capacity.                   |
+| **Credential unreadable**   | `CONFIG_ENCRYPTION_KEY` is missing, wrong, or rotated. The encrypted password is **preserved** — restore the correct key and the connection recovers. Never re-enter it as a "fix" until you have ruled the key out. |
+| **Unreachable**             | No answer. Detail is in the server log, correlated by request id — the API response is deliberately coarse, because a precise one would let anyone reachable use this endpoint to map your internal network.         |
+
 ## Upgrade
 
 ```bash
