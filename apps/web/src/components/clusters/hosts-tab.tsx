@@ -2,6 +2,7 @@ import type { HostResponse } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowRightLeft,
+  CalendarClock,
   ChevronDown,
   ChevronRight,
   History,
@@ -38,6 +39,7 @@ import { cn } from '@/lib/utils';
 import { HostEolPill } from './host-eol-pill';
 import { HostStateBadge } from './host-state-badge';
 import {
+  ConfirmCommissioningDialog,
   CreateHostDialog,
   DecommissionHostDialog,
   DeleteHostDialog,
@@ -63,6 +65,7 @@ type DialogKind =
 
 export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [target, setTarget] = useState<{ host: HostResponse; kind: DialogKind } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -82,6 +85,10 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
 
   const hosts = hostsQuery.data?.items ?? [];
   const total = hostsQuery.data?.total;
+  // Synced hosts vCenter could not date carry a provisional commissioning date
+  // (Q9c, #194). Until an admin confirms them the cluster is forecasting from a
+  // guess, so surface them as an actionable, non-colour-only banner + CTA.
+  const provisionalHosts = hosts.filter((host) => host.commissionedAtProvisional === true);
   // Shared time axis (spec §5.6) for every host's lifecycle bar, computed once
   // so bars stay proportionally aligned across rows.
   const domain = hosts.length > 0 ? ganttDomain(hosts) : null;
@@ -105,6 +112,13 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
             </Button>
           ) : null}
         </header>
+
+        {canManage && provisionalHosts.length > 0 ? (
+          <ProvisionalBanner
+            count={provisionalHosts.length}
+            onConfirm={() => setConfirmOpen(true)}
+          />
+        ) : null}
 
         {hostsQuery.isPending ? (
           <div className="space-y-2">
@@ -211,6 +225,15 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
       </Card>
 
       <CreateHostDialog open={createOpen} onOpenChange={setCreateOpen} clusterId={clusterId} />
+
+      {confirmOpen ? (
+        <ConfirmCommissioningDialog
+          open
+          onOpenChange={setConfirmOpen}
+          clusterId={clusterId}
+          hosts={provisionalHosts}
+        />
+      ) : null}
 
       {target?.kind === 'edit' ? (
         <EditHostDialog
@@ -383,7 +406,18 @@ function LifecycleDates({ host }: { host: HostResponse }): React.JSX.Element {
       <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
         <div>
           <dt className="text-xs text-muted-foreground">Commissioned</dt>
-          <dd className="tabular-nums">{host.commissionedAt}</dd>
+          <dd className="tabular-nums">
+            {host.commissionedAtProvisional ? (
+              <span className="flex flex-wrap items-center gap-1.5">
+                {host.commissionedAt}
+                <Badge variant="warning" dot>
+                  Provisional
+                </Badge>
+              </span>
+            ) : (
+              host.commissionedAt
+            )}
+          </dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Decommissioned</dt>
@@ -429,6 +463,42 @@ function CapacityTimeline({ rows }: { rows: HostResponse['capacities'] }): React
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+/**
+ * Actionable notice that one or more synced hosts still carry a provisional
+ * commissioning date (Q9c, #194). Colour is never the sole signal — an icon and
+ * explicit text carry the meaning, with a CTA to open the confirm dialog.
+ */
+function ProvisionalBanner({
+  count,
+  onConfirm,
+}: {
+  count: number;
+  onConfirm: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius)] border border-warning/40 bg-warning/5 p-3">
+      <div className="flex items-start gap-2.5">
+        <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
+        <div className="text-sm">
+          <p className="font-medium">
+            {count === 1
+              ? '1 host needs a confirmed commissioning date'
+              : `${count} hosts need a confirmed commissioning date`}
+          </p>
+          <p className="text-fg-muted">
+            vCenter could not report when {count === 1 ? 'it was' : 'they were'} commissioned, so
+            the forecast is using a provisional date.
+          </p>
+        </div>
+      </div>
+      <Button size="sm" variant="outline" onClick={onConfirm}>
+        <CalendarClock className="h-4 w-4" />
+        {count === 1 ? 'Confirm date' : 'Confirm dates'}
+      </Button>
     </div>
   );
 }
