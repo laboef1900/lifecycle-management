@@ -266,3 +266,72 @@ export interface VsphereSyncResult {
   /** Sanitized. Never secret-bearing, never a raw driver error. */
   error: string | null;
 }
+
+// ---------- Live usage (#179) ----------
+
+/**
+ * Why a live reading is not fresh.
+ *
+ * @ai-context Each of these is actionable and distinct — `disabled` is an operator
+ * choice, `identity_mismatch` needs a re-adopt, `auth_failed` needs a credential.
+ * Collapsing them into a single "stale" flag would tell the operator that
+ * something is wrong but not what to do about it.
+ */
+export const liveUsageStaleReasonSchema = z.enum([
+  'unreachable',
+  'auth_failed',
+  'tls_untrusted',
+  'identity_mismatch',
+  'disabled',
+]);
+export type LiveUsageStaleReason = z.infer<typeof liveUsageStaleReasonSchema>;
+
+/**
+ * Live memory usage for one cluster.
+ *
+ * @ai-warning A DISCRIMINATED UNION, and it must stay one. `never_fetched` is
+ * **structurally incapable** of carrying numbers — that is the entire point, not a
+ * modelling nicety.
+ *
+ * The bug this designs out: a `{ values, isStale }` shape lets a consumer render
+ * `0 / 0` as **"0% utilized"** when the truth is "we have no idea". In a tool whose
+ * output buys hardware, **"0% used" is the most dangerous possible wrong answer** —
+ * it is indistinguishable from "healthy, plenty of headroom" and it is the state in
+ * which nobody orders anything. Making the numbers unreachable in that state means
+ * the mistake cannot be written.
+ *
+ * Same failure mode as the zero-capacity fail-open closed in #177 (Q9d), for the
+ * same reason: a confidently wrong number beats an honest "unknown" only until
+ * someone acts on it.
+ */
+export const liveUsageSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('never_fetched'),
+    clusterId: z.string(),
+    connectionName: z.string(),
+  }),
+  z.object({
+    state: z.literal('fresh'),
+    clusterId: z.string(),
+    connectionName: z.string(),
+    memoryUsedGiB: z.number(),
+    hostsSampled: z.number(),
+    hostsTotal: z.number(),
+    /** When vCenter measured it — not when we asked. */
+    measuredAt: z.string(),
+    /** Computed SERVER-side, so a client's clock skew cannot disagree. */
+    ageSeconds: z.number(),
+  }),
+  z.object({
+    state: z.literal('stale'),
+    clusterId: z.string(),
+    connectionName: z.string(),
+    memoryUsedGiB: z.number(),
+    hostsSampled: z.number(),
+    hostsTotal: z.number(),
+    measuredAt: z.string(),
+    ageSeconds: z.number(),
+    reason: liveUsageStaleReasonSchema,
+  }),
+]);
+export type LiveUsage = z.infer<typeof liveUsageSchema>;
