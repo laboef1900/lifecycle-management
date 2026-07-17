@@ -507,9 +507,10 @@ model VsphereConnection {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   clusters Cluster[]
   hosts    Host[]
+  job      VsphereConnectionJob?
 
   @@unique([tenantId, name])
   /// Stops the same vCenter being added twice under two names (FQDN and IP), which
@@ -518,4 +519,50 @@ model VsphereConnection {
   /// property hosts_tenant_serial_unique already relies on.
   @@unique([tenantId, instanceUuid], map: "vsphere_connections_tenant_instance_unique")
   @@map("vsphere_connections")
+}
+
+/// Scheduling state for one vCenter connection (#178, epic #172).
+///
+/// @ai-warning `connectionId` is BOTH primary key and foreign key. That is not
+/// tidiness — it is what makes the whole design work:
+///   - one claim per connection ⇒ intra-connection concurrency is STRUCTURALLY
+///     impossible rather than defended against, and "sync before snapshot" becomes
+///     sequential statements in one job body with no cross-job race to reason about;
+///   - the FK cascades, so a deleted connection cannot leave an orphan row ticking
+///     and failing forever against a vCenter that no longer exists.
+///
+/// @ai-context Cascade here does NOT contradict the Restrict on Cluster.connection.
+/// The rule is: **cascade is correct for regenerable operational state; forbidden
+/// for irreplaceable user data.** This row is pure derived state — the next tick
+/// rebuilds it. A baseline is irreplaceable: a destroyed August cannot be
+/// re-measured, the moment is gone.
+model VsphereConnectionJob {
+  connectionId String    @id @map("vsphere_connection_id")
+  /// The single scheduling primitive. `dueAt <= now()` IS catch-up: server down
+  /// three days ⇒ dueAt two days past ⇒ the first tick after boot runs it. There is
+  /// deliberately no "did I miss one?" branch to get wrong.
+  dueAt        DateTime  @map("due_at")
+  /// Claim lease. Non-null means someone is running it; a stale lease is reclaimed
+  /// so a hard-killed process self-heals instead of wedging forever.
+  runningSince DateTime? @map("running_since")
+  lockedBy     String?   @map("locked_by")
+  failureCount Int       @default(0) @map("failure_count")
+
+  lastPollAt         DateTime? @map("last_poll_at")
+  lastSyncAt         DateTime? @map("last_sync_at")
+  lastSyncStatus     String?   @map("last_sync_status")
+  lastSnapshotAt     DateTime? @map("last_snapshot_at")
+  lastSnapshotStatus String?   @map("last_snapshot_status")
+  /// The period the last snapshot ATTEMPTED.
+  lastSnapshotPeriod DateTime? @map("last_snapshot_period") @db.Date
+  /// The period the last snapshot SUCCEEDED for. Distinct from the above on
+  /// purpose: comparing them at recovery is how a missed month becomes visible
+  /// ("Missed: Aug 2026") rather than merely absent from a chart.
+  lastSuccessPeriod  DateTime? @map("last_success_period") @db.Date
+  lastError          String?   @map("last_error")
+
+  connection VsphereConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([dueAt])
+  @@map("vsphere_connection_jobs")
 }
