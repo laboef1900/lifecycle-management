@@ -133,7 +133,28 @@ describe('forecastResponseSchema', () => {
   const literal: ForecastResponse = {
     fromMonth: '2026-01',
     toMonth: '2026-03',
-    months: [{ month: '2026-01', consumption: 100, capacity: 200, utilization: 0.5 }],
+    months: [
+      { month: '2026-01', consumption: 100, capacity: 200, utilization: 0.5 },
+      // A zero-capacity month: utilization is null, never 0 — "unknowable", not
+      // "healthy". The DTO boundary must carry that distinction to the client.
+      { month: '2026-02', consumption: 100, capacity: 0, utilization: null },
+    ],
+    baselineHistory: [
+      {
+        capturedAt: '2026-01-01',
+        source: 'manual',
+        consumption: 100,
+        capacity: 200,
+        utilization: 0.5,
+      },
+      {
+        capturedAt: '2026-02-01',
+        source: 'vsphere',
+        consumption: 120,
+        capacity: 200,
+        utilization: 0.6,
+      },
+    ],
     events: [
       {
         id: 'evt_1',

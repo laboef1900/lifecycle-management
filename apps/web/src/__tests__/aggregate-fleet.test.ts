@@ -29,6 +29,7 @@ function makeForecast(rows: Array<[string, number, number]>): ForecastResponse {
     })),
     effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'tenant' },
     procurement: { leadTimeWeeks: 8, orderByDate: null, breachMonth: null },
+    baselineHistory: [],
   };
 }
 

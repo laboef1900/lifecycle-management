@@ -250,6 +250,21 @@ describe('GET /api/clusters/:id/forecast', () => {
           baselineCapacity: new Prisma.Decimal(400),
         },
       });
+      // Mirrors ClustersService's dual-write (#177). The forecast reads
+      // cluster_baseline_history; cluster_metric_baselines is the legacy table
+      // retained for rollback safety. A fixture writing only the legacy table
+      // produces a metric the forecast reports as untracked.
+      await prisma.clusterBaselineHistory.create({
+        data: {
+          tenantId: 'default',
+          clusterId,
+          metricTypeId: cpu.id,
+          capturedAt: new Date(Date.UTC(2026, 4, 1)),
+          source: 'manual',
+          baselineConsumption: new Prisma.Decimal(100),
+          baselineCapacity: new Prisma.Decimal(400),
+        },
+      });
       await makeHost(prisma, {
         clusterId,
         metricKey: 'memory_gb',

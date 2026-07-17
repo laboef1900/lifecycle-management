@@ -248,11 +248,25 @@ describe('forecast characterization (behaviour as of pre-#177 dev)', () => {
     const cpuMetric = await prisma.metricType.findUniqueOrThrow({
       where: { key: 'fc_cpu_cores' },
     });
+    // Mirrors ClustersService's dual-write (#177): the legacy table plus the
+    // history row the forecast actually reads. Writing only the legacy table
+    // would make this metric look untracked.
     await prisma.clusterMetricBaseline.create({
       data: {
         clusterId: cluster.id,
         tenantId: TENANT,
         metricTypeId: cpuMetric.id,
+        baselineConsumption: 32,
+        baselineCapacity: 128,
+      },
+    });
+    await prisma.clusterBaselineHistory.create({
+      data: {
+        clusterId: cluster.id,
+        tenantId: TENANT,
+        metricTypeId: cpuMetric.id,
+        capturedAt: new Date(Date.UTC(2026, 4, 1)),
+        source: 'manual',
         baselineConsumption: 32,
         baselineCapacity: 128,
       },

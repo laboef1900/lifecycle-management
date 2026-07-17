@@ -69,7 +69,32 @@ export function ForecastChart({
   const foundCurrentIndex = activeForecast.months.findIndex((m) => m.month === currentMonth);
   const currentIndex = foundCurrentIndex === -1 ? 0 : foundCurrentIndex;
 
-  const data = activeForecast.months.map((point, index) => {
+  // Measured baselines, keyed by month. These are the ACTUALS behind the modelled
+  // line — the trend that actually drives purchasing decisions.
+  const measuredByMonth = new Map<string, number>();
+  for (const h of activeForecast.baselineHistory) {
+    measuredByMonth.set(h.capturedAt, Math.round(h.consumption));
+  }
+
+  // History predating the forecast window gets its own leading rows: the window
+  // opens at the NEWEST baseline, so without these every older measurement would
+  // be invisible — which is precisely what #172 exists to fix.
+  const preWindow = activeForecast.baselineHistory
+    .filter((h) => h.capturedAt < activeForecast.fromMonth)
+    .map((h) => ({
+      month: h.capturedAt,
+      consumption: Math.round(h.consumption),
+      actual: null,
+      forecast: null,
+      headroom: null,
+      capacity: null,
+      warnLevel: null,
+      critLevel: null,
+      baselineConsumption: null,
+      measured: Math.round(h.consumption),
+    }));
+
+  const windowData = activeForecast.months.map((point, index) => {
     const capacity = Math.round(point.capacity);
     const consumption = Math.round(point.consumption);
     return {
@@ -84,9 +109,13 @@ export function ForecastChart({
       warnLevel: Math.round(capacity * warn),
       critLevel: Math.round(capacity * crit),
       baselineConsumption: scenario ? (baselineByMonth.get(point.month) ?? null) : null,
+      // null (not 0) for months with no measurement — see the `measured` <Line>.
+      measured: measuredByMonth.get(point.month) ?? null,
     };
   });
-  const maxCeiling = data.reduce((max, d) => Math.max(max, d.capacity), 0);
+
+  const data = [...preWindow, ...windowData];
+  const maxCeiling = data.reduce((max, d) => Math.max(max, d.capacity ?? 0), 0);
   const ceilingForDomain = maxCeiling > 0 ? maxCeiling * 1.05 : undefined;
   const lastIndex = data.length - 1;
 
@@ -251,6 +280,27 @@ export function ForecastChart({
               stroke="none"
               fill="url(#forecast-consumption)"
               isAnimationActive={false}
+            />
+            {/* Measured baselines — the ACTUALS behind the modelled line, and the
+                trend that actually drives purchasing. Drawn beneath the forecast
+                series so the model reads as an overlay on reality.
+
+                @ai-warning `connectNulls={false}` is load-bearing, not styling. A
+                month with no baseline is an honest GAP — a snapshot that could not
+                be taken — never a zero. Connecting across it would silently smooth
+                a missing measurement into a continuous trend, turning "we don't
+                know" into a fabricated fact on the series that buys hardware. */}
+            <Line
+              type="monotone"
+              dataKey="measured"
+              name="Measured"
+              stroke={colors.consumption}
+              strokeWidth={1.5}
+              strokeOpacity={0.55}
+              strokeDasharray="1 3"
+              dot={{ r: 2.5, strokeWidth: 0, fill: colors.consumption }}
+              isAnimationActive={false}
+              connectNulls={false}
             />
             {/* Actual/forecast split (spec §5.4): solid up to "now", dashed from
                 "now" on, sharing the current-month anchor point. Tracks the

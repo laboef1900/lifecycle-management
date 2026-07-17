@@ -171,6 +171,7 @@ function makeTenantSettings(overrides: Partial<TenantSettings> = {}): TenantSett
 
 function makeForecast(overrides: Partial<ForecastResponse> = {}): ForecastResponse {
   return {
+    baselineHistory: [],
     fromMonth: '2026-07-01',
     toMonth: '2028-06-01',
     months: [

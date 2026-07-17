@@ -1,3 +1,4 @@
+import { startOfUtcMonth } from '@lcm/shared';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, Prisma, type HostState } from '@prisma/client';
 
@@ -140,6 +141,33 @@ async function main(): Promise<void> {
         clusterId: cluster.id,
         metricTypeId: memoryMetric.id,
         tenantId: tenant.id,
+        baselineConsumption: new Prisma.Decimal(reference.baselineConsumptionGb),
+        baselineCapacity: new Prisma.Decimal(reference.baselineCapacityGb),
+      },
+    });
+
+    // Dual-write (#177): cluster_baseline_history is the read side, and
+    // `capturedAt` is the PERIOD anchor rather than an instant — hence
+    // startOfUtcMonth. Idempotent on re-seed via the period unique key, matching
+    // the surrounding upserts.
+    await prisma.clusterBaselineHistory.upsert({
+      where: {
+        clusterId_metricTypeId_capturedAt: {
+          clusterId: cluster.id,
+          metricTypeId: memoryMetric.id,
+          capturedAt: startOfUtcMonth(BASELINE_DATE),
+        },
+      },
+      update: {
+        baselineConsumption: new Prisma.Decimal(reference.baselineConsumptionGb),
+        baselineCapacity: new Prisma.Decimal(reference.baselineCapacityGb),
+      },
+      create: {
+        clusterId: cluster.id,
+        metricTypeId: memoryMetric.id,
+        tenantId: tenant.id,
+        capturedAt: startOfUtcMonth(BASELINE_DATE),
+        source: 'manual',
         baselineConsumption: new Prisma.Decimal(reference.baselineConsumptionGb),
         baselineCapacity: new Prisma.Decimal(reference.baselineCapacityGb),
       },

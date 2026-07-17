@@ -1,3 +1,4 @@
+import { startOfUtcMonth } from '@lcm/shared';
 import type { HostState } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
@@ -57,6 +58,20 @@ export async function makeCluster(
         create: {
           tenantId,
           metricTypeId,
+          baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
+          baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
+        },
+      },
+      // Mirrors ClustersService's dual-write (#177): `cluster_baseline_history`
+      // is what the forecast reads, `cluster_metric_baselines` is the legacy
+      // table kept for rollback safety. A fixture that writes only the legacy
+      // table produces a cluster the forecast reports as METRIC_NOT_TRACKED.
+      baselineHistory: {
+        create: {
+          tenantId,
+          metricTypeId,
+          capturedAt: startOfUtcMonth(options.baselineDate ?? DEFAULT_BASELINE_DATE),
+          source: 'manual',
           baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
           baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
         },

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { CategoryResponse } from './category.js';
 import type { ClusterResponse, MetricStateResponse } from './cluster.js';
 import type {
+  BaselineHistoryPoint,
   ForecastEntityContribution,
   ForecastEventMarker,
   ForecastMonthPoint,
@@ -113,7 +114,17 @@ export const forecastMonthPointSchema: z.ZodType<ForecastMonthPoint> = z.object(
   month: z.string(),
   consumption: z.number(),
   capacity: z.number(),
-  utilization: z.number(),
+  // Nullable by contract: null means "capacity is 0, so utilization is
+  // unknowable" — never 0. See ForecastMonthPoint in forecast.ts (Q9d).
+  utilization: z.number().nullable(),
+});
+
+export const baselineHistoryPointSchema: z.ZodType<BaselineHistoryPoint> = z.object({
+  capturedAt: z.string(),
+  source: z.enum(['manual', 'vsphere']),
+  consumption: z.number(),
+  capacity: z.number(),
+  utilization: z.number().nullable(),
 });
 
 export const forecastEventMarkerSchema: z.ZodType<ForecastEventMarker> = z.object({
@@ -148,6 +159,7 @@ export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   applications: z.array(forecastEntityContributionSchema),
   effectiveThresholds: effectiveThresholdsSchema,
   procurement: procurementInfoSchema,
+  baselineHistory: z.array(baselineHistoryPointSchema),
 });
 
 // ---------- Categories ----------
