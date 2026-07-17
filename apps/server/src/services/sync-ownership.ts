@@ -71,3 +71,31 @@ export function assertHostDeletable(source: string, hostId: string): void {
     );
   }
 }
+
+/**
+ * Q9a write-time invariant (owner ruling 2026-07-17): for a synced cluster,
+ * EVERY baseline row — manual correction or vSphere snapshot — must carry
+ * `baselineCapacity = 0`, because a synced cluster's capacity comes entirely from
+ * its synced host inventory. A non-zero baseline capacity double-counts the
+ * fleet (capacity = fleet + fleet), halving utilization so the tool reports
+ * "plenty of headroom" and hardware is never ordered.
+ *
+ * The sanctioned baseline-correction path stays open: `baselineConsumption` and
+ * `baselineDate` corrections are allowed on a synced cluster — only a non-zero
+ * `baselineCapacity` is refused. This deliberately amends #196's "baseline
+ * corrections out of scope" wording (the invariant constrains one field within
+ * that path rather than blocking it).
+ */
+export function assertSyncedBaselineCapacityZero(
+  source: string,
+  clusterId: string,
+  baselines: readonly { baselineCapacity: number }[],
+): void {
+  if (!isSynced(source)) return;
+  if (baselines.some((b) => b.baselineCapacity !== 0)) {
+    throw new ConflictError(
+      'SYNC_OWNED_FIELD',
+      `Cluster ${clusterId} is synced from a vCenter connection: its capacity is derived from synced host inventory, so every baseline row must have baselineCapacity = 0. Correct baselineConsumption instead.`,
+    );
+  }
+}

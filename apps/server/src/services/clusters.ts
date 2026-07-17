@@ -14,7 +14,7 @@ import { NotFoundError, UnprocessableError } from './errors.js';
 import { computeForecast } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
-import { assertClusterDeletable } from './sync-ownership.js';
+import { assertClusterDeletable, assertSyncedBaselineCapacityZero } from './sync-ownership.js';
 
 function clusterNameTaken(name: string): UniqueConstraintMapping {
   return {
@@ -133,10 +133,18 @@ export class ClustersService {
   async update(tenantId: string, id: string, input: ClusterUpdateInput): Promise<ClusterResponse> {
     const existing = await this.prisma.cluster.findFirst({
       where: { id, tenantId },
-      select: { id: true },
+      select: { id: true, source: true },
     });
     if (!existing) {
       throw new NotFoundError('Cluster', id);
+    }
+
+    // Q9a write-time invariant (#196): name/description/baselineDate and
+    // baselineConsumption corrections stay open on a synced cluster — only a
+    // non-zero baselineCapacity is refused, since capacity comes from synced host
+    // inventory and a non-zero baseline double-counts the fleet.
+    if (input.baselines) {
+      assertSyncedBaselineCapacityZero(existing.source, id, input.baselines);
     }
 
     const data: Prisma.ClusterUpdateInput = {};
