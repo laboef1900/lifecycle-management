@@ -14,11 +14,11 @@ any recommendation elsewhere in this document.
 | # | Decision | Consequence |
 | --- | --- | --- |
 | **Q9a** | **`baselineCapacity = 0` for synced clusters; synced hosts carry 100% of capacity.** | Resolves the D34 double-count. vCenter's per-host `hardware.memorySize` is authoritative, and the existing EOL/decommission/replacement machinery operates on real numbers. **Write-time invariant:** for a synced cluster, *every* baseline row (manual or vSphere) must have `baselineCapacity = 0` — otherwise an admin correction reintroduces the double-count. |
-| **Q9b** | **`baselineConsumption` = measured total **minus** tracked-app allocations active at capture time.** | Honours D34a's invariant for the consumption half. Apps stay visible as separate contributions without being double-counted. ⚠️ Needs care when an allocation is edited retroactively — the stored baseline does not retro-adjust. Flag at implementation. |
+| **Q9b** | ~~`baselineConsumption` = measured total **minus** tracked-app allocations at capture time.~~ **⚠️ SUPERSEDED — see §D35 and §12 Q9b-REVISED.** | The intent (don't double-count) is right; the **mechanism is wrong**. It covers only applications (missing both event instances), and write-time subtraction validates a predicate against a **moving target** that the snapshot job itself falsifies. **Replaced by a forecast-time delta filter**, which is self-correcting and mutates no admin data. **Needs a re-decision.** |
 | **Q9c** | **Admin sets `commissionedAt` per host after import.** | Most accurate, but `Host.commissionedAt` is **`NOT NULL`** (`schema.prisma`), so sync MUST import a provisional value and flag it. Requires a `commissionedAtProvisional` marker + a "confirm commissioning dates" task surfaced in the UI. **Directly forces Q9d** — provisional/absent dates make zero-capacity months reachable by default. |
 | **Q9d** | **`utilization` returns `null` at zero capacity; the UI renders "unknown", never 0%.** | Closes the D34b fail-open. **High-risk:** changes forecast output for every zero-capacity month, so D33's characterization snapshot **will** diff — deliberately, and the diff must be explained in the PR body, not absorbed. Colour must never be the sole signal for "unknown" (house style). |
 | **Q2** | **FQDN addressing. NO TLS override — TOFU root-pinning only.** | The `ca` path is viable; D11's IP-SAN problem does not arise. **An `insecure`/`ignore TLS` flag is explicitly rejected** — see §0.1. |
-| **Q4** | **In-place migration**, accepting the narrow rollback window. | D30 as written. **The verified `pg_dump` before PR 1 is now load-bearing**, since the rollback window closes at the first appended baseline. |
+| **Q4** | ~~**In-place migration**, accepting the narrow rollback window.~~ **⚠️ RE-RAISED — see §D36 and §12 Q4-REVISED.** | Decided on a "in-place (Recommended)" framing that **its own author has since withdrawn.** The argument absent from that framing: in-place's post-rollback failure pairs an **arbitrary** baseline with a **fresh** date, so the **existing staleness detector reports "healthy"** — whereas dual-write's failure is merely *stale*, which the detector catches. **Needs a re-decision.** |
 | **Q6** | **Manual baselines snap to first-of-month, like vSphere snapshots.** | `capturedAt` is the period anchor for **both** sources ⇒ D27's "exactly one truth per cluster/metric/period" holds and is DB-enforced. A manual correction to a month that already has a snapshot is an explicit upsert. Accepted cost: no two baselines in one month; an entered date shifts to the 1st (the UI must say so). |
 | **Q8** | **The `clusters.ts:132` data-loss bug gets its own issue + PR, landed before #177.** | Keeps a live-bug fix bisectable and out of a large migration PR, and gives D33's characterization test an honest pre-state to capture. |
 
@@ -1339,6 +1339,131 @@ measurement.** Manual clusters are untouched.
 
 ---
 
+## 9c. ⚠️ Late findings that supersede parts of §0 — RE-RAISED for the owner (Hard Rule 5)
+
+Continued cross-examination after the §0 decisions were taken produced four findings that **change the
+basis on which two of those decisions were made.** Recorded here rather than absorbed silently.
+
+### D35 — ⚠️ The double-count is **one mechanism with four instances**, and the fix is a *forecast-time filter* — not a snapshot-time subtraction (SUPERSEDES Q9b)
+
+> **The mechanism: an advancing anchor absorbs a delta that was legitimately forward-looking when written.**
+
+| # | Instance | Code |
+| --- | --- | --- |
+| 1 | Applications | `forecast.ts:126-130` |
+| 2 | `consumptionDelta` events | `forecast.ts:132-136` |
+| 3 | `capacityDelta` events | `forecast.ts:132-136` |
+| 4 | Synced host capacity vs `baselineCapacity` | `forecast.ts:117-122` (D34) |
+
+**Worked example (instance 3), verified:** admin models `capacityDelta +2560` at `2026-10-01`. October: the
+memory is physically installed, sync writes new `HostMetricCapacity` rows. November: `effectiveCapacityAt`
+(`:188-192`) returns the **new, larger** amount — which already contains the +2560 — and `:132-136` then
+adds the event's `capacityDelta` again because `2026-10-01 <= 2026-11-01`. **`capacity = real + 2560`.**
+
+> **The uniform rule:**
+> **Filter deltas** — applications, `consumptionDelta` events, `capacityDelta` events — to
+> `effectiveDate > anchor.capturedAt`.
+> **Never filter measurement carriers** — hosts, `baselineConsumption`, `baselineCapacity`.
+
+This is strictly better than a consumption-side-only rule because it **explains why hosts are exempt**
+(*they are the measurement*, distributed per host rather than collapsed into a scalar) instead of leaving
+the asymmetry looking accidental. It holds unchanged for **manual** clusters too, where
+`baselineCapacity = 7680` *is* the scalar measurement and a `capacityDelta` dated before `baselineDate`
+double-counts identically. **One rule, both sources, both delta types.**
+
+**⚠️ Why this supersedes Q9b's "snapshot subtracts allocations":**
+- **It doesn't cover events at all** — only applications. Instances 2 and 3 would remain live.
+- **Create-time/write-time validation is structurally dead:** `startedAt > capturedAt` is *true when
+  written and made false by the passage of time* — the snapshot job itself falsifies it. Green at write,
+  wrong a month later, no admin action, no warning. **A predicate validated against a moving target.**
+- **A forecast-time filter is self-correcting** as the anchor advances, has nothing to drift, and
+  **mutates no admin-authored data from a background job** — which would be a Golden Rule 3 problem in its
+  own right. (It also removes the "retroactively-edited allocation won't retro-adjust" rough edge that Q9b
+  carried.)
+
+**Coupled decision, and it cannot be split:** the anchor choice and the absorption rule must be decided
+together. **Anchor = latest** (§D32 invariant 2) is confirmed — and first-anchor is wrong for a reason
+beyond "stops tracking reality": **the monthly re-anchor IS the error-correction mechanism.** Anchored
+permanently on the first baseline, every modelling error compounds forever with nothing to correct it —
+precisely what #172 exists to end.
+
+### D36 — ⚠️ Q4 RE-RAISED: `tls-baseline` reversed its recommendation to **dual-write**, and the reason defeats my framing
+
+The Q4 decision was taken on my "in-place (Recommended)" framing. **That recommendation has been withdrawn
+by its author**, on an argument I did not put in front of the owner:
+
+| | Worst case after an image rollback |
+| --- | --- |
+| **Dual-write** | The old table holds a **stale but previously-correct** value. Wrong only by being *old* — and **staleness is visible**: `stale-baseline.ts` already flags it on the fleet tile (`cluster-tile.tsx:303`). **The existing tripwire catches it.** |
+| **In-place** | `baselines[0]` returns an **arbitrary** row — and because PR 1 dual-writes `clusters.baseline_date`, the response pairs that arbitrary value with a **fresh, correct date**. Staleness says *"healthy."* A 3-year-old capacity number presented as current, with **no signal**, on the number that drives hardware spend. |
+
+> **A fresh date on an arbitrary value is strictly worse than a stale date on a real value** — the first
+> **defeats the detector we already have**; the second trips it. That asymmetry is decisive on its own, and
+> it was absent from the framing the owner decided against.
+
+**Second under-weighted point: in-place's recovery is disproportionate.** Rolling back after the window
+closes means restoring a `pg_dump`, which discards **every** write since the dump — hosts, items, events,
+sessions — not just baselines. That is a heavy, lossy operation to reach for because a *forecast bug*
+shipped. Dual-write's recovery is `LCM_IMAGE_TAG=<previous> && docker compose up -d`: **lossless, at any
+time, forever.**
+
+**Honest cost of dual-write:** two write paths in `ClustersService` for one release, both tested; one rule
+to get right (*the old table mirrors the **newest** baseline — a manual edit backfilling an **older** period
+must not touch it*); a second model in `schema.prisma` for a release; a naming choice at contract time.
+**What it buys:** the rollback window **never closes**, and §D30's warning — the loudest paragraph in this
+document — **ceases to exist**. *A hazard removed by construction beats a hazard documented.*
+
+**What would legitimately keep in-place:** judging rollback sufficiently unlikely (single-replica, CI-gated,
+two people who'd catch it in dev) that the extra path isn't worth carrying. That is a real risk-appetite
+call and it is the owner's — but it should be made knowing **the in-place failure mode is invisible to the
+staleness detector.** → **§12 Q4-REVISED.**
+
+### D37 — ⚠️ HARD REQUIREMENT: the scheduler tick must never reject — Hard Rule 4 is currently unenforceable
+
+**Verified, and it falsifies every degrade path in this document:**
+
+- `plugins/error-handler.ts:10` — `fastify.setErrorHandler(...)` is **request-scoped**. It **cannot see a
+  background job.**
+- `index.ts:31-34` — `unhandledRejection` → `void shutdown('unhandledRejection', 1)` → `process.exit(1)`.
+- `docker/docker-compose.yml:42,110,133` — all services are `restart: unless-stopped`.
+
+⇒ **Any** uncaught rejection in the scheduler — a vCenter timeout, a TLS handshake failure, a Prisma hiccup
+— **kills the server**, and `restart: unless-stopped` converts every transient vCenter failure into a
+**permanent restart loop.**
+
+This silently assumes-away §D9's per-connection statuses, §D16a's failure backoff, and §D22's
+per-connection independence: **all of them assume the rejection stays inside the job, and nothing enforces
+that.**
+
+> **The cleanest instance of the pattern in this whole gate: `unhandledRejection → shutdown` is *correct as
+> written*.** For a purely request-scoped server, Fastify catches everything request-shaped, so a surviving
+> unhandled rejection genuinely is a bug worth dying on. **#178 adds the first background loop and that
+> premise silently becomes false — in code nobody is editing.**
+
+**Requirement:** the tick body is wrapped so that **no path can reject**; every job failure is caught,
+recorded to the job row, and logged. This is a **precondition for Hard Rule 4** ("never crash"), not a
+nicety — without it, "vCenter unreachable ⇒ serve last known data" is false. **Must be tested**: a job whose
+client throws must leave the server serving.
+
+### D38 — ⚠️ #176 gap: adoption can duplicate a host, doubling capacity
+
+Host identity is `(connectionId, moref)`; a **manually-created** host has both NULL, so sync sees no match
+and **creates a second row for a machine already modelled by hand.** Both rows carry capacity ⇒ **doubled
+capacity** — the same family as D34.
+
+The obvious backstop does not close it: `@@unique([tenantId, serialNumber])` exists (`schema.prisma:150`),
+but `serialNumber` is **nullable** (`:126`), and the schema's own comment says why that matters — *"Postgres
+treats NULLs as distinct, so NULL-serial rows never conflict"* (`:141-147`). A hand-entered host without a
+serial — entirely normal, the field is optional — **silently duplicates on adoption.** Where both rows *do*
+have serials, sync hits a P2002 and fails instead: safer, but still wrong (adoption shouldn't error).
+
+**#176 needs an explicit host-reconciliation rule:** match a discovered host to an existing manual host by
+`serialNumber` when both have one; otherwise **an operator-confirmed mapping step, never a silent create** —
+the same shape as D6's `instanceUuid` re-adopt (*identity that cannot be established automatically must be
+confirmed, never guessed*). Depends on whether vCenter reliably reports a usable host serial.
+
+---
+
 ## 10. Phase plan
 
 | Order | Issue | Risk | Gate |
@@ -1394,6 +1519,8 @@ enshrining a live data-loss bug.
 
 | # | Question | Why it blocks |
 | --- | --- | --- |
+| **Q4-REVISED** ⚠️ | **Re-decide: in-place vs new-table dual-write.** The "in-place (Recommended)" framing you decided on **has been withdrawn by its author** (§D36). The missing argument: in-place's post-rollback failure pairs an **arbitrary** baseline value with a **fresh** date, so `stale-baseline.ts` reports **"healthy"** — a 3-year-old capacity number presented as current, with no signal. Dual-write's failure is merely *stale*, which the existing tripwire catches. Also: in-place recovery = `pg_dump` restore, discarding **every** write since the dump (hosts, items, events, sessions); dual-write recovery = `LCM_IMAGE_TAG` rollback, lossless, forever. **Legitimately still in-place** if you judge rollback unlikely enough not to carry the extra path — but decide it knowing the in-place failure is **invisible to the detector**. |
+| **Q9b-REVISED** ⚠️ | **Re-decide: forecast-time delta filter, replacing snapshot-time subtraction** (§D35). Your intent was right; the mechanism was wrong — it covered only applications (missing both **event** instances), and write-time validation checks a predicate the snapshot job itself later falsifies. Uniform rule: **filter deltas** (apps, `consumptionDelta`, `capacityDelta`) to `effectiveDate > anchor.capturedAt`; **never filter measurement carriers** (hosts, `baseline*`). Self-correcting, nothing to drift, mutates no admin-authored data. |
 | **Q9** ⚠️ | **THE BIG ONE — the forecast modelling semantics.** Four linked parts: **(a)** for synced clusters, `baselineCapacity = 0` with hosts carrying 100%? **(b)** how is `baselineConsumption` reconciled against tracked applications (the same double-count applies — D34a)? **(c)** what should a synced host's `commissionedAt` be, given vCenter cannot tell us? **(d)** should `utilization` return `null` instead of `0` when capacity is 0 (D34b)? | Otherwise capacity **double-counts** (`2 × real` ⇒ utilization halves ⇒ *"plenty of headroom"* ⇒ **hardware not purchased**). Silent, plausible, and **the mixed quadrant is untested today**. (c) decides whether the historical chart flatlines at 0%; (d) changes forecast output for every zero-capacity month, so it is gate-level, not a quiet #177 edit. |
 | **Q1** ✅ | **Confirm: LCM's `'GB'` is GiB (2³⁰).** The evidence is strong (govmomi's `units` is 1024-based; `govc cluster.usage` does `<< 20`; VMware states the base-2 convention). **Confirm your spreadsheet figures came from the vSphere UI** — i.e. round numbers like 512/768/1024. | Answered by research (D3a), but it is **your data** — a wrong call is a silent 7.4% on every synced host. Also: do you want the `unit` label corrected to `GiB` (product decision), or just documented? |
 | **Q2** | **Will LCM address the vCenters by FQDN or by IP?** | By IP, default VMCA certs have **no IP SAN**, so hostname verification fails regardless of trust — `ERR_TLS_CERT_ALTNAME_INVALID` (D11). Changes what ships. |
