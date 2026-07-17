@@ -26,6 +26,7 @@ model Tenant {
 
   clusters            Cluster[]
   baselines           ClusterMetricBaseline[]
+  baselineHistory     ClusterBaselineHistory[]
   hosts               Host[]
   hostCapacities      HostMetricCapacity[]
   hostLifecycleEvents HostLifecycleEvent[]
@@ -59,6 +60,7 @@ model MetricType {
   unit        String
 
   baselines       ClusterMetricBaseline[]
+  baselineHistory ClusterBaselineHistory[]
   hostCapacities  HostMetricCapacity[]
   itemAllocations ItemAllocation[]
   items           Item[]
@@ -78,9 +80,10 @@ model Cluster {
   updatedAt    DateTime  @updatedAt @map("updated_at")
   archivedAt   DateTime? @map("archived_at")
 
-  tenant    Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  baselines ClusterMetricBaseline[]
-  hosts     Host[]
+  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  baselines       ClusterMetricBaseline[]
+  baselineHistory ClusterBaselineHistory[]
+  hosts           Host[]
   items     Item[]
   settings  ClusterSettings?
 
@@ -112,6 +115,44 @@ model ClusterMetricBaseline {
 
   @@id([clusterId, metricTypeId])
   @@map("cluster_metric_baselines")
+}
+
+/// Append-only baseline history — the source of truth for the forecast anchor
+/// and the chart's historical series (#177).
+///
+/// @ai-warning `capturedAt` IS the period anchor, not merely "when we measured".
+/// Both manual entry and the vSphere snapshot job snap it to the first of the
+/// month, so `@@unique([clusterId, metricTypeId, capturedAt])` *is* monthly
+/// idempotency, enforced by Postgres rather than by application logic. A job that
+/// restarts and re-runs on a different day of the same month recomputes the same
+/// key and conflicts. Do not "fix" this to a timestamp — that silently drops the
+/// guarantee to day-granularity and lets one month hold two competing truths.
+/// `observedAt` carries the real instant, is informational only, and is read by
+/// nothing on the forecast path.
+///
+/// @ai-context `source` is deliberately NOT in the unique key. Including it would
+/// let a manual row and a vsphere row coexist for one period, making "the newest
+/// baseline" ambiguous on the number that drives hardware purchasing. Excluding it
+/// means exactly one truth per metric per period, and an admin correcting a bad
+/// sync is an explicit overwrite that flips `source` to manual.
+model ClusterBaselineHistory {
+  id                  String    @id @default(cuid())
+  clusterId           String    @map("cluster_id")
+  metricTypeId        String    @map("metric_type_id")
+  tenantId            String    @default("default") @map("tenant_id")
+  capturedAt          DateTime  @map("captured_at") @db.Date
+  source              String    @default("manual")
+  observedAt          DateTime? @map("observed_at") @db.Timestamptz(3)
+  baselineConsumption Decimal   @map("baseline_consumption") @db.Decimal(18, 3)
+  baselineCapacity    Decimal   @map("baseline_capacity") @db.Decimal(18, 3)
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  cluster    Cluster    @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  metricType MetricType @relation(fields: [metricTypeId], references: [id])
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+
+  @@unique([clusterId, metricTypeId, capturedAt], map: "cluster_baseline_history_period_unique")
+  @@map("cluster_baseline_history")
 }
 
 // ---------- Hosts (capacity providers) ----------

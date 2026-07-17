@@ -168,6 +168,78 @@ docker compose exec -T db pg_restore -U lcm -d lcm --no-owner --no-acl \
 
 After restoring, restart the server so it re-verifies migrations: `docker compose restart server`.
 
+### Verifying a dump is actually restorable
+
+A dump you have never restored is a hypothesis, not a backup. Before any migration
+that touches baselines, prove it against a throwaway database — never over the live
+one:
+
+```bash
+# 1. Take the dump.
+docker compose exec -T db pg_dump -U lcm -d lcm --format=custom --compress=9 \
+  > /var/backups/lcm/pre-migration-$(date +%Y%m%d-%H%M%S).dump
+
+# 2. Restore it into a scratch database ALONGSIDE the live one.
+docker compose exec -T db psql -U lcm -d postgres -c 'CREATE DATABASE lcm_verify OWNER lcm;'
+docker compose exec -T db pg_restore -U lcm -d lcm_verify --no-owner --no-acl \
+  < /var/backups/lcm/pre-migration-<stamp>.dump
+
+# 3. Row counts must match the live database EXACTLY for the purchasing-critical
+#    tables. A dump that restores without error but is short a table is precisely
+#    the failure this step exists to catch.
+for t in clusters cluster_metric_baselines cluster_baseline_history hosts host_metric_capacities items item_allocations; do
+  live=$(docker compose exec -T db psql -U lcm -d lcm        -tAc "SELECT COUNT(*) FROM $t")
+  copy=$(docker compose exec -T db psql -U lcm -d lcm_verify -tAc "SELECT COUNT(*) FROM $t")
+  printf '%-28s live=%-8s restored=%-8s %s\n' "$t" "$live" "$copy" \
+    "$([ "$live" = "$copy" ] && echo OK || echo MISMATCH)"
+done
+
+# 4. Drop the scratch database once every line reads OK.
+docker compose exec -T db psql -U lcm -d postgres -c 'DROP DATABASE lcm_verify WITH (FORCE);'
+```
+
+## Baseline history migration (#177) — rollback
+
+The baseline-history migration is **expand + migrate only**: it creates
+`cluster_baseline_history`, backfills it from `cluster_metric_baselines`, and
+**drops nothing**. The application dual-writes both tables (and
+`clusters.baseline_date`) for this release, so:
+
+> **Rolling back is an ordinary image rollback, at any time, with no data loss:**
+>
+> ```bash
+> # Pin the previous image in .env, then:
+> docker compose up -d
+> ```
+>
+> The old code reads `cluster_metric_baselines`, which the new code has kept
+> current. The worst case is a baseline that is _stale_ — which the fleet tile's
+> existing staleness flag already surfaces — never one that is silently wrong.
+
+That property is the whole reason for the dual-write, and it is why the old table
+must **not** be tidied away before the contract migration. Migrating in place would
+have made an image rollback safe only until the first appended baseline, after
+which the old code would pair an _arbitrary_ baseline value with a _fresh_ date — a
+years-old capacity number displayed as current, tripping no staleness check, on the
+number that drives hardware purchasing.
+
+**If the migration itself fails, it fails safe with no action required.** Prisma
+runs each migration in a transaction, so the DDL and the backfill roll back
+together; the backfill's row-count assertion aborts the whole thing if it did not
+copy every row; and the container's `prisma migrate deploy` then exits non-zero, so
+**Fastify never starts**. The service serves nothing rather than serving wrong
+numbers. Fix forward and redeploy.
+
+> **`prisma migrate resolve --rolled-back` does NOT undo any DDL.** It only edits
+> the `_prisma_migrations` bookkeeping table so a failed migration stops blocking
+> the next `deploy`. Reading the flag name as "undo" leaves a database whose actual
+> shape and whose recorded history disagree — worse than either problem alone.
+> Prisma's documented recovery is roll **forward**.
+
+**Before the later contract migration** (which drops `cluster_metric_baselines` and
+`clusters.baseline_date`), take and _verify_ a dump as above: after it, an image
+rollback is no longer possible and restore-from-dump becomes the only recovery.
+
 ## Upgrade
 
 ```bash

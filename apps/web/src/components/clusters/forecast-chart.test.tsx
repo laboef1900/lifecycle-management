@@ -76,8 +76,20 @@ vi.mock('recharts', async () => {
     ),
     Tooltip: () => null,
     Area: ({ dataKey }: { dataKey: string }) => <div data-testid={`area-${dataKey}`} />,
-    Line: ({ dataKey, strokeDasharray }: { dataKey: string; strokeDasharray?: string }) => (
-      <div data-testid={`line-${dataKey}`} data-dasharray={strokeDasharray ?? ''} />
+    Line: ({
+      dataKey,
+      strokeDasharray,
+      connectNulls,
+    }: {
+      dataKey: string;
+      strokeDasharray?: string;
+      connectNulls?: boolean;
+    }) => (
+      <div
+        data-testid={`line-${dataKey}`}
+        data-dasharray={strokeDasharray ?? ''}
+        data-connect-nulls={String(connectNulls ?? '')}
+      />
     ),
     LabelList: () => null,
     ReferenceDot: ({
@@ -126,6 +138,7 @@ function makeForecast(overrides: Partial<ForecastResponse> = {}): ForecastRespon
     applications: [],
     effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'tenant' },
     procurement: { leadTimeWeeks: 8, orderByDate: null, breachMonth: null },
+    baselineHistory: [],
     ...overrides,
   };
 }
@@ -579,5 +592,83 @@ describe('ForecastChart scenario ghost', () => {
     renderChart(makeForecast());
 
     expect(screen.queryByTestId('scenario-delta-label')).not.toBeInTheDocument();
+  });
+});
+
+describe('<ForecastChart> baseline history (#177)', () => {
+  it('renders measured baselines and extends the axis back to the oldest one', () => {
+    renderChart(
+      makeForecast({
+        baselineHistory: [
+          {
+            capturedAt: '2026-03-01',
+            source: 'manual',
+            consumption: 60,
+            capacity: 1000,
+            utilization: 0.06,
+          },
+          {
+            capturedAt: '2026-05-01',
+            source: 'vsphere',
+            consumption: 100,
+            capacity: 1000,
+            utilization: 0.1,
+          },
+        ],
+      }),
+    );
+
+    // March predates the forecast window (which opens at the newest baseline), so
+    // without the leading rows it would be invisible — the exact problem #172 exists
+    // to fix.
+    expect(screen.getByTestId('chart').dataset.monthCount).toBe('4');
+
+    const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+      month: string;
+      measured: number | null;
+    }>;
+    expect(rows.map((r) => r.month)).toEqual([
+      '2026-03-01',
+      '2026-05-01',
+      '2026-06-01',
+      '2026-07-01',
+    ]);
+    expect(rows.map((r) => r.measured)).toEqual([60, 100, null, null]);
+  });
+
+  it('breaks the measured line across a missing month instead of interpolating it', () => {
+    renderChart(
+      makeForecast({
+        baselineHistory: [
+          {
+            capturedAt: '2026-05-01',
+            source: 'vsphere',
+            consumption: 100,
+            capacity: 1000,
+            utilization: 0.1,
+          },
+          // June missing — a snapshot that could not be taken.
+          {
+            capturedAt: '2026-07-01',
+            source: 'vsphere',
+            consumption: 200,
+            capacity: 1100,
+            utilization: 0.18,
+          },
+        ],
+      }),
+    );
+
+    const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+      month: string;
+      measured: number | null;
+    }>;
+    // June is null, NOT 0 — "we don't know", not "nothing was used".
+    expect(rows.find((r) => r.month === '2026-06-01')?.measured).toBeNull();
+
+    // ...and the line must not bridge it. Connecting May to July would smooth a
+    // missing measurement into a trend nobody recorded, on the series that drives
+    // hardware purchasing.
+    expect(screen.getByTestId('line-measured').dataset.connectNulls).toBe('false');
   });
 });

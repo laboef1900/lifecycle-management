@@ -1,4 +1,10 @@
-import { MAX_FORECAST_SPAN_MONTHS, monthsBetweenUtc, type Scenario } from '@lcm/shared';
+import {
+  formatDateIso,
+  MAX_FORECAST_SPAN_MONTHS,
+  monthsBetweenUtc,
+  type BaselineHistoryPoint,
+  type Scenario,
+} from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
 
 import { NotFoundError, UnprocessableError } from './errors.js';
@@ -24,6 +30,7 @@ interface LoadOptions {
 
 interface PreparedForecastInput {
   input: ForecastInput;
+  baselineHistory: BaselineHistoryPoint[];
   fromMonth: Date;
   toMonth: Date;
   effectiveThresholds: Awaited<ReturnType<SettingsService['effectiveFor']>>;
@@ -75,6 +82,10 @@ export class ForecastService {
       where: { id: clusterId, tenantId },
       include: {
         baselines: { where: { metricTypeId: metricType.id } },
+        baselineHistory: {
+          where: { metricTypeId: metricType.id },
+          orderBy: { capturedAt: 'asc' },
+        },
         hosts: {
           include: {
             capacities: { where: { metricTypeId: metricType.id } },
@@ -98,15 +109,29 @@ export class ForecastService {
     const effectiveThresholds = await settingsService.effectiveFor(tenantId, clusterId);
     const tenantSettings = await settingsService.getTenant(tenantId);
 
-    const baseline = cluster.baselines[0];
-    if (!baseline) {
+    // @ai-warning Anchor on the NEWEST baseline, unconditionally — `history` is
+    // ordered `capturedAt: 'asc'`, so the anchor is the last element.
+    //
+    // Note what is deliberately NOT done: filtering to `capturedAt <= today`. A
+    // future-dated baseline is accepted today and simply pushes `fromMonth`
+    // forward; adding an upper bound here would be a silent behaviour change
+    // smuggled in under a migration. If that is ever wanted, it is its own
+    // argued change.
+    //
+    // The advancing anchor is also the forecast's error-correction mechanism:
+    // anchored permanently on the first baseline, every modelling error would
+    // compound forever with nothing to correct it — which is what #172 exists to
+    // end. See docs/vision.md "Forecast modelling semantics".
+    const history = cluster.baselineHistory;
+    const anchor = history[history.length - 1];
+    if (!anchor) {
       throw new UnprocessableError(
         'METRIC_NOT_TRACKED',
         `Cluster does not track metric ${metricKey}`,
       );
     }
 
-    const fromMonth = options.fromMonth ?? firstOfMonth(cluster.baselineDate);
+    const fromMonth = options.fromMonth ?? firstOfMonth(anchor.capturedAt);
     const toMonth = options.toMonth ?? addMonths(fromMonth, DEFAULT_HORIZON_MONTHS);
 
     if (toMonth < fromMonth) {
@@ -156,15 +181,34 @@ export class ForecastService {
         capacityDelta: e.capacityDelta?.toNumber() ?? null,
       }));
 
+    // The pure `computeForecast` never learns that history exists — it still
+    // takes one anchor date and one pair of baseline scalars. Keeping it ignorant
+    // is what makes the characterization snapshot meaningful: if this migration
+    // had reshaped the pure function's contract, "the output is unchanged" would
+    // no longer be a claim anyone could check.
     return {
       input: {
-        baselineDate: cluster.baselineDate,
-        baselineConsumption: baseline.baselineConsumption.toNumber(),
-        baselineCapacity: baseline.baselineCapacity.toNumber(),
+        baselineDate: anchor.capturedAt,
+        // What the anchor MEANS decides whether tracked deltas dated at or before
+        // it are already inside its numbers. See `absorbed` in forecast.ts.
+        baselineSource: anchor.source === 'vsphere' ? 'vsphere' : 'manual',
+        baselineConsumption: anchor.baselineConsumption.toNumber(),
+        baselineCapacity: anchor.baselineCapacity.toNumber(),
         hosts,
         applications,
         events,
       },
+      baselineHistory: history.map((row) => {
+        const capacity = row.baselineCapacity.toNumber();
+        const consumption = row.baselineConsumption.toNumber();
+        return {
+          capturedAt: formatDateIso(row.capturedAt),
+          source: row.source === 'vsphere' ? ('vsphere' as const) : ('manual' as const),
+          consumption,
+          capacity,
+          utilization: capacity === 0 ? null : consumption / capacity,
+        };
+      }),
       fromMonth,
       toMonth,
       effectiveThresholds,
@@ -183,6 +227,7 @@ export class ForecastService {
       ...computed,
       effectiveThresholds: prepared.effectiveThresholds,
       procurement,
+      baselineHistory: prepared.baselineHistory,
     };
   }
 }

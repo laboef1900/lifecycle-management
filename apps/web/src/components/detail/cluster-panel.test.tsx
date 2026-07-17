@@ -94,6 +94,7 @@ function forecast(overrides: Partial<ForecastResponse> = {}): ForecastResponse {
     applications: [],
     effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'tenant' },
     procurement: { leadTimeWeeks: 6, orderByDate: null, breachMonth: null },
+    baselineHistory: [],
     ...overrides,
   };
 }
