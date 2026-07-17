@@ -127,24 +127,37 @@ export class ClustersService {
         const metricTypes = await this.resolveMetricTypes(
           input.baselines.map((b) => b.metricTypeKey),
         );
+        const rows = input.baselines.map((b) => {
+          const metricType = metricTypes.get(b.metricTypeKey);
+          if (!metricType) {
+            throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${b.metricTypeKey}`);
+          }
+          return {
+            metricTypeId: metricType.id,
+            baselineConsumption: new Prisma.Decimal(b.baselineConsumption),
+            baselineCapacity: new Prisma.Decimal(b.baselineCapacity),
+          };
+        });
+        // @ai-warning: upsert per (clusterId, metricTypeId) — never delete-then-recreate.
+        // `baselines` is a partial array by contract (`.min(1)`, not "all of them"), so a
+        // delete scoped to clusterId destroys the baselines of every metric the caller
+        // simply didn't mention. Baselines drive hardware purchasing and this update path
+        // is the only writer, so an omitted metric must be untouched, not re-created from
+        // a payload that never described it. See #181.
         await this.prisma.$transaction([
           this.prisma.cluster.update({ where: { id }, data }),
-          this.prisma.clusterMetricBaseline.deleteMany({ where: { clusterId: id } }),
-          this.prisma.clusterMetricBaseline.createMany({
-            data: input.baselines.map((b) => {
-              const metricType = metricTypes.get(b.metricTypeKey);
-              if (!metricType) {
-                throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${b.metricTypeKey}`);
-              }
-              return {
-                clusterId: id,
-                tenantId,
-                metricTypeId: metricType.id,
-                baselineConsumption: new Prisma.Decimal(b.baselineConsumption),
-                baselineCapacity: new Prisma.Decimal(b.baselineCapacity),
-              };
+          ...rows.map((row) =>
+            this.prisma.clusterMetricBaseline.upsert({
+              where: {
+                clusterId_metricTypeId: { clusterId: id, metricTypeId: row.metricTypeId },
+              },
+              create: { clusterId: id, tenantId, ...row },
+              update: {
+                baselineConsumption: row.baselineConsumption,
+                baselineCapacity: row.baselineCapacity,
+              },
             }),
-          }),
+          ),
         ]);
       } else if (Object.keys(data).length > 0) {
         await this.prisma.cluster.update({ where: { id }, data });
