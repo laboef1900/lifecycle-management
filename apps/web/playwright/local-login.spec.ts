@@ -61,7 +61,12 @@ test('local admin can sign in and reach the dashboard', async ({ page, request }
     await page.getByRole('button', { name: /sign in/i }).click();
 
     await expect(page).toHaveURL('/');
-    await expect(page.getByRole('heading', { name: 'Fleet', level: 1 })).toBeVisible();
+    // The fleet console's only h1 is the computed verdict headline (spec §4.3)
+    // — "Fleet runway is …" when an order-by is due, "Fleet is healthy — …"
+    // otherwise. There's no more static "Fleet" heading to match.
+    await expect(
+      page.getByRole('heading', { level: 1, name: /^(Fleet runway is|Fleet is healthy)/ }),
+    ).toBeVisible();
   } finally {
     try {
       // Best-effort re-auth: independent of the UI, so this still runs even
