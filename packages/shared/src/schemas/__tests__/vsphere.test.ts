@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  liveUsageListResponseSchema,
   vsphereConnectionCreateSchema,
   vsphereConnectionUpdateSchema,
   vsphereProbeSchema,
+  vsphereSyncOutcomeSchema,
   vsphereTrustCaSchema,
   vsphereVerifySchema,
 } from '../vsphere.js';
+import type { LiveUsage } from '../vsphere.js';
 
 /**
  * These assert the ONE rule the vSphere contracts exist to enforce:
@@ -106,6 +109,86 @@ describe('vSphere contracts — the hostname is a hostname, not a URL', () => {
     ['an IP literal', '10.20.30.40'],
   ])('accepts %s', (_label, hostname) => {
     expect(vsphereProbeSchema.safeParse({ hostname }).success).toBe(true);
+  });
+});
+
+describe('vsphereSyncOutcomeSchema', () => {
+  it("accepts 'skipped' — the identity guard refusing is an outcome, not a failure", () => {
+    // vsphere.ts's own @ai-warning: `skipped` is how the guard reports "this
+    // hostname now answers as a DIFFERENT vCenter, so I refused to touch
+    // anything. That refusal is the feature." A two-value 'ok' | 'failed'
+    // vocabulary cannot express it and would force the UI to render the
+    // guard working correctly as an error.
+    expect(vsphereSyncOutcomeSchema.safeParse('skipped').success).toBe(true);
+  });
+
+  it.each(['ok', 'unreachable', 'auth_failed', 'tls_untrusted', 'identity_mismatch', 'skipped'])(
+    'accepts %s',
+    (outcome) => {
+      expect(vsphereSyncOutcomeSchema.safeParse(outcome).success).toBe(true);
+    },
+  );
+
+  it('rejects a word outside the vocabulary', () => {
+    // Prisma stores `lastSyncStatus` as an untyped `String?` with no enum
+    // anywhere, so this schema is the only thing standing between a typo'd
+    // status column and a client rendering it.
+    expect(vsphereSyncOutcomeSchema.safeParse('failed').success).toBe(false);
+  });
+});
+
+describe('liveUsageListResponseSchema', () => {
+  const neverFetched: LiveUsage = {
+    state: 'never_fetched',
+    clusterId: 'cl_1',
+    connectionName: 'vc-prod',
+  };
+  const fresh: LiveUsage = {
+    state: 'fresh',
+    clusterId: 'cl_2',
+    connectionName: 'vc-prod',
+    memoryUsedGiB: 512,
+    hostsSampled: 12,
+    hostsTotal: 12,
+    measuredAt: '2026-07-17T10:00:00.000Z',
+    ageSeconds: 30,
+  };
+  const stale: LiveUsage = {
+    state: 'stale',
+    clusterId: 'cl_3',
+    connectionName: 'vc-dr',
+    memoryUsedGiB: 256,
+    hostsSampled: 4,
+    hostsTotal: 6,
+    measuredAt: '2026-07-17T08:00:00.000Z',
+    ageSeconds: 7200,
+    reason: 'unreachable',
+  };
+
+  it('round-trips a mixed batch of every union member', () => {
+    const parsed = liveUsageListResponseSchema.parse({ items: [neverFetched, fresh, stale] });
+    expect(parsed.items.map((i) => i.state)).toEqual(['never_fetched', 'fresh', 'stale']);
+  });
+
+  it('accepts an empty batch (a fleet with no synced clusters)', () => {
+    expect(liveUsageListResponseSchema.parse({ items: [] }).items).toEqual([]);
+  });
+
+  it('rejects a null item — absence is encoded by omission, never by null', () => {
+    // `VsphereLiveUsageService.forCluster` returns null for "no sample"; the
+    // route maps that through `neverFetched()`. If `items` ever became
+    // `array(liveUsageSchema.nullable())` a null would reach a renderer and
+    // reintroduce the 0%-lie the union exists to prevent.
+    expect(liveUsageListResponseSchema.safeParse({ items: [null] }).success).toBe(false);
+  });
+
+  it('strips numbers smuggled into a never_fetched entry at the boundary', () => {
+    // The union's core guarantee, asserted at the batch envelope: a
+    // `never_fetched` entry is STRUCTURALLY incapable of carrying a number, so
+    // "0% utilized" cannot be rendered from "we have no idea".
+    const smuggled = { ...neverFetched, memoryUsedGiB: 99 };
+    const parsed = liveUsageListResponseSchema.parse({ items: [smuggled] });
+    expect(parsed.items.map((i) => 'memoryUsedGiB' in i)).toEqual([false]);
   });
 });
 

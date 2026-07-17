@@ -23,7 +23,12 @@ import {
   procurementLeadTimeWeeksSchema,
 } from './settings.js';
 import type { TenantSettings } from './settings.js';
-import { vsphereConnectionStatusSchema, vsphereTlsModeSchema } from './vsphere.js';
+import {
+  entitySourceSchema,
+  vsphereConnectionStatusSchema,
+  vsphereSyncOutcomeSchema,
+  vsphereTlsModeSchema,
+} from './vsphere.js';
 import type {
   VsphereConnectionResponse,
   VsphereProbeResult,
@@ -43,6 +48,12 @@ export const metricStateResponseSchema: z.ZodType<MetricStateResponse> = z.objec
   utilization: z.number(),
 });
 
+// The sync fields use `.exactOptional()`, NOT `.optional()`. Under
+// `exactOptionalPropertyTypes` a `.optional()` here does not compile against
+// `source?: EntitySource` (TS2375), and the compiler's suggested fix — widen the
+// interface to `EntitySource | undefined` — must NOT be taken: it makes
+// `{ source: undefined }` legal everywhere and reopens the hole these fields are
+// shaped to close. See `forecastEntityContributionSchema` for the same pattern.
 export const clusterResponseSchema: z.ZodType<ClusterResponse> = z.object({
   id: z.string(),
   name: z.string(),
@@ -52,6 +63,18 @@ export const clusterResponseSchema: z.ZodType<ClusterResponse> = z.object({
   updatedAt: z.string(),
   archivedAt: z.string().nullable(),
   metrics: z.array(metricStateResponseSchema),
+  source: entitySourceSchema.exactOptional(),
+  lastSyncedAt: z.string().nullable().exactOptional(),
+  externalName: z.string().nullable().exactOptional(),
+  connection: z
+    .object({
+      id: z.string(),
+      name: z.string(),
+      status: vsphereConnectionStatusSchema,
+      enabled: z.boolean(),
+    })
+    .nullable()
+    .exactOptional(),
 });
 
 // ---------- Hosts ----------
@@ -84,6 +107,9 @@ export const hostResponseSchema: z.ZodType<HostResponse> = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   capacities: z.array(capacityResponseRowSchema),
+  source: entitySourceSchema.exactOptional(),
+  lastSyncedAt: z.string().nullable().exactOptional(),
+  commissionedAtProvisional: z.boolean().exactOptional(),
 });
 
 // ---------- Items ----------
@@ -241,6 +267,17 @@ export const vsphereConnectionResponseSchema: z.ZodType<VsphereConnectionRespons
   lastConnectedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  syncState: z
+    .object({
+      lastSyncAt: z.string().nullable(),
+      lastSyncStatus: vsphereSyncOutcomeSchema.nullable(),
+      lastSnapshotAt: z.string().nullable(),
+      lastSnapshotStatus: z.string().nullable(),
+      lastSuccessPeriod: z.string().nullable(),
+      failureCount: z.number().int(),
+    })
+    .nullable()
+    .exactOptional(),
 });
 
 export const vsphereProbeResultSchema: z.ZodType<VsphereProbeResult> = z.object({

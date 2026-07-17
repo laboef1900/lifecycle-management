@@ -230,6 +230,34 @@ export interface VsphereConnectionResponse {
   lastConnectedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * The connection's scheduler job row (`VsphereConnectionJob`).
+   *
+   * `null` = no job row exists yet — it is created on connection create/enable
+   * (#191). Absent = this server build predates the field. A nested object
+   * rather than six flat fields precisely because the job is a SEPARATE row that
+   * may not exist (`connectionId` is both PK and FK): one `null` says "no job
+   * row" in one place, where six independent nulls could not distinguish that
+   * from "job row that has never run".
+   *
+   * @ai-warning Distinct from this object's own `lastError`/`lastConnectedAt`,
+   * which are connection status — "can we reach it?" — not job outcome. A
+   * connection can be reachable while its last sync skipped.
+   *
+   * @ai-warning These columns have NO writer as of this contract landing;
+   * #191 owns `onSuccess`/`onFailure` in `vsphere-scheduler.ts`. Until it lands,
+   * every field here is legitimately null.
+   */
+  syncState?: {
+    lastSyncAt: string | null;
+    lastSyncStatus: VsphereSyncOutcome | null;
+    lastSnapshotAt: string | null;
+    lastSnapshotStatus: string | null;
+    /** The last month successfully snapshotted, as a date-only string. */
+    lastSuccessPeriod: string | null;
+    /** Consecutive failures; drives the scheduler's capped backoff. */
+    failureCount: number;
+  } | null;
 }
 
 // ---------- Inventory sync (#176) ----------
@@ -248,15 +276,34 @@ export const entitySourceSchema = z.enum(['manual', 'vsphere']);
 export type EntitySource = z.infer<typeof entitySourceSchema>;
 
 /**
- * What one sync run did, per connection.
+ * How one sync run ended.
  *
  * @ai-warning `skipped` is not a failure and must not be rendered as one — it is
  * how the identity guard reports "this hostname now answers as a DIFFERENT
  * vCenter, so I refused to touch anything." That refusal is the feature.
+ *
+ * @ai-warning This vocabulary must NOT be narrowed to `'ok' | 'failed'`. Two
+ * values cannot express `skipped`, so the guard working correctly would have to
+ * be rendered as an error — the exact thing the warning above forbids.
+ *
+ * Also the runtime validator for `VsphereConnectionJob.lastSyncStatus`, which
+ * Prisma stores as an untyped `String?` with no enum behind it. Without this
+ * schema an unconstrained string reaches the client.
  */
+export const vsphereSyncOutcomeSchema = z.enum([
+  'ok',
+  'unreachable',
+  'auth_failed',
+  'tls_untrusted',
+  'identity_mismatch',
+  'skipped',
+]);
+export type VsphereSyncOutcome = z.infer<typeof vsphereSyncOutcomeSchema>;
+
+/** What one sync run did, per connection. */
 export interface VsphereSyncResult {
   connectionId: string;
-  outcome: 'ok' | 'unreachable' | 'auth_failed' | 'tls_untrusted' | 'identity_mismatch' | 'skipped';
+  outcome: VsphereSyncOutcome;
   clustersCreated: number;
   clustersUpdated: number;
   clustersMissing: number;
@@ -335,3 +382,28 @@ export const liveUsageSchema = z.discriminatedUnion('state', [
   }),
 ]);
 export type LiveUsage = z.infer<typeof liveUsageSchema>;
+
+/**
+ * Batch live usage for the fleet console. One entry per **synced** cluster.
+ *
+ * Batch, not per-cluster: the design gate fixed the cache row (D23), the payload
+ * union (D24) and the no-blocking-read rule (D25) but never the HTTP surface.
+ * The fleet console renders N tiles and would otherwise issue N round-trips
+ * against a page that already fetches its clusters in ONE paginated call.
+ * `clusterId` is present in every union member, so a flat array self-describes
+ * and needs no keyed map. The single-cluster panel read reuses bare
+ * `liveUsageSchema`.
+ *
+ * @ai-warning Manual clusters are ABSENT from `items` — they are not
+ * `never_fetched`. `never_fetched` requires a `connectionName`, which a manual
+ * cluster does not have. Absence is the honest encoding of "no vCenter is
+ * involved here"; a fabricated entry would not be.
+ *
+ * @ai-warning `items` is `array(liveUsageSchema)` and MUST NOT become
+ * `array(liveUsageSchema.nullable())`. `VsphereLiveUsageService.forCluster`
+ * returns `null` for "no sample" and the route maps that through
+ * `neverFetched()`. A nullable item would let `null` reach a renderer and
+ * reintroduce the 0%-lie the union exists to prevent.
+ */
+export const liveUsageListResponseSchema = z.object({ items: z.array(liveUsageSchema) });
+export type LiveUsageListResponse = z.infer<typeof liveUsageListResponseSchema>;
