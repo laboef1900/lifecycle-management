@@ -231,3 +231,38 @@ export interface VsphereConnectionResponse {
   createdAt: string;
   updatedAt: string;
 }
+
+// ---------- Inventory sync (#176) ----------
+
+/**
+ * Where a cluster or host came from.
+ *
+ * @ai-warning `manual` is the default and must stay so: it is what makes the
+ * migration additive and what lets hand-maintained clusters keep working
+ * untouched alongside synced ones. Manual entities are fully editable; synced
+ * entities reject edits to sync-owned fields (host membership, memory capacity)
+ * but keep their label, description, thresholds and lifecycle metadata
+ * operator-owned.
+ */
+export const entitySourceSchema = z.enum(['manual', 'vsphere']);
+export type EntitySource = z.infer<typeof entitySourceSchema>;
+
+/**
+ * What one sync run did, per connection.
+ *
+ * @ai-warning `skipped` is not a failure and must not be rendered as one — it is
+ * how the identity guard reports "this hostname now answers as a DIFFERENT
+ * vCenter, so I refused to touch anything." That refusal is the feature.
+ */
+export interface VsphereSyncResult {
+  connectionId: string;
+  outcome: 'ok' | 'unreachable' | 'auth_failed' | 'tls_untrusted' | 'identity_mismatch' | 'skipped';
+  clustersCreated: number;
+  clustersUpdated: number;
+  clustersMissing: number;
+  hostsCreated: number;
+  hostsUpdated: number;
+  hostsMissing: number;
+  /** Sanitized. Never secret-bearing, never a raw driver error. */
+  error: string | null;
+}

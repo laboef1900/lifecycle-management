@@ -73,6 +73,24 @@ model MetricType {
 
 model Cluster {
   id           String    @id @default(cuid())
+  /// 'manual' | 'vsphere'. Defaults to manual, so the migration is a pure additive
+  /// column default: every existing cluster stays manual and untouched.
+  source       String    @default("manual")
+  /// The vCenter this cluster came from. onDelete: Restrict is deliberate and
+  /// load-bearing — see the VsphereConnection relation below.
+  connectionId String?   @map("vsphere_connection_id")
+  /// vCenter MoRef, e.g. `domain-c123`. Stable across renames; NOT stable across a
+  /// vCenter rebuild — which is what VsphereConnection.instanceUuid catches.
+  externalId   String?   @map("external_id")
+  /// The cluster's name in vCenter, verbatim and sync-owned. `name` is LCM's own
+  /// editable label: two vCenters may both have a cluster called "Production", and
+  /// the operator must be able to tell them apart in the fleet console.
+  externalName String?   @map("external_name")
+  /// Set once an operator edits `name`. Sync then never touches the label again —
+  /// a vCenter-side rename updates `externalName` and is surfaced as a hint rather
+  /// than clobbering a deliberate choice.
+  nameIsCustom Boolean   @default(false) @map("name_is_custom")
+  lastSyncedAt DateTime? @map("last_synced_at")
   tenantId     String    @default("default") @map("tenant_id")
   name         String
   description  String?
@@ -82,6 +100,18 @@ model Cluster {
   archivedAt   DateTime? @map("archived_at")
 
   tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// @ai-warning `onDelete: Restrict`, NEVER Cascade. ClusterMetricBaseline and
+  /// ClusterBaselineHistory both cascade from Cluster, so a cascade here would
+  /// chain: delete connection -> delete clusters -> DELETE EVERY BASELINE. One
+  /// misclick in Settings would silently destroy the purchasing history this whole
+  /// epic exists to accumulate, and it would not even look destructive at the click
+  /// site. Restrict makes the database refuse; the API returns 409 and offers an
+  /// explicit detach that converts the clusters to manual and keeps every row.
+  ///
+  /// SetNull is also wrong: it would leave source='vsphere' with a null
+  /// connectionId — a row no code path expects — and would make the destructive
+  /// path automatic rather than deliberate.
+  connection      VsphereConnection?       @relation(fields: [connectionId], references: [id], onDelete: Restrict)
   baselines       ClusterMetricBaseline[]
   baselineHistory ClusterBaselineHistory[]
   hosts           Host[]
@@ -89,6 +119,15 @@ model Cluster {
   settings        ClusterSettings?
 
   @@unique([tenantId, name], map: "clusters_tenant_name_unique")
+  /// Cluster identity WITHIN a vCenter. A MoRef (`domain-c123`) is unique only
+  /// inside one vCenter, so it is meaningless without the connection — hence the
+  /// composite. Matching on NAME instead would treat a vCenter-side rename as
+  /// delete+create and DESTROY the baseline history; MoRefs survive renames.
+  ///
+  /// Both columns are NULL for manual clusters, and Postgres treats NULLs as
+  /// distinct, so every manual cluster coexists here (the same property
+  /// hosts_tenant_serial_unique relies on).
+  @@unique([connectionId, externalId], map: "clusters_connection_external_unique")
   @@map("clusters")
 }
 
@@ -159,23 +198,35 @@ model ClusterBaselineHistory {
 // ---------- Hosts (capacity providers) ----------
 
 model Host {
-  id               String    @id @default(cuid())
-  tenantId         String    @default("default") @map("tenant_id")
-  clusterId        String    @map("cluster_id")
-  name             String
-  description      String?
-  commissionedAt   DateTime  @map("commissioned_at") @db.Date
-  decommissionedAt DateTime? @map("decommissioned_at") @db.Date
-  serialNumber     String?   @map("serial_number")
-  vendor           String?
-  model            String?
-  purchasedAt      DateTime? @map("purchased_at") @db.Date
-  warrantyEndsAt   DateTime? @map("warranty_ends_at") @db.Date
-  eolAt            DateTime? @map("eol_at") @db.Date
-  runPastEol       Boolean   @default(false) @map("run_past_eol")
-  state            HostState @default(in_service)
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
+  id                        String    @id @default(cuid())
+  source                    String    @default("manual")
+  connectionId              String?   @map("vsphere_connection_id")
+  externalId                String?   @map("external_id")
+  externalName              String?   @map("external_name")
+  lastSyncedAt              DateTime? @map("last_synced_at")
+  /// @ai-warning vCenter cannot tell us when a host was commissioned, so sync
+  /// imports a PROVISIONAL date and flags it. This matters more than it looks:
+  /// effectiveCapacityAt returns 0 before commissionedAt, and a wrong date silently
+  /// zeroes a host's capacity for every month before it — which the forecast then
+  /// renders as "unknown" utilization. The operator confirms the real date after
+  /// import (owner decision Q9c).
+  commissionedAtProvisional Boolean   @default(false) @map("commissioned_at_provisional")
+  tenantId                  String    @default("default") @map("tenant_id")
+  clusterId                 String    @map("cluster_id")
+  name                      String
+  description               String?
+  commissionedAt            DateTime  @map("commissioned_at") @db.Date
+  decommissionedAt          DateTime? @map("decommissioned_at") @db.Date
+  serialNumber              String?   @map("serial_number")
+  vendor                    String?
+  model                     String?
+  purchasedAt               DateTime? @map("purchased_at") @db.Date
+  warrantyEndsAt            DateTime? @map("warranty_ends_at") @db.Date
+  eolAt                     DateTime? @map("eol_at") @db.Date
+  runPastEol                Boolean   @default(false) @map("run_past_eol")
+  state                     HostState @default(in_service)
+  createdAt                 DateTime  @default(now()) @map("created_at")
+  updatedAt                 DateTime  @updatedAt @map("updated_at")
 
   tenant          Tenant               @relation(fields: [tenantId], references: [id])
   cluster         Cluster              @relation(fields: [clusterId], references: [id], onDelete: Cascade)
@@ -183,12 +234,18 @@ model Host {
   lifecycleEvents HostLifecycleEvent[]
   replacedByLinks HostReplacement[]    @relation("HostReplacementOld")
   replacesLinks   HostReplacement[]    @relation("HostReplacementNew")
+  /// @ai-warning onDelete: Restrict, NEVER Cascade — same reasoning as the Cluster
+  /// relation. A synced host carries HostMetricCapacity rows that feed the forecast;
+  /// cascading a connection delete into them would silently change fleet capacity.
+  connection      VsphereConnection?   @relation(fields: [connectionId], references: [id], onDelete: Restrict)
 
   /// Per-tenant uniqueness of serial numbers. Declared as a full unique index
   /// (not the historical partial `WHERE serial_number IS NOT NULL`): Postgres
   /// treats NULLs as distinct, so NULL-serial rows never conflict under either
   /// form — they are equivalent here, and `@@unique` is expressible natively so
   /// schema and DB agree (no more spurious `migrate dev` index drift, #123).
+  /// Host identity within a vCenter — same reasoning as clusters_connection_external_unique.
+  @@unique([connectionId, externalId], map: "hosts_connection_external_unique")
   @@unique([tenantId, serialNumber], map: "hosts_tenant_serial_unique")
   @@index([clusterId])
   @@index([state])
@@ -450,7 +507,9 @@ model VsphereConnection {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clusters Cluster[]
+  hosts    Host[]
 
   @@unique([tenantId, name])
   /// Stops the same vCenter being added twice under two names (FQDN and IP), which
