@@ -235,8 +235,8 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       role="dialog"
       aria-modal="true"
       aria-labelledby={headingId}
-      className="cluster-panel fixed bottom-0 right-0 top-14 z-40 overflow-y-auto border-l border-border"
-      style={{ background: 'var(--surface-card)', boxShadow: 'var(--overlay-shadow)' }}
+      className="cluster-panel fixed bottom-0 right-0 top-14 z-40 overflow-y-auto"
+      style={{ background: 'var(--surface-card)' }}
       initial={{ x: '100%' }}
       animate={{ x: isClosing ? '100%' : 0 }}
       transition={isClosing ? EXIT_TRANSITION : ENTER_TRANSITION}
