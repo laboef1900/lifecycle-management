@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   capacityRowInputSchema,
   clusterIdHostsParamsSchema,
+  hostCommissioningConfirmInputSchema,
   hostCreateInputSchema,
   hostIdParamsSchema,
   hostTransitionInputSchema,
@@ -29,6 +30,15 @@ export const hostRoutes: FastifyPluginAsync = async (fastify) => {
     const created = await service.create(request.tenantId, clusterId, input);
     reply.status(201);
     return created;
+  });
+
+  // Fleet-wide (may span clusters): confirm the provisional commissioning date on
+  // synced hosts after an import (Q9c, #194). A mutating POST, so requiresAdmin
+  // gates it by construction. Static path — no `POST /hosts/:id`, so no collision
+  // with `/hosts/:id/capacity` or `/hosts/:id/transitions`.
+  fastify.post('/hosts/confirm-commissioning', async (request) => {
+    const input = hostCommissioningConfirmInputSchema.parse(request.body);
+    return service.confirmCommissioning(request.tenantId, input);
   });
 
   fastify.get('/hosts/:id', async (request) => {

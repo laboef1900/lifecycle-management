@@ -1,6 +1,7 @@
 import type {
   CapacityResponseRow,
   CapacityRowInput,
+  HostCommissioningConfirmInput,
   HostCreateInput,
   HostResponse,
   HostUpdateInput,
@@ -138,6 +139,15 @@ export class HostsService {
         );
       }
       data.commissionedAt = input.commissionedAt;
+      // @ai-note commissionedAt and commissionedAtProvisional are OPERATOR-OWNED
+      // on synced hosts (owner decision Q9c, #194). vCenter cannot tell us when a
+      // host was commissioned, so sync imports a provisional date and flags it;
+      // the admin confirms the real date here, which clears the flag — even when
+      // the date is unchanged ("confirm as-is"). Both fields MUST remain writable:
+      // #196's sync-owned-field guard has to carve them out, and the re-sync
+      // regression test in host-commissioning.test.ts is the contract it must not
+      // break. The flag is one-way: nothing but a fresh sync re-sets it to true.
+      data.commissionedAtProvisional = false;
     }
     if (input.decommissionedAt !== undefined) {
       data.decommissionedAt = input.decommissionedAt;
@@ -152,6 +162,67 @@ export class HostsService {
 
     await this.prisma.host.update({ where: { id }, data });
     return this.getById(tenantId, id);
+  }
+
+  /**
+   * Bulk-confirm provisional commissioning dates on synced hosts (Q9c, #194).
+   *
+   * @ai-note All-or-nothing. A fleet import stamps a provisional
+   * `commissionedAt` on many hosts at once; the admin reviews them and confirms
+   * the real dates in one request. Every entry is applied inside a single
+   * transaction, so one bad date — rejected by the same `INVALID_COMMISSIONED_AT`
+   * guard as `update` — aborts the whole batch rather than committing a partial,
+   * confusing result. commissionedAt/commissionedAtProvisional are operator-owned
+   * (see the note in `update`); confirming sets the real date and clears the flag,
+   * and is valid even when the date is unchanged.
+   */
+  async confirmCommissioning(
+    tenantId: string,
+    input: HostCommissioningConfirmInput,
+  ): Promise<HostResponse[]> {
+    const ids = input.hosts.map((h) => h.hostId);
+    const rows = await this.prisma.$transaction(
+      async (tx) => {
+        // Validate the WHOLE batch before writing anything, so a single bad date
+        // (or unknown host) aborts before the first mutation — the transaction is
+        // the backstop, but validating up front keeps the failure obvious. Host
+        // ids are unique per the schema refine, so one lookup covers every entry.
+        const existing = await tx.host.findMany({
+          where: { id: { in: ids }, tenantId },
+          include: { capacities: { select: { effectiveFrom: true } } },
+        });
+        const byId = new Map(existing.map((h) => [h.id, h]));
+        for (const entry of input.hosts) {
+          const host = byId.get(entry.hostId);
+          if (!host) {
+            throw new NotFoundError('Host', entry.hostId);
+          }
+          const earliest = host.capacities.reduce<Date | null>(
+            (min, cap) => (min === null || cap.effectiveFrom < min ? cap.effectiveFrom : min),
+            null,
+          );
+          if (earliest !== null && entry.commissionedAt > earliest) {
+            throw new UnprocessableError(
+              'INVALID_COMMISSIONED_AT',
+              'commissionedAt cannot be after the earliest capacity row',
+            );
+          }
+        }
+        for (const entry of input.hosts) {
+          await tx.host.update({
+            where: { id: entry.hostId },
+            data: { commissionedAt: entry.commissionedAt, commissionedAtProvisional: false },
+          });
+        }
+        return tx.host.findMany({
+          where: { id: { in: ids }, tenantId },
+          include: hostInclude,
+          orderBy: { name: 'asc' },
+        });
+      },
+      { isolationLevel: 'Serializable', timeout: 15_000 },
+    );
+    return rows.map((row) => this.toResponse(row));
   }
 
   async appendCapacity(
@@ -311,6 +382,11 @@ export class HostsService {
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       capacities,
+      // A synced host whose commissioning date vCenter could not supply carries a
+      // provisional date flagged here (Q9c, #194); false for manual hosts and for
+      // confirmed synced ones. The client keys the "confirm commissioning date"
+      // affordance off this — it must never present a guess as a measurement.
+      commissionedAtProvisional: row.commissionedAtProvisional,
     };
   }
 }

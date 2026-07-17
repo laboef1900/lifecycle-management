@@ -94,6 +94,15 @@ export interface MakeHostOptions {
   tenantId?: string;
   /** Lifecycle state; omitted uses the schema default (in_service). */
   state?: HostState;
+  /** Provenance; omitted uses the schema default (`manual`). */
+  source?: 'manual' | 'vsphere';
+  /**
+   * A synced host whose commissioning date vCenter could not supply (Q9c, #194).
+   * Omitted uses the schema default (false). Set `true` alongside
+   * `source: 'vsphere'` to fabricate the provisional state the confirm flow
+   * operates on — no VsphereConnection FK is required (connectionId stays null).
+   */
+  commissionedAtProvisional?: boolean;
 }
 
 export async function makeHost(
@@ -118,6 +127,10 @@ export async function makeHost(
       commissionedAt,
       decommissionedAt: options.decommissionedAt ?? null,
       ...(options.state !== undefined && { state: options.state }),
+      ...(options.source !== undefined && { source: options.source }),
+      ...(options.commissionedAtProvisional !== undefined && {
+        commissionedAtProvisional: options.commissionedAtProvisional,
+      }),
       capacities: {
         create: initialCapacity.map((row) => ({
           tenantId,
