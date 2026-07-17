@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.7
     container_name: lcm-keycloak-dev
     profiles: [auth]
     command: ['start-dev', '--import-realm', '--http-port=8081']
