@@ -1,7 +1,7 @@
 # vSphere integration — design and threat model
 
-**Status:** DRAFT — **owner decisions recorded (§0), design approval still outstanding** (issue #174, the
-high-risk design gate for epic #172).
+**Status:** ✅ **APPROVED 2026-07-17** (issue #174, the high-risk design gate for epic #172). Implementation
+authorised in the order given in §10.
 **Date:** 2026-07-17.
 
 ---
@@ -14,11 +14,11 @@ any recommendation elsewhere in this document.
 | # | Decision | Consequence |
 | --- | --- | --- |
 | **Q9a** | **`baselineCapacity = 0` for synced clusters; synced hosts carry 100% of capacity.** | Resolves the D34 double-count. vCenter's per-host `hardware.memorySize` is authoritative, and the existing EOL/decommission/replacement machinery operates on real numbers. **Write-time invariant:** for a synced cluster, *every* baseline row (manual or vSphere) must have `baselineCapacity = 0` — otherwise an admin correction reintroduces the double-count. |
-| **Q9b** | ~~`baselineConsumption` = measured total **minus** tracked-app allocations at capture time.~~ **⚠️ SUPERSEDED — see §D35 and §12 Q9b-REVISED.** | The intent (don't double-count) is right; the **mechanism is wrong**. It covers only applications (missing both event instances), and write-time subtraction validates a predicate against a **moving target** that the snapshot job itself falsifies. **Replaced by a forecast-time delta filter**, which is self-correcting and mutates no admin data. **Needs a re-decision.** |
+| **Q9b** ✅ | ~~Snapshot-time subtraction.~~ **RE-DECIDED 2026-07-17: forecast-time delta filter** (§D35). | **Filter deltas** (applications, `consumptionDelta` events, `capacityDelta` events) to `effectiveDate > anchor.capturedAt`; **never filter measurement carriers** (hosts, `baseline*`). Covers all **four** instances, self-correcting as the anchor advances, mutates no admin-authored data, and holds for manual clusters too. `baselineConsumption` stays the raw measurement. |
 | **Q9c** | **Admin sets `commissionedAt` per host after import.** | Most accurate, but `Host.commissionedAt` is **`NOT NULL`** (`schema.prisma`), so sync MUST import a provisional value and flag it. Requires a `commissionedAtProvisional` marker + a "confirm commissioning dates" task surfaced in the UI. **Directly forces Q9d** — provisional/absent dates make zero-capacity months reachable by default. |
 | **Q9d** | **`utilization` returns `null` at zero capacity; the UI renders "unknown", never 0%.** | Closes the D34b fail-open. **High-risk:** changes forecast output for every zero-capacity month, so D33's characterization snapshot **will** diff — deliberately, and the diff must be explained in the PR body, not absorbed. Colour must never be the sole signal for "unknown" (house style). |
 | **Q2** | **FQDN addressing. NO TLS override — TOFU root-pinning only.** | The `ca` path is viable; D11's IP-SAN problem does not arise. **An `insecure`/`ignore TLS` flag is explicitly rejected** — see §0.1. |
-| **Q4** | ~~**In-place migration**, accepting the narrow rollback window.~~ **⚠️ RE-RAISED — see §D36 and §12 Q4-REVISED.** | Decided on a "in-place (Recommended)" framing that **its own author has since withdrawn.** The argument absent from that framing: in-place's post-rollback failure pairs an **arbitrary** baseline with a **fresh** date, so the **existing staleness detector reports "healthy"** — whereas dual-write's failure is merely *stale*, which the detector catches. **Needs a re-decision.** |
+| **Q4** ✅ | ~~In-place migration.~~ **RE-DECIDED 2026-07-17: new-table dual-write.** | The rollback window **never closes**; recovery is `LCM_IMAGE_TAG=<previous>`, lossless, at any time. §D30's warning ceases to exist — *a hazard removed by construction beats a hazard documented*. **Cost accepted:** two write paths in `ClustersService` for one release, both tested, plus one rule — **the old table mirrors the NEWEST baseline; a manual edit backfilling an OLDER period must not touch it.** Contract PR drops the old table. |
 | **Q6** | **Manual baselines snap to first-of-month, like vSphere snapshots.** | `capturedAt` is the period anchor for **both** sources ⇒ D27's "exactly one truth per cluster/metric/period" holds and is DB-enforced. A manual correction to a month that already has a snapshot is an explicit upsert. Accepted cost: no two baselines in one month; an entered date shifts to the 1st (the UI must say so). |
 | **Q8** | **The `clusters.ts:132` data-loss bug gets its own issue + PR, landed before #177.** | Keeps a live-bug fix bisectable and out of a large migration PR, and gives D33's characterization test an honest pre-state to capture. |
 
@@ -1537,20 +1537,17 @@ enshrining a live data-loss bug.
 
 - [x] **Environment facts (§1) confirmed** — 2026-07-17.
 - [x] **Blocking decisions recorded (§0)** — Q9a, Q9b, Q9c, Q9d, Q2, Q4, Q6, Q8 — 2026-07-17.
-- [ ] **Scope amendments (§11) accepted** — in particular **multi-vCenter**, which rewrites #175, and
-      **§11.7**, documenting the forecast's modelling semantics.
-- [ ] **Threat model and control set (§6) accepted**, including the **ASVS L1 honesty note** (§6.6) — the
-      SSRF requirements are Level 2 and the project targets Level 1, so **none of these controls are
-      mandated**; each stands on the threat model — and the residual risks (§6.8).
-- [ ] **TLS policy (§5) accepted**, including §0.1's **recorded rejection of an insecure mode** and the
-      deliberate divergence from govmomi's leaf-pin convention.
-- [ ] **Migration strategy and the rollback window (§D30) accepted** — the window closes at the **first
-      appended baseline**, after which recovery is restore-from-dump, not image rollback.
-- [ ] **`docs/vision.md` amendment (§11.5) approved** — it currently lists this work under v1 **Non-goals**
-      and **Anti-patterns** while **Horizons** endorses it. `CLAUDE.md` makes that document authoritative,
-      so this is the owner's call, not an assumption.
+- [x] **Scope amendments (§11) accepted** — 2026-07-17.
+- [x] **Threat model and control set (§6) accepted**, ASVS L1 note and residual risks included — 2026-07-17.
+- [x] **TLS policy (§5) accepted**, incl. §0.1's recorded rejection of an insecure mode — 2026-07-17.
+- [x] **Migration strategy accepted** — 2026-07-17, **as new-table dual-write** (Q4 re-decided), so the
+      rollback window never closes and §D30's warning does not apply.
+- [x] **`docs/vision.md` amendment (§11.5) approved** — 2026-07-17.
 
-**No implementation begins until the remaining boxes are signed off.**
+> ## ✅ GATE APPROVED — 2026-07-17. Implementation authorised.
+> Order: **#181** → **characterization snapshot** → **#177** → **#175** → **#176** → **#178** / **#179**.
+> Hard Rule 2 still applies: **#177 and #175 stop for explicit approval before merging.**
+> Hard Rule 5 still applies: if implementation shows a decision here is wrong, **stop and re-raise it**.
 
 ### 13.1 What approval commits to, in one paragraph
 
