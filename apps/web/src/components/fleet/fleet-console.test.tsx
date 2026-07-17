@@ -285,3 +285,49 @@ describe('<FleetConsole> (render)', () => {
     expect(archivedTile).not.toHaveTextContent('0+');
   });
 });
+
+describe('<FleetConsole> heading (every render branch has an h1)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders a level-1 heading while clusters are still loading', () => {
+    // Never resolves within the test — clustersQuery stays isPending, so the
+    // console renders only the skeleton branch.
+    vi.spyOn(api.clusters, 'list').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api.settings.tenant, 'get').mockReturnValue(new Promise(() => {}));
+
+    renderConsole();
+
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+  });
+
+  it('renders a level-1 heading in the error state', async () => {
+    vi.spyOn(api.clusters, 'list').mockRejectedValue(new Error('boom'));
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+
+    renderConsole();
+
+    expect(await screen.findByText(/Could not load clusters/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+  });
+
+  it('renders a level-1 heading in the empty state (no clusters)', async () => {
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+
+    renderConsole();
+
+    // Wait for the empty-state content specifically before asserting the
+    // heading — both the loading and empty branches render an identical
+    // sr-only h1, so asserting the heading alone could pass while still on
+    // the (also headed) loading branch.
+    expect(await screen.findByText('No clusters yet.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+  });
+});

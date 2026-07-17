@@ -160,6 +160,17 @@ describe('<ClusterPanel>', () => {
     expect(dialog).toHaveAttribute('aria-modal', 'false');
   });
 
+  it('gives the close button an accessible name of exactly "Close", not "Close Esc" (MINOR fix)', async () => {
+    // The visible <kbd>Esc</kbd> hint must not concatenate into the
+    // accessible name — it's decorative for sighted keyboard users only.
+    render(<Harness show />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /close/i })).toHaveFocus();
+    });
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveAccessibleName('Close');
+  });
+
   it('restores focus to the previously-focused element after the panel closes', async () => {
     const { rerender } = render(<Harness show={false} />);
     const trigger = screen.getByRole('button', { name: 'Open trigger' });

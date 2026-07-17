@@ -1,8 +1,4 @@
-const DAY_MS = 86_400_000;
-
-function daysUntil(dateStr: string): number {
-  return Math.round((new Date(dateStr).getTime() - Date.now()) / DAY_MS);
-}
+import { daysUntil } from '@/lib/dates';
 
 export function HostEolPill({ eolAt }: { eolAt: string | null }): React.JSX.Element | null {
   if (!eolAt) return null;

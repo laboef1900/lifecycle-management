@@ -238,12 +238,15 @@ body {
 /* Global two-layer focus ring (spec §3 / §6): an outer steel outline for
    ≥3:1 visibility on every surface, separated from the element by a
    surface-colored box-shadow so the ring never blends into whatever it sits
-   on. Components that set their own focus-visible outline/ring (a handful of
-   ui/* primitives) take precedence via specificity — see task-1-report.md. */
+   on. Deliberately no border-radius here: `outline` is a UA-drawn ring that
+   already contours to the focused element's own border-radius, so this rule
+   never has to know (or fight) any component's corner radius — a fixed
+   `border-radius: 3px` here previously clobbered every focused component's
+   actual radius, since this unlayered rule beats Tailwind's `@layer`
+   utilities regardless of a component's own specificity. */
 :focus-visible {
   outline: 2px solid var(--steel);
   outline-offset: 2px;
-  border-radius: 3px;
   box-shadow: 0 0 0 2px var(--background);
 }
 

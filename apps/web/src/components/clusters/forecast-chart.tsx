@@ -165,14 +165,18 @@ export function ForecastChart({
               dataKey="month"
               height={X_AXIS_HEIGHT}
               tickFormatter={formatMonthShort}
-              tick={{ fontSize: compact ? 10 : 11 }}
+              // Recharts paints tick text from `fill` (falling back to `stroke`
+              // when unset) — `colors.axis` is tuned as a line color (~1.4:1 as
+              // text on dark), so tick text needs the separate `--fg-subtle`
+              // text token while the axis line itself keeps `colors.axis`.
+              tick={{ fontSize: compact ? 10 : 11, fill: 'var(--fg-subtle)' }}
               stroke={colors.axis}
               interval="preserveStartEnd"
               minTickGap={24}
             />
             <YAxis
               width={Y_AXIS_WIDTH}
-              tick={{ fontSize: compact ? 10 : 11 }}
+              tick={{ fontSize: compact ? 10 : 11, fill: 'var(--fg-subtle)' }}
               stroke={colors.axis}
               tickFormatter={(v: number) => numberFormat.format(v)}
               domain={ceilingForDomain ? [0, ceilingForDomain] : ['auto', 'auto']}
@@ -180,7 +184,7 @@ export function ForecastChart({
                 value: 'GB',
                 angle: -90,
                 position: 'insideLeft',
-                style: { fontSize: compact ? 10 : 11, fill: colors.axis },
+                style: { fontSize: compact ? 10 : 11, fill: 'var(--fg-subtle)' },
               }}
             />
             <Tooltip

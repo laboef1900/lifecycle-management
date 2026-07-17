@@ -58,8 +58,22 @@ vi.mock('recharts', async () => {
       </div>
     ),
     CartesianGrid: Pass,
-    XAxis: () => null,
-    YAxis: () => null,
+    XAxis: ({ tick }: { tick?: { fill?: string } }): React.JSX.Element => (
+      <div data-testid="x-axis" data-tick-fill={tick?.fill ?? ''} />
+    ),
+    YAxis: ({
+      tick,
+      label,
+    }: {
+      tick?: { fill?: string };
+      label?: { style?: { fill?: string } };
+    }): React.JSX.Element => (
+      <div
+        data-testid="y-axis"
+        data-tick-fill={tick?.fill ?? ''}
+        data-label-fill={label?.style?.fill ?? ''}
+      />
+    ),
     Tooltip: () => null,
     Area: ({ dataKey }: { dataKey: string }) => <div data-testid={`area-${dataKey}`} />,
     Line: ({ dataKey, strokeDasharray }: { dataKey: string; strokeDasharray?: string }) => (
@@ -320,6 +334,19 @@ describe('ForecastChart props mapping', () => {
     renderChart(forecast);
 
     expect(screen.getByRole('img', { name: 'Capacity forecast chart' })).toBeInTheDocument();
+  });
+
+  it('fills axis tick text with fg-subtle, not the axis line color (dark-theme contrast fix)', () => {
+    // Recharts paints tick text from the axis `stroke` by default; `colors.axis`
+    // (`--chart-axis`) is tuned as a ~1.4:1 line color in dark mode, unreadable
+    // as text. Tick text must use the separate `--fg-subtle` text token while
+    // the axis line itself keeps `colors.axis` via `stroke`.
+    const forecast = makeForecast();
+    renderChart(forecast);
+
+    expect(screen.getByTestId('x-axis').dataset.tickFill).toBe('var(--fg-subtle)');
+    expect(screen.getByTestId('y-axis').dataset.tickFill).toBe('var(--fg-subtle)');
+    expect(screen.getByTestId('y-axis').dataset.labelFill).toBe('var(--fg-subtle)');
   });
 
   it('labels each event dot with vertical text in the category colour', () => {

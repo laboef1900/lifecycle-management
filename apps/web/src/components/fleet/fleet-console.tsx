@@ -152,27 +152,40 @@ export function FleetConsole(): React.JSX.Element {
   const isError = clustersQuery.isError;
   const isEmpty = !isLoading && !isError && clusters.length === 0;
 
+  // Every render branch needs exactly one h1 (the happy path's is
+  // FleetVerdict's headline) — the loading/error/empty branches below don't
+  // have a natural heading of their own, so they each get a visually-hidden
+  // one instead of leaving the page headingless.
   return (
     <div className="space-y-3">
       {isError ? (
         <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive shadow-none">
+          <h1 className="sr-only">Fleet capacity console</h1>
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <span>Could not load clusters: {clustersQuery.error?.message}</span>
         </Card>
       ) : null}
 
-      {isLoading ? <ConsoleSkeleton /> : null}
+      {isLoading ? (
+        <>
+          <h1 className="sr-only">Fleet capacity console</h1>
+          <ConsoleSkeleton />
+        </>
+      ) : null}
 
       {isEmpty ? (
-        <EmptyState
-          title="No clusters yet."
-          description="Add a cluster to start tracking memory capacity and forecasting growth."
-          action={
-            <AdminOnly>
-              <CreateClusterDialog />
-            </AdminOnly>
-          }
-        />
+        <>
+          <h1 className="sr-only">Fleet capacity console</h1>
+          <EmptyState
+            title="No clusters yet."
+            description="Add a cluster to start tracking memory capacity and forecasting growth."
+            action={
+              <AdminOnly>
+                <CreateClusterDialog />
+              </AdminOnly>
+            }
+          />
+        </>
       ) : null}
 
       {!isLoading && !isError && clusters.length > 0 ? (

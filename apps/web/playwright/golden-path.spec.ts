@@ -32,6 +32,12 @@ test('create cluster, add host + application, chart reflects updates', async ({
 
     await page.goto('/');
 
+    // The fleet console always has exactly one h1 — the verdict headline on
+    // the happy path, or an sr-only fallback while loading/empty/errored.
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+      /^(Fleet runway is|Fleet is healthy|Fleet capacity console)/,
+    );
+
     // Create the cluster from the console's toolbar row (spec §4.5).
     await page.getByRole('button', { name: '+ Add cluster' }).click();
     const createDialog = page.getByRole('dialog', { name: 'New cluster' });

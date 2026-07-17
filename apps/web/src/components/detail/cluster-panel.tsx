@@ -405,7 +405,10 @@ const CloseButton = ({
   >
     <X className="h-3.5 w-3.5" aria-hidden />
     Close
-    <kbd className="rounded border border-border px-1 py-0.5 text-[9px] font-semibold text-fg-subtle">
+    <kbd
+      aria-hidden
+      className="rounded border border-border px-1 py-0.5 text-[9px] font-semibold text-fg-subtle"
+    >
       Esc
     </kbd>
   </button>
