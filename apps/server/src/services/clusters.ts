@@ -1,4 +1,4 @@
-import { startOfUtcMonth } from '@lcm/shared';
+import { entitySourceSchema, startOfUtcMonth, vsphereConnectionStatusSchema } from '@lcm/shared';
 import type {
   ClusterCreateInput,
   ClusterResponse,
@@ -14,6 +14,7 @@ import { NotFoundError, UnprocessableError } from './errors.js';
 import { computeForecast } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
+import { assertClusterDeletable, assertSyncedBaselineCapacityZero } from './sync-ownership.js';
 
 function clusterNameTaken(name: string): UniqueConstraintMapping {
   return {
@@ -34,6 +35,10 @@ const clusterInclude = {
     },
   },
   items: { include: { allocations: true } },
+  // Denormalized onto ClusterResponse so the fleet console can render a
+  // per-cluster source badge and connection health without a round-trip per
+  // tile (#193). `null` for manual clusters.
+  connection: { select: { id: true, name: true, status: true, enabled: true } },
 } satisfies Prisma.ClusterInclude;
 
 type ClusterRow = Prisma.ClusterGetPayload<{ include: typeof clusterInclude }>;
@@ -132,10 +137,18 @@ export class ClustersService {
   async update(tenantId: string, id: string, input: ClusterUpdateInput): Promise<ClusterResponse> {
     const existing = await this.prisma.cluster.findFirst({
       where: { id, tenantId },
-      select: { id: true },
+      select: { id: true, source: true },
     });
     if (!existing) {
       throw new NotFoundError('Cluster', id);
+    }
+
+    // Q9a write-time invariant (#196): name/description/baselineDate and
+    // baselineConsumption corrections stay open on a synced cluster — only a
+    // non-zero baselineCapacity is refused, since capacity comes from synced host
+    // inventory and a non-zero baseline double-counts the fleet.
+    if (input.baselines) {
+      assertSyncedBaselineCapacityZero(existing.source, id, input.baselines);
     }
 
     const data: Prisma.ClusterUpdateInput = {};
@@ -244,10 +257,17 @@ export class ClustersService {
   }
 
   async delete(tenantId: string, id: string): Promise<void> {
-    const result = await this.prisma.cluster.deleteMany({ where: { id, tenantId } });
-    if (result.count === 0) {
+    const existing = await this.prisma.cluster.findFirst({
+      where: { id, tenantId },
+      select: { id: true, source: true },
+    });
+    if (!existing) {
       throw new NotFoundError('Cluster', id);
     }
+    // A synced cluster's existence is sync-owned: deleting it cascades away the
+    // baseline history and the next sync re-creates an empty twin (#196).
+    assertClusterDeletable(existing.source, id);
+    await this.prisma.cluster.deleteMany({ where: { id, tenantId } });
   }
 
   async archive(tenantId: string, id: string): Promise<ClusterResponse> {
@@ -373,6 +393,21 @@ export class ClustersService {
       updatedAt: row.updatedAt.toISOString(),
       archivedAt: row.archivedAt?.toISOString() ?? null,
       metrics,
+      // Sync provenance (#193). `source`/`status` are stored as untyped strings,
+      // so parse them at this boundary rather than casting — a corrupt value
+      // fails loudly instead of shipping garbage to the client.
+      source: entitySourceSchema.parse(row.source),
+      lastSyncedAt: row.lastSyncedAt?.toISOString() ?? null,
+      externalName: row.externalName,
+      connection: row.connection
+        ? {
+            id: row.connection.id,
+            name: row.connection.name,
+            status: vsphereConnectionStatusSchema.parse(row.connection.status),
+            enabled: row.connection.enabled,
+          }
+        : null,
+      provisionalHostCount: row.hosts.filter((h) => h.commissionedAtProvisional).length,
     };
   }
 }

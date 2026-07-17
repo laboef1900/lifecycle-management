@@ -290,4 +290,76 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText(/forecast unavailable/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
   });
+
+  const syncedConnection = {
+    id: 'conn1',
+    name: 'vc-prod-zrh',
+    status: 'active' as const,
+    enabled: true,
+  };
+
+  it('a manual cluster shows no sync badge or live line (unchanged appearance)', () => {
+    render(
+      <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+    );
+    expect(screen.queryByText('vSphere')).toBeNull();
+    expect(screen.queryByText('LIVE')).toBeNull();
+  });
+
+  it('a synced cluster renders the vSphere badge, live reading, and an AT summary', () => {
+    render(
+      <ClusterTile
+        entry={entry({ cluster: cluster({ source: 'vsphere', connection: syncedConnection }) })}
+        forecast={forecast()}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        live={{
+          state: 'fresh',
+          clusterId: 'c1',
+          connectionName: 'vc-prod-zrh',
+          memoryUsedGiB: 1234.5,
+          hostsSampled: 8,
+          hostsTotal: 8,
+          measuredAt: '2026-08-01T11:59:00Z',
+          ageSeconds: 120,
+        }}
+      />,
+    );
+    expect(screen.getByText('vSphere')).toBeInTheDocument();
+    expect(screen.getByText('1,235 GiB')).toBeInTheDocument();
+    // aria-label overrides visible content, so the live info must be echoed there.
+    const label = screen.getByRole('link').getAttribute('aria-label') ?? '';
+    expect(label).toContain('synced from vSphere');
+    expect(label).toContain('1,235 GiB');
+  });
+
+  it('★ a synced cluster with no sample reads "not yet measured", never 0', () => {
+    render(
+      <ClusterTile
+        entry={entry({ cluster: cluster({ source: 'vsphere', connection: syncedConnection }) })}
+        forecast={forecast()}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        live={{ state: 'never_fetched', clusterId: 'c1', connectionName: 'vc-prod-zrh' }}
+      />,
+    );
+    expect(screen.getByText('not yet measured')).toBeInTheDocument();
+    expect(screen.queryByText(/0 GiB/)).toBeNull();
+  });
+
+  it('surfaces the provisional-host hint when hosts need commissioning dates', () => {
+    render(
+      <ClusterTile
+        entry={entry({
+          cluster: cluster({
+            source: 'vsphere',
+            connection: syncedConnection,
+            provisionalHostCount: 4,
+          }),
+        })}
+        forecast={forecast()}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        live={{ state: 'never_fetched', clusterId: 'c1', connectionName: 'vc-prod-zrh' }}
+      />,
+    );
+    expect(screen.getByText(/4 HOSTS NEED DATES/)).toBeInTheDocument();
+  });
 });

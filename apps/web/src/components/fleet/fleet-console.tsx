@@ -70,6 +70,16 @@ export function FleetConsole(): React.JSX.Element {
   });
   const clusters = clustersQuery.data?.items ?? [];
 
+  // Batch live usage for every synced cluster, in one request (#193). Keyed so
+  // the cluster detail panel reuses this exact cache and picks out its own
+  // item — no per-cluster round-trip. Manual clusters are simply absent.
+  const liveUsageQuery = useQuery({
+    queryKey: ['clusters', 'live-usage'],
+    queryFn: () => api.clusters.liveUsage(),
+  });
+  const liveUsageById = new Map((liveUsageQuery.data?.items ?? []).map((u) => [u.clusterId, u]));
+  const liveUsagePending = liveUsageQuery.isPending;
+
   const archivedClustersQuery = useQuery({
     queryKey: ['clusters', { includeArchived: true }],
     queryFn: () => api.clusters.list({ includeArchived: true }),
@@ -251,6 +261,8 @@ export function FleetConsole(): React.JSX.Element {
                   forecast={forecastsByClusterId.get(entry.cluster.id)}
                   thresholds={entry.thresholds}
                   linked={linkedClusterId === entry.cluster.id}
+                  live={liveUsageById.get(entry.cluster.id)}
+                  liveUsagePending={liveUsagePending}
                 />
               </div>
             ))}
