@@ -138,6 +138,10 @@ describe('<ClusterPanel>', () => {
     navigateMock.mockClear();
     vi.spyOn(api.clusters, 'get').mockResolvedValue(cluster());
     vi.spyOn(api.clusters, 'forecast').mockResolvedValue(forecast());
+    // The default cluster() is manual (no connection), so the live-usage
+    // section renders nothing — but the batch query still fires; keep it off
+    // the real network (#193).
+    vi.spyOn(api.clusters, 'liveUsage').mockResolvedValue({ items: [] });
     vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
       items: [],
       total: 0,

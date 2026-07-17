@@ -1,4 +1,4 @@
-import type { ForecastResponse } from '@lcm/shared';
+import type { ForecastResponse, LiveUsage } from '@lcm/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { memo } from 'react';
@@ -10,6 +10,12 @@ import { formatMonthShort } from '@/lib/format-month';
 import { cn } from '@/lib/utils';
 
 import { ClusterTileChart } from './cluster-tile-chart';
+import {
+  describeLiveUsage,
+  LiveUsageInline,
+  ProvisionalHostHint,
+  SyncStateBadge,
+} from './live-usage';
 import { formatRelativeDays, orderByUrgency } from './order-by-rail';
 import { baselineAgeDays, isBaselineStale } from './stale-baseline';
 
@@ -20,6 +26,13 @@ export interface ClusterTileProps {
   thresholds: { warn: number; crit: number };
   /** Highlights the tile — the order-by rail links back to its tile on hover/focus. */
   linked?: boolean;
+  /**
+   * This cluster's live-usage reading from the fleet batch. `undefined` for a
+   * manual cluster (never in the batch) or while the batch is still loading —
+   * `liveUsagePending` disambiguates the two for the synced case.
+   */
+  live?: LiveUsage | undefined;
+  liveUsagePending?: boolean;
 }
 
 const STATUS_BADGE: Record<
@@ -151,6 +164,8 @@ export const ClusterTile = memo(function ClusterTile({
   forecast,
   thresholds,
   linked = false,
+  live,
+  liveUsagePending = false,
 }: ClusterTileProps): React.JSX.Element {
   const { cluster } = entry;
   const queryClient = useQueryClient();
@@ -214,6 +229,12 @@ export const ClusterTile = memo(function ClusterTile({
         ? `${(currentUtil * 100).toFixed(1)}% used — already past crit.`
         : `${(currentUtil * 100).toFixed(1)}% used — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
 
+  // Live usage / sync summary, appended so assistive tech hears it — the tile's
+  // aria-label overrides its visible content, so the visible LIVE line below
+  // would otherwise be silent.
+  const liveSummary = isArchived ? '' : describeLiveUsage(cluster, live);
+  const provisionalCount = cluster.provisionalHostCount ?? 0;
+
   const ariaLabel = [
     `${cluster.name}: ${(currentUtil * 100).toFixed(1)} percent utilized`,
     isArchived
@@ -223,6 +244,10 @@ export const ClusterTile = memo(function ClusterTile({
       ? `order by ${orderByDate} (${formatRelativeDays(orderByDate)})`
       : 'no order needed',
     stale ? `baseline ${ageDays} days old — re-measure` : null,
+    liveSummary || null,
+    !isArchived && provisionalCount > 0
+      ? `${provisionalCount} host${provisionalCount === 1 ? '' : 's'} need commissioning dates`
+      : null,
     'Open detail.',
   ]
     .filter(Boolean)
@@ -250,6 +275,7 @@ export const ClusterTile = memo(function ClusterTile({
           {badge.label}
         </Badge>
         {cluster.archivedAt ? <Badge variant="outline">Archived</Badge> : null}
+        {!isArchived ? <SyncStateBadge cluster={cluster} /> : null}
       </div>
 
       <div className="flex flex-wrap items-end gap-2">
@@ -288,7 +314,12 @@ export const ClusterTile = memo(function ClusterTile({
         {isArchived ? 'Archived — no forecast.' : verdict}
       </p>
 
+      {!isArchived && cluster.connection ? (
+        <LiveUsageInline cluster={cluster} live={live} isPending={liveUsagePending} />
+      ) : null}
+
       <div className="flex flex-wrap gap-1">
+        {!isArchived ? <ProvisionalHostHint count={provisionalCount} /> : null}
         {events.length > 0 ? (
           <FlagChip tone="warn">
             EVENT ×{events.length}

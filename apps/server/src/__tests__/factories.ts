@@ -1,5 +1,5 @@
 import { startOfUtcMonth } from '@lcm/shared';
-import type { HostState } from '@lcm/shared';
+import type { EntitySource, HostState, VsphereConnectionStatus } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
 import { encrypt } from '../crypto/secret-box.js';
@@ -38,6 +38,18 @@ export interface MakeClusterOptions {
   baselineConsumption?: number;
   baselineCapacity?: number;
   tenantId?: string;
+  /**
+   * Sync provenance. Omitted leaves the schema default (`manual`) with null sync
+   * fields — an ordinary manual cluster. Pass `source: 'vsphere'` (with a
+   * `connectionId`) to fabricate a synced cluster for the live-usage / sync-state
+   * surfaces (#193) and the #196 sync-owned-field guard. `externalId` is required
+   * by the DB's `(connectionId, externalId)` identity once a connection is set.
+   */
+  source?: EntitySource;
+  connectionId?: string;
+  externalId?: string;
+  externalName?: string;
+  lastSyncedAt?: Date;
 }
 
 export async function makeCluster(
@@ -56,6 +68,11 @@ export async function makeCluster(
       name,
       description: options.description ?? null,
       baselineDate: options.baselineDate ?? DEFAULT_BASELINE_DATE,
+      ...(options.source !== undefined ? { source: options.source } : {}),
+      ...(options.connectionId !== undefined ? { connectionId: options.connectionId } : {}),
+      ...(options.externalId !== undefined ? { externalId: options.externalId } : {}),
+      ...(options.externalName !== undefined ? { externalName: options.externalName } : {}),
+      ...(options.lastSyncedAt !== undefined ? { lastSyncedAt: options.lastSyncedAt } : {}),
       baselines: {
         create: {
           tenantId,
@@ -96,15 +113,18 @@ export interface MakeHostOptions {
   tenantId?: string;
   /** Lifecycle state; omitted uses the schema default (in_service). */
   state?: HostState;
-  /** Provenance; omitted uses the schema default (`manual`). */
-  source?: 'manual' | 'vsphere';
   /**
    * A synced host whose commissioning date vCenter could not supply (Q9c, #194).
-   * Omitted uses the schema default (false). Set `true` alongside
-   * `source: 'vsphere'` to fabricate the provisional state the confirm flow
-   * operates on — no VsphereConnection FK is required (connectionId stays null).
+   * Marks the imported `commissionedAt` as provisional (sync-imported,
+   * unconfirmed). Drives the fleet-console "N hosts need commissioning dates"
+   * hint (#193/#194). Omitted leaves the schema default (`false`). Set `true`
+   * alongside `source: 'vsphere'` to fabricate the provisional state the confirm
+   * flow operates on.
    */
   commissionedAtProvisional?: boolean;
+  source?: EntitySource;
+  connectionId?: string;
+  externalId?: string;
 }
 
 export async function makeHost(
@@ -129,10 +149,12 @@ export async function makeHost(
       commissionedAt,
       decommissionedAt: options.decommissionedAt ?? null,
       ...(options.state !== undefined && { state: options.state }),
-      ...(options.source !== undefined && { source: options.source }),
       ...(options.commissionedAtProvisional !== undefined && {
         commissionedAtProvisional: options.commissionedAtProvisional,
       }),
+      ...(options.source !== undefined && { source: options.source }),
+      ...(options.connectionId !== undefined && { connectionId: options.connectionId }),
+      ...(options.externalId !== undefined && { externalId: options.externalId }),
       capacities: {
         create: initialCapacity.map((row) => ({
           tenantId,
@@ -246,44 +268,62 @@ export async function makeEvent(
 }
 
 export interface MakeVsphereConnectionOptions {
-  /** The AES-GCM key the password is encrypted under — must match the service that reveals it. */
-  key: Buffer;
+  id?: string;
   name?: string;
   hostname?: string;
   username?: string;
   password?: string;
   enabled?: boolean;
+  status?: VsphereConnectionStatus;
   tenantId?: string;
   instanceUuid?: string;
   /** The PEM pinned as the trust anchor; null (default) verifies against system roots. */
   tlsPinnedCaPem?: string | null;
+  /**
+   * The AES-GCM key the password is encrypted under — must match the service that
+   * reveals it. Supply it to write a REAL encrypted `passwordEnc` (so
+   * `revealPassword` round-trips, as the scheduler/job tests need). Omit it and the
+   * row gets a non-secret placeholder ciphertext instead — fine for read-path tests
+   * (live usage, sync-state surfaces — #193) that never decrypt the credential.
+   */
+  key?: Buffer;
 }
 
 /**
- * A vCenter connection row with a real encrypted password, so `revealPassword`
- * round-trips. Writes the row directly (no scheduler job — pair with
+ * A vCenter connection row. Writes the row directly (no scheduler job — pair with
  * {@link makeVsphereConnectionJob} when a due job is needed) so a test controls the
  * job's timestamps precisely.
+ *
+ * With a `key`, `passwordEnc` is a real AES-GCM ciphertext that `revealPassword`
+ * round-trips; without one it is a placeholder, which is all the read paths that
+ * only ever read `name`/`status`/`enabled` require. Do NOT rely on the placeholder
+ * for tests that decrypt the credential — pass `key` (or use the service).
  */
 export async function makeVsphereConnection(
   prisma: PrismaClient,
-  options: MakeVsphereConnectionOptions,
-): Promise<{ id: string; tenantId: string }> {
+  options: MakeVsphereConnectionOptions = {},
+): Promise<{ id: string; name: string; tenantId: string }> {
   const tenantId = options.tenantId ?? DEFAULT_TENANT;
-  const suffix = nextSuffix();
-  const row = await prisma.vsphereConnection.create({
+  const name = options.name ?? `vc-${nextSuffix()}`;
+  const passwordEnc =
+    options.key !== undefined
+      ? encrypt(options.password ?? 'p', options.key)
+      : 'factory-placeholder-not-a-real-secret';
+  const connection = await prisma.vsphereConnection.create({
     data: {
+      ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
-      name: options.name ?? `vc-${suffix}`,
+      name,
       hostname: options.hostname ?? 'vcenter.corp.local',
       username: options.username ?? 'svc-lcm',
-      passwordEnc: encrypt(options.password ?? 'p', options.key),
-      enabled: options.enabled ?? true,
+      passwordEnc,
+      ...(options.enabled !== undefined ? { enabled: options.enabled } : {}),
+      ...(options.status !== undefined ? { status: options.status } : {}),
       ...(options.instanceUuid !== undefined ? { instanceUuid: options.instanceUuid } : {}),
       ...(options.tlsPinnedCaPem !== undefined ? { tlsPinnedCaPem: options.tlsPinnedCaPem } : {}),
     },
   });
-  return { id: row.id, tenantId: row.tenantId };
+  return { id: connection.id, name: connection.name, tenantId: connection.tenantId };
 }
 
 export interface MakeVsphereConnectionJobOptions {

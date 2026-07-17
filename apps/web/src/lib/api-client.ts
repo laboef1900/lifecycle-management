@@ -28,6 +28,7 @@ import {
   clusterUpdateInputSchema,
   forecastResponseSchema,
   hostCommissioningConfirmInputSchema,
+  liveUsageListResponseSchema,
   hostCreateInputSchema,
   hostLifecycleEventResponseSchema,
   hostReplacementCreateInputSchema,
@@ -183,6 +184,11 @@ export const api = {
         paginatedSchema(clusterResponseSchema),
       ),
     get: (id: string) => request(`/api/clusters/${id}`, undefined, clusterResponseSchema),
+    // Batch live usage for the fleet console — one entry per SYNCED cluster
+    // (#193). Manual clusters are absent from `items` (not `never_fetched`).
+    // The single-cluster panel reuses this same query via the shared React
+    // Query cache and picks out its cluster's item — no per-cluster endpoint.
+    liveUsage: () => request('/api/clusters/live-usage', undefined, liveUsageListResponseSchema),
     create: (input: ClusterCreateInputWire) =>
       request(
         '/api/clusters',

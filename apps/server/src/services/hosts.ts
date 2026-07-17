@@ -14,6 +14,7 @@ import { formatDate } from '../lib/dates.js';
 import { NotFoundError, UnprocessableError } from './errors.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
+import { assertHostCreatableUnderCluster, assertHostDeletable } from './sync-ownership.js';
 
 const CAPACITY_DUPLICATE: UniqueConstraintMapping = {
   code: 'CAPACITY_DUPLICATE_DATE',
@@ -70,7 +71,15 @@ export class HostsService {
   }
 
   async create(tenantId: string, clusterId: string, input: HostCreateInput): Promise<HostResponse> {
-    await this.assertClusterExists(tenantId, clusterId);
+    const cluster = await this.prisma.cluster.findFirst({
+      where: { id: clusterId, tenantId },
+      select: { id: true, source: true },
+    });
+    if (!cluster) {
+      throw new NotFoundError('Cluster', clusterId);
+    }
+    // Host membership of a synced cluster is sync-owned (#196).
+    assertHostCreatableUnderCluster(cluster.source, clusterId);
     this.validateInitialCapacities(input);
 
     const metricTypes = await this.resolveMetricTypes(input.capacities.map((c) => c.metricTypeKey));
@@ -125,7 +134,12 @@ export class HostsService {
     }
 
     const data: Prisma.HostUpdateInput = {};
-    if (input.name !== undefined) data.name = input.name;
+    if (input.name !== undefined) {
+      data.name = input.name;
+      // An operator rename pins the label so inventory sync stops clobbering it
+      // (parity with Cluster.nameIsCustom, #196). Harmless on manual hosts.
+      data.nameIsCustom = true;
+    }
     if (input.description !== undefined) data.description = input.description ?? null;
     if (input.commissionedAt !== undefined) {
       const earliest = existing.capacities.reduce<Date | null>(
@@ -290,10 +304,16 @@ export class HostsService {
   }
 
   async delete(tenantId: string, id: string): Promise<void> {
-    const result = await this.prisma.host.deleteMany({ where: { id, tenantId } });
-    if (result.count === 0) {
+    const existing = await this.prisma.host.findFirst({
+      where: { id, tenantId },
+      select: { id: true, source: true },
+    });
+    if (!existing) {
       throw new NotFoundError('Host', id);
     }
+    // A synced host is reconciled from vCenter; deleting it is sync-owned (#196).
+    assertHostDeletable(existing.source, id);
+    await this.prisma.host.deleteMany({ where: { id, tenantId } });
   }
 
   private async assertClusterExists(tenantId: string, clusterId: string): Promise<void> {
