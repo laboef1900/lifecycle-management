@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { cuid, dateOnly, positiveAmount } from './common.js';
+import type { EntitySource } from './vsphere.js';
 
 export const capacityRowInputSchema = z.strictObject({
   metricTypeKey: z.string().min(1),
@@ -88,4 +89,25 @@ export interface HostResponse {
   createdAt: string;
   updatedAt: string;
   capacities: CapacityResponseRow[];
+  /**
+   * Where this host came from. Absent = server predates sync metadata.
+   *
+   * @ai-warning Do not default absence to `'manual'` — see the same warning on
+   * `ClusterResponse.source`.
+   */
+  source?: EntitySource;
+  /** Absent = server predates sync metadata. `null` = never synced. */
+  lastSyncedAt?: string | null;
+  /**
+   * True = vCenter could not tell us when this host was commissioned, so sync
+   * imported a provisional date and flagged it (owner decision Q9c). The admin
+   * confirms the real date afterwards. Absent = server predates the flag; render
+   * no badge.
+   *
+   * @ai-context The flag is not cosmetic: `commissionedAt` is NOT NULL and
+   * `effectiveCapacityAt` returns 0 before it, so a wrong provisional date
+   * silently flattens the historical chart. The flag is what lets the UI ask
+   * rather than present a guess as a measurement.
+   */
+  commissionedAtProvisional?: boolean;
 }
