@@ -2,6 +2,8 @@ import { startOfUtcMonth } from '@lcm/shared';
 import type { HostState } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
+import { encrypt } from '../crypto/secret-box.js';
+
 const DEFAULT_TENANT = 'default';
 const DEFAULT_METRIC_KEY = 'memory_gb';
 const DEFAULT_BASELINE_DATE = new Date('2026-05-01T00:00:00.000Z');
@@ -241,6 +243,85 @@ export async function makeEvent(
   });
 
   return { id: event.id, title: event.name };
+}
+
+export interface MakeVsphereConnectionOptions {
+  /** The AES-GCM key the password is encrypted under — must match the service that reveals it. */
+  key: Buffer;
+  name?: string;
+  hostname?: string;
+  username?: string;
+  password?: string;
+  enabled?: boolean;
+  tenantId?: string;
+  instanceUuid?: string;
+  /** The PEM pinned as the trust anchor; null (default) verifies against system roots. */
+  tlsPinnedCaPem?: string | null;
+}
+
+/**
+ * A vCenter connection row with a real encrypted password, so `revealPassword`
+ * round-trips. Writes the row directly (no scheduler job — pair with
+ * {@link makeVsphereConnectionJob} when a due job is needed) so a test controls the
+ * job's timestamps precisely.
+ */
+export async function makeVsphereConnection(
+  prisma: PrismaClient,
+  options: MakeVsphereConnectionOptions,
+): Promise<{ id: string; tenantId: string }> {
+  const tenantId = options.tenantId ?? DEFAULT_TENANT;
+  const suffix = nextSuffix();
+  const row = await prisma.vsphereConnection.create({
+    data: {
+      tenantId,
+      name: options.name ?? `vc-${suffix}`,
+      hostname: options.hostname ?? 'vcenter.corp.local',
+      username: options.username ?? 'svc-lcm',
+      passwordEnc: encrypt(options.password ?? 'p', options.key),
+      enabled: options.enabled ?? true,
+      ...(options.instanceUuid !== undefined ? { instanceUuid: options.instanceUuid } : {}),
+      ...(options.tlsPinnedCaPem !== undefined ? { tlsPinnedCaPem: options.tlsPinnedCaPem } : {}),
+    },
+  });
+  return { id: row.id, tenantId: row.tenantId };
+}
+
+export interface MakeVsphereConnectionJobOptions {
+  connectionId: string;
+  dueAt?: Date;
+  lastPollAt?: Date | null;
+  lastSyncAt?: Date | null;
+  lastSyncStatus?: string | null;
+  lastSnapshotAt?: Date | null;
+  lastSnapshotStatus?: string | null;
+  lastSnapshotPeriod?: Date | null;
+  lastSuccessPeriod?: Date | null;
+  failureCount?: number;
+  runningSince?: Date | null;
+  lockedBy?: string | null;
+}
+
+/** A scheduler job row for a connection, with every last-run timestamp controllable. */
+export async function makeVsphereConnectionJob(
+  prisma: PrismaClient,
+  options: MakeVsphereConnectionJobOptions,
+): Promise<void> {
+  await prisma.vsphereConnectionJob.create({
+    data: {
+      connectionId: options.connectionId,
+      dueAt: options.dueAt ?? new Date(0),
+      lastPollAt: options.lastPollAt ?? null,
+      lastSyncAt: options.lastSyncAt ?? null,
+      lastSyncStatus: options.lastSyncStatus ?? null,
+      lastSnapshotAt: options.lastSnapshotAt ?? null,
+      lastSnapshotStatus: options.lastSnapshotStatus ?? null,
+      lastSnapshotPeriod: options.lastSnapshotPeriod ?? null,
+      lastSuccessPeriod: options.lastSuccessPeriod ?? null,
+      failureCount: options.failureCount ?? 0,
+      runningSince: options.runningSince ?? null,
+      lockedBy: options.lockedBy ?? null,
+    },
+  });
 }
 
 export interface MakeUserOptions {

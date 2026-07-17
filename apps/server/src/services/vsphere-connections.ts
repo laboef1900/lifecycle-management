@@ -3,9 +3,10 @@ import type {
   VsphereConnectionResponse,
   VsphereConnectionStatus,
   VsphereConnectionUpdate,
+  VsphereSyncOutcome,
   VsphereTlsMode,
 } from '@lcm/shared';
-import type { PrismaClient, VsphereConnection } from '@prisma/client';
+import type { PrismaClient, VsphereConnection, VsphereConnectionJob } from '@prisma/client';
 
 import { decrypt, encrypt } from '../crypto/secret-box.js';
 import { NotFoundError, UnprocessableError } from './errors.js';
@@ -35,6 +36,18 @@ const connectionTaken = (name: string): UnprocessableError =>
   );
 
 /**
+ * The `dueAt` a freshly seeded scheduler job gets: the Unix epoch, guaranteed in
+ * the past, so the very first tick after a connection is created or (re-)enabled
+ * imports its inventory immediately rather than waiting out a cadence (#191, D22:
+ * "sync-on-connection-create/enable"). The scheduler advances it to a real cadence
+ * on the first run.
+ */
+const SEED_DUE_AT = new Date(0);
+
+/** A connection row with its scheduler job eagerly loaded, as `toResponse` needs it. */
+type ConnectionWithJob = VsphereConnection & { job: VsphereConnectionJob | null };
+
+/**
  * Manages vCenter connections and their encrypted credentials (#175, epic #172).
  *
  * @ai-warning Two rules here are load-bearing and easy to "tidy" away:
@@ -62,12 +75,16 @@ export class VsphereConnectionsService {
     const rows = await this.prisma.vsphereConnection.findMany({
       where: { tenantId },
       orderBy: { createdAt: 'asc' },
+      include: { job: true },
     });
     return rows.map((r) => this.toResponse(r));
   }
 
   async getById(tenantId: string, id: string): Promise<VsphereConnectionResponse> {
-    const row = await this.prisma.vsphereConnection.findFirst({ where: { id, tenantId } });
+    const row = await this.prisma.vsphereConnection.findFirst({
+      where: { id, tenantId },
+      include: { job: true },
+    });
     if (!row) throw new NotFoundError('VsphereConnection', id);
     return this.toResponse(row);
   }
@@ -78,6 +95,12 @@ export class VsphereConnectionsService {
   ): Promise<VsphereConnectionResponse> {
     const passwordEnc = this.encryptPassword(input.password);
     try {
+      // Seed the scheduler job in the same write (#191). `connectionId` is the job's
+      // PK+FK, so the nested create is atomic — a connection can never exist without
+      // its job row, and the first tick imports immediately (SEED_DUE_AT is in the
+      // past). Seeded even when `enabled: false`; the scheduler filters disabled
+      // connections out, so an unused row is harmless and enabling later just bumps
+      // `dueAt`.
       const row = await this.prisma.vsphereConnection.create({
         data: {
           tenantId,
@@ -86,7 +109,9 @@ export class VsphereConnectionsService {
           username: input.username,
           passwordEnc,
           enabled: input.enabled,
+          job: { create: { dueAt: SEED_DUE_AT } },
         },
+        include: { job: true },
       });
       return this.toResponse(row);
     } catch (err) {
@@ -133,8 +158,35 @@ export class VsphereConnectionsService {
       data.lastError = null;
     }
 
+    // Enabling a previously disabled connection re-arms its scheduler job so the
+    // next tick imports immediately (#191, D22: "sync-on-...enable"). Upsert, not
+    // create: the row normally already exists (seeded at create); the upsert also
+    // self-heals a connection that somehow lost its job. Disabling touches no job
+    // row — the scheduler filters disabled connections out, and keeping the row
+    // preserves its last-run history for the settings panel.
+    const reEnabling = input.enabled === true && !existing.enabled;
+
     try {
-      const row = await this.prisma.vsphereConnection.update({ where: { id }, data });
+      const updateConnection = this.prisma.vsphereConnection.update({
+        where: { id },
+        data,
+        include: { job: true },
+      });
+      // Atomic: the enable and the re-arm land together, or neither does. `dueAt` is
+      // not part of `syncState`, so the connection row's eagerly-loaded job is
+      // accurate for the response even though the upsert bumps `dueAt` alongside.
+      const row = reEnabling
+        ? (
+            await this.prisma.$transaction([
+              updateConnection,
+              this.prisma.vsphereConnectionJob.upsert({
+                where: { connectionId: id },
+                create: { connectionId: id, dueAt: SEED_DUE_AT },
+                update: { dueAt: SEED_DUE_AT },
+              }),
+            ])
+          )[0]
+        : await updateConnection;
       return this.toResponse(row);
     } catch (err) {
       translatePrismaError(err, { uniqueConstraint: connectionTaken(input.name ?? '') });
@@ -173,6 +225,7 @@ export class VsphereConnectionsService {
         status: 'never_connected',
         lastError: null,
       },
+      include: { job: true },
     });
     return this.toResponse(row);
   }
@@ -264,7 +317,7 @@ export class VsphereConnectionsService {
    * encrypted secret never leaves the server, and a `password: '••••'` field is
    * the first step towards someone rendering the real one.
    */
-  private toResponse(row: VsphereConnection): VsphereConnectionResponse {
+  private toResponse(row: ConnectionWithJob): VsphereConnectionResponse {
     return {
       id: row.id,
       name: row.name,
@@ -280,6 +333,36 @@ export class VsphereConnectionsService {
       lastConnectedAt: row.lastConnectedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
+      // The scheduler job's last-run outcome (#202 contract, populated by #191's
+      // status writer). `null` = no job row yet; the object otherwise. Distinct from
+      // `lastError`/`lastConnectedAt` above, which are connection reachability, not
+      // job outcome.
+      syncState: syncStateOf(row.job),
     };
   }
+}
+
+/**
+ * Map a scheduler job row to the `syncState` sub-object of the response contract
+ * (#202). `lastSyncStatus` is stored as an untyped `String?`; the values are only
+ * ever written by the scheduler from the `VsphereSyncOutcome` vocabulary, and the
+ * shared `vsphereSyncOutcomeSchema` validates it at the serialization boundary.
+ */
+function syncStateOf(
+  job: VsphereConnectionJob | null,
+): NonNullable<VsphereConnectionResponse['syncState']> | null {
+  if (!job) return null;
+  return {
+    lastSyncAt: job.lastSyncAt?.toISOString() ?? null,
+    lastSyncStatus: (job.lastSyncStatus as VsphereSyncOutcome | null) ?? null,
+    lastSnapshotAt: job.lastSnapshotAt?.toISOString() ?? null,
+    lastSnapshotStatus: job.lastSnapshotStatus,
+    lastSuccessPeriod: job.lastSuccessPeriod ? isoDateOnly(job.lastSuccessPeriod) : null,
+    failureCount: job.failureCount,
+  };
+}
+
+/** A `@db.Date` column rendered as a date-only `YYYY-MM-DD` string. */
+function isoDateOnly(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }

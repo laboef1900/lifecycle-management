@@ -54,6 +54,12 @@ export class VsphereSyncService {
       password: string;
       pinnedRootPem: string | null;
     },
+    /**
+     * Graceful-shutdown cancellation (design §D21). Threaded into the vCenter
+     * collect so an in-flight sync tears down when the process is draining. Not a
+     * per-collect deadline — the collector's own REQUEST_TIMEOUT bounds each call.
+     */
+    signal?: AbortSignal,
   ): Promise<VsphereSyncResult> {
     const empty = {
       connectionId,
@@ -73,7 +79,7 @@ export class VsphereSyncService {
 
     let inventory: CollectedInventory;
     try {
-      inventory = await this.collector.collect(credentials);
+      inventory = await this.collector.collect(credentials, signal);
     } catch (err) {
       // Degrade, never crash: the last known inventory keeps serving and the
       // connection is marked. A failure on THIS vCenter must not affect any other.

@@ -1,4 +1,4 @@
-import { startOfUtcMonth } from '@lcm/shared';
+import { startOfUtcMonth, type VsphereSyncOutcome } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
 import type { CollectedInventory, VsphereInventoryCollector } from './vsphere-inventory.js';
@@ -36,8 +36,18 @@ export class VsphereSnapshotService {
    * purchasing, where a gap is merely visible. The line is: we never write a
    * baseline we cannot stand behind.
    *
-   * Throws on failure. The scheduler owns all error handling and the backoff that
-   * keeps the job inside its month.
+   * @ai-warning A sync failure returns `{ syncOutcome, snapshotPeriod: null }` — it
+   * does NOT throw. This is what lets the scheduler (#191) stamp `lastSyncStatus`
+   * with the correct `VsphereSyncOutcome` vocabulary and distinguish a *sync*
+   * failure from a *snapshot-measurement* failure (a poll or sync failure must
+   * never be rendered as a snapshot outage — D16a's three-signals model). The
+   * load-bearing guarantee is unchanged: `snapshotPeriod` is null whenever the
+   * sync did not return `ok`, so no baseline is ever written off stale inventory.
+   * The measure step (a second collect + the DB write) still throws — that failure
+   * is unexpected and the scheduler owns its backoff.
+   *
+   * This owns the sync itself (D15a): the scheduler MUST NOT run a separate sync
+   * before calling this when a snapshot is due, or the vCenter is reconciled twice.
    */
   async runSnapshot(
     tenantId: string,
@@ -49,18 +59,30 @@ export class VsphereSnapshotService {
       pinnedRootPem: string | null;
     },
     measuredAt: Date,
-  ): Promise<{ snapshotPeriod: Date | null; clustersSnapshotted: number }> {
+    /** Graceful-shutdown cancellation (design §D21); threaded into both collects. */
+    signal?: AbortSignal,
+  ): Promise<{
+    syncOutcome: VsphereSyncOutcome;
+    syncError: string | null;
+    snapshotPeriod: Date | null;
+    clustersSnapshotted: number;
+  }> {
     // 1. Sync first, always. A sync failure aborts THIS connection's snapshot
     //    deliberately — see the docstring.
     const sync = new VsphereSyncService(this.prisma, this.collector);
-    const syncResult = await sync.syncConnection(tenantId, connectionId, credentials);
+    const syncResult = await sync.syncConnection(tenantId, connectionId, credentials, signal);
     if (syncResult.outcome !== 'ok') {
-      throw new Error(`sync ${syncResult.outcome}: ${syncResult.error ?? 'unknown'}`);
+      return {
+        syncOutcome: syncResult.outcome,
+        syncError: syncResult.error,
+        snapshotPeriod: null,
+        clustersSnapshotted: 0,
+      };
     }
 
     // 2. Measure. A second collect is deliberate: usage moves, inventory does not,
     //    and the numbers must describe the fleet we just reconciled.
-    const inventory = await this.collector.collect(credentials);
+    const inventory = await this.collector.collect(credentials, signal);
     const metric = await this.prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
 
     // ⚠️ The period comes from the MEASUREMENT clock, never from a schedule. A
@@ -110,7 +132,7 @@ export class VsphereSnapshotService {
       clustersSnapshotted += written.count;
     }
 
-    return { snapshotPeriod: period, clustersSnapshotted };
+    return { syncOutcome: 'ok', syncError: null, snapshotPeriod: period, clustersSnapshotted };
   }
 }
 

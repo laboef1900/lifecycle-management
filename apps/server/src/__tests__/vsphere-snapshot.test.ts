@@ -200,9 +200,14 @@ describe('⚠️ sync-before-snapshot is mechanized, not hoped for', () => {
     // A baseline with a stale capacity denominator is WORSE than a missing one:
     // it is a plausible lie that silently biases purchasing, where a gap is merely
     // visible. We never write a baseline we cannot stand behind.
-    await expect(
-      svc.runSnapshot('default', conn, CREDS, new Date('2026-08-01T00:00:00Z')),
-    ).rejects.toThrow(/sync/);
+    //
+    // The sync failure is RETURNED, not thrown: the scheduler (#191) stamps
+    // lastSyncStatus from `syncOutcome` and must distinguish a sync failure from a
+    // snapshot-measurement failure. `snapshotPeriod: null` is the abort — no
+    // baseline is written, and the collect ran exactly once (sync's), never twice.
+    const result = await svc.runSnapshot('default', conn, CREDS, new Date('2026-08-01T00:00:00Z'));
+    expect(result.syncOutcome).toBe('unreachable');
+    expect(result.snapshotPeriod).toBeNull();
     expect(calls).toBe(1);
     expect(await prisma.clusterBaselineHistory.count({ where: { source: 'vsphere' } })).toBe(0);
   });

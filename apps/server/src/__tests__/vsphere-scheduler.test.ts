@@ -2,27 +2,34 @@ import { randomBytes } from 'node:crypto';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { VsphereConnectionsService } from '../services/vsphere-connections.js';
+import { POLL_INTERVAL_MS } from '../services/vsphere-live-usage.js';
 import {
   backoffMs,
+  computeDueState,
   missedPeriods,
   nextMonthlyBoundary,
   periodFor,
   VsphereScheduler,
   type Clock,
   type JobRunner,
+  type JobRunReport,
 } from '../services/vsphere-scheduler.js';
+import { makeVsphereConnection, makeVsphereConnectionJob } from './factories.js';
 import { prisma } from './setup.js';
 
 /**
- * The monthly snapshot scheduler (#178, epic #172).
+ * The vCenter scheduler (#178/#191, epic #172).
  *
- * @ai-context No fake timers anywhere, deliberately. The suite uses them nowhere,
- * and `isolate: false` makes `vi.mock` unreliable here (see oidc-plugin.test.ts).
- * To test "a month passed", these MOVE `dueAt` IN THE DATABASE and call
+ * @ai-context No fake timers anywhere, deliberately. The suite uses them nowhere, and
+ * `isolate: false` makes `vi.mock` unreliable here (see oidc-plugin.test.ts). To test
+ * "a month passed", these MOVE the job's timestamps IN THE DATABASE and call
  * `runDueJobs()` directly — the timer is never started and nothing sleeps.
+ *
+ * The runner is a fake that returns a {@link JobRunReport}. That is the seam: these
+ * tests drive the scheduler's claim/lease/persist logic given a report; the runner's
+ * own D15a dispatch (sync → snapshot → poll) is tested in vsphere-job-runner.test.ts.
  */
-const connections = new VsphereConnectionsService(prisma, randomBytes(32));
+const KEY = randomBytes(32);
 
 let seq = 0;
 const uniq = (s: string): string => `sch-${s}-${++seq}`;
@@ -41,29 +48,45 @@ function runner(impl: JobRunner['run']): JobRunner {
   return { run: impl };
 }
 
-const okRunner = (period = '2026-08-01'): JobRunner =>
-  runner(async () => ({ snapshotPeriod: new Date(`${period}T00:00:00Z`) }));
+/** A report where every activity succeeded — the steady-state happy path. */
+const okReport = (period = '2026-08-01'): JobRunReport => ({
+  poll: { ran: true, ok: true },
+  sync: { outcome: 'ok' },
+  snapshot: { attempted: true, period: new Date(`${period}T00:00:00Z`), failed: false },
+  errorMessage: null,
+});
 
-async function makeJob(dueAt: string): Promise<string> {
-  const c = await connections.create('default', {
-    name: uniq('conn'),
-    hostname: 'vcenter.corp.local',
-    username: 'u',
-    password: 'p',
-    enabled: true,
-  });
-  made.push(c.id);
-  await prisma.vsphereConnectionJob.create({
-    data: { connectionId: c.id, dueAt: new Date(dueAt) },
-  });
-  return c.id;
+const okRunner = (period = '2026-08-01'): JobRunner => runner(async () => okReport(period));
+
+interface MakeJobOptions {
+  lastPollAt?: Date | null;
+  lastSyncAt?: Date | null;
+  lastSuccessPeriod?: Date | null;
+  lastSnapshotStatus?: string | null;
+  failureCount?: number;
 }
 
-describe('period derivation — the rule that makes in-period emergent', () => {
+async function makeJob(dueAt: string, options: MakeJobOptions = {}): Promise<string> {
+  const { id } = await makeVsphereConnection(prisma, { key: KEY, name: uniq('conn') });
+  made.push(id);
+  await makeVsphereConnectionJob(prisma, {
+    connectionId: id,
+    dueAt: new Date(dueAt),
+    ...options,
+  });
+  return id;
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+describe('pure derivations', () => {
   it('derives the period from the MEASUREMENT clock, not from dueAt', () => {
-    // A retry on 3 August recomputes 2026-08-01 by itself. That is why no
-    // "clamp the backoff inside the period" rule is needed — and that clamp is
-    // exactly the version that eventually breaks.
     expect(periodFor(new Date('2026-08-03T09:14:00Z')).toISOString().slice(0, 10)).toBe(
       '2026-08-01',
     );
@@ -73,39 +96,84 @@ describe('period derivation — the rule that makes in-period emergent', () => {
   });
 
   it('advances to the next boundary forward from NOW, never dueAt + 1 month', () => {
-    // Three missed months must produce ONE catch-up run, not three snapshots of
-    // today's usage backdated to three past months — that would be fabricated data.
     expect(nextMonthlyBoundary(new Date('2026-08-15T00:00:00Z')).toISOString().slice(0, 10)).toBe(
       '2026-09-01',
     );
     expect(nextMonthlyBoundary(new Date('2026-12-31T00:00:00Z')).toISOString().slice(0, 10)).toBe(
       '2027-01-01',
     );
-  });
-
-  it('anchoring on day 1 sidesteps addUtcMonths day-clamping', () => {
-    // Anchored on the 31st, one pass through February would drift the schedule to
-    // the 28th forever.
+    // Anchored on day 1 sidesteps addUtcMonths day-clamping through February.
     expect(nextMonthlyBoundary(new Date('2026-01-31T00:00:00Z')).toISOString().slice(0, 10)).toBe(
       '2026-02-01',
     );
   });
 
-  it('caps backoff at one hour — retrying often is desirable', () => {
-    // The earlier in the month we catch a recovery window, the more representative
-    // that month's baseline is.
+  it('backoff clamps at the given cap — poll interval for poll/sync, 1h for snapshot', () => {
+    // 30s · 2^n, clamped. The default cap is 1h (snapshot); a poll/sync tick passes
+    // POLL_INTERVAL_MS so a dead vCenter is never retried slower than its cadence.
     expect(backoffMs(1)).toBe(60_000);
     expect(backoffMs(50)).toBe(60 * 60 * 1000);
+    expect(backoffMs(50, POLL_INTERVAL_MS)).toBe(POLL_INTERVAL_MS);
+    expect(backoffMs(0, POLL_INTERVAL_MS)).toBe(30_000);
+  });
+
+  it('a whole month lost is an HONEST GAP, and it is detectable', () => {
+    const lastSuccess = new Date('2026-07-01T00:00:00Z');
+    expect(missedPeriods(lastSuccess, new Date('2026-09-01T00:00:00Z'))).toBe(1);
+    expect(missedPeriods(lastSuccess, new Date('2026-08-01T00:00:00Z'))).toBe(0);
+    expect(missedPeriods(null, new Date('2026-09-01T00:00:00Z'))).toBe(0);
+  });
+});
+
+describe('computeDueState — per-activity due-ness from last-run timestamps', () => {
+  const now = new Date('2026-08-15T12:00:00Z');
+
+  it('a brand-new job (all null) is due for everything', () => {
+    expect(
+      computeDueState({ lastPollAt: null, lastSyncAt: null, lastSuccessPeriod: null }, now),
+    ).toEqual({ poll: true, sync: true, snapshot: true });
+  });
+
+  it('poll is due at 5 minutes, not before', () => {
+    const fourMin = new Date(now.getTime() - 4 * 60 * 1000);
+    const sixMin = new Date(now.getTime() - 6 * 60 * 1000);
+    expect(
+      computeDueState({ lastPollAt: fourMin, lastSyncAt: now, lastSuccessPeriod: null }, now).poll,
+    ).toBe(false);
+    expect(
+      computeDueState({ lastPollAt: sixMin, lastSyncAt: now, lastSuccessPeriod: null }, now).poll,
+    ).toBe(true);
+  });
+
+  it('sync is due at 6 hours, not before', () => {
+    const fiveH = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+    const sevenH = new Date(now.getTime() - 7 * 60 * 60 * 1000);
+    expect(
+      computeDueState({ lastPollAt: now, lastSyncAt: fiveH, lastSuccessPeriod: null }, now).sync,
+    ).toBe(false);
+    expect(
+      computeDueState({ lastPollAt: now, lastSyncAt: sevenH, lastSuccessPeriod: null }, now).sync,
+    ).toBe(true);
+  });
+
+  it('snapshot is due once per UTC month, from lastSuccessPeriod not dueAt', () => {
+    const thisMonth = new Date('2026-08-01T00:00:00Z');
+    const lastMonth = new Date('2026-07-01T00:00:00Z');
+    expect(
+      computeDueState({ lastPollAt: now, lastSyncAt: now, lastSuccessPeriod: thisMonth }, now)
+        .snapshot,
+    ).toBe(false);
+    expect(
+      computeDueState({ lastPollAt: now, lastSyncAt: now, lastSuccessPeriod: lastMonth }, now)
+        .snapshot,
+    ).toBe(true);
   });
 });
 
 describe('catch-up IS the data model', () => {
   it('a job whose dueAt is in the past runs on the next tick', async () => {
-    // Server down three days ⇒ dueAt two days past ⇒ first tick runs it. There is
-    // no "did I miss one?" branch to get wrong.
     const id = await makeJob('2026-08-01T00:00:00Z');
     const sched = new VsphereScheduler(prisma, okRunner(), fixedClock('2026-08-04T10:00:00Z'));
-
     const outcomes = await sched.runDueJobs();
     expect(outcomes.find((o) => o.connectionId === id)?.ran).toBe(true);
   });
@@ -113,86 +181,200 @@ describe('catch-up IS the data model', () => {
   it('a job not yet due is left alone', async () => {
     const id = await makeJob('2026-09-01T00:00:00Z');
     const sched = new VsphereScheduler(prisma, okRunner(), fixedClock('2026-08-04T10:00:00Z'));
-
     const outcomes = await sched.runDueJobs();
     expect(outcomes.find((o) => o.connectionId === id)).toBeUndefined();
   });
 
-  it('three missed months produce ONE run, not three', async () => {
-    const id = await makeJob('2026-05-01T00:00:00Z');
-    let calls = 0;
-    const sched = new VsphereScheduler(
-      prisma,
-      runner(async () => {
-        calls += 1;
-        return { snapshotPeriod: new Date('2026-08-01T00:00:00Z') };
-      }),
-      fixedClock('2026-08-04T10:00:00Z'),
-    );
+  it('a disabled connection never runs, even with a due job row', async () => {
+    // Seeded then disabled: the row survives (for its history) but must not tick,
+    // or a deliberately disabled vCenter reports a perpetual, escalating false failure.
+    const { id } = await makeVsphereConnection(prisma, {
+      key: KEY,
+      name: uniq('disabled'),
+      enabled: false,
+    });
+    made.push(id);
+    await makeVsphereConnectionJob(prisma, { connectionId: id, dueAt: new Date(0) });
 
-    await sched.runDueJobs();
-    expect(calls).toBe(1);
+    const sched = new VsphereScheduler(prisma, okRunner(), fixedClock('2026-08-04T10:00:00Z'));
+    const outcomes = await sched.runDueJobs();
+    expect(outcomes.find((o) => o.connectionId === id)).toBeUndefined();
+  });
+});
+
+describe('status columns — the writer the #202 dead columns needed', () => {
+  it('a clean run stamps every column with the right outcome', async () => {
+    const id = await makeJob('2026-08-01T00:00:00Z');
+    await new VsphereScheduler(
+      prisma,
+      okRunner('2026-08-01'),
+      fixedClock('2026-08-01T00:00:00Z'),
+    ).runDueJobs();
 
     const job = await prisma.vsphereConnectionJob.findUniqueOrThrow({
       where: { connectionId: id },
     });
-    // Forward from NOW — so the next run is September, not a march through the
-    // months we missed writing today's usage into each.
-    expect(job.dueAt.toISOString().slice(0, 10)).toBe('2026-09-01');
+    expect(job.lastSyncStatus).toBe('ok');
+    expect(job.lastSyncAt?.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+    expect(job.lastPollAt?.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+    expect(job.lastSnapshotStatus).toBe('ok');
+    expect(job.lastSnapshotAt?.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+    expect(job.lastSnapshotPeriod?.toISOString().slice(0, 10)).toBe('2026-08-01');
+    expect(job.lastSuccessPeriod?.toISOString().slice(0, 10)).toBe('2026-08-01');
+    expect(job.failureCount).toBe(0);
+    expect(job.lastError).toBeNull();
+    expect(job.runningSince).toBeNull();
+    expect(job.lockedBy).toBeNull();
+  });
+
+  it('a clean run sets dueAt to the min-of-cadences — the 5-minute poll, jittered', async () => {
+    const now = new Date('2026-08-01T00:00:00Z');
+    const id = await makeJob(now.toISOString());
+    await new VsphereScheduler(prisma, okRunner('2026-08-01'), {
+      now: () => now,
+    }).runDueJobs();
+
+    const job = await prisma.vsphereConnectionJob.findUniqueOrThrow({
+      where: { connectionId: id },
+    });
+    // min(now+5m poll, now+6h sync, next-month snapshot) = now+5m, ±10% jitter.
+    const delta = job.dueAt.getTime() - now.getTime();
+    expect(delta).toBeGreaterThanOrEqual(POLL_INTERVAL_MS * 0.9 - 1);
+    expect(delta).toBeLessThanOrEqual(POLL_INTERVAL_MS * 1.1 + 1);
+  });
+
+  it('records the sync outcome vocabulary on a sync-only failure', async () => {
+    // This month already snapshotted, so only poll+sync are due; the sync fails.
+    const id = await makeJob('2026-08-10T00:00:00Z', {
+      lastSuccessPeriod: new Date('2026-08-01T00:00:00Z'),
+      lastSyncAt: new Date('2026-08-01T00:00:00Z'),
+      lastPollAt: new Date('2026-08-10T00:00:00Z'),
+    });
+    await new VsphereScheduler(
+      prisma,
+      runner(async () => ({
+        poll: { ran: false, ok: false },
+        sync: { outcome: 'auth_failed' },
+        snapshot: { attempted: false, period: null, failed: false },
+        errorMessage: 'vCenter rejected the credentials.',
+      })),
+      fixedClock('2026-08-10T00:00:00Z'),
+    ).runDueJobs();
+
+    const job = await prisma.vsphereConnectionJob.findUniqueOrThrow({
+      where: { connectionId: id },
+    });
+    expect(job.lastSyncStatus).toBe('auth_failed');
+    // A sync failure must NOT stamp lastSyncAt — the sync is not "done", so it stays
+    // due and retries under backoff rather than waiting out 6h.
+    expect(job.lastSyncAt?.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+    expect(job.failureCount).toBe(1);
+    expect(job.lastError).toBe('vCenter rejected the credentials.');
   });
 });
 
 describe('⚠️ a failed snapshot must NEVER consume its month', () => {
-  it('★ failure advances dueAt by backoff only — it stays inside the month', async () => {
+  it('★ a snapshot failure advances dueAt by backoff only — it stays inside the month', async () => {
     const id = await makeJob('2026-08-01T00:00:00Z');
-    const sched = new VsphereScheduler(
+    await new VsphereScheduler(
       prisma,
-      runner(async () => {
-        throw new Error('connect ETIMEDOUT');
-      }),
+      runner(async () => ({
+        poll: { ran: true, ok: true },
+        sync: { outcome: 'ok' },
+        snapshot: { attempted: true, period: null, failed: true },
+        errorMessage: 'Could not reach vCenter.',
+      })),
       fixedClock('2026-08-01T00:00:00Z'),
-    );
+    ).runDueJobs();
 
-    await sched.runDueJobs();
     const job = await prisma.vsphereConnectionJob.findUniqueOrThrow({
       where: { connectionId: id },
     });
-
-    // THE test. Had this advanced to September, a vCenter outage on 1 Aug would
-    // have cost August's baseline forever — silently, in an append-only history
-    // whose whole purpose is an unbroken trend. The chart would just have no
-    // August point and nobody would know why.
+    // Snapshot was due → 1h cap; backoff(1) = 60s. Stays inside August.
     expect(job.dueAt.toISOString().slice(0, 10)).toBe('2026-08-01');
-    expect(job.dueAt.getTime()).toBeGreaterThan(new Date('2026-08-01T00:00:00Z').getTime());
+    expect(job.dueAt.getTime()).toBe(new Date('2026-08-01T00:00:00Z').getTime() + 60_000);
     expect(job.failureCount).toBe(1);
+    expect(job.lastSnapshotStatus).toBe('failed');
     expect(job.lastSuccessPeriod).toBeNull();
   });
 
-  it('repeated failures keep it in-period and never advance the period', async () => {
-    const id = await makeJob('2026-08-01T00:00:00Z');
-    for (const at of ['2026-08-01T00:00:00Z', '2026-08-05T00:00:00Z', '2026-08-20T00:00:00Z']) {
-      await prisma.vsphereConnectionJob.update({
-        where: { connectionId: id },
-        data: { dueAt: new Date(at) },
-      });
-      await new VsphereScheduler(
-        prisma,
-        runner(async () => {
-          throw new Error('down');
-        }),
-        fixedClock(at),
-      ).runDueJobs();
-    }
+  it('a POLL failure must NOT mark the monthly snapshot as failed', async () => {
+    // The month is already snapshotted (ok); a failing 5-minute poll is not a broken
+    // baseline, and rendering it as one would report a snapshot outage that never was.
+    const id = await makeJob('2026-08-10T00:00:00Z', {
+      lastSuccessPeriod: new Date('2026-08-01T00:00:00Z'),
+      lastSnapshotStatus: 'ok',
+      lastSyncAt: new Date('2026-08-10T00:00:00Z'),
+    });
+    await new VsphereScheduler(
+      prisma,
+      runner(async () => ({
+        poll: { ran: true, ok: false },
+        sync: { outcome: null },
+        snapshot: { attempted: false, period: null, failed: false },
+        errorMessage: 'Could not reach vCenter.',
+      })),
+      fixedClock('2026-08-10T00:00:00Z'),
+    ).runDueJobs();
+
     const job = await prisma.vsphereConnectionJob.findUniqueOrThrow({
       where: { connectionId: id },
     });
-    expect(job.failureCount).toBe(3);
-    expect(job.lastSuccessPeriod).toBeNull();
-    expect(job.dueAt.toISOString().slice(0, 7)).toBe('2026-08');
+    expect(job.lastSnapshotStatus).toBe('ok');
+    expect(job.failureCount).toBe(1);
+    expect(job.lastError).toBe('Could not reach vCenter.');
+  });
+
+  it('the backoff cap is chosen by which activity was due', async () => {
+    const clock = fixedClock('2026-08-10T00:00:00Z');
+    const failReport = (): JobRunReport => ({
+      poll: { ran: true, ok: false },
+      sync: { outcome: null },
+      snapshot: { attempted: false, period: null, failed: false },
+      errorMessage: 'Could not reach vCenter.',
+    });
+    const snapshotFailReport = (): JobRunReport => ({
+      poll: { ran: true, ok: true },
+      sync: { outcome: 'ok' },
+      snapshot: { attempted: true, period: null, failed: true },
+      errorMessage: 'Could not reach vCenter.',
+    });
+
+    // Poll-only failure (this month snapshotted) with 9 prior failures → 5m cap.
+    const pollId = await makeJob('2026-08-10T00:00:00Z', {
+      lastSuccessPeriod: new Date('2026-08-01T00:00:00Z'),
+      lastSyncAt: new Date('2026-08-10T00:00:00Z'),
+      failureCount: 9,
+    });
+    await new VsphereScheduler(
+      prisma,
+      runner(async () => failReport()),
+      clock,
+    ).runDueJobs();
+    const pollJob = await prisma.vsphereConnectionJob.findUniqueOrThrow({
+      where: { connectionId: pollId },
+    });
+    expect(pollJob.dueAt.getTime()).toBe(
+      new Date('2026-08-10T00:00:00Z').getTime() + POLL_INTERVAL_MS,
+    );
+
+    // Snapshot-due failure with 9 prior failures → 1h cap.
+    const snapId = await makeJob('2026-08-10T00:00:00Z', { failureCount: 9 });
+    await new VsphereScheduler(
+      prisma,
+      runner(async () => snapshotFailReport()),
+      clock,
+    ).runDueJobs();
+    const snapJob = await prisma.vsphereConnectionJob.findUniqueOrThrow({
+      where: { connectionId: snapId },
+    });
+    expect(snapJob.dueAt.getTime()).toBe(
+      new Date('2026-08-10T00:00:00Z').getTime() + 60 * 60 * 1000,
+    );
   });
 
   it('success records the period and clears the failure count', async () => {
-    const id = await makeJob('2026-08-01T00:00:00Z');
+    const id = await makeJob('2026-08-01T00:00:00Z', { failureCount: 3 });
     await new VsphereScheduler(
       prisma,
       okRunner('2026-08-01'),
@@ -204,21 +386,11 @@ describe('⚠️ a failed snapshot must NEVER consume its month', () => {
     });
     expect(job.lastSuccessPeriod?.toISOString().slice(0, 10)).toBe('2026-08-01');
     expect(job.failureCount).toBe(0);
-    expect(job.dueAt.toISOString().slice(0, 10)).toBe('2026-09-01');
-  });
-
-  it('a whole month lost is an HONEST GAP, and it is detectable', async () => {
-    // vCenter down all August ⇒ 1 Sep writes September only. Fabricating August
-    // from September's usage would be wrong data that looks real.
-    const lastSuccess = new Date('2026-07-01T00:00:00Z');
-    expect(missedPeriods(lastSuccess, new Date('2026-09-01T00:00:00Z'))).toBe(1);
-    expect(missedPeriods(lastSuccess, new Date('2026-08-01T00:00:00Z'))).toBe(0);
-    expect(missedPeriods(null, new Date('2026-09-01T00:00:00Z'))).toBe(0);
   });
 });
 
 describe('⚠️ the scheduler never crashes the server', () => {
-  it('a throwing job is caught, recorded, and does not reject', async () => {
+  it('an unexpectedly throwing runner is caught, recorded, and does not reject', async () => {
     const id = await makeJob('2026-08-01T00:00:00Z');
     const sched = new VsphereScheduler(
       prisma,
@@ -235,7 +407,10 @@ describe('⚠️ the scheduler never crashes the server', () => {
     const job = await prisma.vsphereConnectionJob.findUniqueOrThrow({
       where: { connectionId: id },
     });
-    expect(job.lastSnapshotStatus).toBe('failed');
+    expect(job.failureCount).toBe(1);
+    expect(job.lastError).not.toBeNull();
+    // The backstop must NOT invent a snapshot outage from an unclassified throw.
+    expect(job.lastSnapshotStatus).toBeNull();
   });
 
   it('a sanitized error never carries the credential or a stack', async () => {
@@ -263,7 +438,7 @@ describe('⚠️ the scheduler never crashes the server', () => {
       prisma,
       runner(async (connectionId) => {
         if (connectionId === bad) throw new Error('down');
-        return { snapshotPeriod: new Date('2026-08-01T00:00:00Z') };
+        return okReport('2026-08-01');
       }),
       fixedClock('2026-08-01T00:00:00Z'),
     );
@@ -272,8 +447,6 @@ describe('⚠️ the scheduler never crashes the server', () => {
     const goodJob = await prisma.vsphereConnectionJob.findUniqueOrThrow({
       where: { connectionId: good },
     });
-    // A dead vCenter A must not deny B its baseline — that would turn a one-vCenter
-    // outage into fleet-wide data loss.
     expect(goodJob.lastSuccessPeriod?.toISOString().slice(0, 10)).toBe('2026-08-01');
   });
 });
@@ -288,23 +461,19 @@ describe('⚠️ concurrency — compose overlaps containers today', () => {
         runner(async () => {
           calls += 1;
           await new Promise((r) => setTimeout(r, 30));
-          return { snapshotPeriod: new Date('2026-08-01T00:00:00Z') };
+          return okReport('2026-08-01');
         }),
         fixedClock('2026-08-01T00:00:00Z'),
         `instance-${calls}-${Math.random()}`,
       );
 
-    // `docker compose up -d` overlaps containers: the old one drains for up to 10s
-    // while the new one boots and ticks. This is a real double-run window on the
-    // single-instance deployment we have today, not a hypothetical replica.
     await Promise.all([mk().runDueJobs(), mk().runDueJobs()]);
     expect(calls).toBe(1);
     expect(id).toBeTruthy();
   });
 
   it('a stale lease is reclaimed so a hard-killed process self-heals', async () => {
-    const id = await makeJob('2026-08-01T00:00:00Z');
-    // Simulate a process killed mid-job 20 minutes ago.
+    const id = await makeJob('2026-08-01T00:00:00Z', {});
     await prisma.vsphereConnectionJob.update({
       where: { connectionId: id },
       data: { runningSince: new Date('2026-08-01T09:40:00Z'), lockedBy: 'dead-process' },
@@ -334,23 +503,62 @@ describe('⚠️ concurrency — compose overlaps containers today', () => {
   });
 });
 
+describe('⚠️ graceful shutdown releases the claim without consuming the month', () => {
+  it('★ stop() aborts an in-flight run, releases the claim, and leaves dueAt unchanged', async () => {
+    const dueAt = '2026-08-01T00:00:00Z';
+    const id = await makeJob(dueAt);
+    const started = deferred();
+
+    const sched = new VsphereScheduler(
+      prisma,
+      runner(async (_c, _m, _d, signal) => {
+        started.resolve();
+        // Block until shutdown aborts us, mimicking an in-flight vCenter collect.
+        await new Promise<void>((res) => {
+          if (signal.aborted) return res();
+          signal.addEventListener('abort', () => res(), { once: true });
+        });
+        return okReport('2026-08-01');
+      }),
+      fixedClock(dueAt),
+      'instance-drain',
+      2_000,
+    );
+
+    const runPromise = sched.runDueJobs();
+    await started.promise;
+
+    // The claim is held while the job runs.
+    const claimed = await prisma.vsphereConnectionJob.findUniqueOrThrow({
+      where: { connectionId: id },
+    });
+    expect(claimed.runningSince).not.toBeNull();
+    expect(claimed.lockedBy).toBe('instance-drain');
+
+    await sched.stop();
+    await runPromise;
+
+    const after = await prisma.vsphereConnectionJob.findUniqueOrThrow({
+      where: { connectionId: id },
+    });
+    // Released, dueAt untouched, nothing recorded — the next boot retries immediately.
+    expect(after.runningSince).toBeNull();
+    expect(after.lockedBy).toBeNull();
+    expect(after.dueAt.toISOString()).toBe(new Date(dueAt).toISOString());
+    expect(after.failureCount).toBe(0);
+    expect(after.lastError).toBeNull();
+  });
+});
+
 describe('job rows die with their connection', () => {
   it('deleting a connection cascades the job row away — no orphan ticks forever', async () => {
-    const c = await connections.create('default', {
-      name: uniq('cascade'),
-      hostname: 'vcenter.corp.local',
-      username: 'u',
-      password: 'p',
-      enabled: true,
-    });
-    await prisma.vsphereConnectionJob.create({
-      data: { connectionId: c.id, dueAt: new Date('2026-08-01T00:00:00Z') },
+    const { id } = await makeVsphereConnection(prisma, { key: KEY, name: uniq('cascade') });
+    await makeVsphereConnectionJob(prisma, {
+      connectionId: id,
+      dueAt: new Date('2026-08-01T00:00:00Z'),
     });
 
-    // Cascade is right here — the row is regenerable operational state. It is NOT
-    // right for baselines, which are irreplaceable. An orphan would tick and fail
-    // forever against a vCenter that no longer exists.
-    await prisma.vsphereConnection.delete({ where: { id: c.id } });
-    expect(await prisma.vsphereConnectionJob.count({ where: { connectionId: c.id } })).toBe(0);
+    await prisma.vsphereConnection.delete({ where: { id } });
+    expect(await prisma.vsphereConnectionJob.count({ where: { connectionId: id } })).toBe(0);
   });
 });
