@@ -27,6 +27,7 @@ model Tenant {
   clusters            Cluster[]
   baselines           ClusterMetricBaseline[]
   baselineHistory     ClusterBaselineHistory[]
+  vsphereConnections  VsphereConnection[]
   hosts               Host[]
   hostCapacities      HostMetricCapacity[]
   hostLifecycleEvents HostLifecycleEvent[]
@@ -84,8 +85,8 @@ model Cluster {
   baselines       ClusterMetricBaseline[]
   baselineHistory ClusterBaselineHistory[]
   hosts           Host[]
-  items     Item[]
-  settings  ClusterSettings?
+  items           Item[]
+  settings        ClusterSettings?
 
   @@unique([tenantId, name], map: "clusters_tenant_name_unique")
   @@map("clusters")
@@ -389,4 +390,73 @@ model AuthConfig {
 enum UserRole {
   ADMIN
   VIEWER
+}
+
+/// A configured vCenter, one row per instance (#175, epic #172).
+///
+/// @ai-warning This is NOT a singleton, and must not be "simplified" into one to
+/// match AuthConfig. The deployment has two or more vCenters, and the AuthConfig
+/// pattern does not transfer for two further reasons: degrade must be
+/// PER-CONNECTION (one undecryptable secret must not disable the others), and the
+/// decrypted secret must NOT be cached — AuthConfig caches because it sits on the
+/// hot path of every request, whereas these credentials are used by a background
+/// job every few minutes, so decrypt-on-use is affordable and keeps plaintext out
+/// of the long-lived heap.
+///
+/// @ai-warning `passwordEnc` is the ONLY secret here. `tlsPinnedCaPem` and its
+/// fingerprint are PUBLIC certificate data — vCenter serves the CA unauthenticated
+/// and presents it in every handshake — so encrypting them would protect a secret
+/// that does not exist.
+model VsphereConnection {
+  id          String @id @default(cuid())
+  tenantId    String @default("default") @map("tenant_id")
+  name        String
+  /// Bare hostname. The scheme and port are fixed server-side (https, 443) so a
+  /// URL can never be smuggled through this column.
+  hostname    String
+  username    String
+  /// AES-GCM under CONFIG_ENCRYPTION_KEY via crypto/secret-box.ts — reused as-is,
+  /// no new crypto. On a decrypt failure this column is NEVER nulled: the
+  /// ciphertext may be the only copy, and restoring the key recovers it. Same rule
+  /// and same reasoning as AuthConfig (plugins/auth-config.ts).
+  passwordEnc String @map("password_enc")
+
+  /// 'system' | 'pinned'. Exactly two values, both fail closed. There is no
+  /// insecure mode and there must never be one — see the shared contract.
+  tlsMode         String  @default("pinned") @map("tls_mode")
+  /// The pinned trust anchor: the ROOT of the presented chain, not the leaf.
+  /// vCenter auto-renews its leaf unattended, so a leaf pin would break by itself
+  /// on a ~2-year timer. Public data, stored in plaintext.
+  tlsPinnedCaPem  String? @map("tls_pinned_ca_pem")
+  tlsPinnedSha256 String? @map("tls_pinned_sha256")
+
+  /// ServiceContent.about.instanceUuid, discovered on connect — never entered by
+  /// an operator.
+  ///
+  /// @ai-warning This is the guard against silent cross-vCenter corruption. MoRefs
+  /// are unique only WITHIN a vCenter, so if this hostname is ever re-pointed (DNS
+  /// change, DR failover, a rebuilt appliance reusing the name), `domain-c123` at
+  /// the new target is a COMPLETELY DIFFERENT cluster — and sync would overwrite
+  /// the wrong cluster's hosts and capacity, feeding wrong numbers into a forecast
+  /// that buys hardware. On mismatch: refuse to sync, never auto-heal.
+  instanceUuid String? @map("instance_uuid")
+  apiVersion   String? @map("api_version")
+
+  enabled         Boolean   @default(true)
+  status          String    @default("never_connected")
+  /// Sanitized before storage — never a raw driver error, never secret-bearing.
+  lastError       String?   @map("last_error")
+  lastConnectedAt DateTime? @map("last_connected_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  /// Stops the same vCenter being added twice under two names (FQDN and IP), which
+  /// would import every cluster twice and silently DOUBLE fleet capacity. NULLs are
+  /// distinct in Postgres, so many not-yet-connected rows coexist — the same
+  /// property hosts_tenant_serial_unique already relies on.
+  @@unique([tenantId, instanceUuid], map: "vsphere_connections_tenant_instance_unique")
+  @@map("vsphere_connections")
 }
