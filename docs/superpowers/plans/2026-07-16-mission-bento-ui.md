@@ -113,3 +113,12 @@
 ### Task 6: Final review
 
 - [ ] `git log --oneline origin/dev..HEAD` sanity; self code-review of the diff (`/code-review` skill if available); confirm Definition of Done items from CLAUDE.md; leave branch unpushed and report status + follow-ups to the user.
+
+## Follow-ups (post-merge)
+
+Recorded during the final review fix round (2026-07-17); none blocked the branch, but each is a real, scoped-out gap worth picking up in a follow-on task:
+
+- **FleetConsole remounts across `/` ↔ `/clusters/$id`.** The two routes render independent `FleetConsole` trees rather than one persisted instance, so navigating into and back out of the detail panel remounts the console and drops any in-page focus/scroll state instead of restoring it. Candidate fix: a pathless shared layout route (TanStack Router `_layout` segment) that owns a single `FleetConsole` instance and renders `ClusterPanel` as a sibling overlay for the `$id` child route, instead of each route independently composing `<FleetConsole /> + <ClusterPanel />`.
+- **Escape-guard wiring regression is masked.** `isEscapeTargetInsidePanel`'s DOM-containment guard (added for the CRITICAL #1 fix) is currently exercised in the unit suite, but in the real browser Radix's `DismissableLayer` already consumes Escape at the capture phase for nested dialogs before the panel's own handler ever sees the keydown — so a regression that silently broke the guard's wiring (e.g. an accidental handler removal) would not be caught by manual or e2e testing, only by the unit test's direct DOM dispatch. Worth a follow-up: either an e2e regression test that forces the scenario, or accepting the unit coverage as the sole guard and documenting that explicitly.
+- **`playwright.config.ts` webServer readiness race.** The smoke-suite `webServer` block polls only Vite's `http://localhost:5173` before starting tests; the API server (`tsx watch`, `:8090`) has no readiness gate, so a cold API boot can lose the race and produce a flaky `ECONNREFUSED` on the first request (observed during Task 5). Remedy: add a second `webServer` entry polling `:8090/healthz`, mirroring the two-entry pattern `playwright.oidc.config.ts` already uses.
+- **`mobile.spec.ts` role-based locator refactor.** Noted during Task 5's e2e rewrite as a nice-to-have, not done: several mobile-viewport assertions still use structural/text locators where a `getByRole` equivalent would be more resilient to markup changes. Low priority, no known flakiness caused by it today.
