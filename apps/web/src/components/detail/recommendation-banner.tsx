@@ -51,10 +51,14 @@ export function RecommendationBanner({
     tone = 'none';
     message = 'No order needed in this forecast window.';
   } else if (orderByDate === null) {
-    // Defensive: deriveProcurementKpi never returns crit/warn without an
-    // orderByDate, but the type allows it — fall back to the no-breach copy.
-    tone = 'none';
-    message = 'No order needed in this forecast window.';
+    // MINOR fix (review round 1): deriveProcurementKpi never actually
+    // returns crit/warn without an orderByDate, but ProcurementKpiStatus's
+    // type allows it — if that invariant is ever violated, surface the
+    // urgency instead of silently masking it behind the no-breach copy
+    // (which would tell the reader "no order needed" when the derived
+    // status says otherwise).
+    tone = 'crit';
+    message = `Order now — order date unavailable — check forecast · ${leadPhrase}`;
   } else if (kpi.status === 'crit') {
     const days = Math.abs(daysUntil(orderByDate, today));
     message = `Order now — last safe order date ${orderByDate} (${days} day${days === 1 ? '' : 's'} overdue) · ${leadPhrase}`;

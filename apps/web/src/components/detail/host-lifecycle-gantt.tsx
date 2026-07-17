@@ -79,7 +79,11 @@ export function HostLifecycleGanttRow({
   today = new Date(),
 }: HostLifecycleGanttRowProps): React.JSX.Element {
   const commissioned = parseUtcDate(host.commissionedAt);
-  const barEnd = host.eolAt ? parseUtcDate(host.eolAt) : domain.max;
+  // MINOR fix (review round 1): a decommissioned host's timeline ends at its
+  // decommission date, not its (now moot) hardware EOL projection — the
+  // earliest applicable end date wins.
+  const barEndDate = host.decommissionedAt ?? host.eolAt;
+  const barEnd = barEndDate ? parseUtcDate(barEndDate) : domain.max;
   const startX = pctToX(positionPct(commissioned, domain));
   const endX = pctToX(positionPct(barEnd, domain));
   const nowX = pctToX(positionPct(today, domain));
@@ -146,7 +150,7 @@ export function HostLifecycleGanttRow({
         fill="var(--fg-muted)"
         className="font-mono"
       >
-        {host.eolAt ?? '—'}
+        {barEndDate ?? '—'}
       </text>
     </svg>
   );

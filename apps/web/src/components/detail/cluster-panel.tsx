@@ -8,7 +8,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { AlertTriangle, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { useReducedMotion } from 'motion/react';
 import * as m from 'motion/react-m';
 
 import { ForecastChart } from '@/components/clusters/forecast-chart';
@@ -49,6 +48,33 @@ const EXIT_TRANSITION = { duration: 0.2, ease: [0.4, 0, 1, 1] as const };
 const EXIT_MS = 200;
 
 /**
+ * Scopes Escape handling to keydowns whose real DOM target is inside the
+ * panel's own subtree (CRITICAL fix — panel Escape handler vs nested
+ * dialogs, review round 1). HostsTab's dialogs (Radix `Dialog.Content`) are
+ * rendered via `createPortal` directly into `document.body`, *outside*
+ * `.cluster-panel`'s DOM subtree — so a real DOM-containment check (rather
+ * than guessing at Radix internals) is the version-independent signal here.
+ * Radix 1.6.1's `Dialog.Content` carries no `data-radix-dialog-content`-style
+ * marker attribute to select on (verified by inspecting the rendered DOM),
+ * so `closest('[data-radix-dialog-content]')` isn't viable.
+ *
+ * Verified in a real browser (Playwright against the dev stack, see the fix
+ * report) that pressing Escape while focus is inside a nested host dialog
+ * (e.g. the Delete-host confirmation) does NOT reach this handler at all —
+ * Radix's own `DismissableLayer` already dismisses that dialog itself before
+ * the keydown would ever bubble here, with or without any guard. This check
+ * is deliberately kept anyway as defense-in-depth: it doesn't depend on that
+ * behavior continuing to hold for every current and future nested overlay
+ * (e.g. one that doesn't self-manage Escape the way Radix's Dialog does).
+ */
+export function isEscapeTargetInsidePanel(
+  container: HTMLElement | null,
+  target: EventTarget | null,
+): boolean {
+  return Boolean(container && target instanceof Node && container.contains(target));
+}
+
+/**
  * Cluster detail slide-in panel (spec §5). Fixed right overlay rendered
  * alongside the fleet console (never dims/inerts it — tiles stay mouse-
  * reachable). Owns the entire former detail-page composition: header,
@@ -61,7 +87,6 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const panelRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const closeTimerRef = useRef<number | null>(null);
-  const reducedMotion = useReducedMotion();
 
   const [isClosing, setIsClosing] = useState(false);
   // Overridden by close/scenario-change event handlers; otherwise derived
@@ -135,20 +160,22 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const liveMessage =
     announcementOverride ?? (clusterName ? `Cluster ${clusterName} detail opened.` : '');
 
+  // MINOR fix (review round 1): reduced motion forbids *animation*, not a
+  // deferred navigation — `<MotionConfig reducedMotion="user">` (app.tsx)
+  // already makes the m.div's own exit transition skip its actual duration
+  // for reduced-motion users, so this delay only ever gates the *navigate*,
+  // giving the "detail closed" live-region announcement above time to be
+  // read before the panel unmounts either way.
   const requestClose = useCallback(() => {
     if (isClosing) return;
     setAnnouncementOverride(
       clusterName ? `Cluster ${clusterName} detail closed.` : 'Cluster detail closed.',
     );
-    if (reducedMotion) {
-      void navigate({ to: '/' });
-      return;
-    }
     setIsClosing(true);
     closeTimerRef.current = window.setTimeout(() => {
       void navigate({ to: '/' });
     }, EXIT_MS);
-  }, [isClosing, reducedMotion, navigate, clusterName]);
+  }, [isClosing, navigate, clusterName]);
 
   const handleScenarioChange = useCallback((next: ScenarioWire | null): void => {
     setScenario(next);
@@ -209,8 +236,13 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       animate={{ x: isClosing ? '100%' : 0 }}
       transition={isClosing ? EXIT_TRANSITION : ENTER_TRANSITION}
       onKeyDown={(event) => {
-        if (event.key === 'Escape' && !event.defaultPrevented) {
-          requestClose();
+        if (event.key === 'Escape') {
+          if (
+            !event.defaultPrevented &&
+            isEscapeTargetInsidePanel(panelRef.current, event.target)
+          ) {
+            requestClose();
+          }
           return;
         }
         handleTabTrap(event);
@@ -231,7 +263,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
         <header className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             {clusterQuery.isPending ? (
-              <HeaderSkeletonContent />
+              <HeaderSkeletonContent headingId={headingId} />
             ) : clusterQuery.isError || !clusterQuery.data ? (
               <ErrorCard message={clusterQuery.error?.message ?? 'Cluster not found'} />
             ) : (
@@ -346,8 +378,9 @@ export function computeScenarioDeltaLabel(
   if (delta === 0) return undefined;
   const baselineMonth = baseline.months[baselineIndex]?.month;
   const direction = delta > 0 ? 'earlier' : 'later';
+  const arrow = direction === 'earlier' ? '▲' : '▼';
   const monthLabel = baselineMonth ? ` (was ≈ ${formatMonthShort(baselineMonth)})` : '';
-  return `▲ warn ${Math.abs(delta)} mo ${direction}${monthLabel}`;
+  return `${arrow} warn ${Math.abs(delta)} mo ${direction}${monthLabel}`;
 }
 
 function forecastHeading(procurement: ProcurementInfo): string {
@@ -501,9 +534,15 @@ function ClusterDetailKpiStrip({
   );
 }
 
-function HeaderSkeletonContent(): React.JSX.Element {
+function HeaderSkeletonContent({ headingId }: { headingId: string }): React.JSX.Element {
   return (
     <div className="space-y-2">
+      {/* Keeps the dialog's aria-labelledby pointed at a real element while
+          the cluster query is still pending (MINOR fix, review round 1) —
+          otherwise the dialog is briefly unlabeled for assistive tech. */}
+      <h2 id={headingId} className="sr-only">
+        Loading cluster…
+      </h2>
       <div className="h-7 w-48 animate-pulse rounded bg-muted" />
       <div className="h-4 w-64 animate-pulse rounded bg-muted" />
     </div>
