@@ -130,4 +130,59 @@ describe('HostsTab', () => {
       screen.queryByText('Add a host to start contributing capacity.'),
     ).not.toBeInTheDocument();
   });
+
+  it('replaces the date columns with one Lifecycle gantt cell per host, aria-labelled with all three dates', async () => {
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [
+        makeHost({
+          commissionedAt: '2024-03-15',
+          warrantyEndsAt: '2027-03-15',
+          eolAt: '2029-03-15',
+        }),
+        makeHost({ id: 'host-2', name: 'esx-02' }),
+      ],
+      total: 2,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    expect(await screen.findByText('esx-01')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Lifecycle' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Commissioned' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Decommissioned' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Warranty' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'EOL' })).not.toBeInTheDocument();
+
+    const rows = screen.getAllByRole('img');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAccessibleName(
+      'esx-01: commissioned 2024-03-15, warranty until 2027-03-15, hardware EOL 2029-03-15.',
+    );
+  });
+
+  it('shows the full lifecycle dates in the expanded row content', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [
+        makeHost({
+          commissionedAt: '2024-03-15',
+          warrantyEndsAt: '2027-03-15',
+          eolAt: '2029-03-15',
+        }),
+      ],
+      total: 1,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    expect(await screen.findByText('esx-01')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Expand history' }));
+
+    expect(screen.getByText('Lifecycle dates')).toBeInTheDocument();
+    expect(screen.getAllByText(/2024-03-15/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/2027-03-15/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/2029-03-15/).length).toBeGreaterThan(0);
+  });
 });

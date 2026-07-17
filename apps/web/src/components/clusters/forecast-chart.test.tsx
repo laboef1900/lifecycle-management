@@ -3,8 +3,18 @@ import { render, screen, within } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ThemeProvider } from '@/components/theme/theme-provider';
+import { todayIso } from '@/lib/format';
 
 import { ForecastChart } from './forecast-chart';
+
+const currentMonth = todayIso();
+
+/** `'2026-07-01'` + 1 -> `'2026-08-01'` — month-key arithmetic for fixtures. */
+function shiftMonth(monthIso: string, delta: number): string {
+  const d = new Date(`${monthIso}T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + delta);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
 
 function renderChart(
   forecast: ForecastResponse,
@@ -52,7 +62,9 @@ vi.mock('recharts', async () => {
     YAxis: () => null,
     Tooltip: () => null,
     Area: ({ dataKey }: { dataKey: string }) => <div data-testid={`area-${dataKey}`} />,
-    Line: ({ dataKey }: { dataKey: string }) => <div data-testid={`line-${dataKey}`} />,
+    Line: ({ dataKey, strokeDasharray }: { dataKey: string; strokeDasharray?: string }) => (
+      <div data-testid={`line-${dataKey}`} data-dasharray={strokeDasharray ?? ''} />
+    ),
     LabelList: () => null,
     ReferenceDot: ({
       x,
@@ -429,5 +441,116 @@ describe('ForecastChart props mapping', () => {
     expect(screen.getByText('Kapazitätse…')).toBeInTheDocument();
     const dot = screen.getAllByTestId('reference-dot')[0];
     expect(dot?.querySelector('rect')?.getAttribute('width')).toBe('19');
+  });
+});
+
+describe('ForecastChart actual/forecast split', () => {
+  it('splits consumption into a solid actual line and a dashed forecast line anchored at the current month', () => {
+    const forecast = makeForecast({
+      months: [
+        { month: currentMonth, consumption: 500, capacity: 1000, utilization: 0.5 },
+        { month: shiftMonth(currentMonth, 1), consumption: 600, capacity: 1000, utilization: 0.6 },
+      ],
+    });
+    renderChart(forecast);
+
+    const actualLine = screen.getByTestId('line-actual');
+    const forecastLine = screen.getByTestId('line-forecast');
+    expect(actualLine.dataset.dasharray).toBe('');
+    expect(forecastLine.dataset.dasharray).not.toBe('');
+
+    const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+      month: string;
+      actual: number | null;
+      forecast: number | null;
+    }>;
+    expect(rows[0]).toMatchObject({ month: currentMonth, actual: 500, forecast: 500 });
+    expect(rows[1]).toMatchObject({
+      month: shiftMonth(currentMonth, 1),
+      actual: null,
+      forecast: 600,
+    });
+  });
+});
+
+describe('ForecastChart scenario ghost', () => {
+  function baselineAndScenario(): { baseline: ForecastResponse; scenario: ForecastResponse } {
+    const baseline = makeForecast({
+      months: [
+        { month: currentMonth, consumption: 500, capacity: 1000, utilization: 0.5 },
+        { month: shiftMonth(currentMonth, 1), consumption: 600, capacity: 1000, utilization: 0.6 },
+      ],
+    });
+    const scenario = makeForecast({
+      months: [
+        { month: currentMonth, consumption: 700, capacity: 1000, utilization: 0.7 },
+        { month: shiftMonth(currentMonth, 1), consumption: 850, capacity: 1000, utilization: 0.85 },
+      ],
+    });
+    return { baseline, scenario };
+  }
+
+  it('makes the scenario series the primary actual/forecast line and keeps baseline consumption as a muted dashed ghost', () => {
+    const { baseline, scenario } = baselineAndScenario();
+    render(
+      <ThemeProvider>
+        <ForecastChart
+          forecast={baseline}
+          scenario={{ label: 'Lose 1 host', forecast: scenario }}
+        />
+      </ThemeProvider>,
+    );
+
+    const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+      month: string;
+      actual: number | null;
+      forecast: number | null;
+      baselineConsumption: number | null;
+    }>;
+    // Primary actual/forecast now tracks the scenario, not the baseline.
+    expect(rows[0]).toMatchObject({ month: currentMonth, actual: 700, forecast: 700 });
+    expect(rows[1]).toMatchObject({
+      month: shiftMonth(currentMonth, 1),
+      actual: null,
+      forecast: 850,
+    });
+    // The baseline consumption survives as a ghost field for every row.
+    expect(rows[0]?.baselineConsumption).toBe(500);
+    expect(rows[1]?.baselineConsumption).toBe(600);
+
+    const ghostLine = screen.getByTestId('line-baselineConsumption');
+    expect(ghostLine).toBeInTheDocument();
+    expect(ghostLine.dataset.dasharray).not.toBe('');
+    expect(screen.getByText(/was: baseline/i)).toBeInTheDocument();
+  });
+
+  it('omits the baseline ghost field and legend entry when no scenario is active', () => {
+    renderChart(makeForecast());
+
+    expect(screen.queryByTestId('line-baselineConsumption')).not.toBeInTheDocument();
+    expect(screen.queryByText(/was: baseline/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the scenarioDeltaLabel under the legend when provided', () => {
+    const { baseline, scenario } = baselineAndScenario();
+    render(
+      <ThemeProvider>
+        <ForecastChart
+          forecast={baseline}
+          scenario={{ label: 'Lose 1 host', forecast: scenario }}
+          scenarioDeltaLabel="▲ warn 5 mo earlier (was ≈ Apr 2027)"
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('scenario-delta-label')).toHaveTextContent(
+      '▲ warn 5 mo earlier (was ≈ Apr 2027)',
+    );
+  });
+
+  it('omits the delta label element when scenarioDeltaLabel is not provided', () => {
+    renderChart(makeForecast());
+
+    expect(screen.queryByTestId('scenario-delta-label')).not.toBeInTheDocument();
   });
 });
