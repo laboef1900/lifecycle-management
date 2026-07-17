@@ -1,7 +1,68 @@
 # vSphere integration — design and threat model
 
-**Status:** DRAFT — awaiting project-owner approval (issue #174, the high-risk design gate for epic #172).
+**Status:** DRAFT — **owner decisions recorded (§0), design approval still outstanding** (issue #174, the
+high-risk design gate for epic #172).
 **Date:** 2026-07-17.
+
+---
+
+## 0. Owner decisions — recorded 2026-07-17
+
+These are the project owner's rulings on §12's blocking questions. They are **authoritative** and override
+any recommendation elsewhere in this document.
+
+| # | Decision | Consequence |
+| --- | --- | --- |
+| **Q9a** | **`baselineCapacity = 0` for synced clusters; synced hosts carry 100% of capacity.** | Resolves the D34 double-count. vCenter's per-host `hardware.memorySize` is authoritative, and the existing EOL/decommission/replacement machinery operates on real numbers. **Write-time invariant:** for a synced cluster, *every* baseline row (manual or vSphere) must have `baselineCapacity = 0` — otherwise an admin correction reintroduces the double-count. |
+| **Q9b** | **`baselineConsumption` = measured total **minus** tracked-app allocations active at capture time.** | Honours D34a's invariant for the consumption half. Apps stay visible as separate contributions without being double-counted. ⚠️ Needs care when an allocation is edited retroactively — the stored baseline does not retro-adjust. Flag at implementation. |
+| **Q9c** | **Admin sets `commissionedAt` per host after import.** | Most accurate, but `Host.commissionedAt` is **`NOT NULL`** (`schema.prisma`), so sync MUST import a provisional value and flag it. Requires a `commissionedAtProvisional` marker + a "confirm commissioning dates" task surfaced in the UI. **Directly forces Q9d** — provisional/absent dates make zero-capacity months reachable by default. |
+| **Q9d** | **`utilization` returns `null` at zero capacity; the UI renders "unknown", never 0%.** | Closes the D34b fail-open. **High-risk:** changes forecast output for every zero-capacity month, so D33's characterization snapshot **will** diff — deliberately, and the diff must be explained in the PR body, not absorbed. Colour must never be the sole signal for "unknown" (house style). |
+| **Q2** | **FQDN addressing. NO TLS override — TOFU root-pinning only.** | The `ca` path is viable; D11's IP-SAN problem does not arise. **An `insecure`/`ignore TLS` flag is explicitly rejected** — see §0.1. |
+| **Q4** | **In-place migration**, accepting the narrow rollback window. | D30 as written. **The verified `pg_dump` before PR 1 is now load-bearing**, since the rollback window closes at the first appended baseline. |
+| **Q6** | **Manual baselines snap to first-of-month, like vSphere snapshots.** | `capturedAt` is the period anchor for **both** sources ⇒ D27's "exactly one truth per cluster/metric/period" holds and is DB-enforced. A manual correction to a month that already has a snapshot is an explicit upsert. Accepted cost: no two baselines in one month; an entered date shifts to the 1st (the UI must say so). |
+| **Q8** | **The `clusters.ts:132` data-loss bug gets its own issue + PR, landed before #177.** | Keeps a live-bug fix bisectable and out of a large migration PR, and gives D33's characterization test an honest pre-state to capture. |
+
+**Still open (non-blocking for #177):** Q1 (GiB — proceeding on the research evidence, see §0.2), Q3
+(network segmentation — affects only the recorded severity of R1), Q5 (coarse test-endpoint errors),
+Q7 (`import-xlsx.ts` baselines).
+
+### 0.1 — Recorded rejection: the "ignore TLS errors" setting
+
+The owner initially asked for *"FQDN, add in the settings to ignore TLS error"* and, on review of the
+threat model, **withdrew it in favour of TOFU pinning only.** Recorded because the request is the natural
+one and **will recur**:
+
+- The underlying need — *"self-signed VMCA certs must just work"* — **is fully met by D11's TOFU
+  root-pinning**, with verification ON, surviving leaf auto-renewal.
+- The mechanism is not a convenience flag; it is **trust material wearing a convenience flag's clothing.**
+  Complete attack, no password and no test endpoint required: `disabled` mode ⇒ anonymous ADMIN ⇒
+  `PATCH …/vcenter/1 {"insecure": true}` (a benign-looking boolean that sails through any password gate
+  scoped to "credential fields", and through review) ⇒ spoof internal DNS ⇒ **the next scheduled poll
+  delivers the vCenter credential in cleartext, and every poll after it, forever.**
+- It would waive **#175's own acceptance criterion** ("TLS verification is never silently disabled") and
+  `CLAUDE.md` Golden Rule 8, which requires a recorded exception — not a settings checkbox.
+- **`tlsMode` therefore has exactly two values, both of which fail closed.** There is no third state.
+- **The legitimate need inside the request is diagnostic, and is served properly:** a TLS failure returns a
+  *named cause* plus a one-click "trust this certificate" action — never a bypass.
+
+> **`@ai-warning` this at the TLS implementation site.** A future contributor meeting a handshake failure
+> will reach for `rejectUnauthorized: false` on day one. The answer is the trust flow, not the flag.
+
+### 0.2 — Q1 (GiB): proceeding on evidence, owner confirmation still welcome
+
+The research is conclusive that the chain is **base-2 end to end** (§D3a: govmomi's `units` defines `GB` as
+`1 << (10*iota)`; `govc cluster.usage` does `OverallMemoryUsage << 20`; Broadcom states the convention
+explicitly). Corroborated in-repo: **every seed baseline value is an exact multiple of 1024**, which only
+"humans reading the vSphere UI" explains. Proceeding with **GiB (2³⁰)**.
+
+**Two things this raises that the owner should still see:**
+1. `unit: 'GB'` is a **pre-existing mislabel** — the stored numbers are GiB. Recording it (`@ai-note` +
+   `docs/operations.md`) is mandatory so nobody later "fixes" it to 10⁹ and shifts every forecast 7.4%.
+   Renaming the display string to `GiB` is a **product decision**, flagged not taken.
+2. **The sharper risk is not the unit — it is whether existing baselines are trustworthy.** If any was
+   typed from a decimal-GB source it is *already* 7.4% off, and syncing would **surface** rather than cause
+   it. → **The first sync per cluster MUST report a diff against the hand-entered baseline rather than
+   silently overwriting it.** Adopted as a design requirement.
 **Risk classification:** **High** on four axes per `CLAUDE.md` § Change Risk — secrets handling, outbound
 server connections, Prisma migration on purchasing-critical baseline data, and forecast-engine correctness.
 No implementation phase (#175–#179) may begin until this document is explicitly approved.
@@ -1280,23 +1341,31 @@ measurement.** Manual clusters are untouched.
 
 ## 10. Phase plan
 
-| Phase | Issue | Risk | Gate |
+| Order | Issue | Risk | Gate |
 | --- | --- | --- | --- |
-| 0 | **#174** — this document | High | **Owner approval (§12)** |
-| 1 | #175 — connections, encrypted creds, connection test | **High** | Owner approval on the PR |
-| 2 | #176 — inventory sync | High | Per approved design |
-| 3 | **#177** — baseline history + chart | **High** | Owner approval on the PR; verified `pg_dump` first |
-| 4 | #178 — monthly snapshot + scheduler | Normal–High | Depends on #176 + #177 |
-| 5 | #179 — live usage view | Normal | Depends on #175 + #176 |
+| 0 | **#174** — this document | High | **Owner approval (§13)** |
+| 1 | **NEW** — fix `clusters.ts:132` baseline data-loss bug (Q8) | Normal | Own PR, lands **before** #177 |
+| 2 | **NEW** — D33 characterization snapshot of `ForecastResult` | Low | Own PR; **must pass against current `dev`** |
+| 3 | **#177** — baseline history + chart + Q9d utilization | **High** | Owner approval on the PR; **verified `pg_dump` first** |
+| 4 | #175 — connections, encrypted creds, TOFU trust flow | **High** | Owner approval on the PR |
+| 5 | #176 — inventory sync | High | Per approved design |
+| 6 | #178 — monthly snapshot + scheduler | Normal–High | Depends on #176 + #177 |
+| 7 | #179 — live usage view | Normal | Depends on #175 + #176 |
 
-`#174 → #175 → #176 → (#178, #179)`; **#177 needs only D27/D30's migration decision** and proceeds in its own
-worktree in parallel. Per phase: worktree off `origin/dev`, TDD, Zod contracts in `@lcm/shared` first,
+Per phase: worktree off `origin/dev`, TDD, Zod contracts in `@lcm/shared` first,
 `pnpm lint && pnpm typecheck && pnpm test` green before the PR, PR → `dev` with `Closes #<n>`, merge
-`--merge`, then remove worktree and local branch.
+`--merge`, then remove the worktree and the local branch.
 
-**Recommendation: land #177 first**, before any vSphere connectivity. It is independently valuable (manual
-baselines gain history), it de-risks the migration, and D33's characterization test wants to land ahead of it
-anyway.
+**Sequencing rationale.** Steps 1–3 land before any vSphere connectivity: #177 is independently valuable
+(manual baselines gain history), it de-risks the migration, and **D33's characterization test is worthless
+unless it lands first** — written inside the migration PR it would merely record whatever the new code
+happens to do. Step 1 precedes step 2 so the snapshot captures a *fixed* baseline path rather than
+enshrining a live data-loss bug.
+
+> **⚠️ Q9d makes the characterization snapshot diff — on purpose.** Returning `null` at zero capacity
+> changes output for every zero-capacity month. That diff is the *evidence the change worked*, not noise:
+> it must be reviewed line-by-line and explained in the PR body. **Every other line of the snapshot must be
+> unchanged.**
 
 ---
 
@@ -1339,13 +1408,33 @@ anyway.
 
 ## 13. Approval
 
-- [ ] Environment facts (§1) confirmed.
-- [ ] Blocking questions Q1–Q6 answered (§12).
-- [ ] Scope amendments (§11) accepted — in particular **multi-vCenter**, which rewrites #175.
-- [ ] Threat model and control set (§6) accepted, including the **ASVS L1 honesty note** (§6.6) and the
-      residual risks (§6.8).
-- [ ] TLS policy (§5) accepted, including the **deliberate divergence from govmomi's leaf-pin convention**.
-- [ ] Migration strategy and the **rollback window** (§D30) accepted.
-- [ ] `docs/vision.md` amendment (§11.5) approved.
+- [x] **Environment facts (§1) confirmed** — 2026-07-17.
+- [x] **Blocking decisions recorded (§0)** — Q9a, Q9b, Q9c, Q9d, Q2, Q4, Q6, Q8 — 2026-07-17.
+- [ ] **Scope amendments (§11) accepted** — in particular **multi-vCenter**, which rewrites #175, and
+      **§11.7**, documenting the forecast's modelling semantics.
+- [ ] **Threat model and control set (§6) accepted**, including the **ASVS L1 honesty note** (§6.6) — the
+      SSRF requirements are Level 2 and the project targets Level 1, so **none of these controls are
+      mandated**; each stands on the threat model — and the residual risks (§6.8).
+- [ ] **TLS policy (§5) accepted**, including §0.1's **recorded rejection of an insecure mode** and the
+      deliberate divergence from govmomi's leaf-pin convention.
+- [ ] **Migration strategy and the rollback window (§D30) accepted** — the window closes at the **first
+      appended baseline**, after which recovery is restore-from-dump, not image rollback.
+- [ ] **`docs/vision.md` amendment (§11.5) approved** — it currently lists this work under v1 **Non-goals**
+      and **Anti-patterns** while **Horizons** endorses it. `CLAUDE.md` makes that document authoritative,
+      so this is the owner's call, not an assumption.
 
-**No implementation begins until this is signed off.**
+**No implementation begins until the remaining boxes are signed off.**
+
+### 13.1 What approval commits to, in one paragraph
+
+A **hand-rolled vim25 SOAP client** (no viable dependency exists) reading memory from **N vCenters** over
+**TOFU root-pinned TLS with no insecure mode**, storing credentials with the existing `secret-box` and
+**never sending them to a request-supplied destination** — the rule that also covers the scheduler, which
+is the real target. Inventory syncs every 6h, usage polls every 5 min into a **Postgres cache** so no API
+response ever awaits vCenter, and a **hand-rolled scheduler** (one claimed job row per connection, `dueAt
+<= now()` *is* catch-up) appends **one baseline per cluster per month**, DB-enforced idempotent, where a
+failure **never consumes its month** and a missed month is an **honest gap rendered as a break in the
+line** — never interpolated. Baselines become **append-only history**; for synced clusters
+`baselineCapacity = 0` with hosts carrying 100% and `baselineConsumption` net of tracked apps, per the
+invariant **`baseline*` is the portion not modelled by tracked entities**; and `utilization` returns
+**`null`, not 0%,** when capacity is unknown.
