@@ -16,6 +16,7 @@ import type {
 import {
   vsphereConnectionResponseSchema,
   vsphereProbeResultSchema,
+  vsphereSyncNowResponseSchema,
   vsphereVerifyResultSchema,
   authConfigResponseSchema,
   authConfigTestResultSchema,
@@ -367,6 +368,14 @@ export const api = {
           ),
         remove: (id: string) =>
           request(`/api/settings/vsphere/connections/${id}`, { method: 'DELETE' }, z.void()),
+        // "Sync now" (#192): queues an immediate sync (202) — the scheduler's next
+        // tick runs it. Never awaits vCenter; there is no body to send.
+        syncNow: (id: string) =>
+          request(
+            `/api/settings/vsphere/connections/${id}/sync`,
+            { method: 'POST' },
+            vsphereSyncNowResponseSchema,
+          ),
         trustCa: (id: string, input: VsphereTrustCa) =>
           request(
             `/api/settings/vsphere/connections/${id}/trust-ca`,

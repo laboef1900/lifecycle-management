@@ -201,6 +201,50 @@ export class VsphereConnectionsService {
   }
 
   /**
+   * Queue an immediate sync for one connection — the admin **"Sync now"** action
+   * (#192, design §D22). Sets the scheduler job's `dueAt = now()` and returns; it
+   * performs NO vCenter I/O. The scheduler's next tick claims the row and runs it
+   * through the **identical** claim/run path as a scheduled job — so "Sync now"
+   * cannot drift from the scheduled behaviour, and it inherits the claim lock for
+   * free (a double-click, or a trigger during a live run, cannot double-run).
+   *
+   * @ai-warning Resolve the connection **tenant-scoped first**. A bare upsert off
+   * the `:id` path param would queue a sync for another tenant's connection — the
+   * job row carries no `tenantId` of its own, only the transitive FK — and would
+   * surface a raw FK violation rather than a 404 on an unknown id.
+   *
+   * @ai-warning The upsert's `update` touches ONLY `dueAt`. It must never clear
+   * `runningSince`/`lockedBy`: doing so during a live run would strip the running
+   * job of its claim and let a second worker re-run it. Pulling `dueAt` forward is
+   * enough — the claim lock absorbs a concurrent trigger, and a run already in
+   * flight means a sync just ran.
+   *
+   * A **disabled** connection is refused (422): the scheduler filters disabled
+   * connections out, so queuing one would be a request that can never fire — a
+   * silent lie, not a benign no-op.
+   */
+  async requestSyncNow(tenantId: string, id: string): Promise<{ dueAt: Date }> {
+    const connection = await this.prisma.vsphereConnection.findFirst({
+      where: { id, tenantId },
+      select: { enabled: true },
+    });
+    if (!connection) throw new NotFoundError('VsphereConnection', id);
+    if (!connection.enabled) {
+      throw new UnprocessableError('CONNECTION_DISABLED', 'Enable the connection before syncing.');
+    }
+
+    const dueAt = new Date();
+    // Upsert, not update: the job row normally exists (seeded on create/enable),
+    // but creating it here keeps "Sync now" robust to provisioning order.
+    await this.prisma.vsphereConnectionJob.upsert({
+      where: { connectionId: id },
+      create: { connectionId: id, dueAt },
+      update: { dueAt },
+    });
+    return { dueAt };
+  }
+
+  /**
    * Pin a confirmed root as this connection's trust anchor.
    *
    * The fingerprint the admin confirmed is checked against the PEM the server is

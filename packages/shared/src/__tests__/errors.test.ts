@@ -11,6 +11,13 @@ describe('SERVICE_ERROR_CODES', () => {
     expect(SERVICE_ERROR_CODES).toContain('SYNC_OWNED_FIELD');
   });
 
+  it('carries CONNECTION_DISABLED (Sync now refused on a disabled connection)', () => {
+    // "Sync now" (#192) refuses a disabled connection: the scheduler filters
+    // disabled connections out, so a queued run could never fire. The web client
+    // branches on this code rather than a generic 422.
+    expect(SERVICE_ERROR_CODES).toContain('CONNECTION_DISABLED');
+  });
+
   it('contains no duplicate codes', () => {
     // TS will never catch this. The array is `as const` and NOT sorted, so a
     // second copy of an existing literal is legal TypeScript that the derived
