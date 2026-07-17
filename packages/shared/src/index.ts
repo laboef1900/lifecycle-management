@@ -11,6 +11,7 @@ export * from './schemas/item.js';
 export * from './schemas/category.js';
 export * from './schemas/forecast.js';
 export * from './schemas/settings.js';
+export * from './schemas/vsphere.js';
 export * from './schemas/responses.js';
 export * from './settings/resolve-thresholds.js';
 export * from './dates.js';
