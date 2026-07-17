@@ -1,6 +1,7 @@
 import type { HostResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
@@ -159,6 +160,76 @@ describe('HostsTab', () => {
     expect(rows[0]).toHaveAccessibleName(
       'esx-01: commissioned 2024-03-15, warranty until 2027-03-15, hardware EOL 2029-03-15.',
     );
+  });
+
+  it('shows an actionable banner when synced hosts carry a provisional commissioning date', async () => {
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [
+        makeHost({ commissionedAtProvisional: true }),
+        makeHost({ id: 'host-2', name: 'esx-02' }),
+      ],
+      total: 2,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    expect(
+      await screen.findByText(/1 host needs a confirmed commissioning date/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /confirm date/i })).toBeInTheDocument();
+  });
+
+  it('omits the banner when no host is provisional', async () => {
+    renderTab();
+
+    expect(await screen.findByText('esx-01')).toBeInTheDocument();
+    expect(screen.queryByText(/needs a confirmed commissioning date/i)).not.toBeInTheDocument();
+  });
+
+  it('hides the provisional banner from viewers', async () => {
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [makeHost({ commissionedAtProvisional: true })],
+      total: 1,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab(false);
+
+    expect(await screen.findByText('esx-01')).toBeInTheDocument();
+    expect(screen.queryByText(/needs a confirmed commissioning date/i)).not.toBeInTheDocument();
+  });
+
+  it('opens the confirm dialog from the banner CTA', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [makeHost({ commissionedAtProvisional: true })],
+      total: 1,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    await screen.findByText('esx-01');
+    await user.click(screen.getByRole('button', { name: /confirm date/i }));
+
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Confirm commissioning dates');
+  });
+
+  it('flags the provisional date with a non-colour-only badge in the expanded row', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [makeHost({ commissionedAtProvisional: true })],
+      total: 1,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    await screen.findByText('esx-01');
+    await user.click(screen.getByRole('button', { name: 'Expand history' }));
+
+    expect(screen.getByText('Provisional')).toBeInTheDocument();
   });
 
   it('shows the full lifecycle dates in the expanded row content', async () => {

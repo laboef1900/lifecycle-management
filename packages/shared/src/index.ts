@@ -5,6 +5,7 @@ export * from './schemas/common.js';
 export * from './schemas/pagination.js';
 export * from './schemas/cluster.js';
 export * from './schemas/host.js';
+export * from './schemas/host-commissioning.js';
 export * from './schemas/host-lifecycle.js';
 export * from './schemas/host-replacement.js';
 export * from './schemas/item.js';

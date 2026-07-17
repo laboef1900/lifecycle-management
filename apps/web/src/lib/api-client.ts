@@ -26,6 +26,7 @@ import {
   clusterSettingsResponseSchema,
   clusterUpdateInputSchema,
   forecastResponseSchema,
+  hostCommissioningConfirmInputSchema,
   liveUsageListResponseSchema,
   hostCreateInputSchema,
   hostLifecycleEventResponseSchema,
@@ -156,6 +157,7 @@ export type ItemUpdateInputWire = z.input<typeof itemUpdateInputSchema>;
 export type ItemAllocationAppendInputWire = z.input<typeof itemAllocationRowInputSchema>;
 export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
 export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
+export type HostCommissioningConfirmInputWire = z.input<typeof hostCommissioningConfirmInputSchema>;
 
 // ---------- Query string helper ----------
 
@@ -254,6 +256,12 @@ export const api = {
         hostResponseSchema,
       ),
     delete: (id: string) => request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
+    confirmCommissioning: (input: HostCommissioningConfirmInputWire) =>
+      request(
+        '/api/hosts/confirm-commissioning',
+        { method: 'POST', body: JSON.stringify(input) },
+        z.array(hostResponseSchema),
+      ),
     transition: (id: string, input: HostTransitionInputWire) =>
       request<void>(`/api/hosts/${id}/transitions`, {
         method: 'POST',

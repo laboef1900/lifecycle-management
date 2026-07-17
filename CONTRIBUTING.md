@@ -8,7 +8,9 @@ A few conventions to keep the repo coherent while it's small.
   `fix/<short-slug>` / `chore/<short-slug>` to match the conventional commit
   prefix. If a GitHub issue drives the branch, prefixing the slug with the
   issue number is fine too (e.g. `feat/13-dashboard-cluster-list`).
-- Branch off `main`. Don't merge `main` back in mid-PR; rebase if needed.
+- Branch off `dev`, never off `main`. `dev` is the integration branch; `main`
+  receives changes exclusively through a `dev → main` sync PR. Don't merge the
+  base branch back in mid-PR; rebase if needed.
 - One branch per concern; one PR per branch.
 
 ## Commits
@@ -23,6 +25,8 @@ timeline`.
 ## Pull requests
 
 - PR title mirrors the commit title.
+- Open the PR against `dev` (`gh pr create --base dev`). Only a `dev → main`
+  sync PR targets `main`.
 - PR body links the issue (`Closes #N`) and includes a short test plan or
   evidence (screenshots for UI work, commands run for backend work).
 - CI must be green before merging; the workflow runs lint, typecheck, the
@@ -32,20 +36,35 @@ timeline`.
   branches). Squash-merge is fine for branches with churn that nobody will
   ever want to bisect (typo fixes, lint sweeps, dependency bumps).
 
+### The `ApprovedByAI` label
+
+`ApprovedByAI` means the AI feasibility review passed and the issue is
+approved to **implement now**. It is _not_ merge approval, and it encodes
+nothing about merge order.
+
+- Merge ordering, blockers, and caveats live in the AI review comment on the
+  issue — read that comment before merging, not just before implementing. When
+  an issue must land after another, its comment says so (`Blocked by: #NNN`).
+- The label never replaces CI, human review, or the project owner's approval.
+  Merging is always the owner's call.
+
+An issue can therefore carry `ApprovedByAI` and still be unmergeable today —
+that is the normal state for a stacked issue whose dependency is still open.
+
 ### Merging stacked PRs
 
-When a PR's base is another open PR (not `main`), the merge order matters:
+When a PR's base is another open PR (not `dev`), the merge order matters:
 
 - Use `--merge` (not `--squash` or `--rebase`) for every PR in the stack.
   Squash and rebase rewrite SHAs, which orphans every dependent branch and
   causes GitHub to **close** the dependent PRs instead of retargeting them.
-- Before merging PR _N_, retarget PR _N+1_'s base to `main` first:
-  `gh pr edit <N+1> --base main`. GitHub closes any PR the moment its base
+- Before merging PR _N_, retarget PR _N+1_'s base to `dev` first:
+  `gh pr edit <N+1> --base dev`. GitHub closes any PR the moment its base
   branch is deleted, _before_ any retargeting could fire, so the swap has to
   happen first.
 - Then `gh pr merge <N> --merge --delete-branch`.
 
-In short: **retarget the next, then merge the current.** Once `main` has
+In short: **retarget the next, then merge the current.** Once `dev` has
 caught up, the dependent branch's ancestry is fully reachable and the next
 merge is clean.
 

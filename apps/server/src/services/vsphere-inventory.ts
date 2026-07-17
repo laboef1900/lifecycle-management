@@ -5,7 +5,7 @@
  * forecast needs is here and nothing else is.
  */
 
-/** A host as vCenter describes it. Units are already normalised — see `toGiB`. */
+/** A host as vCenter describes it. Units are already normalised — see `bytesToGiB`. */
 export interface CollectedHost {
   /** MoRef, e.g. `host-42`. Unique only WITHIN this vCenter. */
   moref: string;
@@ -43,12 +43,33 @@ export interface CollectedInventory {
  * hardware.
  */
 export interface VsphereInventoryCollector {
-  collect(input: {
-    hostname: string;
-    username: string;
-    password: string;
-    pinnedRootPem: string | null;
-  }): Promise<CollectedInventory>;
+  /**
+   * Log in, read the fleet, log out — one full session per call, no keepalive.
+   *
+   * @param signal cancellation for graceful shutdown (design §D21). Every vCenter
+   *   round-trip observes it; on abort the in-flight request is torn down and the
+   *   returned promise rejects. Optional so #191 can thread a real signal without
+   *   this interface changing again.
+   * @throws an ordinary `Error` for expected failures (unreachable / auth / TLS).
+   *   The message is credential-free and worded so `VsphereSyncService.classify()`
+   *   maps it correctly — it MUST NOT name a SOAP action (a TLS failure raised
+   *   during "Login" would otherwise match `/login/i` and be mis-reported as an
+   *   auth failure). Callers (sync, snapshot, scheduler) contain the throw.
+   */
+  collect(
+    input: {
+      hostname: string;
+      username: string;
+      password: string;
+      pinnedRootPem: string | null;
+      /**
+       * Destination port. **Defaults to 443; production never sets it** — see
+       * `verifiedTlsOptions`. Test-only reachability seam for a mapped vcsim port.
+       */
+      port?: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<CollectedInventory>;
 }
 
 const BYTES_PER_GIB = 1024 ** 3;

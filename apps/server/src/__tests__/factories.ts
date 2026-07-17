@@ -112,9 +112,12 @@ export interface MakeHostOptions {
   /** Lifecycle state; omitted uses the schema default (in_service). */
   state?: HostState;
   /**
+   * A synced host whose commissioning date vCenter could not supply (Q9c, #194).
    * Marks the imported `commissionedAt` as provisional (sync-imported,
    * unconfirmed). Drives the fleet-console "N hosts need commissioning dates"
-   * hint (#193/#194). Omitted leaves the schema default (`false`).
+   * hint (#193/#194). Omitted leaves the schema default (`false`). Set `true`
+   * alongside `source: 'vsphere'` to fabricate the provisional state the confirm
+   * flow operates on.
    */
   commissionedAtProvisional?: boolean;
   source?: EntitySource;

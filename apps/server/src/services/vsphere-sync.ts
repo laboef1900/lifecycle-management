@@ -200,6 +200,11 @@ export class VsphereSyncService {
       });
 
       if (existing) {
+        // @ai-note commissionedAt and commissionedAtProvisional are deliberately
+        // NOT in this update. They are operator-owned (Q9c, #194): once an admin
+        // confirms the real commissioning date, re-sync must never overwrite it.
+        // The invariant holds by OMISSION here — there is no host `nameIsCustom`
+        // flag (that is Cluster-only). host-commissioning.test.ts pins it.
         await this.prisma.host.update({
           where: { id: existing.id },
           data: { externalName: host.name, name: host.name, clusterId, lastSyncedAt: new Date() },
