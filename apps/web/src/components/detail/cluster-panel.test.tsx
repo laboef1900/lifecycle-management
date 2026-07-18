@@ -1,6 +1,6 @@
 import type { ClusterResponse, ForecastResponse, HostResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { LazyMotion, MotionConfig, domAnimation } from 'motion/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -82,52 +82,26 @@ function stubLayoutBoxes(): void {
   vi.spyOn(Element.prototype, 'getClientRects').mockReturnValue(rects);
 }
 /**
- * Records containment violations across a pane close.
+ * Records any attempt to move focus into the content column while that column
+ * is inert.
  *
- * Two things must never be observable while the Scenario sheet is still in the
- * DOM (i.e. still painting over the content column during AnimatePresence's
- * exit): the column being interactive, and focus being moved into it. The DOM
- * sampler runs on every mutation batch and the `focusin` listener fires
- * synchronously on `.focus()`, so both checks are ordering-based and
- * independent of how long the exit actually takes.
+ * `focusin` fires synchronously from `.focus()`, so this is a pure ordering
+ * check with no dependency on how long the exit animation happens to take —
+ * unlike sampling the DOM on a timer or on mutations, which races the
+ * animation and flakes on a loaded runner.
  */
-function watchColumnUnderPane(panel: HTMLElement): {
-  violations: string[];
-  stop: () => void;
-} {
+function watchFocusIntoInert(): { violations: string[]; stop: () => void } {
   const violations: string[] = [];
-  const columnIsInert = (): boolean =>
-    panel.querySelector('[data-testid="panel-content"]')?.hasAttribute('inert') ?? false;
-
-  const sample = (): void => {
-    const sheetOnScreen = panel.querySelector('[data-testid="scenario-pane-body"]') !== null;
-    if (sheetOnScreen && !columnIsInert()) {
-      violations.push(
-        `PAINT aside=${panel.querySelector('aside') !== null} body=${sheetOnScreen} inertAttr=${String(panel.querySelector('[data-testid="panel-content"]')?.getAttribute('inert'))} asideWidth=${(panel.querySelector('aside') as HTMLElement | null)?.style.width ?? 'n/a'}`,
-      );
-    }
-  };
   const onFocusIn = (event: Event): void => {
     const target = event.target;
     if (target instanceof HTMLElement && target.closest('[inert]') !== null) {
       violations.push(
-        `focus was moved into the inert column: ${target.dataset.testid ?? target.tagName}`,
+        `focus moved into the inert column: ${target.dataset.testid ?? target.tagName}`,
       );
     }
   };
-
-  const observer = new MutationObserver(sample);
-  observer.observe(panel, { subtree: true, childList: true, attributes: true });
   document.addEventListener('focusin', onFocusIn);
-  sample();
-
-  return {
-    violations,
-    stop: () => {
-      observer.disconnect();
-      document.removeEventListener('focusin', onFocusIn);
-    },
-  };
+  return { violations, stop: () => document.removeEventListener('focusin', onFocusIn) };
 }
 
 const navigateMock = vi.fn();
@@ -740,22 +714,30 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await user.click(scenarioButton);
     await screen.findByTestId('scenario-controls');
     expect(content).toHaveAttribute('inert');
-    expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus();
+    const paneClose = screen.getByRole('button', { name: 'Close scenario pane' });
+    expect(paneClose).toHaveFocus();
 
-    // Every DOM commit from here on is sampled, rather than snapshotting once
-    // after the close and trusting that the 200ms exit has not already
-    // finished: the invariant is an ordering one, and a wall-clock snapshot
-    // flakes under a loaded test runner.
-    const closing = watchColumnUnderPane(screen.getByRole('dialog'));
-    await user.keyboard('{Escape}');
+    const closing = watchFocusIntoInert();
+
+    // Synchronous dispatch, with nothing awaited before the assertions below:
+    // an animation frame can only run once the stack unwinds, so what is
+    // observed is exactly the commit `closePane` produced. (`user.keyboard`
+    // awaits internally, which on a loaded runner can let the whole 200ms exit
+    // finish first — a race with the animation, not a behaviour difference.)
+    fireEvent.keyDown(paneClose, { key: 'Escape' });
+
+    // Still mounted, so still painted over the column...
+    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
+    expect(content).toHaveAttribute('inert');
+    // ...and therefore focus has not been handed back into it yet.
+    expect(scenarioButton).not.toHaveFocus();
+
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
     closing.stop();
 
-    // No committed state had the sheet painted over a live column, and focus
-    // was never handed back into the column while it was still inert (where
-    // `focus()` is a no-op in a real browser, stranding focus on <body>).
+    // Focus was never pushed into the column while it was still inert — where
+    // `focus()` is a no-op in a real browser and would strand focus on <body>.
     expect(closing.violations).toEqual([]);
-
     expect(content).not.toHaveAttribute('inert');
     await waitFor(() => expect(scenarioButton).toHaveFocus());
   });

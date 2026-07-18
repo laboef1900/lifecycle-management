@@ -93,6 +93,13 @@ export function scenarioPaneLayout(sideBySide: boolean): {
  * close control). `tone: 'active'` uses the consumption token rather than the
  * amber accent so the indicator points at the violet scenario line it labels —
  * amber is double-booked as the warn-threshold color (styles.css §chart tokens).
+ *
+ * @ai-context One copy of this recipe still lives in `ui/back-button.tsx`. PR
+ * #234 moves that one onto `Button`'s `chip` variant + `chip` size; once it has
+ * landed, delete this `cva` and render both call sites as
+ * `<Button variant="chip" size="chip">`, keeping only the `tone: 'active'`
+ * classes as a local `className` override. Minting the shared primitive here
+ * instead would collide with that PR, which is why it is still local.
  */
 const chipButton = cva(
   'flex shrink-0 items-center gap-2 rounded-[var(--radius)] border px-2.5 py-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] transition-colors',
