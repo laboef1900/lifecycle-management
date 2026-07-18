@@ -113,3 +113,73 @@ describe('<OrderByRail>', () => {
     expect(button).toHaveAttribute('data-cluster-id', 'c-p1');
   });
 });
+
+describe('<OrderByRail> lead-time zone', () => {
+  const zone = (container: HTMLElement): Element | null =>
+    container.querySelector('[data-testid="rail-lead-zone"]');
+
+  const overdueFirst: OrderByRailItem[] = [
+    { clusterId: 'c-late', name: 'CL-Late', orderByDate: '2020-01-01', leadTimeWeeks: 13 },
+    { clusterId: 'c-p1', name: 'CL-Prod-P1', orderByDate: '2027-12-28', leadTimeWeeks: 13 },
+  ];
+
+  it('labels the zone with the lead time in days derived from leadTimeWeeks', () => {
+    render(<OrderByRail items={items} />);
+    expect(screen.getByText('LEAD 91 D')).toBeInTheDocument(); // 13 wk x 7
+  });
+
+  it('derives a different label from a different leadTimeWeeks', () => {
+    render(<OrderByRail items={items.map((i) => ({ ...i, leadTimeWeeks: 8 }))} />);
+    expect(screen.getByText('LEAD 56 D')).toBeInTheDocument(); // the 8 wk default
+  });
+
+  // Guards the issue's core constraint: the zone spans the *configured* lead
+  // time, never a hardcoded 90 days. Without this, a constant would still pass
+  // every label assertion above while silently drawing the wrong width.
+  it.each([
+    [13, 91],
+    [8, 56],
+  ])('sizes the zone from leadTimeWeeks (%i wk -> %i d of the 365-day rail)', (weeks, days) => {
+    const { container } = render(
+      <OrderByRail items={items.map((i) => ({ ...i, leadTimeWeeks: weeks }))} />,
+    );
+    const width = (zone(container) as HTMLElement).style.width;
+    expect(Number.parseFloat(width)).toBeCloseTo((days / 365) * 100, 4);
+  });
+
+  it('clamps the zone to the rail window when the lead time exceeds 12 months', () => {
+    const { container } = render(
+      <OrderByRail items={items.map((i) => ({ ...i, leadTimeWeeks: 104 }))} />,
+    );
+    // 104 wk = 728 d, twice the window — the zone fills it rather than overflowing.
+    expect(Number.parseFloat((zone(container) as HTMLElement).style.width)).toBe(100);
+    expect(screen.getByText('LEAD 728 D')).toBeInTheDocument();
+  });
+
+  it('keeps the zone and label decorative, with the header hint carrying the meaning', () => {
+    const { container } = render(<OrderByRail items={items} />);
+    expect(screen.getByText('LEAD 91 D')).toHaveAttribute('aria-hidden');
+    expect(zone(container)).toHaveAttribute('aria-hidden');
+    expect(screen.getByText(/inside 91-day lead time/i)).toBeInTheDocument();
+  });
+
+  it('still renders the zone and its label when the earliest order-by is overdue', () => {
+    const { container } = render(<OrderByRail items={overdueFirst} />);
+    expect(zone(container)).toBeInTheDocument();
+    expect(screen.getByText('LEAD 91 D')).toBeInTheDocument();
+  });
+
+  it('omits the zone when the rail has no ticks', () => {
+    const { container } = render(<OrderByRail items={[]} />);
+    expect(zone(container)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^LEAD /)).not.toBeInTheDocument();
+  });
+
+  it('omits the zone when the configured lead time is zero', () => {
+    const { container } = render(
+      <OrderByRail items={items.map((i) => ({ ...i, leadTimeWeeks: 0 }))} />,
+    );
+    expect(zone(container)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^LEAD /)).not.toBeInTheDocument();
+  });
+});

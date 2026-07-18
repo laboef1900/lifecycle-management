@@ -61,9 +61,9 @@ const URGENCY_STYLE: Record<
 
 /**
  * Order-by rail (spec §4.2): a full-width 12-month strip with one tick per
- * cluster that has a non-null procurement order-by date. The earliest tick
- * carries a shaded zone spanning its cluster's lead time; hovering/focusing a
- * tick links back to its tile via `onTickHover` + `data-cluster-id`.
+ * cluster that has a non-null procurement order-by date. A labelled zone shades
+ * the configured procurement lead time from NOW; hovering/focusing a tick links
+ * back to its tile via `onTickHover` + `data-cluster-id`.
  */
 export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps): React.JSX.Element {
   const today = new Date();
@@ -77,11 +77,22 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
     })
     .sort((a, b) => a.days - b.days);
 
+  // The zone measures the configured procurement lead time forward from NOW, so
+  // it is drawn whenever the rail has ticks at all. An overdue order-by is
+  // exactly when "anything ordered today lands after this window" matters most
+  // — the old `days >= 0` guard hid the zone in precisely that case.
   const earliest = ticks[0];
-  const leadZonePct =
-    earliest && earliest.days >= 0
-      ? Math.min(100, ((earliest.leadTimeWeeks * 7) / RAIL_WINDOW_DAYS) * 100)
-      : 0;
+  const leadDays = earliest ? earliest.leadTimeWeeks * 7 : 0;
+  const leadZonePct = Math.min(100, (leadDays / RAIL_WINDOW_DAYS) * 100);
+  const showLeadZone = leadDays > 0;
+
+  // The zone and its label are decorative; this hint is where the meaning
+  // reaches assistive tech, so it carries the lead time in words.
+  const hint = showLeadZone
+    ? `shaded = inside ${leadDays}-day lead time · tick = last safe order date`
+    : ticks.length > 0
+      ? 'tick = last safe order date'
+      : 'the lead-time zone appears once a cluster has an order-by date in this window';
 
   const monthTicks = Array.from({ length: 12 }, (_, i) => {
     const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + i + 1, 1));
@@ -104,9 +115,7 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
           Order-by rail — next 12 months
         </h2>
         <span className="text-[9px] font-semibold uppercase tracking-[0.1em] text-fg-subtle">
-          {ticks.length > 0
-            ? 'shaded = inside lead time · tick = last safe order date'
-            : 'the lead-time zone appears when an order-by falls inside 90 days'}
+          {hint}
         </span>
       </div>
 
@@ -123,9 +132,10 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
           </div>
         ) : (
           <>
-            {leadZonePct > 0 ? (
+            {showLeadZone ? (
               <span
                 aria-hidden
+                data-testid="rail-lead-zone"
                 className="absolute inset-y-0 left-0 border-r border-dashed border-accent/45"
                 style={{
                   width: `${leadZonePct}%`,
@@ -142,6 +152,17 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
                 style={{ left: `${m.pct}%`, background: 'var(--chart-grid)' }}
               />
             ))}
+            {/* After the gridlines: the zone is a backdrop, but its label is
+                text and must not be crossed by a month rule. */}
+            {showLeadZone ? (
+              <span
+                aria-hidden
+                className="absolute bottom-[3px] -translate-x-full whitespace-nowrap pr-1.5 font-mono text-[9px] font-semibold tracking-[0.1em]"
+                style={{ left: `${leadZonePct}%`, color: 'var(--accent-label)' }}
+              >
+                LEAD {leadDays} D
+              </span>
+            ) : null}
             <span
               aria-hidden
               className="absolute inset-y-0 left-0 w-0.5 bg-steel"
