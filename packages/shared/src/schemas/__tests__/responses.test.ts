@@ -44,6 +44,14 @@ describe('clusterResponseSchema', () => {
     expect(clusterResponseSchema.safeParse(literal).success).toBe(true);
   });
 
+  it('accepts a null utilization for a zero-capacity metric (unknowable, never 0%)', () => {
+    const unknown = {
+      ...literal,
+      metrics: [{ ...literal.metrics[0], currentCapacity: 0, utilization: null }],
+    };
+    expect(clusterResponseSchema.safeParse(unknown).success).toBe(true);
+  });
+
   it('rejects a non-numeric utilization', () => {
     const bad = {
       ...literal,
@@ -292,6 +300,7 @@ describe('vsphereConnectionResponseSchema', () => {
     id: 'vc_1',
     name: 'vc-prod',
     hostname: 'vcenter.corp.local',
+    port: 443,
     username: 'svc-lcm',
     tlsMode: 'pinned',
     pinnedRootFingerprintSha256: Array.from({ length: 32 }, () => 'AB').join(':'),

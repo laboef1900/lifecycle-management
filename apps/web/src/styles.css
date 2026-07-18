@@ -75,8 +75,15 @@
      track the palette in both themes; the categorical event scale (--chart-1..7)
      is chart-only. Tokens built from var() below resolve per theme automatically
      via the dark overrides above/below, so only genuinely independent literals
-     (chart-capacity/grid/axis/1-4/7) are re-declared in html.dark. */
-  --chart-consumption: var(--accent);
+     (chart-consumption/capacity/grid/axis/1-4/7) are re-declared in html.dark. */
+  /* Consumption line: a dedicated violet, NOT amber. Amber (--accent/--warning)
+     is double-booked as the warn-threshold color, so on the forecast charts the
+     usage line and the warn hairline were indistinguishable (identical hex in
+     dark). Violet clears warn amber, crit red, success green, and the steel
+     interaction hue in both themes (#7c3aed ~5.7:1 on white, #c084fc ~6.5:1 on
+     the dark card). House-style deviation recorded in the mission-bento spec
+     §4.4 amendment (2026-07-18). */
+  --chart-consumption: #7c3aed;
   --chart-capacity: #3a455e;
   --chart-grid: #e3e8f2;
   --chart-axis: #8a94ac;
@@ -135,8 +142,10 @@ html.dark {
   --meter-gradient: linear-gradient(90deg, #d9a32c, var(--accent));
 
   /* Categorical event-scale + independent chart roles (the var()-referencing
-     roles above — consumption, chart-5, chart-6, and the chart-utilization-*
-     trio — resolve automatically from the dark tokens above). */
+     roles above — chart-5, chart-6, and the chart-utilization-* trio — resolve
+     automatically from the dark tokens above; consumption is an independent
+     literal per theme, see the :root note). */
+  --chart-consumption: #c084fc;
   --chart-capacity: #c7d0e4;
   --chart-grid: #1b2236;
   --chart-axis: #2a3450;
@@ -264,7 +273,12 @@ body {
 
 /* Cluster detail slide-in panel (spec §5): fullscreen takeover — 100vw at
    every width (user decision 2026-07-17, superseding the former 58vw side
-   panel with its 1100px breakpoint). The console beneath is fully covered. */
+   panel with its 1100px breakpoint). The console beneath is fully covered.
+
+   @ai-warning `scenarioPaneLayout` (components/detail/cluster-panel.tsx) sizes
+   the below-`lg` Scenario sheet to 100vw so that it covers this panel exactly,
+   which is what makes the `inert` it applies to the content column honest.
+   Narrow this and the sheet would leave part of an inert column on screen. */
 .cluster-panel {
   width: 100vw;
 }

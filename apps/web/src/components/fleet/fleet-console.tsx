@@ -1,14 +1,16 @@
 import type { ClusterResponse, ProcurementInfo } from '@lcm/shared';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { AlertTriangle } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
+import { AlertTriangle, Boxes } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
 import { AdminOnly } from '@/components/auth/admin-only';
-import { CreateClusterDialog } from '@/components/clusters/create-cluster-dialog';
 import { resolveWindow } from '@/components/clusters/window-controls';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ADD_CLUSTER_HASH } from '@/lib/anchors';
 import { api } from '@/lib/api-client';
 import { collectForecastState, earliestOrderByFromFleet } from '@/lib/collect-forecast-state';
 import { buildClusterForecastEntries, type ClusterForecastEntry } from '@/lib/forecast-summary';
@@ -191,12 +193,29 @@ export function FleetConsole(): React.JSX.Element {
       {isEmpty ? (
         <>
           <h1 className="sr-only">Fleet capacity console</h1>
+          {/* The large call-to-action fills the area the cluster-tile grid
+              would occupy (#223). Adding a cluster is a configuration task, so
+              the action lives in Settings — this only points there, deep-linked
+              to the Add-cluster panel. Admin-only, as the create action was;
+              viewers get a plain explanation. */}
           <EmptyState
-            title="No clusters yet."
-            description="Add a cluster to start tracking memory capacity and forecasting growth."
+            size="hero"
+            icon={<Boxes />}
+            title="No clusters yet"
+            description="Add a cluster to start tracking memory capacity and forecasting growth. Clusters are managed in Settings, alongside your vCenter connections."
             action={
-              <AdminOnly>
-                <CreateClusterDialog />
+              <AdminOnly
+                fallback={
+                  <p className="text-xs text-fg-subtle">
+                    Ask an administrator to add a cluster in Settings.
+                  </p>
+                }
+              >
+                <Button asChild variant="accent" size="lg">
+                  <Link to="/settings" hash={ADD_CLUSTER_HASH}>
+                    Add a cluster in Settings
+                  </Link>
+                </Button>
               </AdminOnly>
             }
           />
@@ -212,9 +231,6 @@ export function FleetConsole(): React.JSX.Element {
           />
 
           <div className="flex items-center justify-end gap-2">
-            <AdminOnly>
-              <CreateClusterDialog />
-            </AdminOnly>
             <button
               type="button"
               onClick={() => setShowArchived((v) => !v)}

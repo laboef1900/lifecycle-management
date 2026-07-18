@@ -51,6 +51,7 @@ function renderSettingsRoute(auth: AuthState): ReturnType<typeof render> {
 
 const baseAuthConfig: AuthConfigResponse = {
   mode: 'disabled',
+  forceDisabledReason: null,
   issuerUrl: null,
   clientId: null,
   appBaseUrl: null,

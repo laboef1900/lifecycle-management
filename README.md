@@ -110,7 +110,7 @@ All three containers run on [Docker Hardened Images](https://www.docker.com/prod
 | `HTTP_PORT`             | `80`                                      | web (compose)          | Host port mapped to nginx :8080                                                                                 |
 | `LCM_IMAGE_TAG`         | `latest`                                  | server + web (compose) | GHCR image tag (e.g. `0.1`, `dev`)                                                                              |
 | `CONFIG_ENCRYPTION_KEY` | `— (required)`                            | server (compose)       | Encrypts the DB-backed OIDC config; compose refuses to start if unset — generate with `openssl rand -base64 32` |
-| `RECOVERY_DISABLE_AUTH` | `false`                                   | server (compose)       | Break-glass: forces auth off on next boot regardless of stored config                                           |
+| `RECOVERY_DISABLE_AUTH` | `false`                                   | server (compose)       | Break-glass: forces auth off for that boot only, in memory — the stored auth config is left untouched           |
 
 OIDC itself is configured at runtime via **Settings → Authentication**, not
 env vars — see [`docs/operations.md`](docs/operations.md#authentication-oidc).

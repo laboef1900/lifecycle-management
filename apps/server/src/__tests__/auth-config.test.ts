@@ -398,6 +398,27 @@ describe('AuthConfigService.toEffective', () => {
 });
 
 describe('AuthConfigService.sanitize', () => {
+  /**
+   * What every in-memory force-disable looks like on the wire: the ENFORCED
+   * mode is `disabled` while the stored mode is `oidc`.
+   */
+  const divergentEffective: EffectiveAuthConfig = {
+    mode: 'disabled',
+    issuerUrl: 'https://idp',
+    clientId: 'lcm',
+    clientSecret: 'client-secret-value-9f2a1',
+    signingSecret: 'signing-secret-value-7d3c8',
+    appBaseUrl: 'https://app',
+    scopes: 'openid profile email',
+    roleClaim: null,
+    adminValues: null,
+    defaultRole: 'admin',
+    allowedEmailDomains: null,
+    allowedEmails: null,
+    sessionTtlHours: 12,
+    allowInsecure: false,
+  };
+
   it('never includes secret values', () => {
     const svc = new AuthConfigService(prisma, KEY);
     const eff: EffectiveAuthConfig = {
@@ -417,7 +438,13 @@ describe('AuthConfigService.sanitize', () => {
       allowInsecure: false,
     };
     const out = JSON.stringify(
-      svc.sanitize(eff, 'https://app/api/auth/callback', 'connected', null),
+      svc.sanitize(
+        eff,
+        { storedMode: 'oidc', overrideCause: null },
+        'https://app/api/auth/callback',
+        'connected',
+        null,
+      ),
     );
     // Assert on the full secret values (not a short substring like 'sig' —
     // that would coincidentally match inside the "signingSecretSet" key).
@@ -445,10 +472,128 @@ describe('AuthConfigService.sanitize', () => {
       sessionTtlHours: 12,
       allowInsecure: false,
     };
-    const out = svc.sanitize(eff, 'https://app/api/auth/callback', 'disabled', 'boom');
+    const out = svc.sanitize(
+      eff,
+      { storedMode: 'disabled', overrideCause: null },
+      'https://app/api/auth/callback',
+      'disabled',
+      'boom',
+    );
     expect(out.clientSecretSet).toBe(false);
     expect(out.signingSecretSet).toBe(false);
     expect(out.lastDiscoveryError).toBe('boom');
     expect(out.discoveryStatus).toBe('disabled');
+  });
+
+  it('reports the STORED mode plus forceDisabledReason, not the enforced mode (#222)', () => {
+    const svc = new AuthConfigService(prisma, KEY);
+    // What a break-glass boot looks like: enforced disabled, stored oidc.
+    const eff: EffectiveAuthConfig = {
+      mode: 'disabled',
+      issuerUrl: 'https://idp',
+      clientId: 'lcm',
+      clientSecret: 'client-secret-value-9f2a1',
+      signingSecret: 'signing-secret-value-7d3c8',
+      appBaseUrl: 'https://app',
+      scopes: 'openid profile email',
+      roleClaim: null,
+      adminValues: null,
+      defaultRole: 'admin',
+      allowedEmailDomains: null,
+      allowedEmails: null,
+      sessionTtlHours: 12,
+      allowInsecure: false,
+    };
+
+    const out = svc.sanitize(
+      eff,
+      { storedMode: 'oidc', overrideCause: 'break_glass' },
+      'https://app/api/auth/callback',
+      'disabled',
+      null,
+    );
+
+    // Reporting the enforced 'disabled' here would make the Settings form echo
+    // it back in its PUT and clobber the stored oidc config.
+    expect(out.mode).toBe('oidc');
+    expect(out.forceDisabledReason).toBe('break_glass');
+  });
+
+  it('reports forceDisabledReason=secret_decrypt_failure for the decrypt degrade (#222)', () => {
+    const svc = new AuthConfigService(prisma, KEY);
+    // The decrypt degrade produces the SAME divergence as break-glass, but with
+    // break-glass OFF. Gating the indicator on break-glass alone answered
+    // {mode:'oidc', no indicator} over an anonymous-ADMIN API.
+    const out = svc.sanitize(
+      { ...divergentEffective },
+      { storedMode: 'oidc', overrideCause: 'secret_decrypt_failure' },
+      'https://app/api/auth/callback',
+      'disabled',
+      null,
+    );
+
+    expect(out.mode).toBe('oidc');
+    expect(out.forceDisabledReason).toBe('secret_decrypt_failure');
+  });
+
+  it('reports a divergence with NO recorded cause conservatively, never as null (#222)', () => {
+    const svc = new AuthConfigService(prisma, KEY);
+    // A divergence with no recorded cause is a plugin bug. Failing safe means
+    // still flagging it: reporting null would render a secured-looking OIDC page
+    // over a wide-open API, the exact failure this field prevents.
+    const out = svc.sanitize(
+      { ...divergentEffective },
+      { storedMode: 'oidc', overrideCause: null },
+      'https://app/api/auth/callback',
+      'disabled',
+      null,
+    );
+
+    expect(out.forceDisabledReason).toBe('secret_decrypt_failure');
+  });
+
+  it('reports forceDisabledReason=null when a cause is recorded but nothing actually diverges (#222)', () => {
+    const svc = new AuthConfigService(prisma, KEY);
+    // The FALSE-POSITIVE direction, and the only fixture here that a hardcoded
+    // non-null implementation fails: break-glass over a deployment whose stored
+    // mode is ALREADY `disabled`. A cause IS recorded (the override genuinely
+    // fired), but enforced and stored agree, so there is no "open despite
+    // configuration" to report. Deriving the reason from `overrideCause` alone
+    // would put a force-disabled banner on the app's documented default
+    // posture — banner blindness on every fresh deployment.
+    const out = svc.sanitize(
+      { ...divergentEffective, mode: 'disabled' },
+      { storedMode: 'disabled', overrideCause: 'break_glass' },
+      'https://app/api/auth/callback',
+      'disabled',
+      null,
+    );
+
+    expect(out.mode).toBe('disabled');
+    expect(out.forceDisabledReason).toBeNull();
+  });
+
+  it('reports forceDisabledReason=null when the enforced mode matches the stored one', () => {
+    const svc = new AuthConfigService(prisma, KEY);
+
+    const enforcedOidc = svc.sanitize(
+      { ...divergentEffective, mode: 'oidc' },
+      { storedMode: 'oidc', overrideCause: null },
+      'https://app/api/auth/callback',
+      'connected',
+      null,
+    );
+    expect(enforcedOidc.forceDisabledReason).toBeNull();
+
+    // A deployment legitimately stored as `disabled` is NOT a divergence, even
+    // though the enforced mode is `disabled` — it must report null.
+    const storedDisabled = svc.sanitize(
+      { ...divergentEffective, mode: 'disabled' },
+      { storedMode: 'disabled', overrideCause: null },
+      'https://app/api/auth/callback',
+      'disabled',
+      null,
+    );
+    expect(storedDisabled.forceDisabledReason).toBeNull();
   });
 });

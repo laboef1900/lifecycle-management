@@ -36,13 +36,12 @@ const connectionTaken = (name: string): UnprocessableError =>
   );
 
 /**
- * The `dueAt` a freshly seeded scheduler job gets: the Unix epoch, guaranteed in
- * the past, so the very first tick after a connection is created or (re-)enabled
- * imports its inventory immediately rather than waiting out a cadence (#191, D22:
- * "sync-on-connection-create/enable"). The scheduler advances it to a real cadence
- * on the first run.
+ * The `dueAt` a freshly seeded scheduler job gets. "Now" makes it immediately due
+ * without letting newly-created rows jump ahead of every already-queued job as the
+ * Unix epoch did. FIFO ordering is part of the anonymous-create work budget: a
+ * steady stream of new rows must not perpetually starve an older first contact.
  */
-const SEED_DUE_AT = new Date(0);
+const seedDueAt = (): Date => new Date();
 
 /** A connection row with its scheduler job eagerly loaded, as `toResponse` needs it. */
 type ConnectionWithJob = VsphereConnection & { job: VsphereConnectionJob | null };
@@ -97,8 +96,8 @@ export class VsphereConnectionsService {
     try {
       // Seed the scheduler job in the same write (#191). `connectionId` is the job's
       // PK+FK, so the nested create is atomic — a connection can never exist without
-      // its job row, and the first tick imports immediately (SEED_DUE_AT is in the
-      // past). Seeded even when `enabled: false`; the scheduler filters disabled
+      // its job row, and the first tick imports immediately (`dueAt` is now).
+      // Seeded even when `enabled: false`; the scheduler filters disabled
       // connections out, so an unused row is harmless and enabling later just bumps
       // `dueAt`.
       const row = await this.prisma.vsphereConnection.create({
@@ -106,10 +105,11 @@ export class VsphereConnectionsService {
           tenantId,
           name: input.name,
           hostname: input.hostname,
+          port: input.port,
           username: input.username,
           passwordEnc,
           enabled: input.enabled,
-          job: { create: { dueAt: SEED_DUE_AT } },
+          job: { create: { dueAt: seedDueAt() } },
         },
         include: { job: true },
       });
@@ -140,6 +140,11 @@ export class VsphereConnectionsService {
     if (input.enabled !== undefined) data.enabled = input.enabled;
     if (input.username !== undefined) data.username = input.username;
     if (input.password !== undefined) data.passwordEnc = this.encryptPassword(input.password);
+    // A port change repoints the socket on the SAME host, so — unlike a hostname
+    // change below — it does NOT reset the pin: same host means the same Machine SSL
+    // certificate, and the instanceUuid guard still catches "a different vCenter".
+    // It is trust material for the PASSWORD gate (route-enforced), not for the pin.
+    if (input.port !== undefined) data.port = input.port;
 
     // Re-pointing at a different host invalidates everything we learned about the
     // old one. Keeping the pin would trust the OLD vCenter's CA for the NEW host;
@@ -165,6 +170,7 @@ export class VsphereConnectionsService {
     // row — the scheduler filters disabled connections out, and keeping the row
     // preserves its last-run history for the settings panel.
     const reEnabling = input.enabled === true && !existing.enabled;
+    const rearmDueAt = seedDueAt();
 
     try {
       const updateConnection = this.prisma.vsphereConnection.update({
@@ -181,8 +187,8 @@ export class VsphereConnectionsService {
               updateConnection,
               this.prisma.vsphereConnectionJob.upsert({
                 where: { connectionId: id },
-                create: { connectionId: id, dueAt: SEED_DUE_AT },
-                update: { dueAt: SEED_DUE_AT },
+                create: { connectionId: id, dueAt: rearmDueAt },
+                update: { dueAt: rearmDueAt },
               }),
             ])
           )[0]
@@ -366,6 +372,7 @@ export class VsphereConnectionsService {
       id: row.id,
       name: row.name,
       hostname: row.hostname,
+      port: row.port,
       username: row.username,
       tlsMode: (row.tlsMode === 'system' ? 'system' : 'pinned') satisfies VsphereTlsMode,
       pinnedRootFingerprintSha256: row.tlsPinnedSha256,

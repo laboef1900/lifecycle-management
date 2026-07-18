@@ -12,6 +12,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 const wellFormedAuthConfigResponse = {
   mode: 'oidc',
+  forceDisabledReason: null,
   issuerUrl: 'https://idp.example.com',
   clientId: 'client-123',
   appBaseUrl: 'https://app.example.com',

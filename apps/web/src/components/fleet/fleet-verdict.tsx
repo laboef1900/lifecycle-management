@@ -47,8 +47,11 @@ export function FleetVerdict({
     thresholds,
   );
   const horizonMonth = summary.fleetMonths.at(-1)?.month;
-  const headroom = Math.max(0, summary.totalCapacity - summary.totalConsumption);
-  const utilPct = summary.utilization * 100;
+  const utilizationKnown = summary.utilization !== null;
+  const headroom = utilizationKnown
+    ? Math.max(0, summary.totalCapacity - summary.totalConsumption)
+    : null;
+  const utilPct = summary.utilization === null ? null : summary.utilization * 100;
 
   return (
     <section
@@ -57,7 +60,37 @@ export function FleetVerdict({
       aria-label="Fleet verdict"
     >
       <h1 className="max-w-[56ch] text-balance font-display text-[clamp(22px,2.2vw,28px)] font-semibold leading-[1.18] tracking-[-0.02em]">
-        {earliest ? (
+        {!utilizationKnown ? (
+          <>
+            Fleet capacity is{' '}
+            <strong className={cn('text-fg-muted', HL, 'decoration-border-strong')}>unknown</strong>{' '}
+            {'—'}{' '}
+            {earliest ? (
+              <>
+                <Link
+                  to="/clusters/$id"
+                  params={{ id: earliest.cluster.id }}
+                  className={cn(
+                    'text-inherit',
+                    HL,
+                    'decoration-border-strong hover:text-steel hover:decoration-steel',
+                  )}
+                >
+                  {earliest.cluster.name}
+                </Link>{' '}
+                still needs an order by{' '}
+                <strong className={cn('text-fg-muted', HL, 'decoration-border-strong')}>
+                  {earliest.procurement.orderByDate
+                    ? formatDateShort(earliest.procurement.orderByDate)
+                    : '—'}
+                </strong>
+                , but complete capacity before relying on fleet runway.
+              </>
+            ) : (
+              <>add missing capacity before relying on procurement timing.</>
+            )}
+          </>
+        ) : earliest ? (
           <>
             Fleet runway is{' '}
             <strong className={cn('text-accent', HL, 'decoration-accent')}>
@@ -98,21 +131,27 @@ export function FleetVerdict({
 
       <div className="flex flex-wrap items-end gap-6">
         <Instrument label="Utilization">
-          <span className="font-mono text-base font-bold tabular-nums text-accent">
-            {utilPct.toFixed(1)}%
-          </span>
-          <BulletMeter
-            value={utilPct}
-            warn={thresholds.warn * 100}
-            crit={thresholds.crit * 100}
-            className="mt-1.5 w-[150px]"
-            label={`Fleet utilization ${utilPct.toFixed(1)} percent of capacity. Warn threshold ${Math.round(thresholds.warn * 100)} percent, critical ${Math.round(thresholds.crit * 100)} percent.`}
-          />
+          {utilPct === null ? (
+            <span className="font-mono text-base font-bold text-fg-muted">UNKNOWN</span>
+          ) : (
+            <>
+              <span className="font-mono text-base font-bold tabular-nums text-accent">
+                {utilPct.toFixed(1)}%
+              </span>
+              <BulletMeter
+                value={utilPct}
+                warn={thresholds.warn * 100}
+                crit={thresholds.crit * 100}
+                className="mt-1.5 w-[150px]"
+                label={`Fleet utilization ${utilPct.toFixed(1)} percent of capacity. Warn threshold ${Math.round(thresholds.warn * 100)} percent, critical ${Math.round(thresholds.crit * 100)} percent.`}
+              />
+            </>
+          )}
         </Instrument>
         <Separator />
         <Instrument label="Headroom">
           <span className="font-mono text-base font-bold tabular-nums text-accent">
-            {formatGb(headroom)}
+            {headroom === null ? 'UNKNOWN' : formatGb(headroom)}
           </span>
         </Instrument>
         <Separator />
@@ -126,7 +165,11 @@ export function FleetVerdict({
         <Separator />
         <Instrument label="Open orders">
           <span className="font-mono text-base font-bold tabular-nums">
-            {openOrderCount > 0 ? `${openOrderCount} pending` : 'nothing pending'}
+            {openOrderCount > 0
+              ? `${openOrderCount} pending`
+              : utilizationKnown
+                ? 'nothing pending'
+                : 'status unknown'}
           </span>
         </Instrument>
         <Separator />

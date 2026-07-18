@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { HostsService } from '../services/hosts.js';
+import { ForecastService } from '../services/forecast-loader.js';
 import type {
   CollectedInventory,
   VsphereInventoryCollector,
@@ -27,11 +28,12 @@ import { makeTestEnv } from './test-helpers.js';
  * confirmed date. That last test is the contract #196's sync-owned-field guard
  * must not break.
  *
- * @ai-note There is deliberately no live-forecast assertion here: a merged synced
- * host carries ZERO HostMetricCapacity rows (that write is #190/#191), so
- * `commissionedAt` has no observable forecast effect yet. This PR pre-positions
- * the date; capacity rows below are fabricated only to exercise the
- * INVALID_COMMISSIONED_AT guard.
+ * @ai-note There is deliberately no live-forecast assertion here: this file pins
+ * the confirm-flow contract directly, and its fixtures are built via `makeHost`
+ * rather than a live sync. The forecast effect of a synced host's capacity — which
+ * #198 now writes on sync — and its interaction with `commissionedAt` is covered in
+ * the vsphere-sync and forecast suites. Capacity rows below are fabricated only to
+ * exercise the INVALID_COMMISSIONED_AT guard.
  */
 let server: FastifyInstance;
 
@@ -52,7 +54,8 @@ async function provisionalHost(
     source: 'vsphere',
     commissionedAtProvisional: true,
     commissionedAt: opts.commissionedAt ?? new Date('2026-07-01T00:00:00.000Z'),
-    // A real synced host has no capacity rows yet; pass one only to arm the guard.
+    // This fixture omits capacity rows by default to keep the confirm-flow tests
+    // focused; pass one only to arm the INVALID_COMMISSIONED_AT guard.
     initialCapacity:
       opts.withCapacityAt !== undefined
         ? [{ effectiveFrom: opts.withCapacityAt, amount: 512 }]
@@ -88,9 +91,10 @@ describe('PUT /api/hosts/:id confirms and clears the flag', () => {
     clusterId = (await makeCluster(prisma)).id;
   });
 
-  it('setting commissionedAt clears the provisional flag', async () => {
+  it('setting commissionedAt clears the flag and moves the seeded capacity date', async () => {
     const id = await provisionalHost(clusterId, {
       commissionedAt: new Date('2026-07-01T00:00:00.000Z'),
+      withCapacityAt: new Date('2026-07-01T00:00:00.000Z'),
     });
 
     const res = await server.inject({
@@ -103,6 +107,82 @@ describe('PUT /api/hosts/:id confirms and clears the flag', () => {
     const after = await readHost(id);
     expect(after.provisional).toBe(false);
     expect(after.commissionedAt).toBe('2024-01-15');
+    const capacity = await prisma.hostMetricCapacity.findFirstOrThrow({ where: { hostId: id } });
+    expect(capacity.effectiveFrom.toISOString()).toBe('2024-01-15T00:00:00.000Z');
+  });
+
+  it('makes capacity available to the forecast from the confirmed date, not import day', async () => {
+    const cluster = await makeCluster(prisma, {
+      baselineDate: new Date('2024-01-01T00:00:00.000Z'),
+      baselineConsumption: 256,
+      baselineCapacity: 0,
+    });
+    const id = await provisionalHost(cluster.id, {
+      commissionedAt: new Date('2026-07-01T00:00:00.000Z'),
+      withCapacityAt: new Date('2026-07-01T00:00:00.000Z'),
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/hosts/${id}`,
+      payload: { commissionedAt: '2024-01-15' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const forecast = await new ForecastService(prisma).forCluster(
+      'default',
+      cluster.id,
+      'memory_gb',
+      {
+        fromMonth: new Date('2024-02-01T00:00:00.000Z'),
+        toMonth: new Date('2024-02-01T00:00:00.000Z'),
+      },
+    );
+    expect(forecast.months[0]).toMatchObject({ capacity: 512, utilization: 0.5 });
+  });
+
+  it('moves only the initial row and preserves later availability history', async () => {
+    const provisionalDate = new Date('2026-07-01T00:00:00.000Z');
+    const id = await provisionalHost(clusterId, {
+      commissionedAt: provisionalDate,
+      withCapacityAt: provisionalDate,
+    });
+    const memory = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    await prisma.hostMetricCapacity.createMany({
+      data: [
+        {
+          hostId: id,
+          tenantId: 'default',
+          metricTypeId: memory.id,
+          effectiveFrom: new Date('2026-07-15T00:00:00.000Z'),
+          amount: 0,
+        },
+        {
+          hostId: id,
+          tenantId: 'default',
+          metricTypeId: memory.id,
+          effectiveFrom: new Date('2026-07-20T00:00:00.000Z'),
+          amount: 512,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/hosts/${id}`,
+      payload: { commissionedAt: '2020-01-01' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const rows = await prisma.hostMetricCapacity.findMany({
+      where: { hostId: id, metricTypeId: memory.id },
+      orderBy: { effectiveFrom: 'asc' },
+    });
+    expect(rows.map((row) => [row.effectiveFrom.toISOString(), row.amount.toNumber()])).toEqual([
+      ['2020-01-01T00:00:00.000Z', 512],
+      ['2026-07-15T00:00:00.000Z', 0],
+      ['2026-07-20T00:00:00.000Z', 512],
+    ]);
   });
 
   it('confirm-as-is: an unchanged date still clears the flag', async () => {
@@ -134,8 +214,15 @@ describe('POST /api/hosts/confirm-commissioning (bulk, transactional)', () => {
   });
 
   it('confirms per-host dates and clears every flag in one request', async () => {
-    const a = await provisionalHost(clusterId);
-    const b = await provisionalHost(clusterId);
+    const provisionalDate = new Date('2026-07-01T00:00:00.000Z');
+    const a = await provisionalHost(clusterId, {
+      commissionedAt: provisionalDate,
+      withCapacityAt: provisionalDate,
+    });
+    const b = await provisionalHost(clusterId, {
+      commissionedAt: provisionalDate,
+      withCapacityAt: provisionalDate,
+    });
 
     const res = await server.inject({
       method: 'POST',
@@ -159,6 +246,20 @@ describe('POST /api/hosts/confirm-commissioning (bulk, transactional)', () => {
 
     expect(await readHost(a)).toEqual({ commissionedAt: '2020-01-01', provisional: false });
     expect(await readHost(b)).toEqual({ commissionedAt: '2019-06-15', provisional: false });
+    const capacities = await prisma.hostMetricCapacity.findMany({
+      where: { hostId: { in: [a, b] } },
+      select: { hostId: true, effectiveFrom: true },
+    });
+    expect(
+      new Map(
+        capacities.map((capacity) => [capacity.hostId, capacity.effectiveFrom.toISOString()]),
+      ),
+    ).toEqual(
+      new Map([
+        [a, '2020-01-01T00:00:00.000Z'],
+        [b, '2019-06-15T00:00:00.000Z'],
+      ]),
+    );
   });
 
   it('one bad date aborts the whole batch — nothing is committed', async () => {
@@ -282,6 +383,7 @@ describe('⚠️ re-sync NEVER overwrites an operator-confirmed commissionedAt',
     const conn = await connections.create('default', {
       name: `hc-conn-${Date.now()}`,
       hostname: 'vcenter.corp.local',
+      port: 443,
       username: 'u',
       password: 'p',
       enabled: true,

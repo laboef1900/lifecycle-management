@@ -55,6 +55,7 @@ async function setup(inv: CollectedInventory): Promise<{ conn: string; clusterId
   const c = await connections.create('default', {
     name: uniq('conn'),
     hostname: 'vcenter.corp.local',
+    port: 443,
     username: 'u',
     password: 'p',
     enabled: true,

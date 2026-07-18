@@ -25,7 +25,7 @@ function makeForecast(rows: Array<[string, number, number]>): ForecastResponse {
       month,
       consumption,
       capacity,
-      utilization: capacity > 0 ? consumption / capacity : 0,
+      utilization: capacity > 0 ? consumption / capacity : null,
     })),
     effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'tenant' },
     procurement: { leadTimeWeeks: 8, orderByDate: null, breachMonth: null },
@@ -34,11 +34,11 @@ function makeForecast(rows: Array<[string, number, number]>): ForecastResponse {
 }
 
 describe('aggregateFleet', () => {
-  test('empty cluster list yields zeroes', () => {
+  test('empty cluster list has no measurable utilization', () => {
     const r = aggregateFleet([], []);
     expect(r.totalConsumption).toBe(0);
     expect(r.totalCapacity).toBe(0);
-    expect(r.utilization).toBe(0);
+    expect(r.utilization).toBeNull();
     expect(r.clusterCount).toBe(0);
     expect(r.worstCluster).toBeNull();
     expect(r.perClusterSeries).toEqual([]);
@@ -112,17 +112,35 @@ describe('aggregateFleet', () => {
     );
     expect(r.totalConsumption).toBe(100);
     expect(r.totalCapacity).toBe(500);
+    expect(r.utilization).toBeNull();
     expect(r.clusterCount).toBe(2);
     expect(r.worstCluster?.id).toBe('a');
     expect(r.perClusterSeries).toHaveLength(2);
     expect(r.perClusterSeries[1]?.months).toEqual([]);
   });
 
-  test('zero-capacity cluster does not divide by zero', () => {
+  test('zero-capacity cluster is unknown and is not selected as the worst cluster', () => {
     const a = makeCluster('a', 'A');
     const fa = makeForecast([['2026-01-01', 0, 0]]);
     const r = aggregateFleet([a], [{ clusterId: 'a', data: fa }]);
-    expect(r.utilization).toBe(0);
-    expect(r.worstCluster?.utilization).toBe(0);
+    expect(r.utilization).toBeNull();
+    expect(r.worstCluster).toBeNull();
+  });
+
+  test('one unknown cluster makes fleet utilization incomplete but preserves the worst known cluster', () => {
+    const known = makeCluster('known', 'Known');
+    const unknown = makeCluster('unknown', 'Unknown');
+    const r = aggregateFleet(
+      [known, unknown],
+      [
+        { clusterId: 'known', data: makeForecast([['2026-01-01', 400, 500]]) },
+        { clusterId: 'unknown', data: makeForecast([['2026-01-01', 100, 0]]) },
+      ],
+    );
+
+    expect(r.totalConsumption).toBe(500);
+    expect(r.totalCapacity).toBe(500);
+    expect(r.utilization).toBeNull();
+    expect(r.worstCluster).toEqual({ id: 'known', name: 'Known', utilization: 0.8 });
   });
 });

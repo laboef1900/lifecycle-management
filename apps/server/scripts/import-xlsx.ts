@@ -1,4 +1,10 @@
 #!/usr/bin/env tsx
+// `pnpm --filter @lcm/server db:import-xlsx` runs this file directly through
+// tsx, bypassing the Prisma CLI and therefore prisma.config.ts — so `.env` must
+// be loaded here too, or DATABASE_URL is undefined and the pg adapter fails
+// with a SASL error.
+import 'dotenv/config';
+
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 

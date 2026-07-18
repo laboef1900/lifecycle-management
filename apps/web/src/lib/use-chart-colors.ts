@@ -31,9 +31,9 @@ export interface ChartColors {
  * before styles resolve. They mirror the resolved token values; in the browser
  * the real `--chart-*` properties win.
  */
-type Palette7 = readonly [string, string, string, string, string, string, string];
+export type Palette7 = readonly [string, string, string, string, string, string, string];
 
-interface ChartFallback {
+export interface ChartFallback {
   consumption: string;
   capacity: string;
   grid: string;
@@ -44,8 +44,8 @@ interface ChartFallback {
   palette: Palette7;
 }
 
-const FALLBACK_LIGHT: ChartFallback = {
-  consumption: '#8f6400', // --accent
+export const FALLBACK_LIGHT: ChartFallback = {
+  consumption: '#7c3aed', // --chart-consumption (dedicated violet, not --accent)
   capacity: '#3a455e', // --chart-capacity
   grid: '#e3e8f2', // --chart-grid
   axis: '#8a94ac', // --chart-axis
@@ -55,8 +55,8 @@ const FALLBACK_LIGHT: ChartFallback = {
   palette: ['#171c2c', '#5a6478', '#66708c', '#a8b0c4', '#8f6400', '#95610c', '#0f766e'],
 };
 
-const FALLBACK_DARK: ChartFallback = {
-  consumption: '#ffc53d', // --accent
+export const FALLBACK_DARK: ChartFallback = {
+  consumption: '#c084fc', // --chart-consumption (dedicated violet, not --accent)
   capacity: '#c7d0e4', // --chart-capacity
   grid: '#1b2236', // --chart-grid
   axis: '#2a3450', // --chart-axis

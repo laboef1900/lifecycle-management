@@ -42,6 +42,15 @@ describe('<RunwayPill>', () => {
     expect(pill.parentElement).toHaveAttribute('data-variant', 'accent');
   });
 
+  it('shows unknown instead of a synthetic runway when capacity is missing', () => {
+    render(
+      <RunwayPill summary={{ months: null, alreadyBreached: false }} unknown horizonMonths={24} />,
+    );
+    const pill = screen.getByText(/unknown — no capacity/i);
+    expect(pill.parentElement).toHaveAttribute('data-variant', 'outline');
+    expect(screen.queryByText(/24\+ mo/i)).toBeNull();
+  });
+
   it('renders em-dash when the summary is undefined', () => {
     render(<RunwayPill summary={undefined} />);
     expect(screen.getByText('—')).toBeInTheDocument();

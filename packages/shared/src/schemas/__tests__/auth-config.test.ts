@@ -39,6 +39,7 @@ describe('authConfigResponseSchema', () => {
   it('parses a sanitized response and tolerates an extra field', () => {
     const r = authConfigResponseSchema.safeParse({
       mode: 'oidc',
+      forceDisabledReason: null,
       issuerUrl: 'https://x',
       clientId: 'lcm',
       appBaseUrl: 'https://a',
@@ -62,6 +63,7 @@ describe('authConfigResponseSchema', () => {
   it('rejects a bad discoveryStatus', () => {
     const r = authConfigResponseSchema.safeParse({
       mode: 'oidc',
+      forceDisabledReason: null,
       issuerUrl: 'https://x',
       clientId: 'lcm',
       appBaseUrl: 'https://a',
@@ -80,5 +82,63 @@ describe('authConfigResponseSchema', () => {
       lastDiscoveryError: null,
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe('authConfigResponseSchema forceDisabledReason (#222)', () => {
+  const breakGlassResponse = {
+    // the STORED mode, reported unmasked while the enforced mode is `disabled`
+    mode: 'oidc',
+    forceDisabledReason: 'break_glass',
+    issuerUrl: 'https://idp.example.com/realms/lcm',
+    clientId: 'lcm',
+    appBaseUrl: 'https://lcm.example.com',
+    scopes: 'openid profile email',
+    roleClaim: null,
+    adminValues: null,
+    defaultRole: 'admin',
+    allowedEmailDomains: null,
+    allowedEmails: null,
+    sessionTtlHours: 12,
+    allowInsecure: false,
+    clientSecretSet: true,
+    signingSecretSet: true,
+    redirectUri: 'https://lcm.example.com/api/auth/callback',
+    discoveryStatus: 'disabled',
+    lastDiscoveryError: null,
+  };
+
+  it('carries the stored mode alongside forceDisabledReason=break_glass', () => {
+    const r = authConfigResponseSchema.safeParse(breakGlassResponse);
+    expect(r.success).toBe(true);
+    expect(r.data?.mode).toBe('oidc');
+    expect(r.data?.forceDisabledReason).toBe('break_glass');
+  });
+
+  it('carries the stored mode alongside forceDisabledReason=secret_decrypt_failure', () => {
+    // The decrypt degrade produces the SAME divergence as break-glass — an
+    // enforced `disabled` under a stored `oidc` — and must be just as reportable.
+    const r = authConfigResponseSchema.safeParse({
+      ...breakGlassResponse,
+      forceDisabledReason: 'secret_decrypt_failure',
+    });
+    expect(r.success).toBe(true);
+    expect(r.data?.forceDisabledReason).toBe('secret_decrypt_failure');
+  });
+
+  it('rejects a response that omits forceDisabledReason', () => {
+    const { forceDisabledReason: _omitted, ...withoutReason } = breakGlassResponse;
+    expect(authConfigResponseSchema.safeParse(withoutReason).success).toBe(false);
+  });
+
+  it('rejects an unknown forceDisabledReason', () => {
+    expect(
+      authConfigResponseSchema.safeParse({ ...breakGlassResponse, forceDisabledReason: 'whatever' })
+        .success,
+    ).toBe(false);
+    expect(
+      authConfigResponseSchema.safeParse({ ...breakGlassResponse, forceDisabledReason: true })
+        .success,
+    ).toBe(false);
   });
 });

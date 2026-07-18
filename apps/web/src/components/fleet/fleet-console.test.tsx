@@ -19,14 +19,17 @@ vi.mock('@tanstack/react-router', () => ({
     children,
     to,
     params,
+    hash,
     ...rest
   }: {
     children: React.ReactNode;
     to: string;
     params?: Record<string, string>;
+    hash?: string;
   }) => {
     let href = to;
     for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, v);
+    if (hash) href = `${href}#${hash}`;
     return (
       <a href={href} {...rest}>
         {children}
@@ -35,11 +38,12 @@ vi.mock('@tanstack/react-router', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
-  // Skips CreateClusterDialog (AdminOnly renders nothing for non-admins),
-  // which otherwise pulls in its own mutation/toast wiring irrelevant here.
-  useIsAdmin: () => false,
-}));
+// The empty-state Add-cluster CTA is `AdminOnly`-gated. Default to viewer so the
+// existing render tests stay unaffected; the admin tests flip it and `afterEach`
+// puts it back — `restoreAllMocks` alone does not reset a hoisted `vi.fn`, so
+// without an explicit reset this default holds only by test ordering.
+const { useIsAdminMock } = vi.hoisted(() => ({ useIsAdminMock: vi.fn(() => false) }));
+vi.mock('@/lib/auth', () => ({ useIsAdmin: () => useIsAdminMock() }));
 
 vi.mock('@/lib/use-chart-colors', () => ({
   useChartColors: () => ({
@@ -221,6 +225,10 @@ describe('<FleetConsole> (render)', () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    // `restoreAllMocks` only restores `vi.spyOn` spies; reset the hoisted role
+    // mock and re-state the file default so the suite is order-independent.
+    useIsAdminMock.mockReset();
+    useIsAdminMock.mockReturnValue(false);
   });
 
   it('shows the cluster count alone while forecasts are loading, then "N CLUSTERS · M HOSTS" once resolved (finding 2)', async () => {
@@ -298,6 +306,10 @@ describe('<FleetConsole> heading (every render branch has an h1)', () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    // `restoreAllMocks` only restores `vi.spyOn` spies; reset the hoisted role
+    // mock and re-state the file default so the suite is order-independent.
+    useIsAdminMock.mockReset();
+    useIsAdminMock.mockReturnValue(false);
   });
 
   it('renders a level-1 heading while clusters are still loading', () => {
@@ -336,7 +348,78 @@ describe('<FleetConsole> heading (every render branch has an h1)', () => {
     // heading — both the loading and empty branches render an identical
     // sr-only h1, so asserting the heading alone could pass while still on
     // the (also headed) loading branch.
-    expect(await screen.findByText('No clusters yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No clusters yet')).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+  });
+
+  it('shows the admin an Add-cluster CTA in the empty state linking to Settings', async () => {
+    useIsAdminMock.mockReturnValue(true);
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+
+    renderConsole();
+
+    const link = await screen.findByRole('link', { name: /add a cluster in settings/i });
+    // The hash is load-bearing: /settings alone lands above the fold with the
+    // Add-cluster panel fourth down the page and focus left on <body>.
+    expect(link).toHaveAttribute('href', '/settings#add-cluster');
+  });
+
+  it('hides the empty-state CTA link from viewers but still tells them what to do', async () => {
+    useIsAdminMock.mockReturnValue(false);
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+
+    renderConsole();
+
+    expect(await screen.findByText('No clusters yet')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /add a cluster in settings/i })).toBeNull();
+    // Without this, deleting the fallback would leave viewers staring at an
+    // empty console with no explanation — and pass every other assertion.
+    expect(screen.getByText(/ask an administrator to add a cluster in settings/i)).toBeVisible();
+  });
+});
+
+describe('<FleetConsole> Add-cluster affordance lives in Settings only (#223)', () => {
+  beforeEach(() => {
+    vi.spyOn(api.clusters, 'liveUsage').mockResolvedValue({ items: [] });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useIsAdminMock.mockReset();
+    useIsAdminMock.mockReturnValue(false);
+  });
+
+  it('shows admins no Add-cluster control in the populated console toolbar', async () => {
+    // Admin + a non-empty cluster list is the exact state the removed toolbar
+    // trigger used to render in; every other test runs as viewer or empty, so
+    // reinstating the trigger would otherwise pass the whole suite.
+    useIsAdminMock.mockReturnValue(true);
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [makeCluster({ id: 'c1', name: 'CL-A' })],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    });
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(makeForecast());
+
+    renderConsole();
+
+    // The toolbar only exists on the populated branch — wait for it.
+    expect(await screen.findByRole('button', { name: /show archived/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add cluster/i })).toBeNull();
+    expect(screen.queryByText('+ Add cluster')).toBeNull();
+    expect(screen.queryByRole('link', { name: /add a cluster in settings/i })).toBeNull();
   });
 });

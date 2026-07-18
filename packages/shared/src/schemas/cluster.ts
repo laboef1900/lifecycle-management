@@ -56,7 +56,19 @@ export interface MetricStateResponse {
   baselineCapacity: number;
   currentConsumption: number;
   currentCapacity: number;
-  utilization: number;
+  /**
+   * Current-state utilization, or **null when currentCapacity is 0** — unknowable,
+   * not 0%.
+   *
+   * @ai-warning Do NOT default this to 0 (no `?? 0` at the call site, no
+   * `.default()` on the schema). A synced cluster with no host capacity yet, or any
+   * zero-capacity month, would otherwise render as "0% used" — *maximum headroom,
+   * healthy* — the single most dangerous wrong answer on the surfaces that drive
+   * hardware purchasing. Same fail-open as the retired `utilization ?? 0`. `null`
+   * forces every consumer to render "unknown" instead of a reassuring lie. Recorded
+   * decision Q9d, 2026-07-17.
+   */
+  utilization: number | null;
 }
 
 /**

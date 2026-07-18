@@ -3,7 +3,8 @@ import type { ClusterResponse, ForecastMonthPoint, ForecastResponse } from '@lcm
 export interface FleetSummary {
   totalConsumption: number;
   totalCapacity: number;
-  utilization: number;
+  /** null when any current cluster capacity is missing or its forecast is unavailable. */
+  utilization: number | null;
   clusterCount: number;
   worstCluster: { id: string; name: string; utilization: number } | null;
   perClusterSeries: Array<{
@@ -31,7 +32,7 @@ export function aggregateFleet(
     return {
       totalConsumption: 0,
       totalCapacity: 0,
-      utilization: 0,
+      utilization: null,
       clusterCount: 0,
       worstCluster: null,
       perClusterSeries: [],
@@ -74,20 +75,26 @@ export function aggregateFleet(
   const current = fleetMonths[0];
   let totalConsumption = 0;
   let totalCapacity = 0;
+  let currentCapacityComplete = current !== undefined;
   if (current) {
     for (const series of perClusterSeries) {
+      const point = series.months.find((month) => month.month === current.month);
+      if (!point || point.utilization === null) currentCapacityComplete = false;
       const v = current[series.clusterId];
       if (typeof v === 'number') totalConsumption += v;
     }
     totalCapacity = current.capacityTotal;
   }
-  const utilization = totalCapacity > 0 ? totalConsumption / totalCapacity : 0;
+  const utilization =
+    currentCapacityComplete && totalCapacity > 0 ? totalConsumption / totalCapacity : null;
 
   let worstCluster: FleetSummary['worstCluster'] = null;
   for (const series of perClusterSeries) {
-    const currentMonth = series.months[0];
-    if (!currentMonth) continue;
-    const u = currentMonth.capacity > 0 ? currentMonth.consumption / currentMonth.capacity : 0;
+    const currentMonth = current
+      ? series.months.find((month) => month.month === current.month)
+      : undefined;
+    if (!currentMonth || currentMonth.utilization === null) continue;
+    const u = currentMonth.utilization;
     if (!worstCluster || u > worstCluster.utilization) {
       worstCluster = { id: series.clusterId, name: series.clusterName, utilization: u };
     }

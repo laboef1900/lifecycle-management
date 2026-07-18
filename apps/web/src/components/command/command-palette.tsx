@@ -15,11 +15,12 @@ import {
 import { useEffect, useState } from 'react';
 
 import { useTheme, type Theme } from '@/components/theme/use-theme';
+import { ADD_CLUSTER_HASH, requestAnchorFocus } from '@/lib/anchors';
 import { api } from '@/lib/api-client';
+import { useIsAdmin } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
 const OPEN_EVENT = 'lcm:open-command-palette';
-const CREATE_CLUSTER_EVENT = 'lcm:open-create-cluster';
 const SHORTCUTS_EVENT = 'lcm:open-shortcuts';
 
 export function CommandPalette(): React.JSX.Element {
@@ -27,6 +28,7 @@ export function CommandPalette(): React.JSX.Element {
   const [search, setSearch] = useState('');
   const navigate = useNavigate();
   const { setTheme } = useTheme();
+  const isAdmin = useIsAdmin();
 
   const clustersQuery = useQuery({
     queryKey: ['clusters'],
@@ -111,13 +113,30 @@ export function CommandPalette(): React.JSX.Element {
               ) : null}
 
               <PaletteGroup heading="Actions">
-                <PaletteItem
-                  icon={Plus}
-                  label="Create cluster"
-                  onSelect={() =>
-                    runAndClose(() => window.dispatchEvent(new CustomEvent(CREATE_CLUSTER_EVENT)))
-                  }
-                />
+                {isAdmin ? (
+                  // Labelled for the outcome, not the old dialog: selecting this
+                  // navigates to Settings and deep-links to the Add-cluster
+                  // panel (which scrolls itself into view and takes focus).
+                  // `keywords` keeps the pre-#223 "create cluster" muscle memory
+                  // searchable.
+                  //
+                  // @ai-warning The `requestAnchorFocus` call is load-bearing,
+                  // not belt-and-braces: navigating to a location the user is
+                  // already at is a no-op the panel cannot observe, so without
+                  // it re-running this action from /settings#add-cluster does
+                  // nothing at all. See lib/anchors.ts.
+                  <PaletteItem
+                    icon={Plus}
+                    label="Add cluster — Settings"
+                    keywords={['create cluster', 'new cluster', 'add cluster']}
+                    onSelect={() =>
+                      runAndClose(() => {
+                        void navigate({ to: '/settings', hash: ADD_CLUSTER_HASH });
+                        requestAnchorFocus(ADD_CLUSTER_HASH);
+                      })
+                    }
+                  />
+                ) : null}
                 <PaletteItem
                   icon={Settings}
                   label="View keyboard shortcuts"
@@ -173,13 +192,22 @@ interface PaletteItemProps {
   icon: LucideIcon;
   label: string;
   hint?: string;
+  /** Extra search terms matched alongside the label (cmdk filtering). */
+  keywords?: string[];
   onSelect: () => void;
 }
 
-function PaletteItem({ icon: Icon, label, hint, onSelect }: PaletteItemProps): React.JSX.Element {
+function PaletteItem({
+  icon: Icon,
+  label,
+  hint,
+  keywords,
+  onSelect,
+}: PaletteItemProps): React.JSX.Element {
   return (
     <Command.Item
       value={label}
+      {...(keywords ? { keywords } : {})}
       onSelect={onSelect}
       className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-foreground aria-selected:bg-accent aria-selected:text-accent-foreground"
     >

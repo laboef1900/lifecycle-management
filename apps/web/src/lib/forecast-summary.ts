@@ -58,12 +58,15 @@ export function fleetRunwayToWarn(
   return runwayToWarn(merged, thresholds);
 }
 
-export type UtilStatus = 'ok' | 'warn' | 'crit';
+export type UtilStatus = 'ok' | 'warn' | 'crit' | 'unknown';
 
 export function utilStatus(
-  utilization: number,
+  utilization: number | null,
   thresholds: { warn: number; crit: number } = SYSTEM_DEFAULTS,
 ): UtilStatus {
+  // null = capacity 0 = unknowable. Never fall through to 'ok': a green "healthy"
+  // badge on an unknown cluster is the Q9d lie (#200). "unknown" is a visible gap.
+  if (utilization === null) return 'unknown';
   if (utilization >= thresholds.crit) return 'crit';
   if (utilization >= thresholds.warn) return 'warn';
   return 'ok';

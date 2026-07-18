@@ -12,6 +12,7 @@ import {
 /** The credential bundle every vCenter call takes. Assembled per run, never cached. */
 interface VsphereCredentials {
   hostname: string;
+  port: number;
   username: string;
   password: string;
   pinnedRootPem: string | null;
@@ -118,6 +119,7 @@ export class VsphereJobRunner implements JobRunner {
       select: {
         tenantId: true,
         hostname: true,
+        port: true,
         username: true,
         enabled: true,
         tlsPinnedCaPem: true,
@@ -154,6 +156,7 @@ export class VsphereJobRunner implements JobRunner {
 
     const credentials: VsphereCredentials = {
       hostname: connection.hostname,
+      port: connection.port,
       username: connection.username,
       password,
       pinnedRootPem: connection.tlsPinnedCaPem,

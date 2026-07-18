@@ -32,6 +32,7 @@ async function makeConnection(): Promise<string> {
   const c = await service.create('default', {
     name: uniq('conn'),
     hostname: 'vcenter.corp.local',
+    port: 443,
     username: 'svc-lcm',
     password: 'pw',
     enabled: true,

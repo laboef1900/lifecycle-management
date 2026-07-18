@@ -179,6 +179,15 @@ yet); when `mode === 'oidc'`, require `request.user.role === 'ADMIN'` (else
 
 ### Break-glass recovery
 
+> **SUPERSEDED (2026-07-18, issue #222).** The paragraph below specifies that
+> the override is **persisted** to the `auth_config` row. That behaviour was a
+> bug: clearing the flag restored nothing, so the deployment kept serving an
+> open API with the UI showing no sign of it. The override is now applied
+> **in memory for that boot only** and never writes to the row. Do not
+> re-introduce the DB write from this text — see
+> `docs/design/2026-07-18-issue-222-break-glass-override.md` for the current
+> design. Retained below as a historical record of the original design.
+
 `RECOVERY_DISABLE_AUTH` stays in `env.ts` as an optional boolean. On boot, if
 `true`, the `auth-config` plugin forces the row's `mode` to `disabled`
 (persisted, logged at `warn`: "RECOVERY_DISABLE_AUTH set — authentication

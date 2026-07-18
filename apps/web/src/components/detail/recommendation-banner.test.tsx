@@ -79,6 +79,22 @@ describe('RecommendationBanner', () => {
     expect(banner.dataset.tone).toBe('none');
   });
 
+  it('renders unknown instead of "no order needed" when capacity is missing', () => {
+    render(
+      <RecommendationBanner
+        procurement={procurement({ orderByDate: null, breachMonth: null })}
+        today={TODAY}
+        capacityKnown={false}
+      />,
+    );
+
+    const banner = screen.getByTestId('recommendation-banner');
+    expect(banner).toHaveTextContent('UNKNOWN');
+    expect(banner).toHaveTextContent(/capacity unknown/i);
+    expect(banner).not.toHaveTextContent(/no order needed/i);
+    expect(banner.dataset.tone).toBe('unknown');
+  });
+
   it('renders the urgent tone, not "No order needed", when status is crit/warn but orderByDate is unexpectedly null (MINOR #8)', () => {
     // deriveProcurementKpi never actually returns crit/warn without an
     // orderByDate, but ProcurementKpiStatus's type allows it — this
