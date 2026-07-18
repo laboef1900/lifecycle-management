@@ -303,11 +303,16 @@ describe('/_app/settings Back button + Esc', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
   });
 
-  it('still pops only once per intent on a hash variant (release is not a free pass)', async () => {
+  it('stays latched for a second Escape in the same task on a hash variant', async () => {
     // Guards the release added above: two Escapes in the same task both fire
     // from `/settings#add-cluster`, so the second must still be latched out.
     // An over-eager release (e.g. keying only on pathname, or resetting on any
     // location change) would let this pop twice and land on `/`.
+    //
+    // Scope, deliberately: this covers the same-task window only. Once the pop
+    // has landed on `/settings`, the latch has released by design and a further
+    // activation pops again — bounded by `canGoBack`, so the worst case is
+    // landing on `/`, never leaving the SPA. See the @ai-warning in the route.
     const { router } = renderSettingsRoute(disabledAuth, [
       '/',
       '/settings',

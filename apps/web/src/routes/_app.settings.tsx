@@ -57,6 +57,16 @@ function SettingsPage(): React.JSX.Element {
   // recovery short of a reload. Hence: released only by a same-pathname,
   // different-href landing. Do NOT simplify this to "reset on location change"
   // — that is window (2), and it is reachable.
+  //
+  // Two consequences of that release, both accepted:
+  //  - Once such a pop HAS landed, a further activation is no longer guarded,
+  //    so a slow double-click pops again. `canGoBack` bounds it: the worst
+  //    case is landing on `/`, never leaving the SPA. The code cannot tell a
+  //    stray second click from a deliberate new intent once the pop landed.
+  //  - A pop landing on the same pathname AND the same href keeps the latch
+  //    forever. Unreachable today — TanStack dedupes a navigation to the
+  //    current href, so adjacent identical entries do not occur — but a future
+  //    navigation that can create them would need this rule widened.
   const firedFromRef = useRef<{ href: string; pathname: string } | null>(null);
   const goBack = useCallback((): void => {
     const firedFrom = firedFromRef.current;
