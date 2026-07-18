@@ -30,20 +30,29 @@ function renderChart(
 // Recharts components do heavy SVG rendering we don't need to assert on; replace
 // them with minimal pass-through stubs so we can verify props mapping without
 // pulling in a full chart canvas.
+// The ResponsiveContainer stub renders a fragment, so there is no DOM node to
+// hang a data-attribute on — capture the props under test out-of-band instead.
+const containerProbe = vi.hoisted(() => ({ debounce: undefined as number | undefined }));
+
 vi.mock('recharts', async () => {
   const { useEffect } = await import('react');
   const Pass = ({ children }: { children?: React.ReactNode }): React.JSX.Element => <>{children}</>;
   const ResponsiveContainer = ({
     children,
     onResize,
+    debounce,
   }: {
     children?: React.ReactNode;
     onResize?: (width: number, height: number) => void;
+    debounce?: number;
   }): React.JSX.Element => {
-    // Simulate the initial measurement recharts performs on mount.
+    // Simulate the initial measurement recharts performs on mount. The stub
+    // invokes onResize directly, so the real `debounce` timing is not
+    // simulated here — the prop is asserted instead (see the debounce test).
     useEffect(() => {
+      containerProbe.debounce = debounce;
       onResize?.(800, 320);
-    }, [onResize]);
+    }, [onResize, debounce]);
     return <>{children}</>;
   };
   return {
@@ -347,6 +356,18 @@ describe('ForecastChart props mapping', () => {
     renderChart(forecast);
 
     expect(screen.getByRole('img', { name: 'Capacity forecast chart' })).toBeInTheDocument();
+  });
+
+  it('debounces container resize so the animating scenario pane cannot re-render it per frame', () => {
+    // At lg+ the scenario pane is a flex sibling whose width animates 0->340px
+    // (280 ms enter / 200 ms exit), resizing this container every frame. Without
+    // a debounce each frame re-renders the whole ComposedChart plus the
+    // pixel-space event-label collision planner. The debounce must clear the
+    // exit transition so the chart re-measures once, on settle.
+    containerProbe.debounce = undefined;
+    renderChart(makeForecast());
+
+    expect(containerProbe.debounce).toBeGreaterThanOrEqual(200);
   });
 
   it('fills axis tick text with fg-subtle, not the axis line color (dark-theme contrast fix)', () => {

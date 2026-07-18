@@ -54,8 +54,12 @@ interface TileChartRow {
 }
 
 /**
- * Compact per-tile forecast chart: %-of-capacity on a fixed 0-125 scale so
- * every tile in the grid is visually comparable. The consumption line is
+ * Compact per-tile forecast chart: %-of-capacity on the fixed shared window
+ * (40-125 % — see the `Y_MIN`/`Y_MAX` block above, which is the single source
+ * of truth) so every tile in the grid is visually comparable. Values outside
+ * the window — data rows, the breach dot, and the warn/crit hairlines alike —
+ * are clamped to its edges rather than allowed to stretch the axis or vanish.
+ * The consumption line is
  * split into a solid "actual" segment up to the current month and a dashed
  * "forecast" segment from the current month on — sharing the anchor point at
  * the current month keeps the line visually continuous.
@@ -150,8 +154,25 @@ export function ClusterTileChart({
               );
             }}
           />
-          <ReferenceLine y={warnPct} stroke={colors.utilizationWarn} strokeDasharray="4 3" />
-          <ReferenceLine y={critPct} stroke={colors.utilizationCrit} strokeDasharray="4 3" />
+          {/* Clamp the hairlines into the window. Recharts' ReferenceLine
+              defaults to ifOverflow="discard", so a threshold configured below
+              the 40 % floor (percentSchema allows 0.01) would render NOTHING —
+              yet the breach dot still pins to the floor and the aria-label
+              still names the threshold, an inconsistent, misleading tile.
+              Pinning the hairline to the floor instead keeps the tile
+              self-consistent and stays honest: the whole visible window is
+              then genuinely at or above warn. The aria-label keeps reporting
+              the true percentage. */}
+          <ReferenceLine
+            y={clampToWindow(warnPct)}
+            stroke={colors.utilizationWarn}
+            strokeDasharray="4 3"
+          />
+          <ReferenceLine
+            y={clampToWindow(critPct)}
+            stroke={colors.utilizationCrit}
+            strokeDasharray="4 3"
+          />
           <ReferenceLine y={100} stroke={colors.capacity} strokeDasharray="2 3" />
           {orderByInRange && orderByMonthKey ? (
             <ReferenceLine

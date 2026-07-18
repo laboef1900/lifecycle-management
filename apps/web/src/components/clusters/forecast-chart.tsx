@@ -44,6 +44,14 @@ interface ForecastChartProps {
 
 const numberFormat = new Intl.NumberFormat('en-US');
 
+/**
+ * Resize debounce for the chart container, in ms. Sits above the scenario
+ * pane's 280 ms enter / 200 ms exit width transition (`cluster-panel.tsx`) so
+ * an animating pane re-measures the chart once, on settle, instead of once per
+ * animation frame.
+ */
+const RESIZE_DEBOUNCE_MS = 200;
+
 export function ForecastChart({
   forecast,
   compact = false,
@@ -171,6 +179,12 @@ export function ForecastChart({
         <ResponsiveContainer
           width="100%"
           height="100%"
+          // At lg+ the scenario pane is a flex sibling, so its 0->340px width
+          // animation resizes this container on EVERY frame. Undebounced, each
+          // frame re-renders the whole ComposedChart plus the pixel-space
+          // event-label collision planner (~17 re-renders per open) and janks
+          // the very animation it accompanies.
+          debounce={RESIZE_DEBOUNCE_MS}
           onResize={(width) => setChartWidth(width > 0 ? width : null)}
         >
           <ComposedChart
