@@ -10,9 +10,13 @@ const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
  * `src/index.ts` and `prisma.config.ts` already load `dotenv/config`, so a dev
  * running `pnpm dev` or `prisma migrate deploy` from `apps/server` gets their
  * config out of `apps/server/.env`. dotenv resolves `.env` relative to the
- * working directory and does NOT walk up to the repo root, so every entrypoint
- * that tsx starts directly has to import 'dotenv/config' itself or it silently
- * sees a different environment than its siblings. `pnpm seed` and
+ * working directory and does NOT walk up to the repo root, so an entrypoint
+ * that expects its config from `apps/server/.env` has to import 'dotenv/config'
+ * itself or it silently sees a different environment than its siblings. The
+ * rule is scoped to those entrypoints — `scripts/e2e-oidc-server.ts` is also
+ * tsx-started (by Playwright's `webServer`, not by a package.json script here)
+ * and deliberately does NOT load `.env`: it provisions its own throwaway
+ * Testcontainers Postgres and must not inherit the dev database URL. `pnpm seed` and
  * `pnpm --filter @lcm/server db:import-xlsx` run `tsx` on their file directly
  * and never evaluate prisma.config.ts; without the import DATABASE_URL is
  * undefined and the pg adapter fails with
