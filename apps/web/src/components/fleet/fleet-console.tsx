@@ -8,7 +8,9 @@ import { AdminOnly } from '@/components/auth/admin-only';
 import { resolveWindow } from '@/components/clusters/window-controls';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ADD_CLUSTER_HASH } from '@/lib/anchors';
 import { api } from '@/lib/api-client';
 import { collectForecastState, earliestOrderByFromFleet } from '@/lib/collect-forecast-state';
 import { buildClusterForecastEntries, type ClusterForecastEntry } from '@/lib/forecast-summary';
@@ -193,29 +195,30 @@ export function FleetConsole(): React.JSX.Element {
           <h1 className="sr-only">Fleet capacity console</h1>
           {/* The large call-to-action fills the area the cluster-tile grid
               would occupy (#223). Adding a cluster is a configuration task, so
-              the action lives in Settings — this only points there. Admin-only,
-              as the create action was; viewers get a plain explanation. */}
-          <Card className="flex min-h-[320px] flex-col items-center justify-center gap-4 border-dashed p-12 text-center shadow-none">
-            <Boxes className="h-10 w-10 text-fg-subtle" aria-hidden />
-            <div className="space-y-1">
-              <p className="font-display text-xl">No clusters yet</p>
-              <p className="mx-auto max-w-md text-sm text-fg-muted">
-                Add a cluster to start tracking memory capacity and forecasting growth. Clusters are
-                managed in Settings, alongside your vCenter connections.
-              </p>
-            </div>
-            <AdminOnly
-              fallback={
-                <p className="text-xs text-fg-subtle">
-                  Ask an administrator to add a cluster in Settings.
-                </p>
-              }
-            >
-              <Button asChild variant="accent" size="lg">
-                <Link to="/settings">Add a cluster in Settings</Link>
-              </Button>
-            </AdminOnly>
-          </Card>
+              the action lives in Settings — this only points there, deep-linked
+              to the Add-cluster panel. Admin-only, as the create action was;
+              viewers get a plain explanation. */}
+          <EmptyState
+            size="hero"
+            icon={<Boxes />}
+            title="No clusters yet"
+            description="Add a cluster to start tracking memory capacity and forecasting growth. Clusters are managed in Settings, alongside your vCenter connections."
+            action={
+              <AdminOnly
+                fallback={
+                  <p className="text-xs text-fg-subtle">
+                    Ask an administrator to add a cluster in Settings.
+                  </p>
+                }
+              >
+                <Button asChild variant="accent" size="lg">
+                  <Link to="/settings" hash={ADD_CLUSTER_HASH}>
+                    Add a cluster in Settings
+                  </Link>
+                </Button>
+              </AdminOnly>
+            }
+          />
         </>
       ) : null}
 
