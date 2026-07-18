@@ -82,11 +82,17 @@ function draftToScenario(d: DraftState): { scenario: ScenarioWire | null; error:
 }
 
 /**
- * Scenario form. Since #226 it renders only inside the cluster panel's ~272px
+ * Scenario form. Since #226 it renders only inside the cluster panel's
  * Scenario pane, so the layout is stacked (one field per row) rather than the
  * old viewport-`sm:` twelve-column row, which squeezed the `add_vms` number
  * inputs to ~39px there. The pair of `add_vms` inputs is the one exception —
- * they still share a row, at ~132px each.
+ * they still share a row.
+ *
+ * Since #243 the pane is a floating glass card and this form is chrome-less:
+ * the card (`ScenarioPaneBody`) owns the surface, the border, and the single
+ * "Scenario" heading — this component rendering its own card + h3 was exactly
+ * the duplication #243 removes. The inputs keep their solid fills (`Input`'s
+ * `bg-background`), so entered values never sit on the glass math.
  */
 export function ScenarioControls({ active, onChange }: ScenarioControlsProps): React.JSX.Element {
   // Initializer, not a sync effect: the draft is the user's in-progress edit
@@ -115,27 +121,7 @@ export function ScenarioControls({ active, onChange }: ScenarioControlsProps): R
   };
 
   return (
-    <section
-      data-testid="scenario-controls"
-      aria-label="Forecast scenarios"
-      className="rounded-[var(--radius-card)] border border-border bg-card p-3"
-    >
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-          Scenario
-        </h3>
-        {active ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={clear}
-            data-testid="scenario-clear"
-          >
-            Clear
-          </Button>
-        ) : null}
-      </div>
+    <section data-testid="scenario-controls" aria-label="Forecast scenarios">
       <div data-testid="scenario-fields" className="space-y-2">
         <label className="block">
           <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
@@ -224,6 +210,17 @@ export function ScenarioControls({ active, onChange }: ScenarioControlsProps): R
         ) : null}
 
         <div className="flex items-center justify-end gap-2 pt-1">
+          {active ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={clear}
+              data-testid="scenario-clear"
+            >
+              Clear
+            </Button>
+          ) : null}
           <Button type="button" variant="accent" size="sm" onClick={apply}>
             Apply
           </Button>

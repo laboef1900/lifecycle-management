@@ -75,28 +75,31 @@ test.describe('scenario pane as a modal sheet below lg', () => {
 
     // The sheet spans the panel, not a 340px strip of it — the round-1
     // regression was a narrow pane over a fully `inert` panel, which left most
-    // of the column visible on screen but unreachable.
+    // of the column visible on screen but unreachable. Since #243 the sheet is
+    // a scrim-tinted aside carrying the floating glass card, but its geometry
+    // contract is identical: the aside spans the whole panel.
     expect(Math.round(sheetBox!.width)).toBeGreaterThanOrEqual(Math.round(panelBox!.width) - 2);
     expect(Math.round(sheetBox!.x)).toBeLessThanOrEqual(Math.round(panelBox!.x) + 2);
 
     // The column is contained...
     await expect(page.getByTestId('panel-content')).toHaveAttribute('inert', '');
 
-    // ...and it is genuinely covered: hit-testing the middle of the panel lands
-    // inside the pane, never on a control in the column behind it. `inert`
-    // alone would not prove this — a transparent or undersized sheet would
-    // still carry the attribute.
+    // ...and pointer input genuinely cannot reach it: hit-testing the middle
+    // of the panel lands on the sheet layer (the scrim aside or the glass card
+    // — whichever paints there), never on a control in the column behind it.
+    // `inert` alone would not prove this — a transparent, pointer-events-none
+    // sheet would still carry the attribute.
     const hit = await page.evaluate(
       ({ x, y }) => {
         const el = document.elementFromPoint(x, y);
         return {
-          insidePane: el?.closest('[data-testid="scenario-pane-body"]') !== null,
+          insideSheetLayer: el?.closest('aside') !== null,
           insideColumn: el?.closest('[data-testid="panel-content"]') !== null,
         };
       },
       { x: panelBox!.x + panelBox!.width / 2, y: panelBox!.y + panelBox!.height / 2 },
     );
-    expect(hit.insidePane).toBe(true);
+    expect(hit.insideSheetLayer).toBe(true);
     expect(hit.insideColumn).toBe(false);
   });
 
@@ -152,9 +155,19 @@ test.describe('scenario pane beside the content column at lg and up', () => {
 
     const columnBox = await page.getByTestId('panel-content').boundingBox();
     expect(columnBox).not.toBeNull();
-    // Side by side, not overlapping.
+    // Side by side, not overlapping — the GUTTER never covers the column.
     expect(Math.round(columnBox!.x + columnBox!.width)).toBeLessThanOrEqual(
       Math.round(sheetBox!.x) + 2,
     );
+
+    // The glass card (#243) floats inside that gutter: 348px wide — 16px
+    // right inset plus a deliberate 24px overlap past the gutter's left edge,
+    // under the column's 24px right padding, so real content sits behind the
+    // blur. The overlapped strip is padding, not controls, so the column
+    // stays fully interactive.
+    const cardBox = await page.getByTestId('scenario-pane-body').boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(Math.round(cardBox!.width)).toBe(348);
+    expect(Math.round(sheetBox!.x) - Math.round(cardBox!.x)).toBe(24);
   });
 });

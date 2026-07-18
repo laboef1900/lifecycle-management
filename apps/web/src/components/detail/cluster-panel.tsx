@@ -483,13 +483,16 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
           content column does — so the Scenario pane can sit beside it as a
           full-height flex sibling. */}
       {/* `inert` exactly while the Scenario sheet covers this column (below
-          `lg`, see `scenarioPaneLayout`): the sheet is opaque and spans the
-          whole panel, so nothing here is visible or reachable by pointer.
-          Covered controls keep their client rects, so without this they stay in
-          the Tab cycle and focus lands on elements the user cannot see — WCAG
-          2.2 AA 2.4.11 (Focus Not Obscured). `inert` also removes them from the
-          accessibility tree, which is the honest description of a fully covered
-          column; the sheet's own close control and Esc are the way out. At
+          `lg`, see `scenarioPaneLayout`): the sheet — since #243 a scrim-
+          tinted aside carrying the floating glass card — spans the whole
+          panel, so nothing here is reachable by pointer (the scrim eats every
+          hit). Covered controls keep their client rects, so without this they
+          stay in the Tab cycle and focus lands on elements the user cannot
+          operate — WCAG 2.2 AA 2.4.11 (Focus Not Obscured). `inert` also
+          removes them from the accessibility tree — the honest description of
+          a column that is dimmed under a modal sheet (the same contract as the
+          app's Dialog overlays); the sheet's own close control and Esc are the
+          way out. At
           `lg`+ the pane is a flex sibling that covers nothing, so the column
           stays fully interactive. `collectFocusable` skips `[inert]` subtrees
           so the hand-rolled Tab trap agrees with the browser.
@@ -640,13 +643,19 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
           whose exit finishes immediately). */}
       <AnimatePresence onExitComplete={() => dispatchPane('exit-complete')}>
         {paneOpen ? (
+          /* Since #243 the aside is no longer a visible surface: at `lg`+ it
+             is the transparent 340px reserved gutter that compresses the
+             content column (width animation unchanged); below `lg` it spans
+             the panel with a scrim tint. The visible surface is the floating
+             glass card (`ScenarioPaneBody`). `overflow-hidden` is gone so the
+             card can overlap the column's right padding — the card carries
+             its own enter/exit animation instead of relying on the clip. */
           <m.aside
             key="scenario-pane"
             ref={paneRef}
             id={paneId}
             aria-labelledby={paneHeadingId}
-            className="absolute inset-y-0 right-0 z-10 overflow-hidden lg:relative lg:inset-auto lg:z-auto lg:border-l lg:border-border"
-            style={{ background: 'var(--surface-card)' }}
+            className="absolute inset-y-0 right-0 z-10 max-lg:bg-black/40 lg:relative lg:inset-auto lg:z-auto"
             initial={{ width: 0 }}
             animate={{ width: paneLayout.width }}
             exit={{ width: 0, transition: EXIT_TRANSITION }}
@@ -654,7 +663,6 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
           >
             <ScenarioPaneBody
               headingId={paneHeadingId}
-              width={paneLayout.width}
               scenario={scenario}
               onChange={handleScenarioChange}
               onClose={closePane}
@@ -767,37 +775,44 @@ function ScenarioButton({
 }
 
 /**
- * Inner content of the Scenario pane. Anchored to the pane's right edge at the
- * pane's *final* width (`scenarioPaneLayout`) so the text doesn't reflow while
- * the `m.aside` width animates 0 → open and clips it. Focus-into-pane on open
- * is owned by the parent's `paneOpen` effect, not by this component's mount —
- * AnimatePresence can recycle the body instead of remounting it (see
- * `closePane`).
+ * The floating glass Scenario card (#243) — the one sanctioned glass surface
+ * (`.scenario-card`, styles.css). Anchored to the aside's top-right corner
+ * with a 16px inset, auto height, and its own opacity/x enter/exit (never the
+ * blur radius); at `lg`+ it is 348px wide — the 340px gutter minus the 16px
+ * right inset plus a 24px overlap under the content column's 24px right
+ * padding, so real content peeks through the blur. Because the card hangs off
+ * the aside's fixed right edge, the aside's width animation never moves or
+ * reflows it. Below `lg` it is a full-width sheet body (16px insets) over the
+ * aside's scrim. Focus-into-pane on open is owned by the parent's `paneOpen`
+ * effect, not by this component's mount — AnimatePresence can recycle the
+ * body instead of remounting it (see `closePane`).
  *
- * The header row spans the full sheet so the close control keeps its top-right
- * corner; only the form is capped, because below `lg` the sheet is as wide as
- * the panel and number inputs stretched across ~900px read as broken.
+ * The single "Scenario" heading lives here (labels the aside via
+ * `aria-labelledby`); `ScenarioControls` no longer renders its own (#243
+ * de-duplication). Only the form is width-capped below `lg`, because number
+ * inputs stretched across ~900px read as broken.
  */
 function ScenarioPaneBody({
   headingId,
-  width,
   scenario,
   onChange,
   onClose,
   closeRef,
 }: {
   headingId: string;
-  width: number | string;
   scenario: ScenarioWire | null;
   onChange: (next: ScenarioWire | null) => void;
   onClose: () => void;
   closeRef: React.RefObject<HTMLButtonElement | null>;
 }): React.JSX.Element {
   return (
-    <div
+    <m.div
       data-testid="scenario-pane-body"
-      className="absolute inset-y-0 right-0 flex flex-col overflow-y-auto p-5"
-      style={{ width }}
+      className="scenario-card absolute right-4 top-4 flex max-h-[calc(100%-2rem)] w-[calc(100vw-2rem)] flex-col overflow-y-auto p-4 lg:w-[348px]"
+      initial={{ opacity: 0, x: 12 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 12, transition: EXIT_TRANSITION }}
+      transition={ENTER_TRANSITION}
     >
       <div className="mb-3 flex items-center justify-between gap-2">
         <h3
@@ -834,7 +849,7 @@ function ScenarioPaneBody({
       <div className="w-full max-w-sm">
         <ScenarioControls active={scenario} onChange={onChange} />
       </div>
-    </div>
+    </m.div>
   );
 }
 

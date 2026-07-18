@@ -643,11 +643,20 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     const paneClose = await screen.findByRole('button', { name: 'Close scenario pane' });
     await waitFor(() => expect(paneClose).toHaveFocus());
 
-    // The sheet spans the whole panel. A 340px strip over a 100vw panel would
-    // leave ~560px of this column visible on screen while inert — visible but
-    // unclickable and stripped from the accessibility tree, which is a worse
-    // defect than the focus-obscured bug the inert is here to fix.
-    expect(screen.getByTestId('scenario-pane-body')).toHaveStyle({ width: '100vw' });
+    // The pane still spans the whole panel below lg — since #243 as a
+    // scrim-tinted aside with the controls on a floating glass card, rather
+    // than an opaque full-height sheet body. A 340px strip over a 100vw panel
+    // would leave ~560px of this column reachable by pointer while inert —
+    // a worse defect than the focus-obscured bug the inert is here to fix.
+    // jsdom applies no stylesheets and does not run the width animation to a
+    // deterministic point, so the material/geometry are asserted structurally
+    // here; the real bounding-box + hit-test proof lives in
+    // playwright/scenario-pane.spec.ts.
+    const paneBody = screen.getByTestId('scenario-pane-body');
+    expect(paneBody).toHaveClass('scenario-card');
+    const paneAside = paneBody.closest('aside');
+    expect(paneAside).not.toBeNull();
+    expect(paneAside).toHaveClass('max-lg:bg-black/40');
 
     // Only because nothing is visible under it is `inert` on the whole column
     // honest — including the Back and Scenario buttons the sheet covers.
@@ -674,7 +683,11 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    expect(screen.getByTestId('scenario-pane-body')).toHaveStyle({ width: '340px' });
+    // The 340px reserved gutter (the aside) still compresses the column; the
+    // card floats inside it at 348px — 16px right inset + 24px overlap under
+    // the column's 24px right padding (#243). Class-level assertions: jsdom
+    // computes no Tailwind; the pixel geometry is Playwright's job.
+    expect(screen.getByTestId('scenario-pane-body')).toHaveClass('scenario-card', 'lg:w-[348px]');
     expect(screen.getByTestId('panel-content')).not.toHaveAttribute('inert');
   });
 
@@ -704,7 +717,13 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
 
     const keycap = paneBody.querySelector('kbd');
     expect(keycap).not.toBeNull();
-    expect(keycap).toBeVisible();
+    // NOT `toBeVisible()`: the glass card fades in (#243) and motion never
+    // advances past the initial `opacity: 0` keyframe under jsdom, so
+    // jest-dom would report the card's subtree invisible forever. The
+    // real-browser visibility half of this requirement is asserted in
+    // playwright/scenario-pane.spec.ts ("the close control shows a visible
+    // Esc keycap"); this test owns the structural half.
+    expect(keycap).not.toHaveClass('sr-only', 'hidden');
     expect(keycap).toHaveTextContent('Esc');
     expect(keycap).toHaveClass('font-mono', 'border-border');
 
