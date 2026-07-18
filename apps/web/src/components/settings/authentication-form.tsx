@@ -1,6 +1,11 @@
-import { authConfigUpdateSchema, type AuthConfigTest, type AuthConfigUpdate } from '@lcm/shared';
+import {
+  authConfigUpdateSchema,
+  type AuthConfigTest,
+  type AuthConfigUpdate,
+  type AuthForceDisabledReason,
+} from '@lcm/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Copy } from 'lucide-react';
+import { ChevronRight, Copy, ShieldAlert } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -50,6 +55,60 @@ const FIELD_LABELS: Record<string, string> = {
   allowedEmails: 'Allowed emails',
   sessionTtlHours: 'Session TTL (hours)',
   allowInsecure: 'Allow insecure',
+};
+
+// @ai-note `AuthConfigResponse.mode` is the mode as STORED in auth_config,
+// not the mode being enforced (#222). Whenever `forceDisabledReason` is
+// non-null the enforced mode is always 'disabled'; the form must keep
+// defaulting from — and echoing back — the stored value, or saving during an
+// override would clobber the operator's real configuration with 'disabled'.
+const MODE_LABELS: Record<AuthMode, string> = {
+  disabled: 'Disabled',
+  local: 'Local accounts',
+  oidc: 'OIDC',
+};
+
+// @ai-warning Both causes must be surfaced. `secret_decrypt_failure` used to
+// be invisible here because the alert gated on a break-glass-only boolean,
+// which rendered a normal, secured-looking OIDC page over a fully
+// unauthenticated API. The recovery differs per cause, so the copy branches.
+const FORCE_DISABLED_COPY: Record<
+  AuthForceDisabledReason,
+  { title: string; cause: React.ReactNode; recovery: React.ReactNode }
+> = {
+  break_glass: {
+    title: 'Break-glass override active — authentication is force-disabled',
+    cause: (
+      <>
+        <code className="font-mono text-xs">RECOVERY_DISABLE_AUTH</code> is set for this boot.
+      </>
+    ),
+    recovery: (
+      <>
+        Changes saved here are stored, but take effect only after you clear{' '}
+        <code className="font-mono text-xs">RECOVERY_DISABLE_AUTH</code> in the environment and
+        restart the server.
+      </>
+    ),
+  },
+  secret_decrypt_failure: {
+    title: 'Stored auth secret could not be decrypted — authentication is force-disabled',
+    cause: (
+      <>
+        A stored auth secret could not be decrypted, so the server failed safe and disabled
+        authentication for this boot.{' '}
+        <code className="font-mono text-xs">CONFIG_ENCRYPTION_KEY</code> is missing, wrong, or was
+        rotated.
+      </>
+    ),
+    recovery: (
+      <>
+        The encrypted secrets are intact and are never wiped. Restore or roll back{' '}
+        <code className="font-mono text-xs">CONFIG_ENCRYPTION_KEY</code> to the value the secrets
+        were encrypted with and restart the server; changes saved here take effect only after that.
+      </>
+    ),
+  },
 };
 
 function statusPill(
@@ -264,6 +323,41 @@ export function AuthenticationForm(): React.JSX.Element {
           <form onSubmit={handleSubmit} className="space-y-3" noValidate>
             {data.discoveryStatus === 'unavailable' && data.lastDiscoveryError ? (
               <p className="text-xs text-warning">{data.lastDiscoveryError}</p>
+            ) : null}
+
+            {data.forceDisabledReason !== null ? (
+              <div
+                role="alert"
+                aria-labelledby="force-disabled-alert-title"
+                className="rounded-[var(--radius)] border border-warning/40 bg-warning/5 p-3"
+              >
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
+                  <div className="space-y-1 text-sm">
+                    <p id="force-disabled-alert-title" className="font-medium text-warning">
+                      {FORCE_DISABLED_COPY[data.forceDisabledReason].title}
+                    </p>
+                    <p className="text-fg-muted">
+                      {FORCE_DISABLED_COPY[data.forceDisabledReason].cause}{' '}
+                      <strong className="font-medium text-foreground">
+                        The API is currently unauthenticated
+                      </strong>{' '}
+                      — every request is treated as an anonymous admin until the server restarts.
+                    </p>
+                    <p className="text-fg-muted">
+                      Your stored configuration is untouched — the saved mode is{' '}
+                      <strong className="font-medium text-foreground">
+                        {MODE_LABELS[data.mode]}
+                      </strong>
+                      . While the override is active the connection status above reads “Disabled”
+                      regardless of the saved mode.
+                    </p>
+                    <p className="text-fg-muted">
+                      {FORCE_DISABLED_COPY[data.forceDisabledReason].recovery}
+                    </p>
+                  </div>
+                </div>
+              </div>
             ) : null}
 
             <div>

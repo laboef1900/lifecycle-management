@@ -1,6 +1,6 @@
 import type { AuthConfigResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,6 +22,7 @@ function renderWithClient(ui: React.ReactNode) {
 
 const baseConfig: AuthConfigResponse = {
   mode: 'disabled',
+  forceDisabledReason: null,
   issuerUrl: null,
   clientId: null,
   appBaseUrl: null,
@@ -443,5 +444,139 @@ describe('<AuthenticationForm>', () => {
     // The panel is mounted (its content is queryable) even while collapsed —
     // <details> hides content visually, it doesn't unmount it.
     expect(await screen.findByText('breakglass')).toBeInTheDocument();
+  });
+
+  // #222 — an in-memory override forces the *enforced* mode to 'disabled'
+  // while `data.mode` stays the STORED mode. The form must say so loudly for
+  // BOTH causes and must never echo 'disabled' back into the PUT.
+  describe('force-disabled override (#222)', () => {
+    const breakGlassOidcConfig: AuthConfigResponse = {
+      ...baseConfig,
+      mode: 'oidc',
+      forceDisabledReason: 'break_glass',
+      issuerUrl: 'https://idp.example.com',
+      clientId: 'client-123',
+      appBaseUrl: 'https://app.example.com',
+      clientSecretSet: true,
+      // The override parks OIDC discovery, so this reads 'disabled' beside a
+      // stored mode of 'oidc' (design note §3.9) — the alert explains it.
+      discoveryStatus: 'disabled',
+    };
+
+    it('renders a warning alert naming the stored mode when break-glass is active', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({ ...breakGlassOidcConfig });
+      renderWithClient(<AuthenticationForm />);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveAccessibleName(/break-glass override active/i);
+      expect(within(alert).getByText(/authentication is force-disabled/i)).toBeInTheDocument();
+      // The unauthenticated API is the whole point of the alert.
+      expect(within(alert).getByText(/the api is currently unauthenticated/i)).toBeInTheDocument();
+      // The env var is named so the operator knows what to clear...
+      expect(within(alert).getAllByText('RECOVERY_DISABLE_AUTH').length).toBeGreaterThan(0);
+      // ...and the STORED mode is named so 'disabled' is never mistaken for
+      // their configured state.
+      expect(within(alert).getByText('OIDC')).toBeInTheDocument();
+      expect(within(alert).getByText(/take effect only after you clear/i)).toBeInTheDocument();
+      // The other cause's recovery must not leak into this one.
+      expect(within(alert).queryByText('CONFIG_ENCRYPTION_KEY')).not.toBeInTheDocument();
+
+      // Colour is not the only signal: an icon plus explicit text carry it.
+      expect(alert.querySelector('svg')).not.toBeNull();
+      // The decorative icon is hidden from assistive tech.
+      expect(alert.querySelector('svg')).toHaveAttribute('aria-hidden');
+
+      // The mode selector reflects the stored mode, not the enforced one.
+      expect(screen.getByRole('button', { name: 'OIDC', pressed: true })).toBeInTheDocument();
+    });
+
+    // The regression this contract reshape closes: a decrypt failure produces
+    // the same divergence as break-glass, so it must raise the same alarm —
+    // with its own recovery, since clearing RECOVERY_DISABLE_AUTH won't help.
+    it('renders a warning alert with key-recovery copy on a secret decrypt failure', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({
+        ...breakGlassOidcConfig,
+        forceDisabledReason: 'secret_decrypt_failure',
+      });
+      renderWithClient(<AuthenticationForm />);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveAccessibleName(/could not be decrypted/i);
+      expect(within(alert).getByText(/authentication is force-disabled/i)).toBeInTheDocument();
+      expect(within(alert).getByText(/the api is currently unauthenticated/i)).toBeInTheDocument();
+      // Names the key to restore, states the secrets survive, and never tells
+      // the operator to clear a break-glass flag they never set.
+      expect(within(alert).getAllByText('CONFIG_ENCRYPTION_KEY').length).toBeGreaterThan(0);
+      expect(within(alert).getByText(/restore or roll back/i)).toBeInTheDocument();
+      expect(within(alert).getByText(/encrypted secrets are intact/i)).toBeInTheDocument();
+      expect(within(alert).queryByText('RECOVERY_DISABLE_AUTH')).not.toBeInTheDocument();
+
+      // Same non-colour signalling and stored-mode naming as the other cause.
+      expect(alert.querySelector('svg')).toHaveAttribute('aria-hidden');
+      expect(within(alert).getByText('OIDC')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'OIDC', pressed: true })).toBeInTheDocument();
+    });
+
+    it('names "Local accounts" as the stored mode when that is what is stored', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({
+        ...baseConfig,
+        mode: 'local',
+        forceDisabledReason: 'break_glass',
+      });
+      renderWithClient(<AuthenticationForm />);
+
+      const alert = await screen.findByRole('alert');
+      expect(within(alert).getByText('Local accounts')).toBeInTheDocument();
+    });
+
+    it('renders no alert when there is no divergence', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({
+        ...breakGlassOidcConfig,
+        forceDisabledReason: null,
+        discoveryStatus: 'connected',
+      });
+      renderWithClient(<AuthenticationForm />);
+      await screen.findByText(/configured/i);
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.queryByText(/force-disabled/i)).not.toBeInTheDocument();
+    });
+
+    it('does not coerce the stored mode to disabled when saving during a decrypt failure', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({
+        ...breakGlassOidcConfig,
+        forceDisabledReason: 'secret_decrypt_failure',
+      });
+      renderWithClient(<AuthenticationForm />);
+      await screen.findByRole('alert');
+
+      await userEvent.type(screen.getByLabelText(/role claim/i), 'roles');
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => {
+        expect(api.settings.auth.update).toHaveBeenCalled();
+      });
+      expect(vi.mocked(api.settings.auth.update).mock.calls[0]![0].mode).toBe('oidc');
+    });
+
+    it('does not coerce the stored mode to disabled when saving during break-glass', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({ ...breakGlassOidcConfig });
+      renderWithClient(<AuthenticationForm />);
+      await screen.findByRole('alert');
+
+      // Edit an unrelated, non-critical field and save without touching the
+      // mode selector. The PUT must carry the STORED mode ('oidc'). If the
+      // form defaulted from the enforced mode instead, this would send
+      // 'disabled' and re-persist #222 through the UI.
+      await userEvent.type(screen.getByLabelText(/role claim/i), 'roles');
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => {
+        expect(api.settings.auth.update).toHaveBeenCalled();
+      });
+      const body = vi.mocked(api.settings.auth.update).mock.calls[0]![0];
+      expect(body.mode).toBe('oidc');
+      expect(body.mode).not.toBe('disabled');
+    });
   });
 });
