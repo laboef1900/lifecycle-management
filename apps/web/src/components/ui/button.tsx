@@ -15,12 +15,18 @@ const buttonVariants = cva(
         outline: 'border border-input bg-background hover:bg-card-hover hover:text-foreground',
         ghost: 'hover:bg-card-hover hover:text-foreground',
         link: 'text-accent underline-offset-4 hover:underline',
+        // Micro-label chip: a transparent, hairline-bordered control that reads
+        // as a label until hovered. Pair with `size="chip"`.
+        chip: 'border border-border text-fg-muted hover:border-border-strong hover:text-foreground',
       },
       size: {
         sm: 'h-7 rounded-[var(--radius)] px-2.5 text-xs',
         default: 'h-8 px-3 py-1.5',
         lg: 'h-9 rounded-[var(--radius)] px-4',
         icon: 'h-8 w-8',
+        // Chip metrics: content-height (no fixed `h-*`) so an inline <Kbd xs>
+        // hint can ride along, with the mono uppercase micro-label typography.
+        chip: 'flex shrink-0 px-2.5 py-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em]',
       },
     },
     defaultVariants: {

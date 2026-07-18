@@ -1,14 +1,20 @@
 import { ArrowLeft } from 'lucide-react';
 import type * as React from 'react';
 
-import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Kbd } from '@/components/ui/kbd';
 
 /**
  * Shared "Back" affordance used by the cluster detail panel and the Settings
  * page so the label, left-arrow icon, and decorative Esc hint stay consistent.
+ * Composed from the `chip` Button variant and the `xs` Kbd — the micro-label
+ * recipe lives in those primitives, not in a copy of their class strings.
+ *
  * The `<kbd>` and icon are `aria-hidden`, so the accessible name is exactly the
- * `label` (default "Back"). `ref` forwards to the underlying button — the panel
- * relies on a stable ref for its open-focus / focus-restore management.
+ * `label` (default "Back"); `aria-keyshortcuts` is what exposes the Esc binding
+ * to assistive tech, since the visual hint is decorative. `ref` forwards to the
+ * underlying button — the panel relies on a stable ref for its open-focus /
+ * focus-restore management.
  */
 export function BackButton({
   onClick,
@@ -22,23 +28,20 @@ export function BackButton({
   ref?: React.RefObject<HTMLButtonElement | null>;
 }): React.JSX.Element {
   return (
-    <button
+    <Button
       ref={ref}
       type="button"
+      variant="chip"
+      size="chip"
       onClick={onClick}
-      className={cn(
-        'flex shrink-0 items-center gap-2 rounded-[var(--radius)] border border-border px-2.5 py-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] text-fg-muted transition-colors hover:border-border-strong hover:text-foreground',
-        className,
-      )}
+      aria-keyshortcuts="Escape"
+      className={className}
     >
       <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
       {label}
-      <kbd
-        aria-hidden
-        className="rounded border border-border px-1 py-0.5 text-[9px] font-semibold text-fg-subtle"
-      >
+      <Kbd aria-hidden size="xs">
         Esc
-      </kbd>
-    </button>
+      </Kbd>
+    </Button>
   );
 }
