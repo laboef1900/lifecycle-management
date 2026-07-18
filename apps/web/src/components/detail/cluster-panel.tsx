@@ -860,7 +860,7 @@ function ScenarioPaneBody({
           Close
           <Kbd
             aria-hidden
-            className="h-auto min-w-0 rounded bg-none px-1 py-0.5 text-[9px] font-semibold text-fg-subtle shadow-none"
+            className="h-auto min-w-0 rounded bg-none px-1 py-0.5 text-[9px] font-semibold text-fg-subtle shadow-none dark:shadow-none"
           >
             Esc
           </Kbd>
