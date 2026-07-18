@@ -1,6 +1,6 @@
 import { clusterCreateInputSchema } from '@lcm/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
 import { Field } from '@/components/form/field';
@@ -42,12 +42,6 @@ export function CreateClusterDialog({ trigger }: CreateClusterDialogProps): Reac
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<FormState>(initialState);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof FormState, string>>>({});
-
-  useEffect(() => {
-    const handler = (): void => setOpen(true);
-    window.addEventListener('lcm:open-create-cluster', handler);
-    return () => window.removeEventListener('lcm:open-create-cluster', handler);
-  }, []);
 
   const mutation = useMutation({
     mutationFn: (payload: ClusterCreateInputWire) => api.clusters.create(payload),
