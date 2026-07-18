@@ -39,6 +39,30 @@ const Y_AXIS_WIDTH = 30;
 /** Clamp a utilization % into the fixed shared window so it can't stretch the axis. */
 const clampToWindow = (value: number): number => Math.min(Math.max(value, Y_MIN), Y_MAX);
 
+/** Dash pattern for a threshold hairline drawn at its true value. */
+const HAIRLINE_DASH = '4 3';
+/**
+ * Dash pattern for a hairline that had to be clamped to a window edge — the
+ * "off-scale" cue. Without it a warn threshold of 35 % pinned to the 40 % floor
+ * is indistinguishable from one genuinely configured at 40 %, so the tile
+ * misreports by 5 points. Pattern (not color) carries the distinction so it
+ * survives color-vision deficiency, and the aria-label announces the true
+ * percentage either way.
+ */
+const OFF_SCALE_DASH = '1 2';
+
+interface Hairline {
+  /** Plotted y, clamped into the shared window. */
+  y: number;
+  /** True when the clamp bit — the line is NOT at its configured value. */
+  offScale: boolean;
+}
+
+function hairlineFor(pct: number): Hairline {
+  const y = clampToWindow(pct);
+  return { y, offScale: y !== pct };
+}
+
 interface TileChartRow {
   month: string;
   /**
@@ -54,8 +78,13 @@ interface TileChartRow {
 }
 
 /**
- * Compact per-tile forecast chart: %-of-capacity on a fixed 0-125 scale so
- * every tile in the grid is visually comparable. The consumption line is
+ * Compact per-tile forecast chart: %-of-capacity on the fixed shared window
+ * (40-125 % — see the `Y_MIN`/`Y_MAX` block above, which is the single source
+ * of truth) so every tile in the grid is visually comparable. Values outside
+ * the window — data rows, the breach dot, and the warn/crit hairlines alike —
+ * are clamped to its edges rather than allowed to stretch the axis or vanish;
+ * a clamped hairline switches to {@link OFF_SCALE_DASH} so an edge value is
+ * never mistaken for a configured one. The consumption line is
  * split into a solid "actual" segment up to the current month and a dashed
  * "forecast" segment from the current month on — sharing the anchor point at
  * the current month keeps the line visually continuous.
@@ -88,6 +117,15 @@ export function ClusterTileChart({
 
   const warnPct = thresholds.warn * 100;
   const critPct = thresholds.crit * 100;
+  const warnLine = hairlineFor(warnPct);
+  const critLine = hairlineFor(critPct);
+  // Two hairlines resolving to the same y render exactly coincident, so the one
+  // drawn first (warn) is permanently hidden under the other. That happens
+  // whenever both thresholds fall outside the window and clamp to the same edge.
+  // Draw a single merged line in the more severe color instead of implying two
+  // distinguishable bands the scale cannot show; the aria-label still reports
+  // both true percentages.
+  const hairlinesCoincide = warnLine.y === critLine.y;
 
   const breachIndex = months.findIndex(
     (m) => m.capacity > 0 && m.consumption / m.capacity >= thresholds.warn,
@@ -150,8 +188,28 @@ export function ClusterTileChart({
               );
             }}
           />
-          <ReferenceLine y={warnPct} stroke={colors.utilizationWarn} strokeDasharray="4 3" />
-          <ReferenceLine y={critPct} stroke={colors.utilizationCrit} strokeDasharray="4 3" />
+          {/* Clamp the hairlines into the window. Recharts' ReferenceLine
+              defaults to ifOverflow="discard", so a threshold configured below
+              the 40 % floor (percentSchema allows 0.01) would render NOTHING —
+              yet the breach dot still pins to the floor and the aria-label
+              still names the threshold, an inconsistent, misleading tile.
+              Pinning the hairline to the edge instead keeps the tile
+              self-consistent, and OFF_SCALE_DASH marks it as pinned rather
+              than measured so the edge value can't be misread as the
+              configured one. The aria-label keeps reporting the true
+              percentage. */}
+          {hairlinesCoincide ? null : (
+            <ReferenceLine
+              y={warnLine.y}
+              stroke={colors.utilizationWarn}
+              strokeDasharray={warnLine.offScale ? OFF_SCALE_DASH : HAIRLINE_DASH}
+            />
+          )}
+          <ReferenceLine
+            y={critLine.y}
+            stroke={colors.utilizationCrit}
+            strokeDasharray={critLine.offScale ? OFF_SCALE_DASH : HAIRLINE_DASH}
+          />
           <ReferenceLine y={100} stroke={colors.capacity} strokeDasharray="2 3" />
           {orderByInRange && orderByMonthKey ? (
             <ReferenceLine
