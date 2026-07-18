@@ -5,7 +5,7 @@ import { connect as tlsConnect, createServer, type TlsOptions } from 'node:tls';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { OTHER_CERT_PEM, TEST_CERT_PEM, TEST_KEY_PEM } from './vsphere-tls-fixtures.js';
-import { normalizeFingerprint, verifiedTlsOptions } from '../vsphere-tls.js';
+import { normalizeFingerprint, probeCertificate, verifiedTlsOptions } from '../vsphere-tls.js';
 
 /**
  * TLS trust behaviour for vCenter connections (#175, epic #172).
@@ -157,5 +157,26 @@ describe('fingerprints', () => {
   it('the generated cert has a readable SHA-256 fingerprint', () => {
     const x509 = new X509Certificate(certificate);
     expect(x509.fingerprint256).toMatch(/^[A-F0-9]{2}(:[A-F0-9]{2}){31}$/);
+  });
+});
+
+describe('probeCertificate dials the configured port (#199)', () => {
+  it('captures a certificate from a non-443 port', async () => {
+    // Bind to and dial `localhost` (a valid SNI name — an IP is not) on an ephemeral
+    // port. If probeCertificate ignored the port and dialed 443, nothing would answer
+    // and this would be `unreachable`; a successful capture proves the port argument
+    // reaches the socket.
+    const port = await new Promise<number>((resolve) => {
+      const server = createServer({ key: privateKey, cert: certificate }, (socket) => socket.end());
+      server.listen(0, 'localhost', () => {
+        servers.push({ close: () => server.close() });
+        resolve((server.address() as AddressInfo).port);
+      });
+    });
+
+    const result = await probeCertificate('localhost', port);
+
+    expect(result.outcome).toBe('ok');
+    expect(result.chain?.rootFingerprintSha256).toMatch(/^[A-F0-9]{2}(:[A-F0-9]{2}){31}$/);
   });
 });

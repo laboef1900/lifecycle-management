@@ -22,14 +22,34 @@ export interface ClusterTileChartProps {
   orderByDate: string | null;
 }
 
-/** Shared %-of-capacity ceiling across every tile so tiles are visually comparable (spec §4.4). */
+/**
+ * Shared %-of-capacity window across every tile so tiles are visually comparable
+ * (spec §4.4, amended 2026-07-18). The floor is 40 %, not 0 %: real clusters of
+ * interest sit well above 40 %, so the old 0–125 scale spent its bottom third
+ * empty and squeezed the warn/crit band into a top sliver. The window is FIXED
+ * (see `allowDataOverflow` on the YAxis) — values outside it are clamped, never
+ * allowed to stretch the axis, or the shared scale would stop being shared.
+ */
+const Y_MIN = 40;
 const Y_MAX = 125;
+const Y_TICKS = [50, 75, 100];
+const X_AXIS_HEIGHT = 16;
+const Y_AXIS_WIDTH = 30;
+
+/** Clamp a utilization % into the fixed shared window so it can't stretch the axis. */
+const clampToWindow = (value: number): number => Math.min(Math.max(value, Y_MIN), Y_MAX);
 
 interface TileChartRow {
   month: string;
-  /** Utilization % for months at/before "now" — null elsewhere so the line stops. */
+  /**
+   * True utilization % for this month — always present (0 for unknown/zero
+   * capacity). The tooltip reports this so it stays honest even when the plotted
+   * line is clamped to the window edge.
+   */
+  util: number;
+  /** Clamped utilization % for months at/before "now" — null elsewhere so the line stops. */
   actual: number | null;
-  /** Utilization % for months at/after "now" (drawn dashed) — null elsewhere. */
+  /** Clamped utilization % for months at/after "now" (drawn dashed) — null elsewhere. */
   forecast: number | null;
 }
 
@@ -57,10 +77,12 @@ export function ClusterTileChart({
 
   const data: TileChartRow[] = months.map((m, i) => {
     const value = utilPct(m);
+    const plotted = clampToWindow(value);
     return {
       month: m.month,
-      actual: i <= currentIndex ? value : null,
-      forecast: i >= currentIndex ? value : null,
+      util: value,
+      actual: i <= currentIndex ? plotted : null,
+      forecast: i >= currentIndex ? plotted : null,
     };
   });
 
@@ -82,16 +104,42 @@ export function ClusterTileChart({
       aria-label={chartAriaLabel(months, thresholds, breachIndex, orderByDate)}
     >
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={data} margin={{ top: 10, right: 8, bottom: 2, left: 0 }}>
+        <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
-          <XAxis dataKey="month" hide />
-          <YAxis domain={[0, Y_MAX]} hide />
+          <XAxis
+            dataKey="month"
+            height={X_AXIS_HEIGHT}
+            tickFormatter={formatMonthShort}
+            // Recharts paints tick text from `fill`; `colors.axis` is tuned as a
+            // ~1.4:1 line color, unfit as label text — use the --fg-subtle text
+            // token while the axis line itself keeps colors.grid.
+            tick={{ fontSize: 9, fill: 'var(--fg-subtle)' }}
+            tickLine={false}
+            stroke={colors.grid}
+            interval="preserveStartEnd"
+            minTickGap={28}
+          />
+          <YAxis
+            width={Y_AXIS_WIDTH}
+            domain={[Y_MIN, Y_MAX]}
+            ticks={Y_TICKS}
+            // Keep the shared window fixed: never let below-floor (0 %, unknown
+            // capacity) or above-ceiling (>125 %) data stretch the axis, or tiles
+            // would stop being comparable at a glance.
+            allowDataOverflow
+            tickFormatter={(v: number) => `${v}%`}
+            tick={{ fontSize: 9, fill: 'var(--fg-subtle)' }}
+            tickLine={false}
+            axisLine={false}
+          />
           <Tooltip
             content={({ active, payload, label }) => {
               if (!active || !payload || payload.length === 0 || typeof label !== 'string') {
                 return null;
               }
-              const value = (payload[0]?.value as number | null) ?? null;
+              // Report the TRUE utilization, not the clamped plotted value.
+              const row = payload[0]?.payload as TileChartRow | undefined;
+              const value = row ? row.util : null;
               return (
                 <div className="rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
                   <span className="font-medium">{formatMonthShort(label)}</span>
@@ -146,7 +194,10 @@ export function ClusterTileChart({
             // breach as a crit one (PR review fix 4a).
             <ReferenceDot
               x={breachRow.month}
-              y={Math.min(breachRow.actual ?? breachRow.forecast ?? 0, Y_MAX)}
+              // Clamp into the fixed window on BOTH ends. The upper clamp keeps a
+              // >125 % breach on-chart; the lower clamp only bites if the warn
+              // threshold is configured below the 40 % floor (breach y ≥ warnPct).
+              y={clampToWindow(breachRow.util)}
               r={4}
               fill={colors.utilizationWarn}
               stroke="var(--card)"
@@ -173,7 +224,7 @@ function chartAriaLabel(
   orderByDate: string | null,
 ): string {
   const parts = [
-    `${months.length}-month forecast as percent of capacity, shared scale across tiles.`,
+    `${months.length}-month forecast as percent of capacity, shared ${Y_MIN} to ${Y_MAX} percent scale across tiles.`,
   ];
   parts.push(
     breachIndex >= 0

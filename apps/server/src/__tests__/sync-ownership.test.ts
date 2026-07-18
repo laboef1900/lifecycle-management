@@ -123,11 +123,30 @@ describe('deleting a synced cluster is refused (the most valuable rejection)', (
 });
 
 describe('operator-owned surfaces stay open on synced entities', () => {
-  it('appendCapacity is left open — it is the only path to synced-cluster capacity (#198)', async () => {
+  it('appendCapacity on a SYNCED host is refused with 409 SYNC_OWNED_FIELD (#198)', async () => {
+    // Once sync writes host capacity (#198), vCenter owns a synced host's installed
+    // memory; the operator path closes so the two writers cannot fight over it.
     const cluster = await makeCluster(prisma, { source: 'vsphere' });
     const host = await makeHost(prisma, {
       clusterId: cluster.id,
       source: 'vsphere',
+      commissionedAt: new Date('2026-05-01T00:00:00.000Z'),
+    });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/hosts/${host.id}/capacity`,
+      payload: { metricTypeKey: 'memory_gb', effectiveFrom: '2026-08-01', amount: 256 },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(errorCode(res)).toBe('SYNC_OWNED_FIELD');
+  });
+
+  it('appendCapacity on a MANUAL host stays open (no over-reach)', async () => {
+    const cluster = await makeCluster(prisma);
+    const host = await makeHost(prisma, {
+      clusterId: cluster.id,
       commissionedAt: new Date('2026-05-01T00:00:00.000Z'),
     });
 
@@ -229,6 +248,7 @@ describe('operator rename pins a synced host label (nameIsCustom parity)', () =>
     const conn = await connections.create('default', {
       name: `so-conn-${Date.now()}`,
       hostname: 'vcenter.corp.local',
+      port: 443,
       username: 'u',
       password: 'p',
       enabled: true,

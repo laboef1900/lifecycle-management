@@ -6,6 +6,7 @@ import { POLL_INTERVAL_MS } from '../services/vsphere-live-usage.js';
 import {
   backoffMs,
   computeDueState,
+  MAX_DUE_JOBS_PER_TICK,
   missedPeriods,
   nextMonthlyBoundary,
   periodFor,
@@ -67,7 +68,11 @@ interface MakeJobOptions {
 }
 
 async function makeJob(dueAt: string, options: MakeJobOptions = {}): Promise<string> {
-  const { id } = await makeVsphereConnection(prisma, { key: KEY, name: uniq('conn') });
+  const { id } = await makeVsphereConnection(prisma, {
+    key: KEY,
+    name: uniq('conn'),
+    lastConnectedAt: new Date('2026-07-01T00:00:00Z'),
+  });
   made.push(id);
   await makeVsphereConnectionJob(prisma, {
     connectionId: id,
@@ -199,6 +204,26 @@ describe('catch-up IS the data model', () => {
     const sched = new VsphereScheduler(prisma, okRunner(), fixedClock('2026-08-04T10:00:00Z'));
     const outcomes = await sched.runDueJobs();
     expect(outcomes.find((o) => o.connectionId === id)).toBeUndefined();
+  });
+
+  it('runs at most the five oldest established connections in one tick', async () => {
+    const ids: string[] = [];
+    for (let day = 1; day <= 7; day++) {
+      ids.push(await makeJob(`2026-08-0${day}T00:00:00Z`));
+    }
+    const calls: string[] = [];
+    const sched = new VsphereScheduler(
+      prisma,
+      runner(async (connectionId) => {
+        calls.push(connectionId);
+        return okReport();
+      }),
+      fixedClock('2026-08-10T00:00:00Z'),
+    );
+
+    const outcomes = await sched.runDueJobs();
+    expect(outcomes).toHaveLength(MAX_DUE_JOBS_PER_TICK);
+    expect(calls).toEqual(ids.slice(0, MAX_DUE_JOBS_PER_TICK));
   });
 });
 
@@ -499,7 +524,7 @@ describe('⚠️ concurrency — compose overlaps containers today', () => {
       okRunner(),
       fixedClock('2026-08-01T10:00:00Z'),
     ).runDueJobs();
-    expect(outcomes.find((o) => o.connectionId === id)?.ran).toBe(false);
+    expect(outcomes.find((o) => o.connectionId === id)).toBeUndefined();
   });
 });
 

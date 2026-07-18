@@ -36,6 +36,7 @@ async function makeConnection(name: string, password = 'sup3r-s3cret'): Promise<
   const c = await service().create('default', {
     name,
     hostname: 'vcenter.corp.local',
+    port: 443,
     username: 'svc-lcm',
     password,
     enabled: true,
@@ -69,6 +70,18 @@ describe('vCenter credentials — encryption at rest', () => {
     // rendering the real one, so the field must not exist at all.
     expect(Object.keys(response)).not.toContain('password');
     expect(JSON.stringify(response)).not.toContain('sup3r-s3cret');
+  });
+
+  it('seeds immediate scheduler work at creation time, not the queue-jumping Unix epoch', async () => {
+    const before = Date.now();
+    const id = await makeConnection(uniqueName('fair-due-at'));
+    const after = Date.now();
+    const job = await prisma.vsphereConnectionJob.findUniqueOrThrow({
+      where: { connectionId: id },
+    });
+
+    expect(job.dueAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(job.dueAt.getTime()).toBeLessThanOrEqual(after);
   });
 });
 
@@ -113,6 +126,7 @@ describe('vCenter credentials — failure and recovery', () => {
       service(null).create('default', {
         name: uniqueName('nokey-create'),
         hostname: 'vcenter.corp.local',
+        port: 443,
         username: 'svc-lcm',
         password: 'x',
         enabled: true,
@@ -128,6 +142,7 @@ describe('vCenter credentials — failure and recovery', () => {
     const bad = await badService.create('default', {
       name: uniqueName('bad'),
       hostname: 'vcenter2.corp.local',
+      port: 443,
       username: 'svc-lcm',
       password: 'unreadable-under-key-a',
       enabled: true,
@@ -211,6 +226,7 @@ describe('vCenter connections — duplicate protection', () => {
       service().create('default', {
         name,
         hostname: 'other.corp.local',
+        port: 443,
         username: 'svc-lcm',
         password: 'x',
         enabled: true,
@@ -243,5 +259,48 @@ describe('vCenter connections — duplicate protection', () => {
     await makeConnection(uniqueName('null-c'));
     const rows = await prisma.vsphereConnection.findMany({ where: { instanceUuid: null } });
     expect(rows.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('configurable port (#199)', () => {
+  it('persists a non-default port on create and surfaces it in the response', async () => {
+    const c = await service().create('default', {
+      name: uniqueName('port'),
+      hostname: 'vcenter.corp.local',
+      port: 8443,
+      username: 'svc-lcm',
+      password: 'pw',
+      enabled: true,
+    });
+    created.push(c.id);
+
+    expect(c.port).toBe(8443);
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id: c.id } });
+    expect(row.port).toBe(8443);
+  });
+
+  it('changing only the port keeps the pinned CA and identity — a port change is not a host change', async () => {
+    const id = await makeConnection(uniqueName('pinned'));
+    await prisma.vsphereConnection.update({
+      where: { id },
+      data: {
+        tlsMode: 'pinned',
+        tlsPinnedCaPem: 'PEM-ROOT',
+        tlsPinnedSha256: 'AB:CD',
+        instanceUuid: 'uuid-1',
+      },
+    });
+
+    const updated = await service().update('default', id, {
+      port: 8443,
+      password: 'sup3r-s3cret',
+    });
+
+    expect(updated.port).toBe(8443);
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id } });
+    // Same host ⇒ same Machine SSL certificate: the pin and the identity guard must
+    // survive a port-only change (only a hostname change resets them).
+    expect(row.tlsPinnedCaPem).toBe('PEM-ROOT');
+    expect(row.instanceUuid).toBe('uuid-1');
   });
 });

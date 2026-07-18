@@ -155,7 +155,7 @@ describe('<ClusterPanel>', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders as a modal dialog and moves focus to the close button on open (PR review fix 3)', async () => {
+  it('renders as a modal dialog and moves focus to the back button on open (PR review fix 3)', async () => {
     // aria-modal="true" now matches reality: the route wraps the fleet
     // console in an `inert` container while this panel is open (see
     // apps/web/src/routes/_app.clusters.$id.tsx), and the hand-rolled Tab
@@ -164,7 +164,7 @@ describe('<ClusterPanel>', () => {
     render(<Harness show />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /close/i })).toHaveFocus();
+      expect(screen.getByRole('button', { name: /back/i })).toHaveFocus();
     });
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
@@ -231,15 +231,15 @@ describe('<ClusterPanel>', () => {
     expect(dialog.style.boxShadow).toBe('');
   });
 
-  it('gives the close button an accessible name of exactly "Close", not "Close Esc" (MINOR fix)', async () => {
+  it('gives the back button an accessible name of exactly "Back", not "Back Esc" (MINOR fix)', async () => {
     // The visible <kbd>Esc</kbd> hint must not concatenate into the
     // accessible name — it's decorative for sighted keyboard users only.
     render(<Harness show />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /close/i })).toHaveFocus();
+      expect(screen.getByRole('button', { name: /back/i })).toHaveFocus();
     });
-    expect(screen.getByRole('button', { name: 'Close' })).toHaveAccessibleName('Close');
+    expect(screen.getByRole('button', { name: 'Back' })).toHaveAccessibleName('Back');
   });
 
   it('restores focus to the previously-focused element after the panel closes', async () => {
@@ -249,7 +249,7 @@ describe('<ClusterPanel>', () => {
     expect(trigger).toHaveFocus();
 
     rerender(<Harness show />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
 
     rerender(<Harness show={false} />);
     await waitFor(() => expect(trigger).toHaveFocus());
@@ -265,7 +265,7 @@ describe('<ClusterPanel>', () => {
 
   it('Esc navigates to / after the exit transition', async () => {
     render(<Harness show />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
 
     const dialog = screen.getByRole('dialog');
     dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -283,7 +283,7 @@ describe('<ClusterPanel>', () => {
     const user = userEvent.setup();
     render(<Harness show />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
     await screen.findByText('esx-01');
 
     await user.click(screen.getByRole('button', { name: 'Delete' }));
@@ -301,13 +301,13 @@ describe('<ClusterPanel>', () => {
     expect(screen.getByRole('dialog', { name: /prod-east/i })).toBeInTheDocument();
   });
 
-  it('the close button navigates to / and the live region announces the close first', async () => {
+  it('the back button navigates to / and the live region announces the close first', async () => {
     render(<Harness show />);
     await screen.findByText('Prod-East');
     expect(screen.getByRole('status')).toHaveTextContent('Cluster Prod-East detail opened.');
 
     const user = (await import('@testing-library/user-event')).default.setup();
-    await user.click(screen.getByRole('button', { name: /close/i }));
+    await user.click(screen.getByRole('button', { name: /back/i }));
 
     // The "closed" announcement is set synchronously, before the delayed navigate.
     expect(screen.getByRole('status')).toHaveTextContent('Cluster Prod-East detail closed.');
@@ -329,9 +329,9 @@ describe('<ClusterPanel>', () => {
 
     const user = userEvent.setup();
     render(<Harness show />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
 
-    await user.click(screen.getByRole('button', { name: /close/i }));
+    await user.click(screen.getByRole('button', { name: /back/i }));
 
     // Reduced motion forbids *animation*, not a deferred navigation: the
     // navigate must NOT fire synchronously with the click...
@@ -364,8 +364,11 @@ describe('<ClusterPanel>', () => {
     const user = userEvent.setup();
     render(<Harness show />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
     await screen.findByTestId('kpi-strip');
+
+    // ScenarioControls now lives in the slide-in pane (#226) — open it first.
+    await user.click(screen.getByTestId('scenario-button'));
 
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() =>
@@ -374,6 +377,96 @@ describe('<ClusterPanel>', () => {
 
     await user.click(screen.getByTestId('scenario-clear'));
     expect(screen.getByRole('status')).toHaveTextContent('Baseline forecast restored.');
+  });
+});
+
+describe('<ClusterPanel> scenario pane (#226)', () => {
+  beforeEach(() => {
+    navigateMock.mockClear();
+    vi.spyOn(api.clusters, 'get').mockResolvedValue(cluster());
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(forecast());
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(forecast());
+    vi.spyOn(api.clusters, 'liveUsage').mockResolvedValue({ items: [] });
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 500,
+      offset: 0,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not render ScenarioControls inline; it lives in the pane opened from the header button', async () => {
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    // Inline controls are gone until the pane is opened.
+    expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('scenario-button'));
+    expect(await screen.findByTestId('scenario-controls')).toBeInTheDocument();
+  });
+
+  it('opening the pane moves focus into it; closing returns focus to the Scenario button', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    await user.click(scenarioButton);
+
+    const paneClose = await screen.findByRole('button', { name: 'Close scenario panel' });
+    await waitFor(() => expect(paneClose).toHaveFocus());
+
+    await user.click(paneClose);
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(scenarioButton).toHaveFocus();
+  });
+
+  it('Esc closes the pane first (focus back on the button), then a second Esc closes the panel', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    await user.click(scenarioButton);
+    await screen.findByTestId('scenario-controls');
+
+    // First Esc: closes the pane only — the panel must NOT navigate.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(scenarioButton).toHaveFocus();
+
+    // Second Esc (focus on the in-panel button): now the panel closes.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: '/' }));
+  });
+
+  it('keeps the active scenario clearly indicated on the header button after the pane is closed', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Scenario active: Lose 1 host.'),
+    );
+
+    // Close the pane; the applied scenario must survive and stay visible.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+
+    const indicator = screen.getByTestId('scenario-active-indicator');
+    expect(indicator).toBeInTheDocument();
+    expect(indicator).toHaveTextContent('Lose 1 host');
+    // A non-colour cue: the summary text is present in the button's accessible name.
+    expect(screen.getByTestId('scenario-button')).toHaveAccessibleName(/lose 1 host/i);
   });
 });
 

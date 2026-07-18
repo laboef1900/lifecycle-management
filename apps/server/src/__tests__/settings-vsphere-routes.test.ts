@@ -9,7 +9,11 @@ import { buildServer } from '../server.js';
 import { SessionService } from '../services/sessions.js';
 import { VsphereConnectionsService } from '../services/vsphere-connections.js';
 import { VsphereJobRunner } from '../services/vsphere-job-runner.js';
-import { VsphereScheduler } from '../services/vsphere-scheduler.js';
+import {
+  MAX_DUE_JOBS_PER_TICK,
+  MAX_NEVER_CONNECTED_JOBS_PER_TICK,
+  VsphereScheduler,
+} from '../services/vsphere-scheduler.js';
 import { makeVsphereConnection, makeVsphereConnectionJob } from './factories.js';
 import { prisma } from './setup.js';
 import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
@@ -104,6 +108,126 @@ describe('POST /api/settings/vsphere/connections', () => {
     });
     expect(res.statusCode).toBe(201);
   });
+
+  it('defaults the port to 443 and accepts a non-default port (#199)', async () => {
+    const def = await server.inject({
+      method: 'POST',
+      url: '/api/settings/vsphere/connections',
+      payload: {
+        name: uniqueName('port-default'),
+        hostname: 'vcenter.corp.local',
+        username: 'svc-lcm',
+        password: 'p',
+      },
+    });
+    expect((def.json() as { port: number }).port).toBe(443);
+
+    const alt = await server.inject({
+      method: 'POST',
+      url: '/api/settings/vsphere/connections',
+      payload: {
+        name: uniqueName('port-alt'),
+        hostname: 'vcenter.corp.local',
+        port: 8443,
+        username: 'svc-lcm',
+        password: 'p',
+      },
+    });
+    expect(alt.statusCode).toBe(201);
+    expect((alt.json() as { port: number }).port).toBe(8443);
+  });
+
+  it('★ rate-limits anonymous creates and bounds the scheduler work they seed (#199 review)', async () => {
+    // This is deliberately a production-mode server: ordinary tests skip the
+    // rate-limit plugin, which would make a 429 assertion vacuous. Auth remains
+    // disabled, reproducing the actual anonymous-ADMIN threat model.
+    await prisma.vsphereConnectionJob.deleteMany({});
+    await prisma.vsphereConnection.deleteMany({});
+
+    const prefix = uniqueName('rate-budget');
+    const guardedServer = await buildServer({
+      env: makeTestEnv({
+        NODE_ENV: 'production',
+        CONFIG_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+      }),
+      prisma,
+    });
+
+    const createdIds: string[] = [];
+    try {
+      try {
+        for (let i = 0; i < 10; i++) {
+          const res = await guardedServer.inject({
+            method: 'POST',
+            url: '/api/settings/vsphere/connections',
+            remoteAddress: '198.51.100.10',
+            payload: {
+              name: `${prefix}-${i}`,
+              hostname: `10.20.30.${i + 1}`,
+              port: 4400 + i,
+              username: 'attacker-selected',
+              password: 'attacker-selected',
+            },
+          });
+          expect(res.statusCode).toBe(201);
+          createdIds.push((res.json() as { id: string }).id);
+        }
+
+        const limited = await guardedServer.inject({
+          method: 'POST',
+          url: '/api/settings/vsphere/connections',
+          remoteAddress: '198.51.100.10',
+          payload: {
+            name: `${prefix}-blocked`,
+            hostname: '10.20.30.250',
+            port: 65000,
+            username: 'attacker-selected',
+            password: 'attacker-selected',
+          },
+        });
+        expect(limited.statusCode).toBe(429);
+        expect(createdIds).toHaveLength(10);
+      } finally {
+        // Stop the production timer before driving the deterministic fake-runner
+        // scheduler below. `start()` waits one minute before its first tick, but
+        // closing here makes the non-overlap structural rather than timing-based.
+        await guardedServer.close();
+      }
+
+      const now = new Date();
+      let outboundRuns = 0;
+      const scheduler = new VsphereScheduler(
+        prisma,
+        {
+          run: async () => {
+            outboundRuns++;
+            return {
+              poll: { ran: true, ok: true },
+              sync: { outcome: 'ok' },
+              snapshot: { attempted: true, period: startOfUtcMonth(now), failed: false },
+              errorMessage: null,
+            };
+          },
+        },
+        { now: () => now },
+      );
+
+      const outcomes = await scheduler.runDueJobs();
+      expect(outcomes).toHaveLength(MAX_NEVER_CONNECTED_JOBS_PER_TICK);
+      expect(outboundRuns).toBe(MAX_NEVER_CONNECTED_JOBS_PER_TICK);
+      expect(MAX_NEVER_CONNECTED_JOBS_PER_TICK).toBeLessThan(MAX_DUE_JOBS_PER_TICK);
+      expect(
+        await prisma.vsphereConnectionJob.count({
+          where: { dueAt: { lte: now }, connection: { enabled: true } },
+        }),
+      ).toBe(10 - MAX_NEVER_CONNECTED_JOBS_PER_TICK);
+    } finally {
+      // Prefix cleanup also catches the 11th row if a rate-limit regression made
+      // the assertion fail after persisting it.
+      await prisma.vsphereConnection.deleteMany({ where: { name: { startsWith: prefix } } });
+      await prisma.authConfig.deleteMany({});
+    }
+  });
 });
 
 describe('PUT /api/settings/vsphere/connections/:id — the password gate', () => {
@@ -145,6 +269,49 @@ describe('PUT /api/settings/vsphere/connections/:id — the password gate', () =
     });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { hostname: string }).hostname).toBe('vcenter-2.corp.local');
+  });
+
+  it('★ rejects changing the port with the WRONG password — a port is a credential destination (#199)', async () => {
+    const id = await createConnection(uniqueName('port-wrong-pw'));
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/settings/vsphere/connections/${id}`,
+      payload: { port: 8443, password: 'guessing' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: { code: 'PASSWORD_MISMATCH' } });
+    // ...and the port is unchanged.
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id } });
+    expect(row.port).toBe(443);
+  });
+
+  it('rejects changing the port with NO password (contract-level, #199)', async () => {
+    const id = await createConnection(uniqueName('port-no-pw'));
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/settings/vsphere/connections/${id}`,
+      payload: { port: 8443 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('allows changing the port with the CORRECT password, keeping the pin (#199)', async () => {
+    const id = await createConnection(uniqueName('port-right-pw'), 'correct-horse');
+    await prisma.vsphereConnection.update({
+      where: { id },
+      data: { tlsPinnedCaPem: 'PEM-ROOT', instanceUuid: 'uuid-1' },
+    });
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/settings/vsphere/connections/${id}`,
+      payload: { port: 8443, password: 'correct-horse' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { port: number }).port).toBe(8443);
+    // A port change is not a host change: the pinned CA and identity survive.
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id } });
+    expect(row.tlsPinnedCaPem).toBe('PEM-ROOT');
+    expect(row.instanceUuid).toBe('uuid-1');
   });
 
   it('a benign edit needs no password — friction is what kills a gate', async () => {
@@ -209,7 +376,7 @@ describe('POST /api/settings/vsphere/connections/:id/trust-ca', () => {
 describe('POST /api/settings/vsphere/connections/:id/sync — "Sync now" (#192)', () => {
   it('202s immediately and never runs the sync inline — a handler must not await vCenter', async () => {
     const id = await createConnection(uniqueName('syncnow-202'));
-    // The create seeds a job at dueAt = epoch with every last-run column null.
+    // The create seeds an immediately-due job with every last-run column null.
     const before = await prisma.vsphereConnectionJob.findUniqueOrThrow({
       where: { connectionId: id },
     });
@@ -229,8 +396,7 @@ describe('POST /api/settings/vsphere/connections/:id/sync — "Sync now" (#192)'
     const after = await prisma.vsphereConnectionJob.findUniqueOrThrow({
       where: { connectionId: id },
     });
-    // dueAt moved from the epoch seed to ~now.
-    expect(after.dueAt.getTime()).toBeGreaterThan(before.dueAt.getTime());
+    // dueAt remains ~now (create and sync-now both queue immediate work).
     expect(Math.abs(after.dueAt.getTime() - t0)).toBeLessThan(5000);
     // The observable proof there was NO inline vCenter call: no last-run column
     // moved and no claim was taken. Had the handler synced inline it would have

@@ -300,6 +300,7 @@ describe('vsphereConnectionResponseSchema', () => {
     id: 'vc_1',
     name: 'vc-prod',
     hostname: 'vcenter.corp.local',
+    port: 443,
     username: 'svc-lcm',
     tlsMode: 'pinned',
     pinnedRootFingerprintSha256: Array.from({ length: 32 }, () => 'AB').join(':'),

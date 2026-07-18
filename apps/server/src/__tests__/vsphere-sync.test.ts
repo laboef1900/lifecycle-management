@@ -1,14 +1,18 @@
 import { randomBytes } from 'node:crypto';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { startOfUtcMonth } from '@lcm/shared';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   CollectedInventory,
   VsphereInventoryCollector,
 } from '../services/vsphere-inventory.js';
 import { bytesToGiB, mibToGiB } from '../services/vsphere-inventory.js';
+import { ForecastService } from '../services/forecast-loader.js';
 import { VsphereConnectionsService } from '../services/vsphere-connections.js';
 import { VsphereSyncService } from '../services/vsphere-sync.js';
+
+import { makeCluster, makeHost } from './factories.js';
 import { prisma } from './setup.js';
 
 /**
@@ -70,6 +74,7 @@ async function makeConn(name = uniq('conn')): Promise<string> {
   const c = await connections.create('default', {
     name,
     hostname: 'vcenter.corp.local',
+    port: 443,
     username: 'u',
     password: 'p',
     enabled: true,
@@ -315,5 +320,296 @@ describe('two vCenters with the same cluster name', () => {
     expect(clusters.every((c) => c.externalName === 'Production')).toBe(true);
     // ...but the operator must be able to tell which one needs hardware.
     expect(new Set(clusters.map((c) => c.name)).size).toBe(2);
+  });
+});
+
+describe('sync writes host memory capacity (#198)', () => {
+  // These drive the "changed memory" paths, which depend on the sync clock
+  // (startOfUtcMonth(now)); pin it so the append-forward-only date is deterministic.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function memRows(
+    conn: string,
+  ): Promise<{ hostId: string; effectiveFrom: Date; amount: unknown }[]> {
+    return prisma.hostMetricCapacity.findMany({
+      where: { host: { connectionId: conn }, metricType: { key: 'memory_gb' } },
+      orderBy: { effectiveFrom: 'asc' },
+      select: { hostId: true, effectiveFrom: true, amount: true },
+    });
+  }
+
+  it('writes one memory_gb row on host create, effective from the commissioned date', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
+    const conn = await makeConn();
+
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    const rows = await memRows(conn);
+    expect(rows).toHaveLength(1);
+    // The fake host reports 512 GiB installed — the capacity a synced cluster's
+    // forecast now reads instead of the "unknown" (capacity 0) it read before #198.
+    expect(Number(rows[0]!.amount)).toBe(512);
+    const host = await prisma.host.findFirstOrThrow({ where: { connectionId: conn } });
+    expect(rows[0]!.effectiveFrom.getTime()).toBe(host.commissionedAt.getTime());
+  });
+
+  it('does not append a second row when re-synced memory is unchanged', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    vi.setSystemTime(new Date('2026-07-15T00:00:00.000Z'));
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    expect(await memRows(conn)).toHaveLength(1);
+  });
+
+  it('appends a forward-dated row when memory INCREASES', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    vi.setSystemTime(new Date('2026-07-15T00:00:00.000Z'));
+    const bigger = inventory();
+    bigger.clusters[0]!.hosts[0]!.memoryGiB = 1024;
+    await new VsphereSyncService(prisma, fakeCollector(bigger)).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    const rows = await memRows(conn);
+    expect(rows).toHaveLength(2);
+    expect(Number(rows[1]!.amount)).toBe(1024);
+    expect(rows[1]!.effectiveFrom.getTime()).toBe(
+      startOfUtcMonth(new Date('2026-07-15T00:00:00.000Z')).getTime(),
+    );
+    expect(rows[1]!.effectiveFrom.getTime()).toBeGreaterThan(rows[0]!.effectiveFrom.getTime());
+  });
+
+  it('appends a forward-dated row when memory DECREASES (the invariant bounds the date, not the amount)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    vi.setSystemTime(new Date('2026-07-15T00:00:00.000Z'));
+    const smaller = inventory();
+    smaller.clusters[0]!.hosts[0]!.memoryGiB = 256;
+    await new VsphereSyncService(prisma, fakeCollector(smaller)).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    const rows = await memRows(conn);
+    expect(rows).toHaveLength(2);
+    expect(Number(rows[1]!.amount)).toBe(256);
+    expect(rows[1]!.effectiveFrom.getTime()).toBeGreaterThan(rows[0]!.effectiveFrom.getTime());
+  });
+
+  it('skips a same-month memory change and still returns ok (never throws on the collision)', async () => {
+    vi.useFakeTimers();
+    // Commission on the 1st so startOfUtcMonth(now) equals the existing row's date —
+    // the exact same-period collision the append-forward-only guard must absorb.
+    vi.setSystemTime(new Date('2026-07-01T00:00:00.000Z'));
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    vi.setSystemTime(new Date('2026-07-20T00:00:00.000Z'));
+    const changed = inventory();
+    changed.clusters[0]!.hosts[0]!.memoryGiB = 1024;
+    const result = await new VsphereSyncService(prisma, fakeCollector(changed)).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    expect(result.outcome).toBe('ok');
+    expect(await memRows(conn)).toHaveLength(1);
+  });
+
+  it('backfills a capacity row for a pre-existing synced host that has none', async () => {
+    const conn = await makeConn();
+    const cluster = await makeCluster(prisma, {
+      source: 'vsphere',
+      connectionId: conn,
+      externalId: 'domain-c1',
+      baselineCapacity: 0,
+    });
+    const host = await makeHost(prisma, {
+      clusterId: cluster.id,
+      source: 'vsphere',
+      connectionId: conn,
+      externalId: 'host-1',
+      commissionedAt: new Date('2026-03-01T00:00:00.000Z'),
+      initialCapacity: [],
+    });
+
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    const rows = await memRows(conn);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.hostId).toBe(host.id);
+    expect(Number(rows[0]!.amount)).toBe(512);
+    // Its history starts at the host's (provisional) commissioning date, not deploy day.
+    expect(rows[0]!.effectiveFrom.getTime()).toBe(new Date('2026-03-01T00:00:00.000Z').getTime());
+  });
+
+  it('writes zero capacity while a host is missing and restores it when the host returns', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
+    const conn = await makeConn();
+    const cluster = await makeCluster(prisma, {
+      source: 'vsphere',
+      connectionId: conn,
+      externalId: 'domain-c1',
+      baselineDate: new Date('2026-05-01T00:00:00.000Z'),
+      baselineConsumption: 256,
+      baselineCapacity: 0,
+    });
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    vi.setSystemTime(new Date('2026-07-15T00:00:00.000Z'));
+    const missing = inventory();
+    missing.clusters[0]!.hosts = [];
+    const missingResult = await new VsphereSyncService(
+      prisma,
+      fakeCollector(missing),
+    ).syncConnection('default', conn, CREDS);
+
+    expect(missingResult.hostsMissing).toBe(1);
+    let rows = await memRows(conn);
+    expect(rows.map((row) => Number(row.amount))).toEqual([512, 0]);
+    expect(rows[1]!.effectiveFrom.toISOString()).toBe('2026-07-15T00:00:00.000Z');
+
+    let forecast = await new ForecastService(prisma).forCluster(
+      'default',
+      cluster.id,
+      'memory_gb',
+      {
+        fromMonth: new Date('2026-08-01T00:00:00.000Z'),
+        toMonth: new Date('2026-08-01T00:00:00.000Z'),
+      },
+    );
+    expect(forecast.months[0]).toMatchObject({ capacity: 0, utilization: null });
+
+    vi.setSystemTime(new Date('2026-09-15T00:00:00.000Z'));
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    rows = await memRows(conn);
+    expect(rows.map((row) => Number(row.amount))).toEqual([512, 0, 512]);
+    expect(rows[2]!.effectiveFrom.toISOString()).toBe('2026-09-15T00:00:00.000Z');
+    forecast = await new ForecastService(prisma).forCluster('default', cluster.id, 'memory_gb', {
+      fromMonth: new Date('2026-10-01T00:00:00.000Z'),
+      toMonth: new Date('2026-10-01T00:00:00.000Z'),
+    });
+    expect(forecast.months[0]!.capacity).toBe(512);
+  });
+
+  it('applies a missing/reconnected transition within the same month', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-01T00:00:00.000Z'));
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    vi.setSystemTime(new Date('2026-07-15T00:00:00.000Z'));
+    const missing = inventory();
+    missing.clusters[0]!.hosts = [];
+    await new VsphereSyncService(prisma, fakeCollector(missing)).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+    expect((await memRows(conn)).map((row) => Number(row.amount))).toEqual([512, 0]);
+
+    vi.setSystemTime(new Date('2026-07-20T00:00:00.000Z'));
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+    expect((await memRows(conn)).map((row) => Number(row.amount))).toEqual([512, 0, 512]);
+  });
+
+  it('a fully synced cluster reports real utilization from host capacity, not "unknown"', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-15T00:00:00.000Z'));
+    const conn = await makeConn();
+    const cluster = await makeCluster(prisma, {
+      source: 'vsphere',
+      connectionId: conn,
+      externalId: 'domain-c1',
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 256,
+      baselineCapacity: 0,
+    });
+
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    const forecast = await new ForecastService(prisma).forCluster(
+      'default',
+      cluster.id,
+      'memory_gb',
+      {
+        fromMonth: new Date(Date.UTC(2026, 4, 1)),
+        toMonth: new Date(Date.UTC(2026, 8, 1)),
+      },
+    );
+    const august = forecast.months.find((m) => m.month === '2026-08-01');
+    expect(august).toBeDefined();
+    // baselineCapacity stays 0 (no double-count); the synced host carries the 512.
+    expect(august!.capacity).toBe(512);
+    // The point of #198: capacity is non-zero, so utilization is a real number, not null.
+    expect(august!.utilization).not.toBeNull();
   });
 });

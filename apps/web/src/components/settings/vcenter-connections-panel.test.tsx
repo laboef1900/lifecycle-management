@@ -30,6 +30,7 @@ const connection = (
   id: 'c1',
   name: 'vc-prod',
   hostname: 'vcenter.corp.local',
+  port: 443,
   username: 'svc-lcm',
   tlsMode: 'pinned',
   pinnedRootFingerprintSha256: null,
@@ -77,8 +78,79 @@ describe('<VcenterConnectionsPanel>', () => {
     await waitFor(() => expect(probe).toHaveBeenCalled());
     // Vet the certificate BEFORE the credential is transmitted. A merged
     // "test connection" would send the password to a cert nobody has confirmed.
-    expect(probe).toHaveBeenCalledWith({ hostname: 'vcenter.corp.local' });
+    // The port rides along (default 443) but never the password.
+    expect(probe).toHaveBeenCalledWith({ hostname: 'vcenter.corp.local', port: 443 });
     expect(JSON.stringify(probe.mock.calls)).not.toContain('never-send-me');
+  });
+
+  it('offers a port field defaulting to 443 and probes the chosen port (#199)', async () => {
+    const probe = vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
+      reachable: true,
+      trustedBySystemRoots: false,
+      rootFingerprintSha256: 'AB:CD',
+      validFrom: null,
+      validTo: null,
+      outcome: 'ok',
+    });
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    const port = await screen.findByLabelText(/port/i);
+    expect(port).toHaveValue(443);
+
+    await userEvent.type(screen.getByLabelText(/hostname/i), 'vcenter.corp.local');
+    await userEvent.clear(port);
+    await userEvent.type(port, '8443');
+    await userEvent.click(screen.getByRole('button', { name: /check certificate/i }));
+
+    await waitFor(() => expect(probe).toHaveBeenCalled());
+    expect(probe).toHaveBeenCalledWith({ hostname: 'vcenter.corp.local', port: 8443 });
+  });
+
+  it('includes the chosen port in the create payload (#199)', async () => {
+    const create = vi
+      .spyOn(api.settings.vsphere.connections, 'create')
+      .mockResolvedValue(connection({ port: 8443 }));
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    await userEvent.type(await screen.findByLabelText(/^name/i), 'vc-alt');
+    await userEvent.type(screen.getByLabelText(/hostname/i), 'vcenter.corp.local');
+    await userEvent.clear(screen.getByLabelText(/port/i));
+    await userEvent.type(screen.getByLabelText(/port/i), '8443');
+    await userEvent.type(screen.getByLabelText(/username/i), 'svc-lcm');
+    await userEvent.type(screen.getByLabelText(/password/i), 'pw');
+    await userEvent.click(screen.getByRole('button', { name: /save connection/i }));
+
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ port: 8443 }));
+  });
+
+  it('shows a non-default port in the connection list, hiding it for 443 (#199)', async () => {
+    vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([
+      connection({ name: 'vc-alt', hostname: 'vcenter.corp.local', port: 8443 }),
+    ]);
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    expect(await screen.findByText(/vcenter\.corp\.local:8443/)).toBeInTheDocument();
+  });
+
+  it('discards a captured certificate when the port changes (#199)', async () => {
+    vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
+      reachable: true,
+      trustedBySystemRoots: false,
+      rootFingerprintSha256: 'AB:CD:EF:01',
+      validFrom: null,
+      validTo: null,
+      outcome: 'ok',
+    });
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    await userEvent.type(await screen.findByLabelText(/hostname/i), 'vcenter.corp.local');
+    await userEvent.click(screen.getByRole('button', { name: /check certificate/i }));
+    expect(await screen.findByText('AB:CD:EF:01')).toBeInTheDocument();
+
+    // A different port is a different endpoint; the old certificate says nothing.
+    await userEvent.type(screen.getByLabelText(/port/i), '1');
+    await waitFor(() => expect(screen.queryByText('AB:CD:EF:01')).not.toBeInTheDocument());
   });
 
   it('shows the fingerprint to confirm — and nothing else about the certificate', async () => {

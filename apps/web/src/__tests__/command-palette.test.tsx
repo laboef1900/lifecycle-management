@@ -16,6 +16,12 @@ vi.mock('@tanstack/react-router', async () => {
   };
 });
 
+// The palette gates its "Create cluster" action on admin (#223); mock the hook
+// so tests control the role without a router context. Default admin; the viewer
+// test flips it.
+const { useIsAdminMock } = vi.hoisted(() => ({ useIsAdminMock: vi.fn(() => true) }));
+vi.mock('@/lib/auth', () => ({ useIsAdmin: () => useIsAdminMock() }));
+
 const navigateMock = vi.fn();
 
 function wrap(node: React.ReactElement): React.ReactElement {
@@ -130,5 +136,42 @@ describe('CommandPalette', () => {
     await user.click(screen.getByText('Go to fleet'));
 
     expect(navigateMock).toHaveBeenCalledWith({ to: '/' });
+  });
+
+  test('admins get a "Create cluster" action that navigates to /settings (#223)', async () => {
+    useIsAdminMock.mockReturnValue(true);
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    const user = userEvent.setup();
+    render(wrap(<CommandPalette />));
+
+    window.dispatchEvent(new CustomEvent('lcm:open-command-palette'));
+    await screen.findByPlaceholderText(/search/i);
+    await user.click(screen.getByText('Create cluster'));
+
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/settings' });
+  });
+
+  test('viewers do not see the "Create cluster" action (#223)', async () => {
+    useIsAdminMock.mockReturnValue(false);
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    render(wrap(<CommandPalette />));
+
+    window.dispatchEvent(new CustomEvent('lcm:open-command-palette'));
+    await screen.findByPlaceholderText(/search/i);
+
+    expect(screen.queryByText('Create cluster')).not.toBeInTheDocument();
+    // The rest of the palette still renders — the gate is targeted.
+    expect(screen.getByText('Go to settings')).toBeInTheDocument();
+    useIsAdminMock.mockReturnValue(true);
   });
 });
