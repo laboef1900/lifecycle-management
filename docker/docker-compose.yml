@@ -69,12 +69,21 @@ services:
       # above. Encrypts the DB-backed OIDC config (client secret, the
       # app-generated login-state signing secret). Generate once with:
       #   openssl rand -base64 32
-      # Losing/rotating it after OIDC is enabled forces auth back to
-      # disabled and requires re-entering the client secret via
-      # Settings → Authentication — see docs/operations.md.
+      # Losing/rotating it after OIDC is enabled degrades the effective
+      # mode to disabled IN MEMORY (the stored config is preserved), so
+      # the API is unauthenticated until the key is fixed and the server
+      # restarted. Rotating deliberately also requires re-entering the
+      # client secret via Settings → Authentication.
+      # See docs/operations.md ("CONFIG_ENCRYPTION_KEY rotation").
       CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:?CONFIG_ENCRYPTION_KEY must be set — generate with 'openssl rand -base64 32'}
-      # Break-glass: `true` forces auth disabled on next boot regardless of
-      # the stored config. See docs/operations.md ("Break-glass").
+      # Emergency break-glass: `true` forces auth off for that boot (e.g.
+      # you're locked out with no working admin session). The override is
+      # in-memory for that boot only and never rewrites the stored auth
+      # config — set this back to `false` (or unset) and restart, and the
+      # previously configured mode comes back on its own. While it is set
+      # every /api/* route is reachable without a session.
+      # See docs/operations.md ("Break-glass: RECOVERY_DISABLE_AUTH") — it
+      # also covers the mandatory post-episode account audit.
       RECOVERY_DISABLE_AUTH: ${RECOVERY_DISABLE_AUTH:-false}
       # ---- OIDC seed vars — first-boot only, ignored afterwards ----
       # Configure OIDC via the app's Settings → Authentication panel

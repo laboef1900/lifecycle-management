@@ -554,7 +554,11 @@ OIDC client secret and the app-generated login-state signing secret. It is
 required to enable OIDC at all — without it, `auth_config` seeds (and
 stays) disabled, and the settings UI can't persist a client secret either.
 This is a fail-safe, not a crash: a missing or invalid key never takes the
-server down.
+server down. Read "fail-safe" precisely, though — it means the server stays
+_up_, not that the deployment stays _secured_. An unreadable key degrades
+authentication to `disabled`, which leaves the API open until the key is
+fixed. See the first bullet below before treating this as a low-severity
+incident.
 
 - **Losing the key, or booting with the wrong one** (unset, or changed to a
   value that can't decrypt what's already stored — e.g. mid-rotation,
@@ -563,8 +567,77 @@ server down.
   `mode=disabled` automatically — it does **not** wipe the encrypted
   columns, so restoring the correct key (missing or wrong, it doesn't
   matter which) on a later boot recovers the configuration exactly as it
-  was. This is graceful either way — a missing key and a present-but-wrong
-  key both fail safe the same way, and neither crashes the server.
+  was. A missing key and a present-but-wrong key behave identically, and
+  neither crashes the server. The degrade is in-memory only: the stored
+  `mode` still says `oidc`, so nothing has to be re-selected in Settings
+  once the key is back.
+
+  **Treat this as a security incident, not just an outage.** For as long as
+  the server runs with an unreadable key, the effective mode is `disabled`:
+  every `/api/*` route is reachable **without a session**, and every request
+  is served as an anonymous **ADMIN** — exactly the exposure described under
+  "Break-glass: RECOVERY_DISABLE_AUTH" below, including the SSRF-adjacent
+  settings endpoints. The stored `oidc` mode being preserved does **not**
+  mean authentication is being enforced. The window closes only when the key
+  is fixed (or rolled back) **and the server is restarted** — the degrade is
+  decided at boot, so repairing `.env` alone changes nothing until then.
+
+  Two signals make the state visible. In the logs, an `error`
+  (`auth_config.open_despite_configuration`) is emitted on every boot where
+  the enforced mode is `disabled` but the stored mode is not — the same line
+  that marks a break-glass window, in any `NODE_ENV`. In the UI,
+  **Settings → Authentication** shows the _stored_ mode alongside an explicit
+  warning that authentication is currently force-disabled because the stored
+  secrets cannot be decrypted, so the panel can no longer look like a normal,
+  secured OIDC deployment while the API is open. The warning names the cause,
+  because the recovery differs: a decryption failure is fixed by restoring or
+  rolling back `CONFIG_ENCRYPTION_KEY` and restarting, whereas a break-glass
+  window is closed by clearing `RECOVERY_DISABLE_AUTH` and restarting.
+
+  Run the same post-episode account audit documented under "After a
+  break-glass episode" below — the exposure was identical, so the review
+  is too.
+
+- **Caveat for `AUTH_STRICT_BOOT=true` deployments.** Because the stored
+  mode survives the degrade, the _next_ boot sees the same configured row
+  it still can't decrypt and, under strict boot, **refuses to start**
+  rather than fail open. That is what strict boot is for, but it changes
+  "restart to resume normal operation" into "the server will not start
+  until the key is fixed".
+
+  **Which stored modes refuse to boot.** Every mode that is not
+  `disabled` — both `oidc` **and** `local`. Degrading either of them to
+  `mode=disabled` turns a closed deployment into an open, unauthenticated
+  one, which is exactly what strict boot exists to prevent. (Earlier
+  versions scoped the refusal to `oidc` only, so a `local` deployment with
+  an unreadable key booted wide open despite `AUTH_STRICT_BOOT=true`.)
+
+  A stored mode of `disabled` still boots normally, even under strict
+  boot. Such a row is already open by the operator's own choice, so
+  refusing it would be an outage with no security benefit — and it is a
+  realistic state: switching OIDC → disabled from Settings leaves the
+  encrypted client secret in the row, so a later key rotation produces a
+  decrypt failure on a deployment that was never enforcing
+  authentication in the first place. Strict boot must not crash-loop on
+  that stale ciphertext.
+
+  **Two recovery paths**, both requiring a restart:
+
+  1. **Fix or roll back `CONFIG_ENCRYPTION_KEY`** — restore the correct
+     key (or revert to the previous one if the rotation was the cause)
+     and `docker compose up -d`. Nothing was written, so the stored mode
+     comes back exactly as configured with nothing to re-enter. This is
+     the preferred path: it never opens the API.
+  2. **`RECOVERY_DISABLE_AUTH=true`** — deliberately boot with an open,
+     unauthenticated API so you can repair the config from Settings. Use
+     this only when path 1 isn't available, and treat the window as the
+     security incident described under "Break-glass:
+     RECOVERY_DISABLE_AUTH" below, post-episode account audit included.
+
+  (`AUTH_STRICT_BOOT` is opt-in and is not forwarded by the shipped
+  production compose file — it only applies if your deployment passes it
+  into the `server` service.)
+
 - **Deliberately rotating to a new key**: do this in a maintenance window.
   Update `CONFIG_ENCRYPTION_KEY` in `.env`, `docker compose up -d`, then go
   to **Settings → Authentication** and re-enter the client secret (the new
@@ -585,13 +658,33 @@ server down.
 If you're locked out (e.g. the only ADMIN account can't sign in, or the
 IdP is unreachable and there's no other way to get in) set
 `RECOVERY_DISABLE_AUTH=true` in `.env` and `docker compose up -d`. On that
-boot the server forces `mode=disabled` regardless of what's stored in the
-DB, so every `/api/*` route becomes reachable without a session — sign in
-is not required, so use this only for as long as it takes to fix the
-underlying problem. Once you've regained access (fixed the admin account,
-reconfigured OIDC via Settings → Authentication, etc.), set
-`RECOVERY_DISABLE_AUTH=false` (or remove it) and `docker compose up -d`
-again to resume normal operation.
+boot the server **overrides the effective mode to `disabled` in memory
+only** — the stored configuration in the database is left untouched. Every
+`/api/*` route becomes reachable without a session, so use this only for
+as long as it takes to fix the underlying problem. The override is sticky
+for the whole process: it survives in-session config reloads, so the
+server can't lock you back out halfway through the recovery.
+
+Once you've regained access (fixed the admin account, reconfigured OIDC
+via Settings → Authentication, etc.), set `RECOVERY_DISABLE_AUTH=false`
+(or remove it) and `docker compose up -d` again. Because the override
+never wrote anything, that restores whatever mode was stored before the
+incident — no re-selection in Settings required. Then run the verification
+probe and the post-episode audit below.
+
+Two boot log lines mark the window: a `warn` when the override is applied,
+and an `error` (`auth_config.open_despite_configuration`) on every boot
+where the enforced mode is `disabled` but the stored mode is not. The
+second one is the one to search for during an incident review — it is the
+only trace that the API was open, in any `NODE_ENV`.
+
+While the flag is set, **Settings → Authentication** shows the _stored_
+mode (not `disabled`) alongside a warning that authentication is currently
+force-disabled by the break-glass flag. Changes you save there are
+persisted, but they do not take effect until you clear the flag and
+restart — the deliberate flag wins for the rest of that boot. Expect the
+OIDC discovery status to read `disabled` next to a stored mode of `oidc`
+for the same reason.
 
 > **SECURITY NOTE — bootstrap/break-glass exposure.** Whenever auth is
 > disabled — the initial bootstrap window before any admin exists, or any
@@ -605,7 +698,98 @@ again to resume normal operation.
 > (SSRF-adjacent). Configure authentication (or clear the break-glass
 > flag) promptly, and keep the deployment on a trusted network — behind a
 > firewall/VPN, not exposed to the open internet — during initial setup or
-> while any break-glass override is active.
+> while any break-glass override is active. The exposure window ends at the
+> next boot without the flag: the override only ever lived in memory, so
+> nothing has to be undone in the database to close it again.
+
+#### If the IdP is down and won't recover in time
+
+Clearing the flag will not get you back in: it restores `oidc`, and the
+deployment is still broken. You also can't re-enable OIDC from Settings
+while the IdP is unreachable — saving `mode: oidc` re-tests discovery
+server-side and fails with `422 TEST_REQUIRED`. That gate is deliberate.
+The supported procedure is to switch away from OIDC while break-glass is
+still active:
+
+1. **Settings → Authentication** → create a local admin account.
+2. Set `mode` to `local` and save (refused with `422 NO_LOCAL_ADMIN` if
+   there is no enabled local admin yet).
+3. Set `RECOVERY_DISABLE_AUTH=false` (or remove it) and
+   `docker compose up -d`. The server boots into `local` mode and you sign
+   in with the account from step 1.
+
+Switch back to `oidc` from Settings once the IdP is healthy again.
+
+#### Verify the API is closed again
+
+Do this after every break-glass episode. The failure mode this guards
+against is silent — an app that renders normally looks identical whether
+authentication is on or off:
+
+```bash
+curl -si http://<host>/api/clusters | head -1     # must print HTTP/1.1 401
+curl -s  http://<host>/api/auth/me                # must print {"authRequired":true}
+```
+
+Anything else means authentication is still off.
+
+### After a break-glass episode
+
+While break-glass is active every request is an anonymous **ADMIN**, and
+the last-admin guard is keyed to the stored `local` mode rather than the
+overridden one. Anyone who could reach the server during the window could
+have created an account or reset an existing password — and that access
+survives after authentication is correctly restored. Treat this as
+mandatory after **any** episode in which the API ran open, including past
+ones — that means break-glass windows _and_ any boot degraded by an
+unreadable `CONFIG_ENCRYPTION_KEY` (see that section above), since the
+exposure is identical:
+
+1. Audit the `users` table for accounts you don't recognise, and for admin
+   roles you didn't grant:
+
+   ```bash
+   docker compose exec db psql -U lcm -d lcm \
+     -c "SELECT id, issuer, subject, email, role, disabled, created_at, password_updated_at FROM users ORDER BY created_at DESC;"
+   ```
+
+   Anything created or with a password changed during the window is
+   suspect. Delete unexpected accounts from **Settings → Authentication**.
+
+2. Revoke every session, so any cookie issued during the window is dead:
+
+   ```bash
+   docker compose exec db psql -U lcm -d lcm -c "DELETE FROM sessions;"
+   ```
+
+   Everyone signs in again — that is the point. To revoke a single user
+   instead, see "Offboarding a user" below.
+
+3. Re-run the verification probe above.
+
+Also re-check the vCenter connections and the OIDC issuer/client ID in
+Settings: both are readable, and writable, without a session while auth is
+off.
+
+#### Were you affected by the pre-fix persistence bug?
+
+Releases before this behaviour was fixed (issue #222) implemented the
+break-glass override by **writing** `mode=disabled` into the stored
+`auth_config` row. On those versions, clearing `RECOVERY_DISABLE_AUTH` and
+restarting restored nothing: the deployment kept serving an open API, and
+the UI gave no sign of it. No code change can recover the mode that row
+used to hold. If this deployment ever ran break-glass on an older release:
+
+- Check the effective mode from outside:
+  `curl -s http://<host>/api/auth/me`. If it prints
+  `{"authRequired":false}` while you believe authentication is configured,
+  you were affected.
+- Re-select the intended mode in **Settings → Authentication** and save
+  (for `oidc` this re-tests discovery; for `local` you need an enabled
+  local admin first).
+- Then run the account audit and session revocation above. The exposure
+  window may have been open for as long as the deployment has been
+  running, so treat it as a real incident rather than a formality.
 
 ### IdP registration
 
@@ -692,6 +876,6 @@ After 5 consecutive failed login attempts, an account locks with exponential bac
 
 ### Recovery
 
-The existing break-glass path covers local accounts too: set `RECOVERY_DISABLE_AUTH=true` in `.env` and `docker compose up -d` — this forces `mode=disabled` regardless of what's stored in the DB, so you can reset a password or create a fresh admin from **Settings → Authentication**, then set `RECOVERY_DISABLE_AUTH=false` (or remove it) and restart to resume normal operation. No new environment variable was introduced for local accounts — this reuses the same flag documented under "Break-glass: RECOVERY_DISABLE_AUTH" above.
+The existing break-glass path covers local accounts too — no new environment variable was introduced for them. Follow "Break-glass: RECOVERY_DISABLE_AUTH" above, including the verification probe and the post-episode account audit; resetting a password or creating a fresh admin from **Settings → Authentication** is exactly the recovery that section is written for.
 
 > `CONFIG_ENCRYPTION_KEY` is **not** required for `local` mode. The argon2id password hashes live directly on the `users` table, not in the AES-GCM-encrypted `auth_config` row — only `oidc` mode needs the encryption key, to store the OIDC client secret.
