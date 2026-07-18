@@ -26,6 +26,22 @@ const DRAIN_TIMEOUT_MS = 5_000;
 const JITTER_FRACTION = 0.1;
 
 /**
+ * Hard outbound-work budget per one-minute scheduler tick. Connection creation is
+ * reachable without a session while auth is disabled and seeds an immediately-due
+ * job, so an unbounded `findMany` would turn a bounded HTTP route into an unbounded
+ * persistent scan/resource-exhaustion path. Five keeps normal small fleets
+ * immediate while making the worst case explicit and independent of queue depth.
+ */
+export const MAX_DUE_JOBS_PER_TICK = 5;
+
+/**
+ * First-contact jobs have never proved they are vCenter at all, so reserve at
+ * most one slot per tick for them. Previously-connected vCenters consume the
+ * remaining budget first and cannot be starved by anonymous connection creation.
+ */
+export const MAX_NEVER_CONNECTED_JOBS_PER_TICK = 1;
+
+/**
  * Backoff cap for a failing SNAPSHOT: **1 hour**, not the poll interval and not
  * OIDC's 60s.
  *
@@ -220,14 +236,50 @@ export class VsphereScheduler {
 
   private async executeDueJobs(): Promise<JobOutcome[]> {
     const now = this.clock.now();
-    const due = await this.prisma.vsphereConnectionJob
+    const staleBefore = new Date(now.getTime() - STALE_LEASE_MS);
+    const available: Prisma.VsphereConnectionJobWhereInput = {
+      dueAt: { lte: now },
+      OR: [{ runningSince: null }, { runningSince: { lt: staleBefore } }],
+    };
+
+    // Previously-connected vCenters get first claim on the budget. A caller who
+    // can anonymously create never-connected rows must not be able to starve the
+    // established inventory/snapshot path by keeping that queue non-empty.
+    const established = await this.prisma.vsphereConnectionJob
       .findMany({
-        // Disabled connections keep their job row (for its history) but never run —
-        // a disabled vCenter must not report a perpetual, escalating, false failure.
-        where: { dueAt: { lte: now }, connection: { enabled: true } },
+        where: {
+          ...available,
+          connection: { enabled: true, lastConnectedAt: { not: null } },
+        },
+        orderBy: [{ dueAt: 'asc' }, { connectionId: 'asc' }],
+        take: MAX_DUE_JOBS_PER_TICK,
         select: { connectionId: true },
       })
-      .catch(() => []);
+      .catch(() => null);
+    if (established === null) return [];
+
+    const firstContactBudget = Math.min(
+      MAX_NEVER_CONNECTED_JOBS_PER_TICK,
+      MAX_DUE_JOBS_PER_TICK - established.length,
+    );
+    const firstContact =
+      firstContactBudget > 0
+        ? await this.prisma.vsphereConnectionJob
+            .findMany({
+              // Disabled connections keep their job history but never run. Live
+              // claims are excluded before applying the limit so they cannot
+              // consume the scarce first-contact slot.
+              where: {
+                ...available,
+                connection: { enabled: true, lastConnectedAt: null },
+              },
+              orderBy: [{ dueAt: 'asc' }, { connectionId: 'asc' }],
+              take: firstContactBudget,
+              select: { connectionId: true },
+            })
+            .catch(() => [])
+        : [];
+    const due = [...established, ...firstContact];
 
     const outcomes: JobOutcome[] = [];
     for (const { connectionId } of due) {

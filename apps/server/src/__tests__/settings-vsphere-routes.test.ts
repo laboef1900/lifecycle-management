@@ -9,7 +9,11 @@ import { buildServer } from '../server.js';
 import { SessionService } from '../services/sessions.js';
 import { VsphereConnectionsService } from '../services/vsphere-connections.js';
 import { VsphereJobRunner } from '../services/vsphere-job-runner.js';
-import { VsphereScheduler } from '../services/vsphere-scheduler.js';
+import {
+  MAX_DUE_JOBS_PER_TICK,
+  MAX_NEVER_CONNECTED_JOBS_PER_TICK,
+  VsphereScheduler,
+} from '../services/vsphere-scheduler.js';
 import { makeVsphereConnection, makeVsphereConnectionJob } from './factories.js';
 import { prisma } from './setup.js';
 import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
@@ -131,6 +135,98 @@ describe('POST /api/settings/vsphere/connections', () => {
     });
     expect(alt.statusCode).toBe(201);
     expect((alt.json() as { port: number }).port).toBe(8443);
+  });
+
+  it('★ rate-limits anonymous creates and bounds the scheduler work they seed (#199 review)', async () => {
+    // This is deliberately a production-mode server: ordinary tests skip the
+    // rate-limit plugin, which would make a 429 assertion vacuous. Auth remains
+    // disabled, reproducing the actual anonymous-ADMIN threat model.
+    await prisma.vsphereConnectionJob.deleteMany({});
+    await prisma.vsphereConnection.deleteMany({});
+
+    const prefix = uniqueName('rate-budget');
+    const guardedServer = await buildServer({
+      env: makeTestEnv({
+        NODE_ENV: 'production',
+        CONFIG_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+      }),
+      prisma,
+    });
+
+    const createdIds: string[] = [];
+    try {
+      try {
+        for (let i = 0; i < 10; i++) {
+          const res = await guardedServer.inject({
+            method: 'POST',
+            url: '/api/settings/vsphere/connections',
+            remoteAddress: '198.51.100.10',
+            payload: {
+              name: `${prefix}-${i}`,
+              hostname: `10.20.30.${i + 1}`,
+              port: 4400 + i,
+              username: 'attacker-selected',
+              password: 'attacker-selected',
+            },
+          });
+          expect(res.statusCode).toBe(201);
+          createdIds.push((res.json() as { id: string }).id);
+        }
+
+        const limited = await guardedServer.inject({
+          method: 'POST',
+          url: '/api/settings/vsphere/connections',
+          remoteAddress: '198.51.100.10',
+          payload: {
+            name: `${prefix}-blocked`,
+            hostname: '10.20.30.250',
+            port: 65000,
+            username: 'attacker-selected',
+            password: 'attacker-selected',
+          },
+        });
+        expect(limited.statusCode).toBe(429);
+        expect(createdIds).toHaveLength(10);
+      } finally {
+        // Stop the production timer before driving the deterministic fake-runner
+        // scheduler below. `start()` waits one minute before its first tick, but
+        // closing here makes the non-overlap structural rather than timing-based.
+        await guardedServer.close();
+      }
+
+      const now = new Date();
+      let outboundRuns = 0;
+      const scheduler = new VsphereScheduler(
+        prisma,
+        {
+          run: async () => {
+            outboundRuns++;
+            return {
+              poll: { ran: true, ok: true },
+              sync: { outcome: 'ok' },
+              snapshot: { attempted: true, period: startOfUtcMonth(now), failed: false },
+              errorMessage: null,
+            };
+          },
+        },
+        { now: () => now },
+      );
+
+      const outcomes = await scheduler.runDueJobs();
+      expect(outcomes).toHaveLength(MAX_NEVER_CONNECTED_JOBS_PER_TICK);
+      expect(outboundRuns).toBe(MAX_NEVER_CONNECTED_JOBS_PER_TICK);
+      expect(MAX_NEVER_CONNECTED_JOBS_PER_TICK).toBeLessThan(MAX_DUE_JOBS_PER_TICK);
+      expect(
+        await prisma.vsphereConnectionJob.count({
+          where: { dueAt: { lte: now }, connection: { enabled: true } },
+        }),
+      ).toBe(10 - MAX_NEVER_CONNECTED_JOBS_PER_TICK);
+    } finally {
+      // Prefix cleanup also catches the 11th row if a rate-limit regression made
+      // the assertion fail after persisting it.
+      await prisma.vsphereConnection.deleteMany({ where: { name: { startsWith: prefix } } });
+      await prisma.authConfig.deleteMany({});
+    }
   });
 });
 
@@ -280,7 +376,7 @@ describe('POST /api/settings/vsphere/connections/:id/trust-ca', () => {
 describe('POST /api/settings/vsphere/connections/:id/sync — "Sync now" (#192)', () => {
   it('202s immediately and never runs the sync inline — a handler must not await vCenter', async () => {
     const id = await createConnection(uniqueName('syncnow-202'));
-    // The create seeds a job at dueAt = epoch with every last-run column null.
+    // The create seeds an immediately-due job with every last-run column null.
     const before = await prisma.vsphereConnectionJob.findUniqueOrThrow({
       where: { connectionId: id },
     });
@@ -300,8 +396,7 @@ describe('POST /api/settings/vsphere/connections/:id/sync — "Sync now" (#192)'
     const after = await prisma.vsphereConnectionJob.findUniqueOrThrow({
       where: { connectionId: id },
     });
-    // dueAt moved from the epoch seed to ~now.
-    expect(after.dueAt.getTime()).toBeGreaterThan(before.dueAt.getTime());
+    // dueAt remains ~now (create and sync-now both queue immediate work).
     expect(Math.abs(after.dueAt.getTime() - t0)).toBeLessThan(5000);
     // The observable proof there was NO inline vCenter call: no last-run column
     // moved and no claim was taken. Had the handler synced inline it would have

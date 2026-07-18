@@ -279,9 +279,16 @@ to confirm and the panel says so.
 > server, with no session. Because the port is configurable to any value in
 > 1-65535, these endpoints can test whether an internal host answers TLS on
 > an arbitrary port **from the server's network position** — a coarse
-> internal port scanner (SSRF-adjacent). Both are rate-limited to 10
-> requests/minute/IP to bound that, but a determined caller on a trusted
-> network can still sweep slowly. Responses are deliberately coarse —
+> internal port scanner (SSRF-adjacent). Every settings route that can probe,
+> create, re-arm, or re-point this outbound work is rate-limited to 10
+> requests/minute/IP. The background scheduler additionally claims at most
+> five due connections per one-minute tick, oldest first. Established vCenters
+> get priority and at most one slot is available to a connection that has never
+> connected successfully, so anonymous first-contact rows cannot starve normal
+> inventory work or turn the HTTP limit into unbounded concurrent background
+> probes. These controls bound work; they do not make the endpoint a security
+> boundary, and a determined caller on a trusted network can still sweep
+> slowly. Responses are deliberately coarse —
 > reachable or not, plus a certificate fingerprint, never the subject,
 > issuer, or SANs. Private addresses are permitted by design (a vCenter is
 > private). Stored credentials are never sent to a request-supplied host, and

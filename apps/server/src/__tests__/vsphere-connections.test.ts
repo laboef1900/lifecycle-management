@@ -71,6 +71,18 @@ describe('vCenter credentials — encryption at rest', () => {
     expect(Object.keys(response)).not.toContain('password');
     expect(JSON.stringify(response)).not.toContain('sup3r-s3cret');
   });
+
+  it('seeds immediate scheduler work at creation time, not the queue-jumping Unix epoch', async () => {
+    const before = Date.now();
+    const id = await makeConnection(uniqueName('fair-due-at'));
+    const after = Date.now();
+    const job = await prisma.vsphereConnectionJob.findUniqueOrThrow({
+      where: { connectionId: id },
+    });
+
+    expect(job.dueAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(job.dueAt.getTime()).toBeLessThanOrEqual(after);
+  });
 });
 
 describe('vCenter credentials — failure and recovery', () => {

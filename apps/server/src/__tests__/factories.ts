@@ -277,6 +277,7 @@ export interface MakeVsphereConnectionOptions {
   status?: VsphereConnectionStatus;
   tenantId?: string;
   instanceUuid?: string;
+  lastConnectedAt?: Date | null;
   /** The PEM pinned as the trust anchor; null (default) verifies against system roots. */
   tlsPinnedCaPem?: string | null;
   /**
@@ -320,6 +321,9 @@ export async function makeVsphereConnection(
       ...(options.enabled !== undefined ? { enabled: options.enabled } : {}),
       ...(options.status !== undefined ? { status: options.status } : {}),
       ...(options.instanceUuid !== undefined ? { instanceUuid: options.instanceUuid } : {}),
+      ...(options.lastConnectedAt !== undefined
+        ? { lastConnectedAt: options.lastConnectedAt }
+        : {}),
       ...(options.tlsPinnedCaPem !== undefined ? { tlsPinnedCaPem: options.tlsPinnedCaPem } : {}),
     },
   });

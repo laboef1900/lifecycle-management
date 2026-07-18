@@ -55,13 +55,14 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
 ) => {
   const service = new VsphereConnectionsService(fastify.prisma, opts.configKey);
 
-  // Tighter per-IP limit on the two endpoints that open outbound TLS sockets to a
-  // caller-supplied host:port (#199 design C5). With the port configurable to any
-  // value, an unauthenticated caller in `disabled` mode could otherwise use these
-  // as an internal port scanner bounded only by the global 300/min limit; 10/min
-  // meaningfully throttles that. Inert in tests (the rate-limit plugin is not
-  // registered there — see server.ts), exactly like the auth routes' limit.
-  const probeRateLimit = { rateLimit: { max: 10, timeWindow: '1 minute' } };
+  // Tighter per-IP budget on every endpoint that can directly open an outbound
+  // socket OR enqueue/re-arm background work against a stored caller-selected
+  // host:port (#199 design C5). Creation is intentionally included: it seeds an
+  // immediately-due scheduler job, so omitting it would let an anonymous caller in
+  // `disabled` mode bypass the probe/verify limit through persistent background
+  // retries. Inert in ordinary tests (the rate-limit plugin is not registered
+  // there — see server.ts), exactly like the auth routes' limit.
+  const outboundWorkRateLimit = { rateLimit: { max: 10, timeWindow: '1 minute' } };
 
   /**
    * Bootstrap-safe admin gate, mirroring `settings-auth.ts`. Open while auth is
@@ -87,15 +88,20 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
     },
   );
 
-  fastify.post('/settings/vsphere/connections', async (request, reply) => {
-    const body = vsphereConnectionCreateSchema.parse(request.body);
-    guardTarget(body.hostname);
-    const created = await service.create(request.tenantId, body);
-    return reply.code(201).send(created);
-  });
+  fastify.post(
+    '/settings/vsphere/connections',
+    { config: outboundWorkRateLimit },
+    async (request, reply) => {
+      const body = vsphereConnectionCreateSchema.parse(request.body);
+      guardTarget(body.hostname);
+      const created = await service.create(request.tenantId, body);
+      return reply.code(201).send(created);
+    },
+  );
 
   fastify.put(
     '/settings/vsphere/connections/:id',
+    { config: outboundWorkRateLimit },
     async (request): Promise<VsphereConnectionResponse> => {
       const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
       const body = vsphereConnectionUpdateSchema.parse(request.body);
@@ -147,12 +153,16 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
    * no trust material and discloses nothing, so a password gate here would be
    * friction on a benign action, not the control — see the file header.
    */
-  fastify.post('/settings/vsphere/connections/:id/sync', async (request, reply) => {
-    const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
-    const { dueAt } = await service.requestSyncNow(request.tenantId, id);
-    const body: VsphereSyncNowResponse = { dueAt: dueAt.toISOString() };
-    return reply.code(202).send(body);
-  });
+  fastify.post(
+    '/settings/vsphere/connections/:id/sync',
+    { config: outboundWorkRateLimit },
+    async (request, reply) => {
+      const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
+      const { dueAt } = await service.requestSyncNow(request.tenantId, id);
+      const body: VsphereSyncNowResponse = { dueAt: dueAt.toISOString() };
+      return reply.code(202).send(body);
+    },
+  );
 
   /**
    * PHASE 1 — reachability + certificate capture. **Sends no credential**, and the
@@ -160,7 +170,7 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
    */
   fastify.post(
     '/settings/vsphere/probe',
-    { config: probeRateLimit },
+    { config: outboundWorkRateLimit },
     async (request): Promise<VsphereProbeResult> => {
       const body = vsphereProbeSchema.parse(request.body);
       guardTarget(body.hostname);
@@ -201,7 +211,7 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
    */
   fastify.post(
     '/settings/vsphere/verify',
-    { config: probeRateLimit },
+    { config: outboundWorkRateLimit },
     async (request): Promise<VsphereVerifyResult> => {
       const body = vsphereVerifySchema.parse(request.body);
       guardTarget(body.hostname);
@@ -237,6 +247,7 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
    */
   fastify.post(
     '/settings/vsphere/connections/:id/trust-ca',
+    { config: outboundWorkRateLimit },
     async (request): Promise<VsphereConnectionResponse> => {
       const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
       const body = vsphereTrustCaSchema.parse(request.body);

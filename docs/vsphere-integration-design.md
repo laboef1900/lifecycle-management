@@ -1590,9 +1590,14 @@ stays legible; the superseded text above is left intact, with an inline pointer 
   and R1 (§6.8) already accept as irreducible for a connection-test feature. **The port never relaxes
   TLS:** `rejectUnauthorized` stays `true` on the credential path and the scheduled poll, and the `ca:`
   root pin (D11/D11a) is unchanged. A configurable port widens _where we connect_, never _what we trust_.
-- **C5's per-route rate limit (10/min/IP on `…/probe` and `…/verify`) is now IMPLEMENTED.** §6.5 listed
-  it as "~free, include it"; it is now wired, bounding the wider-port scan oracle exactly as C5 described
-  — a speed bump, not a boundary, and still not counted in the security argument.
+- **C5's per-route rate limit is now IMPLEMENTED at 10/min/IP on every route that can probe, create,
+  re-arm, or re-point outbound vCenter work** (`…/connections`, update, sync, trust-ca, probe, and
+  verify). §6.5 listed it as "~free, include it"; it is a speed bump, not a boundary, and is still not
+  counted in the credential-security argument. Because create seeds durable work, the scheduler also
+  has a hard work budget of **five oldest due connections per one-minute tick**, with established
+  vCenters first and at most one never-connected endpoint in that batch. Queue depth can delay first
+  contacts, but cannot starve established inventory work or turn the HTTP limit into an unbounded burst
+  of persistent background probes.
 - **Q2/D11's ruling — "FQDN + TOFU root-pinning, no TLS override" — is unchanged.** A configurable _port_
   is categorically different from a configurable _trust_ toggle (§0.1): the port only changes the
   destination socket; it cannot turn verification off. §0.1's rejection of an `insecure`/`ignore TLS`
