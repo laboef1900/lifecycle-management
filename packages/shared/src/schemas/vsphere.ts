@@ -11,8 +11,8 @@ import { cuid } from './common.js';
  *   was written by someone who knew the password. Any mutation to trust material
  *   MUST carry the current password. Reads and probes MUST NOT require it.**
  *
- * Trust material = where credentials go (`hostname`, `username`) + what proves
- * the destination's identity (`tlsMode`, `pinnedCaPem`).
+ * Trust material = where credentials go (`hostname`, `port`, `username`) + what
+ * proves the destination's identity (`tlsMode`, `pinnedCaPem`).
  *
  * Why this is not paranoia: the default auth mode is `disabled`, in which every
  * anonymous caller is an ADMIN principal. The only asymmetry between the real
@@ -29,7 +29,10 @@ import { cuid } from './common.js';
  * control and be handed the vCenter service-account password in cleartext.
  */
 
-/** Hostname only — the scheme and port are fixed server-side (https, 443). */
+/**
+ * Hostname only — the scheme is fixed server-side (https) and the port lives in
+ * its own `port` field (#199). The regex still rejects an inline `host:port`.
+ */
 const vcenterHostname = z
   .string()
   .trim()
@@ -37,8 +40,17 @@ const vcenterHostname = z
   .max(253)
   // No scheme, no userinfo, no path, no port. Rejecting `user@host` here closes
   // the `https://vcenter.corp.local@attacker.example/` parser-differential trick
-  // at the contract rather than hoping every parser downstream agrees.
+  // at the contract rather than hoping every parser downstream agrees. The port is
+  // a separate field, so `host:8443` must still be rejected here.
   .regex(/^[a-zA-Z0-9.-]+$/, 'Must be a bare hostname or IP — no scheme, port, userinfo, or path');
+
+/**
+ * vCenter's HTTPS port. Full 1-65535 range is allowed (#199) — TOFU root-pinning,
+ * not a port allow-list, is the trust gate; the port only changes the destination
+ * socket, never whether the certificate is verified. It IS trust material: a port
+ * repoints where the credential is sent, so changing it requires the password.
+ */
+const vcenterPort = z.number().int().min(1).max(65535);
 
 /**
  * How the connection proves vCenter's identity. **There are exactly two values
@@ -78,6 +90,7 @@ export type VsphereConnectionStatus = z.infer<typeof vsphereConnectionStatusSche
 export const vsphereConnectionCreateSchema = z.strictObject({
   name: z.string().trim().min(1).max(120),
   hostname: vcenterHostname,
+  port: vcenterPort.default(443),
   username: z.string().trim().min(1).max(255),
   password: z.string().min(1).max(1000),
   enabled: z.boolean().default(true),
@@ -88,12 +101,12 @@ export type VsphereConnectionCreate = z.infer<typeof vsphereConnectionCreateSche
  * Updating a connection.
  *
  * @ai-warning `password` is REQUIRED whenever any trust-material field
- * (`hostname`, `username`) is present. That is enforced by the refine below and
- * again server-side — a client cannot opt out. Without it, an anonymous caller in
- * `disabled` mode repoints a saved connection at their own host and simply waits:
- * the next unattended poll delivers the credential. That attack needs no test
- * endpoint at all, which is why protecting only the test endpoint would protect
- * nothing.
+ * (`hostname`, `port`, `username`) is present. That is enforced by the refine below
+ * and again server-side — a client cannot opt out. Without it, an anonymous caller
+ * in `disabled` mode repoints a saved connection at their own host (or port) and
+ * simply waits: the next unattended poll delivers the credential. That attack needs
+ * no test endpoint at all, which is why protecting only the test endpoint would
+ * protect nothing.
  *
  * `displayName`-style fields carry no such requirement: the worst they achieve is
  * confusion, not disclosure.
@@ -102,15 +115,18 @@ export const vsphereConnectionUpdateSchema = z
   .strictObject({
     name: z.string().trim().min(1).max(120).optional(),
     hostname: vcenterHostname.optional(),
+    port: vcenterPort.optional(),
     username: z.string().trim().min(1).max(255).optional(),
     password: z.string().min(1).max(1000).optional(),
     enabled: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field must be provided' })
   .refine(
-    (v) => (v.hostname === undefined && v.username === undefined) || v.password !== undefined,
+    (v) =>
+      (v.hostname === undefined && v.username === undefined && v.port === undefined) ||
+      v.password !== undefined,
     {
-      message: 'Changing the hostname or username requires re-entering the password',
+      message: 'Changing the hostname, port, or username requires re-entering the password',
       path: ['password'],
     },
   );
@@ -127,6 +143,7 @@ export type VsphereConnectionUpdate = z.infer<typeof vsphereConnectionUpdateSche
  */
 export const vsphereProbeSchema = z.strictObject({
   hostname: vcenterHostname,
+  port: vcenterPort.default(443),
 });
 export type VsphereProbe = z.infer<typeof vsphereProbeSchema>;
 
@@ -174,6 +191,7 @@ export interface VsphereProbeResult {
  */
 export const vsphereVerifySchema = z.strictObject({
   hostname: vcenterHostname,
+  port: vcenterPort.default(443),
   username: z.string().trim().min(1).max(255),
   password: z.string().min(1).max(1000),
 });
@@ -235,6 +253,8 @@ export interface VsphereConnectionResponse {
   id: string;
   name: string;
   hostname: string;
+  /** vCenter's HTTPS port; 443 unless configured otherwise (#199). */
+  port: number;
   username: string;
   tlsMode: VsphereTlsMode;
   /** Fingerprint of the pinned root, for display. Public data — never a secret. */

@@ -474,9 +474,17 @@ model VsphereConnection {
   id          String @id @default(cuid())
   tenantId    String @default("default") @map("tenant_id")
   name        String
-  /// Bare hostname. The scheme and port are fixed server-side (https, 443) so a
-  /// URL can never be smuggled through this column.
+  /// Bare hostname — the scheme (https) is fixed and the shared regex rejects an
+  /// inline port, so a URL can never be smuggled through this column. The port has
+  /// its own column (#199).
   hostname    String
+  /// vCenter's HTTPS port. Defaults to 443; configurable per connection (#199).
+  /// Full 1-65535 is allowed — TOFU root-pinning (tls_pinned_ca_pem) is the trust
+  /// gate, not a port allow-list, and the port only changes the destination socket,
+  /// never whether the certificate is verified. Not part of connection identity
+  /// ((tenantId,name) + the discovered instanceUuid), so a port change never resets
+  /// the pin.
+  port        Int    @default(443)
   username    String
   /// AES-GCM under CONFIG_ENCRYPTION_KEY via crypto/secret-box.ts — reused as-is,
   /// no new crypto. On a decrypt failure this column is NEVER nulled: the

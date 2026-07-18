@@ -106,6 +106,7 @@ export class VsphereConnectionsService {
           tenantId,
           name: input.name,
           hostname: input.hostname,
+          port: input.port,
           username: input.username,
           passwordEnc,
           enabled: input.enabled,
@@ -140,6 +141,11 @@ export class VsphereConnectionsService {
     if (input.enabled !== undefined) data.enabled = input.enabled;
     if (input.username !== undefined) data.username = input.username;
     if (input.password !== undefined) data.passwordEnc = this.encryptPassword(input.password);
+    // A port change repoints the socket on the SAME host, so — unlike a hostname
+    // change below — it does NOT reset the pin: same host means the same Machine SSL
+    // certificate, and the instanceUuid guard still catches "a different vCenter".
+    // It is trust material for the PASSWORD gate (route-enforced), not for the pin.
+    if (input.port !== undefined) data.port = input.port;
 
     // Re-pointing at a different host invalidates everything we learned about the
     // old one. Keeping the pin would trust the OLD vCenter's CA for the NEW host;
@@ -366,6 +372,7 @@ export class VsphereConnectionsService {
       id: row.id,
       name: row.name,
       hostname: row.hostname,
+      port: row.port,
       username: row.username,
       tlsMode: (row.tlsMode === 'system' ? 'system' : 'pinned') satisfies VsphereTlsMode,
       pinnedRootFingerprintSha256: row.tlsPinnedSha256,

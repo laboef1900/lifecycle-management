@@ -63,8 +63,9 @@ export interface VsphereInventoryCollector {
       password: string;
       pinnedRootPem: string | null;
       /**
-       * Destination port. **Defaults to 443; production never sets it** — see
-       * `verifiedTlsOptions`. Test-only reachability seam for a mapped vcsim port.
+       * Destination port. Configurable per connection (#199), defaulting to 443 —
+       * see `verifiedTlsOptions`. Changes the destination socket only; trust is
+       * unaffected.
        */
       port?: number;
     },

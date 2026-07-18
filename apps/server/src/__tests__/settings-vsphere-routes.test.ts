@@ -104,6 +104,34 @@ describe('POST /api/settings/vsphere/connections', () => {
     });
     expect(res.statusCode).toBe(201);
   });
+
+  it('defaults the port to 443 and accepts a non-default port (#199)', async () => {
+    const def = await server.inject({
+      method: 'POST',
+      url: '/api/settings/vsphere/connections',
+      payload: {
+        name: uniqueName('port-default'),
+        hostname: 'vcenter.corp.local',
+        username: 'svc-lcm',
+        password: 'p',
+      },
+    });
+    expect((def.json() as { port: number }).port).toBe(443);
+
+    const alt = await server.inject({
+      method: 'POST',
+      url: '/api/settings/vsphere/connections',
+      payload: {
+        name: uniqueName('port-alt'),
+        hostname: 'vcenter.corp.local',
+        port: 8443,
+        username: 'svc-lcm',
+        password: 'p',
+      },
+    });
+    expect(alt.statusCode).toBe(201);
+    expect((alt.json() as { port: number }).port).toBe(8443);
+  });
 });
 
 describe('PUT /api/settings/vsphere/connections/:id — the password gate', () => {
@@ -145,6 +173,49 @@ describe('PUT /api/settings/vsphere/connections/:id — the password gate', () =
     });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { hostname: string }).hostname).toBe('vcenter-2.corp.local');
+  });
+
+  it('★ rejects changing the port with the WRONG password — a port is a credential destination (#199)', async () => {
+    const id = await createConnection(uniqueName('port-wrong-pw'));
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/settings/vsphere/connections/${id}`,
+      payload: { port: 8443, password: 'guessing' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: { code: 'PASSWORD_MISMATCH' } });
+    // ...and the port is unchanged.
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id } });
+    expect(row.port).toBe(443);
+  });
+
+  it('rejects changing the port with NO password (contract-level, #199)', async () => {
+    const id = await createConnection(uniqueName('port-no-pw'));
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/settings/vsphere/connections/${id}`,
+      payload: { port: 8443 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('allows changing the port with the CORRECT password, keeping the pin (#199)', async () => {
+    const id = await createConnection(uniqueName('port-right-pw'), 'correct-horse');
+    await prisma.vsphereConnection.update({
+      where: { id },
+      data: { tlsPinnedCaPem: 'PEM-ROOT', instanceUuid: 'uuid-1' },
+    });
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/settings/vsphere/connections/${id}`,
+      payload: { port: 8443, password: 'correct-horse' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { port: number }).port).toBe(8443);
+    // A port change is not a host change: the pinned CA and identity survive.
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id } });
+    expect(row.tlsPinnedCaPem).toBe('PEM-ROOT');
+    expect(row.instanceUuid).toBe('uuid-1');
   });
 
   it('a benign edit needs no password — friction is what kills a gate', async () => {
