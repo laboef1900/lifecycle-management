@@ -277,6 +277,82 @@ describe('/_app/settings Back button + Esc', () => {
     expect(router.state.location.pathname).toBe('/');
   });
 
+  it('recovers after a pop that lands on the same page (hash variant)', async () => {
+    // The ⌘K "Add cluster" action navigates to `/settings#add-cluster` while the
+    // user may already be on `/settings`, so Back/Esc pops to `/settings` — the
+    // SAME route, which does not remount. A latch that never released would stay
+    // set for the rest of the visit and kill Back and Esc silently, with no
+    // recovery short of a reload.
+    const { router } = renderSettingsRoute(disabledAuth, [
+      '/',
+      '/settings',
+      '/settings#add-cluster',
+    ]);
+    const heading = await screen.findByRole('heading', { name: 'Settings' });
+
+    document.dispatchEvent(escapeEvent());
+    await waitFor(() => expect(router.state.location.href).toBe('/settings'));
+
+    // Same DOM node ⇒ the route component never remounted, so releasing the
+    // latch is the only thing that can make the second Escape work. Without
+    // this assertion the test would pass vacuously if the router ever started
+    // remounting on hash changes.
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBe(heading);
+
+    document.dispatchEvent(escapeEvent());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+  });
+
+  it('still pops only once per intent on a hash variant (release is not a free pass)', async () => {
+    // Guards the release added above: two Escapes in the same task both fire
+    // from `/settings#add-cluster`, so the second must still be latched out.
+    // An over-eager release (e.g. keying only on pathname, or resetting on any
+    // location change) would let this pop twice and land on `/`.
+    const { router } = renderSettingsRoute(disabledAuth, [
+      '/',
+      '/settings',
+      '/settings#add-cluster',
+    ]);
+    await screen.findByRole('heading', { name: 'Settings' });
+    const back = vi.spyOn(router.history, 'back');
+
+    document.dispatchEvent(escapeEvent());
+    document.dispatchEvent(escapeEvent());
+
+    await waitFor(() => expect(router.state.location.href).toBe('/settings'));
+    expect(back).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(router.state.location.href).toBe('/settings');
+  });
+
+  it('stays latched while leaving the page, even though it renders once more', async () => {
+    // Window (2) in the latch's @ai-warning, and the reason a plain "reset on
+    // location change" is wrong: once the pop lands on a different pathname this
+    // page renders once more before React unmounts it, so both controls are
+    // still live while the location no longer matches the one they fired from.
+    // Also pins that the latch is shared across the two controls (Back, then
+    // Esc) rather than being per-control. Three entries make an over-pop
+    // observable: index 2 → back → '/' (1) → back again → '/settings' (0).
+    const { router } = renderSettingsRoute(disabledAuth, ['/settings', '/', '/settings']);
+    await screen.findByRole('heading', { name: 'Settings' });
+    const back = vi.spyOn(router.history, 'back');
+    const button = screen.getByRole('button', { name: 'Back' });
+
+    fireEvent.click(button);
+
+    // The window is real, not hypothetical — assert it rather than assume it.
+    // If either of these ever stops holding, the assertion below would pass for
+    // the wrong reason (nothing mounted to receive the second activation).
+    expect(router.state.location.pathname).toBe('/');
+    expect(button).toBeInTheDocument();
+
+    document.dispatchEvent(escapeEvent());
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(router.state.location.pathname).toBe('/');
+  });
+
   it('exposes the Esc shortcut to assistive tech without polluting the name', async () => {
     renderSettingsRoute(disabledAuth, ['/', '/settings']);
     await screen.findByRole('heading', { name: 'Settings' });

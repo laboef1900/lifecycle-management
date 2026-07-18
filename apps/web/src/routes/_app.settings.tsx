@@ -1,4 +1,10 @@
-import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router';
+import {
+  createFileRoute,
+  useCanGoBack,
+  useLocation,
+  useNavigate,
+  useRouter,
+} from '@tanstack/react-router';
 import { useCallback, useEffect, useRef } from 'react';
 
 import { AddClusterPanel } from '@/components/settings/add-cluster-panel';
@@ -18,6 +24,7 @@ function SettingsPage(): React.JSX.Element {
   const router = useRouter();
   const canGoBack = useCanGoBack();
   const navigate = useNavigate();
+  const { href, pathname } = useLocation();
   // Disabled-mode bootstrap: with no auth enforced yet, anyone on this page
   // can configure it. Once OIDC is on, only an ADMIN sees the panel.
   const canManageAuth = auth.user?.role === 'ADMIN' || auth.authRequired === false;
@@ -26,38 +33,48 @@ function SettingsPage(): React.JSX.Element {
   // back to the fleet console — a deep link/refresh onto /settings has no prior
   // entry (useCanGoBack tracks `__TSR_index !== 0`), so it lands on `/`.
   //
-  // @ai-warning One-shot latch, mirroring the cluster panel's `isClosing` guard.
+  // @ai-warning Re-entrancy latch, mirroring the cluster panel's `isClosing`
+  // guard — but keyed to the location it fired from, NOT a one-shot boolean.
   // `router.history.back()` is `window.history.back()`: the traversal is queued
   // and only lands on a later task (popstate → router transition → unmount), so
-  // this page — and its document keydown listener — stays mounted with a stale
-  // `canGoBack === true` for a beat. A second activation inside that window
-  // (double-clicked Back, double-tapped Esc) would pop a *second* entry and can
-  // eject the user out of the SPA entirely.
+  // this page — and its document keydown listener — outlives its own navigation
+  // in two windows that need OPPOSITE treatment. Both are load-bearing:
   //
-  // The latch is deliberately never reset. That is safe only while every
-  // goBack() outcome unmounts this page — today it does: `/settings` has no
-  // search-param or child-route variant that `history.back()` could land on,
-  // and the `navigate({ to: '/' })` fallback always leaves. Do NOT "fix" this
-  // by clearing the ref on location change: this page can stay mounted for a
-  // beat *after* the location flips (a pending route load on the way out), and
-  // a reset inside that window re-opens the exact double-pop this guards. If
-  // `/settings` ever gains a variant back() can land on, gate the reset on that
-  // navigation specifically — otherwise Back and Esc go dead for the visit.
-  const navigatedRef = useRef(false);
+  //  1. Pop not landed yet — `href` is still the one we fired from and
+  //     `canGoBack` is stale. A second activation here (double-clicked Back,
+  //     double-tapped Esc, OS auto-repeat) pops a *second* entry and can eject
+  //     the user out of the SPA entirely. Stay latched.
+  //  2. Pop landed on a different pathname — this page still renders once more
+  //     before React unmounts it (verified in the memory-router harness:
+  //     SettingsPage renders at href `/` after Back). Resetting here would
+  //     re-open exactly the double-pop of (1). Stay latched; the unmount
+  //     discards the latch anyway.
+  //
+  // The case that MUST release is a pop landing on the SAME pathname: the route
+  // does not remount, so the page carries this latch for the rest of the visit.
+  // `/settings#add-cluster` (the ⌘K Add-cluster deep link) → back → `/settings`
+  // is exactly that, and a permanent latch leaves Back and Esc dead with no
+  // recovery short of a reload. Hence: released only by a same-pathname,
+  // different-href landing. Do NOT simplify this to "reset on location change"
+  // — that is window (2), and it is reachable.
+  const firedFromRef = useRef<{ href: string; pathname: string } | null>(null);
   const goBack = useCallback((): void => {
-    if (navigatedRef.current) return;
-    navigatedRef.current = true;
+    const firedFrom = firedFromRef.current;
+    if (firedFrom !== null && (firedFrom.href === href || firedFrom.pathname !== pathname)) return;
+    firedFromRef.current = { href, pathname };
     if (canGoBack) {
       router.history.back();
     } else {
       void navigate({ to: '/' });
     }
-  }, [canGoBack, router, navigate]);
+  }, [href, pathname, canGoBack, router, navigate]);
 
   // Esc goes back, mirroring the panel's affordance. A document-level listener
   // is required (not a wrapper onKeyDown): Settings has no focus trap, so focus
-  // on arrival is wherever the entry path left it — on <body> for the topbar
-  // link and the `g s` shortcut, where a wrapper handler would never fire.
+  // on arrival is wherever the entry path left it, which is routinely OUTSIDE
+  // this subtree — the topbar <Link> keeps focus on its own <a>, which survives
+  // the navigation because AppShell persists, and `g s` leaves focus wherever
+  // the user already was (typically <body>). A wrapper handler sees neither.
   //
   // Guards, in order: ignore OS key auto-repeat (holding Esc is one intent, not
   // ~30 of them); skip if another handler already consumed the event; skip when
