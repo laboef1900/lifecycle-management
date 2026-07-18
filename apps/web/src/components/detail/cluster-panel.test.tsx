@@ -396,14 +396,16 @@ describe('<ClusterPanel>', () => {
     }
   });
 
-  it('Esc navigates to / after the exit transition', async () => {
+  it('Esc navigates to / on the same frame — no exit animation, no close delay (#243)', async () => {
     render(<Harness show />);
     await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
 
     const dialog = screen.getByRole('dialog');
     dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: '/' }));
+    // Synchronous, not awaited: the 200ms deferred navigate is gone — closing
+    // is pure wait time on a frequent, user-triggered transition (NN/g).
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/' });
   });
 
   it('Escape inside a nested host dialog closes only that dialog, not the panel (CRITICAL #1)', async () => {
@@ -434,7 +436,12 @@ describe('<ClusterPanel>', () => {
     expect(screen.getByRole('dialog', { name: /prod-east/i })).toBeInTheDocument();
   });
 
-  it('the back button navigates to / and the live region announces the close first', async () => {
+  it('the back control navigates to / synchronously (#243 — no deferred close)', async () => {
+    // The 200ms close delay existed to let a "detail closed" live-region
+    // announcement be read before unmount. With the instant close (#243) the
+    // announcement is gone with the delay — focus returning to the trigger
+    // tile is the assistive-tech cue that the dialog closed (the restore is
+    // covered by its own test above).
     render(<Harness show />);
     await screen.findByText('Prod-East');
     expect(screen.getByRole('status')).toHaveTextContent('Cluster Prod-East detail opened.');
@@ -442,37 +449,7 @@ describe('<ClusterPanel>', () => {
     const user = (await import('@testing-library/user-event')).default.setup();
     await user.click(screen.getByRole('button', { name: /back/i }));
 
-    // The "closed" announcement is set synchronously, before the delayed navigate.
-    expect(screen.getByRole('status')).toHaveTextContent('Cluster Prod-East detail closed.');
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: '/' }));
-  });
-
-  it('retains the exit delay under prefers-reduced-motion, so the "closed" announcement has time to be read (MINOR #6)', async () => {
-    vi.stubGlobal(
-      'matchMedia',
-      vi.fn().mockImplementation((query: string) => ({
-        matches: query === '(prefers-reduced-motion: reduce)',
-        media: query,
-        onchange: null,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-        dispatchEvent: () => false,
-      })),
-    );
-
-    const user = userEvent.setup();
-    render(<Harness show />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
-
-    await user.click(screen.getByRole('button', { name: /back/i }));
-
-    // Reduced motion forbids *animation*, not a deferred navigation: the
-    // navigate must NOT fire synchronously with the click...
-    expect(navigateMock).not.toHaveBeenCalled();
-    // ...but the announcement is already in place, ready to be read...
-    expect(screen.getByRole('status')).toHaveTextContent('Cluster Prod-East detail closed.');
-    // ...and navigate still follows after the same exit delay.
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: '/' }));
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/' });
   });
 
   it('announces "Cluster <name> detail opened." once the cluster loads', async () => {

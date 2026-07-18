@@ -47,10 +47,15 @@ export interface ClusterPanelProps {
 
 const numberFormat = new Intl.NumberFormat('en-US');
 
-/** Panel motion (spec §3): enter 280ms ease-out, exit 200ms ease-in. */
+/**
+ * Scenario pane motion (spec §3): enter 280ms ease-out, exit 200ms ease-in.
+ * The PANEL itself no longer animates (#243): open and close render on the
+ * next frame. The asymmetry is deliberate and recorded in the spec §5
+ * amendment — the panel is high-frequency navigation where animation is pure
+ * wait time (NN/g, Apple HIG); the pane is an occasional mode change.
+ */
 const ENTER_TRANSITION = { duration: 0.28, ease: [0, 0, 0.38, 0.9] as const };
 const EXIT_TRANSITION = { duration: 0.2, ease: [0.4, 0, 1, 1] as const };
-const EXIT_MS = 200;
 
 /** Width of the slide-in Scenario pane (#226) at `lg` and up, in px. Animated
  *  from 0 → this so the forecast/tabs content column compresses to its left. */
@@ -189,8 +194,9 @@ export function isEscapeTargetInsidePanel(
 }
 
 /**
- * Cluster detail slide-in panel (spec §5). Fixed right overlay rendered
- * alongside the fleet console, as a true modal dialog (`aria-modal="true"`)
+ * Cluster detail panel (spec §5). Fullscreen takeover rendered alongside the
+ * fleet console with an instant entrance — no slide-in (#243) — as a true
+ * modal dialog (`aria-modal="true"`)
  * — the route (`_app.clusters.$id.tsx`) makes the console `inert` while this
  * panel is mounted, so it's excluded from the tab order and assistive tech
  * (PR review fix 3, review round 2 finding 3: `aria-modal="false"` used to
@@ -213,9 +219,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const paneRef = useRef<HTMLElement>(null);
   const paneCloseRef = useRef<HTMLButtonElement>(null);
   const restorePaneFocusRef = useRef(false);
-  const closeTimerRef = useRef<number | null>(null);
 
-  const [isClosing, setIsClosing] = useState(false);
   const [pane, dispatchPane] = useReducer(panePresenceReducer, PANE_CLOSED);
   const paneOpen = pane.open;
   // Overridden by close/scenario-change event handlers; otherwise derived
@@ -249,12 +253,6 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     queryFn: () => api.clusters.liveUsage(),
   });
   const liveUsage = liveUsageQuery.data?.items.find((u) => u.clusterId === clusterId);
-
-  useEffect(() => {
-    return () => {
-      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
-    };
-  }, []);
 
   // Focus management (spec §5): move focus to the back button on open,
   // restore it to whatever was previously focused on close — a single
@@ -313,22 +311,14 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // bare cluster name would.
   const dialogLabel = clusterName ? `Cluster ${clusterName} detail` : 'Cluster detail';
 
-  // MINOR fix (review round 1): reduced motion forbids *animation*, not a
-  // deferred navigation — `<MotionConfig reducedMotion="user">` (app.tsx)
-  // already makes the m.div's own exit transition skip its actual duration
-  // for reduced-motion users, so this delay only ever gates the *navigate*,
-  // giving the "detail closed" live-region announcement above time to be
-  // read before the panel unmounts either way.
+  // Instant close (#243): navigate on the same frame — no exit animation, no
+  // deferred navigate, and with them no "detail closed" announcement (it only
+  // existed because the 200ms delay gave it time to be read). Focus returning
+  // to the trigger tile (the unmount effect above) is the assistive-tech cue
+  // that the dialog closed.
   const requestClose = useCallback(() => {
-    if (isClosing) return;
-    setAnnouncementOverride(
-      clusterName ? `Cluster ${clusterName} detail closed.` : 'Cluster detail closed.',
-    );
-    setIsClosing(true);
-    closeTimerRef.current = window.setTimeout(() => {
-      void navigate({ to: '/' });
-    }, EXIT_MS);
-  }, [isClosing, navigate, clusterName]);
+    void navigate({ to: '/' });
+  }, [navigate]);
 
   const handleScenarioChange = useCallback((next: ScenarioWire | null): void => {
     setScenario(next);
@@ -457,16 +447,13 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       : undefined;
 
   return (
-    <m.div
+    <div
       ref={panelRef}
       role="dialog"
       aria-modal="true"
       aria-label={dialogLabel}
       className="cluster-panel fixed bottom-0 right-0 top-14 z-40 flex overflow-hidden"
       style={{ background: 'var(--surface-card)' }}
-      initial={{ x: '100%' }}
-      animate={{ x: isClosing ? '100%' : 0 }}
-      transition={isClosing ? EXIT_TRANSITION : ENTER_TRANSITION}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           if (
@@ -494,9 +481,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
 
       {/* Non-scrolling shell (#226): the panel root no longer scrolls — this
           content column does — so the Scenario pane can sit beside it as a
-          full-height flex sibling (a `position: fixed` pane would be broken by
-          the root's animating `x` transform, which becomes its containing
-          block). */}
+          full-height flex sibling. */}
       {/* `inert` exactly while the Scenario sheet covers this column (below
           `lg`, see `scenarioPaneLayout`): the sheet is opaque and spans the
           whole panel, so nothing here is visible or reachable by pointer.
@@ -678,7 +663,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
           </m.aside>
         ) : null}
       </AnimatePresence>
-    </m.div>
+    </div>
   );
 }
 
