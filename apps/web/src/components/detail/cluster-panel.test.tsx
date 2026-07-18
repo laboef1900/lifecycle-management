@@ -1,18 +1,112 @@
 import type { ClusterResponse, ForecastResponse, HostResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { LazyMotion, MotionConfig, domAnimation } from 'motion/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
 
 import {
   ClusterPanel,
+  PANE_CLOSED,
+  collectFocusable,
   computeScenarioDeltaLabel,
   isEscapeTargetInsidePanel,
+  paneIsOnScreen,
+  panePresenceReducer,
+  scenarioPaneLayout,
 } from './cluster-panel';
 
 const CLUSTER_ID = 'cl-1';
+
+/**
+ * The panel reads two viewport breakpoints (`640px` for the compact chart,
+ * `1024px` for pane side-by-side vs. overlay). The shared setup stub answers
+ * `false` to every query, i.e. the narrowest viewport — good for the overlay
+ * cases, useless for the side-by-side ones, so tests that care state a width.
+ */
+function stubViewportWidth(width: number): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockImplementation((query: string) => {
+      const minWidth = /min-width:\s*(\d+)px/.exec(query)?.[1];
+      return {
+        matches: minWidth === undefined ? false : width >= Number(minWidth),
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      };
+    }),
+  );
+}
+
+/**
+ * Like `stubViewportWidth`, but the returned setter also notifies the `change`
+ * listeners `useMediaQuery` subscribes with — the only way to exercise a
+ * breakpoint crossing (rotate / resize / split view) on a mounted panel.
+ */
+function stubResizableViewport(initialWidth: number): (width: number) => void {
+  let width = initialWidth;
+  const listeners = new Set<() => void>();
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockImplementation((query: string) => {
+      const minWidth = /min-width:\s*(\d+)px/.exec(query)?.[1];
+      return {
+        // A getter, not a snapshot: `useSyncExternalStore` re-reads
+        // `matchMedia(query).matches` after every notification.
+        get matches(): boolean {
+          return minWidth === undefined ? false : width >= Number(minWidth);
+        },
+        media: query,
+        onchange: null,
+        addEventListener: (_type: string, cb: () => void) => listeners.add(cb),
+        removeEventListener: (_type: string, cb: () => void) => listeners.delete(cb),
+        dispatchEvent: () => false,
+      };
+    }),
+  );
+  return (next: number) => {
+    width = next;
+    act(() => {
+      for (const notify of listeners) notify();
+    });
+  };
+}
+
+/** jsdom has no layout, so `getClientRects()` is empty for every element and
+ *  the panel's Tab trap short-circuits. Give every element a box so the trap
+ *  actually runs. */
+function stubLayoutBoxes(): void {
+  const rects = [{ width: 10, height: 10 }] as unknown as DOMRectList;
+  vi.spyOn(Element.prototype, 'getClientRects').mockReturnValue(rects);
+}
+/**
+ * Records any attempt to move focus into the content column while that column
+ * is inert.
+ *
+ * `focusin` fires synchronously from `.focus()`, so this is a pure ordering
+ * check with no dependency on how long the exit animation happens to take —
+ * unlike sampling the DOM on a timer or on mutations, which races the
+ * animation and flakes on a loaded runner.
+ */
+function watchFocusIntoInert(): { violations: string[]; stop: () => void } {
+  const violations: string[] = [];
+  const onFocusIn = (event: Event): void => {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest('[inert]') !== null) {
+      violations.push(
+        `focus moved into the inert column: ${target.dataset.testid ?? target.tagName}`,
+      );
+    }
+  };
+  document.addEventListener('focusin', onFocusIn);
+  return { violations, stop: () => document.removeEventListener('focusin', onFocusIn) };
+}
+
 const navigateMock = vi.fn();
 
 vi.mock('@tanstack/react-router', () => ({
@@ -129,6 +223,26 @@ function Harness({ show }: { show: boolean }): React.JSX.Element {
     <QueryClientProvider client={client}>
       <button type="button">Open trigger</button>
       {show ? <ClusterPanel clusterId={CLUSTER_ID} /> : null}
+    </QueryClientProvider>
+  );
+}
+
+/**
+ * `Harness` deliberately omits LazyMotion, so `m.*` renders as plain DOM and
+ * AnimatePresence removes an exiting child immediately — which is why every
+ * other test here sees closing as instantaneous. This harness mirrors app.tsx
+ * instead, so the pane's 200ms exit actually occupies wall-clock time and the
+ * window between "closing" and "gone" can be asserted.
+ */
+function AnimatedHarness(): React.JSX.Element {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return (
+    <QueryClientProvider client={client}>
+      <LazyMotion features={domAnimation} strict>
+        <MotionConfig reducedMotion="user">
+          <ClusterPanel clusterId={CLUSTER_ID} />
+        </MotionConfig>
+      </LazyMotion>
     </QueryClientProvider>
   );
 }
@@ -260,7 +374,26 @@ describe('<ClusterPanel>', () => {
     render(<Harness show />);
 
     const dialog = screen.getByRole('dialog');
-    expect(dialog).toHaveAccessibleName('Loading cluster…');
+    expect(dialog).toHaveAccessibleName('Cluster detail');
+  });
+
+  it('names the dialog from an attribute on itself, never from inside the coverable content column', async () => {
+    // The cluster heading lives in the content column, which goes `inert` while
+    // the Scenario sheet covers it below `lg` — and inert subtrees are removed
+    // from the accessibility tree. jsdom's accname implementation ignores
+    // `inert` entirely, so asserting the *name* alone would pass either way;
+    // what has to hold is that the name's source is not in that subtree.
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAccessibleName('Cluster Prod-East detail');
+
+    const content = screen.getByTestId('panel-content');
+    const labelledBy = dialog.getAttribute('aria-labelledby');
+    for (const id of labelledBy?.split(/\s+/).filter(Boolean) ?? []) {
+      expect(content.contains(document.getElementById(id))).toBe(false);
+    }
   });
 
   it('Esc navigates to / after the exit transition', async () => {
@@ -419,12 +552,14 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     const scenarioButton = screen.getByTestId('scenario-button');
     await user.click(scenarioButton);
 
-    const paneClose = await screen.findByRole('button', { name: 'Close scenario panel' });
+    const paneClose = await screen.findByRole('button', { name: 'Close scenario pane' });
     await waitFor(() => expect(paneClose).toHaveFocus());
 
     await user.click(paneClose);
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    expect(scenarioButton).toHaveFocus();
+    // `waitFor`, not a bare assertion: the restore now waits for the exit to
+    // finish (see the containment test) rather than firing on the click.
+    await waitFor(() => expect(scenarioButton).toHaveFocus());
   });
 
   it('Esc closes the pane first (focus back on the button), then a second Esc closes the panel', async () => {
@@ -440,7 +575,7 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
     expect(navigateMock).not.toHaveBeenCalled();
-    expect(scenarioButton).toHaveFocus();
+    await waitFor(() => expect(scenarioButton).toHaveFocus());
 
     // Second Esc (focus on the in-panel button): now the panel closes.
     await user.keyboard('{Escape}');
@@ -467,6 +602,455 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(indicator).toHaveTextContent('Lose 1 host');
     // A non-colour cue: the summary text is present in the button's accessible name.
     expect(screen.getByTestId('scenario-button')).toHaveAccessibleName(/lose 1 host/i);
+  });
+
+  it('exposes disclosure state on the header button and toggles the pane closed on a second click', async () => {
+    stubViewportWidth(1280); // side-by-side: the header button stays interactive
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    expect(scenarioButton).toHaveAttribute('aria-expanded', 'false');
+    expect(scenarioButton).not.toHaveAttribute('aria-controls');
+
+    await user.click(scenarioButton);
+    await screen.findByTestId('scenario-controls');
+    expect(scenarioButton).toHaveAttribute('aria-expanded', 'true');
+
+    // aria-controls must point at the element that actually holds the controls.
+    const controlsId = scenarioButton.getAttribute('aria-controls') ?? '';
+    expect(controlsId).not.toBe('');
+    const pane = document.getElementById(controlsId);
+    expect(pane).not.toBeNull();
+    expect(pane).toContainElement(screen.getByTestId('scenario-controls'));
+
+    // Third close affordance: the header button itself.
+    await user.click(scenarioButton);
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(scenarioButton).toHaveAttribute('aria-expanded', 'false');
+    expect(scenarioButton).not.toHaveAttribute('aria-controls');
+    expect(scenarioButton).toHaveFocus();
+  });
+
+  it('becomes a full-panel modal sheet below lg, so the inert column is genuinely covered (WCAG 2.4.11)', async () => {
+    stubViewportWidth(900); // below lg
+    stubLayoutBoxes();
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const content = screen.getByTestId('panel-content');
+    expect(content).not.toHaveAttribute('inert');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    const paneClose = await screen.findByRole('button', { name: 'Close scenario pane' });
+    await waitFor(() => expect(paneClose).toHaveFocus());
+
+    // The sheet spans the whole panel. A 340px strip over a 100vw panel would
+    // leave ~560px of this column visible on screen while inert — visible but
+    // unclickable and stripped from the accessibility tree, which is a worse
+    // defect than the focus-obscured bug the inert is here to fix.
+    expect(screen.getByTestId('scenario-pane-body')).toHaveStyle({ width: '100vw' });
+
+    // Only because nothing is visible under it is `inert` on the whole column
+    // honest — including the Back and Scenario buttons the sheet covers.
+    expect(content).toHaveAttribute('inert');
+    const backButton = screen.getByRole('button', { name: 'Back' });
+    expect(content).toContainElement(backButton);
+
+    // ...and the panel's own Tab trap agrees: Shift+Tab off the pane's first
+    // control wraps to the pane's last control, never onto a covered one.
+    await user.tab({ shift: true });
+    expect(backButton).not.toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Apply' })).toHaveFocus();
+
+    // Closing the pane hands the column back.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(content).not.toHaveAttribute('inert'));
+  });
+
+  it('stays a 340px sibling at lg and up, covering nothing and leaving the column interactive', async () => {
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    expect(screen.getByTestId('scenario-pane-body')).toHaveStyle({ width: '340px' });
+    expect(screen.getByTestId('panel-content')).not.toHaveAttribute('inert');
+  });
+
+  it('shows a visible Esc keycap on the pane close control, sourced from ui/kbd.tsx', async () => {
+    // Two requirements that pull against each other.
+    //
+    // 1. The keycap must stay VISIBLE. `aria-keyshortcuts` alone is not an
+    //    affordance — no browser renders it — so dropping the keycap would
+    //    silently remove the hint sighted pointer users had, and would leave
+    //    this control inconsistent with the BackButton a few elements away in
+    //    the panel header, which shows the same kind of hint.
+    // 2. It must not be a hand-rolled <kbd>. The control used to carry a
+    //    verbatim copy of BackButton's <kbd> class string, which is what made
+    //    ui/kbd.tsx's "every keycap comes from here" claim false.
+    //
+    // `font-mono` is the discriminator for requirement 2: it comes from the
+    // Kbd primitive's base recipe, whereas a hand-rolled keycap inside this
+    // button inherits the button's own mono face and never sets it. It also
+    // survives PR #234, which keeps `border border-border font-mono` as the
+    // shared base while moving the box styles into size variants.
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    const paneBody = await screen.findByTestId('scenario-pane-body');
+
+    const keycap = paneBody.querySelector('kbd');
+    expect(keycap).not.toBeNull();
+    expect(keycap).toBeVisible();
+    expect(keycap).toHaveTextContent('Esc');
+    expect(keycap).toHaveClass('font-mono', 'border-border');
+
+    const close = within(paneBody).getByRole('button', { name: 'Close scenario pane' });
+    expect(close).toContainElement(keycap);
+    expect(close).toHaveAttribute('aria-keyshortcuts', 'Escape');
+    // The keycap is decorative: aria-hidden keeps it out of the accessible
+    // name, which stays exactly "Close scenario pane" (asserted by the
+    // getByRole above) and still contains the visible "Close" — WCAG 2.5.3
+    // Label in Name.
+    expect(keycap).toHaveAttribute('aria-hidden');
+    expect(close).toHaveTextContent('Close');
+  });
+
+  it('holds the containment until the closing sheet has finished painting over the column', async () => {
+    // The sheet keeps covering the column for AnimatePresence's 200ms exit.
+    // Releasing `inert` the instant `paneOpen` flips false would re-create the
+    // focus-obscured condition for that window — and would also try to restore
+    // focus into a subtree that is still inert, where `focus()` is a no-op.
+    stubViewportWidth(900);
+    const user = userEvent.setup();
+    render(<AnimatedHarness />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    const content = screen.getByTestId('panel-content');
+    await user.click(scenarioButton);
+    await screen.findByTestId('scenario-controls');
+    expect(content).toHaveAttribute('inert');
+    const paneClose = screen.getByRole('button', { name: 'Close scenario pane' });
+    expect(paneClose).toHaveFocus();
+
+    const closing = watchFocusIntoInert();
+
+    // Synchronous dispatch, with nothing awaited before the assertions below:
+    // an animation frame can only run once the stack unwinds, so what is
+    // observed is exactly the commit `closePane` produced. (`user.keyboard`
+    // awaits internally, which on a loaded runner can let the whole 200ms exit
+    // finish first — a race with the animation, not a behaviour difference.)
+    fireEvent.keyDown(paneClose, { key: 'Escape' });
+
+    // Still mounted, so still painted over the column...
+    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
+    expect(content).toHaveAttribute('inert');
+    // ...and therefore focus has not been handed back into it yet.
+    expect(scenarioButton).not.toHaveFocus();
+
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    closing.stop();
+
+    // Focus was never pushed into the column while it was still inert — where
+    // `focus()` is a no-op in a real browser and would strand focus on <body>.
+    expect(closing.violations).toEqual([]);
+    expect(content).not.toHaveAttribute('inert');
+    await waitFor(() => expect(scenarioButton).toHaveFocus());
+  });
+
+  it('re-homes focus into the pane when a resize turns the content column inert', async () => {
+    // Focus in the content column with the pane open is reachable at lg and up
+    // (that is what the Esc-without-focus-steal behaviour supports). Crossing
+    // below lg then turns that column inert underneath the focused element: a
+    // real browser blurs it and focus falls to <body>, from where Tab never
+    // reaches the panel's React `onKeyDown` trap — focus escapes the modal
+    // entirely unless the pane reclaims it. jsdom does not implement inert, so
+    // here `document.activeElement` stays on the tab trigger instead; the code
+    // treats both as lost focus.
+    const resizeTo = stubResizableViewport(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+
+    const hostsTab = screen.getByRole('tab', { name: 'Hosts' });
+    hostsTab.focus();
+    expect(hostsTab).toHaveFocus();
+
+    resizeTo(900);
+
+    const content = screen.getByTestId('panel-content');
+    expect(content).toHaveAttribute('inert');
+    expect(content).toContainElement(hostsTab);
+    expect(hostsTab).not.toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus();
+  });
+
+  it('leaves focus alone when a resize hands the content column back', async () => {
+    // The mirror case: growing past lg un-inerts the column, which loses
+    // nothing — the re-home must not fire and steal the user's place.
+    const resizeTo = stubResizableViewport(900);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    const countInput = await screen.findByLabelText(/hosts to drop/i);
+    countInput.focus();
+
+    resizeTo(1280);
+
+    expect(screen.getByTestId('panel-content')).not.toHaveAttribute('inert');
+    expect(countInput).toHaveFocus();
+  });
+
+  it('Esc with the pane open but focus in the content column closes the pane without stealing focus', async () => {
+    // Reachable only at lg and up, where the column stays interactive beside
+    // the pane. The pane must still swallow the first Esc (the panel stays
+    // open), but the user keeps their place in the content.
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    await user.click(scenarioButton);
+    await screen.findByTestId('scenario-controls');
+
+    const hostsTab = screen.getByRole('tab', { name: 'Hosts' });
+    hostsTab.focus();
+    expect(hostsTab).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(hostsTab).toHaveFocus();
+    expect(scenarioButton).not.toHaveFocus();
+  });
+
+  it('re-seeds the form from the applied scenario when the pane is reopened', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    const countInput = await screen.findByLabelText(/hosts to drop/i);
+    await user.clear(countInput);
+    await user.type(countInput, '3');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Scenario active: Lose 3 hosts.'),
+    );
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    // Not the DEFAULT_DRAFT "1": a stray Apply must not silently replace the
+    // applied scenario with the defaults.
+    expect(screen.getByLabelText(/hosts to drop/i)).toHaveValue(3);
+  });
+
+  it('recovers cleanly when the pane is reopened mid-exit and closed again', async () => {
+    // Guards the AnimatePresence exit-window race: a same-key child that
+    // re-enters mid-exit is recycled, not remounted, so focus must be driven by
+    // the open state rather than by the pane body's mount.
+    //
+    // MUST run under `AnimatedHarness`. Under `Harness` (no LazyMotion)
+    // AnimatePresence drops an exiting child synchronously, so there is no exit
+    // window at all and the reopen below would be an ordinary closed->open
+    // cycle that exercises nothing. The `toBe(bodyBeforeClose)` identity
+    // assertion is what proves the child was recycled rather than remounted —
+    // i.e. that the race was really entered.
+    //
+    // Runs at lg+ because that is the only width where a mid-exit reopen is
+    // reachable: below lg the Scenario button is inert until the exit finishes.
+    //
+    // The `exiting`-flag half of this race is guarded separately and directly by
+    // the `panePresenceReducer` suite below — it is a pure state transition with
+    // no observable rendering consequence while `open` is true, so no
+    // integration test here can pin it. Kept honest deliberately.
+    stubViewportWidth(1280);
+    render(<AnimatedHarness />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    fireEvent.click(scenarioButton);
+    const bodyBeforeClose = await screen.findByTestId('scenario-pane-body');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus(),
+    );
+
+    // Synchronous dispatch with nothing awaited in between: an animation frame
+    // can only run once the stack unwinds, so the reopen lands inside the exit
+    // window. (`userEvent` awaits internally and would let the 200ms exit
+    // finish first on a loaded runner.)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Close scenario pane' }), {
+      key: 'Escape',
+    });
+    // Mid-exit: still mounted, still painting over the column.
+    expect(screen.getByTestId('scenario-pane-body')).toBe(bodyBeforeClose);
+    // A real pointer click focuses the button it hits; `fireEvent.click` does
+    // not, so do it explicitly. Without this, focus would never leave the pane
+    // close control and the "focus came back" assertion below would hold
+    // vacuously — including for a mount-driven implementation.
+    scenarioButton.focus();
+    expect(scenarioButton).toHaveFocus();
+    fireEvent.click(scenarioButton);
+
+    // Recycled, not remounted — the same DOM node came back, which is exactly
+    // why a mount-driven focus effect would silently skip moving focus here.
+    expect(screen.getByTestId('scenario-pane-body')).toBe(bodyBeforeClose);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus(),
+    );
+
+    // And the recycled pane still closes cleanly, restoring focus to the
+    // trigger once the (real, uncancelled) exit has finished.
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Close scenario pane' }), {
+      key: 'Escape',
+    });
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    await waitFor(() => expect(scenarioButton).toHaveFocus());
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('applies the containment as soon as the pane opens, not after the enter animation', async () => {
+    // Pins the deliberate enter/exit asymmetry documented at the `inert` site.
+    // The exit side holds the containment until `onExitComplete`; the enter side
+    // applies it on the opening commit, accepting a <=280ms window in which part
+    // of the column is visible but inert. Deferring it to match the exit side
+    // would instead leave the column *interactive* while the sheet covers it —
+    // the WCAG 2.4.11 condition the containment exists to prevent.
+    stubViewportWidth(900);
+    render(<AnimatedHarness />);
+    await screen.findByTestId('kpi-strip');
+
+    const content = screen.getByTestId('panel-content');
+    expect(content).not.toHaveAttribute('inert');
+
+    fireEvent.click(screen.getByTestId('scenario-button'));
+
+    // Asserted before anything is awaited, so the 280ms enter animation cannot
+    // have progressed, let alone completed.
+    expect(content).toHaveAttribute('inert');
+  });
+});
+
+describe('panePresenceReducer (AnimatePresence exit-window state)', () => {
+  it('marks the pane on screen while it is open', () => {
+    const open = panePresenceReducer(PANE_CLOSED, 'open');
+    expect(open).toEqual({ open: true, exiting: false });
+    expect(paneIsOnScreen(open)).toBe(true);
+  });
+
+  it('keeps the pane on screen after close until the exit completes', () => {
+    // This is what holds the content column's `inert` across the 200ms exit:
+    // dropping it the instant `open` flips false would hand the column back
+    // while the sheet is still painted over it.
+    const exiting = panePresenceReducer(panePresenceReducer(PANE_CLOSED, 'open'), 'close');
+    expect(exiting).toEqual({ open: false, exiting: true });
+    expect(paneIsOnScreen(exiting)).toBe(true);
+
+    const gone = panePresenceReducer(exiting, 'exit-complete');
+    expect(gone).toEqual(PANE_CLOSED);
+    expect(paneIsOnScreen(gone)).toBe(false);
+  });
+
+  it('clears the exiting flag when the pane re-enters mid-exit', () => {
+    // The invariant no integration test can observe: a mid-exit re-entry
+    // cancels the exit, and a cancelled exit never fires `onExitComplete`
+    // (AnimatePresence drops the key from its `exitComplete` map), so `open` is
+    // the only place the flag can be cleared. While the pane is open a stale
+    // flag is masked by `open` in `paneIsOnScreen` — it shows up only as
+    // `exiting` no longer meaning "exiting", and as the next close inheriting a
+    // state it did not produce.
+    const exiting = panePresenceReducer(panePresenceReducer(PANE_CLOSED, 'open'), 'close');
+    expect(exiting.exiting).toBe(true);
+
+    const reopened = panePresenceReducer(exiting, 'open');
+    expect(reopened).toEqual({ open: true, exiting: false });
+  });
+
+  it('leaves a fully closed pane closed when a stray exit-complete arrives', () => {
+    expect(panePresenceReducer(PANE_CLOSED, 'exit-complete')).toEqual(PANE_CLOSED);
+  });
+});
+
+describe('scenarioPaneLayout (pane geometry ↔ content containment)', () => {
+  it('is a fixed strip that covers nothing when it can sit beside the column', () => {
+    expect(scenarioPaneLayout(true)).toEqual({ width: 340, coversContent: false });
+  });
+
+  it('spans the whole panel when it has to overlay the column', () => {
+    expect(scenarioPaneLayout(false)).toEqual({ width: '100vw', coversContent: true });
+  });
+
+  it('never claims to cover the column at a width narrower than the panel', () => {
+    // The invariant the function exists to hold: `coversContent` is what
+    // licenses `inert` on the content column, so it may only be true when the
+    // pane really spans the panel. Decoupling them is how the column ended up
+    // visible-but-inert at 640–1023px.
+    for (const sideBySide of [true, false]) {
+      const layout = scenarioPaneLayout(sideBySide);
+      expect(layout.coversContent).toBe(layout.width === '100vw');
+    }
+  });
+});
+
+describe('collectFocusable (Tab-trap candidates)', () => {
+  beforeEach(() => {
+    // jsdom has no layout: stand in for it, with `data-unrendered` marking the
+    // elements a real browser would report no client rects for.
+    const rects = [{ width: 10, height: 10 }] as unknown as DOMRectList;
+    const noRects = [] as unknown as DOMRectList;
+    vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function getClientRects(
+      this: Element,
+    ) {
+      return this.hasAttribute('data-unrendered') ? noRects : rects;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('skips elements inside an inert subtree (the pane-covered content column)', () => {
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div id="content" inert><button id="covered">Back</button></div>
+      <aside><button id="pane-close">Close</button></aside>
+    `;
+    document.body.appendChild(container);
+    try {
+      expect(collectFocusable(container).map((el) => el.id)).toEqual(['pane-close']);
+    } finally {
+      document.body.removeChild(container);
+    }
+  });
+
+  it('skips elements with no layout box (e.g. an inactive tab panel)', () => {
+    const container = document.createElement('div');
+    container.innerHTML =
+      '<button id="shown">Shown</button><button id="hidden" data-unrendered>Hidden</button>';
+    document.body.appendChild(container);
+    try {
+      expect(collectFocusable(container).map((el) => el.id)).toEqual(['shown']);
+    } finally {
+      document.body.removeChild(container);
+    }
   });
 });
 

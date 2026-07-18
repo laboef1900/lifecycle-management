@@ -34,6 +34,31 @@ const DEFAULT_DRAFT: DraftState = {
   delayMonths: '2',
 };
 
+/**
+ * Inverse of `draftToScenario`: seeds the form from the scenario that is
+ * already applied. The pane unmounts on close (#226), so without this a reopen
+ * showed the `lose_hosts` defaults next to "Active: Delay procurement by 6 mo"
+ * and a single Apply click silently replaced the applied scenario with
+ * "Lose 1 host" — forecast scenarios drive purchasing decisions, so the form
+ * must show what is actually in effect.
+ */
+export function scenarioToDraft(active: ScenarioWire | null): DraftState {
+  if (!active) return DEFAULT_DRAFT;
+  switch (active.kind) {
+    case 'lose_hosts':
+      return { ...DEFAULT_DRAFT, kind: 'lose_hosts', loseCount: String(active.count) };
+    case 'add_vms':
+      return {
+        ...DEFAULT_DRAFT,
+        kind: 'add_vms',
+        addCount: String(active.count),
+        addSize: String(active.sizeGb),
+      };
+    case 'delay_procurement':
+      return { ...DEFAULT_DRAFT, kind: 'delay_procurement', delayMonths: String(active.months) };
+  }
+}
+
 function draftToScenario(d: DraftState): { scenario: ScenarioWire | null; error: string | null } {
   switch (d.kind) {
     case 'lose_hosts': {
@@ -56,8 +81,18 @@ function draftToScenario(d: DraftState): { scenario: ScenarioWire | null; error:
   }
 }
 
+/**
+ * Scenario form. Since #226 it renders only inside the cluster panel's ~272px
+ * Scenario pane, so the layout is stacked (one field per row) rather than the
+ * old viewport-`sm:` twelve-column row, which squeezed the `add_vms` number
+ * inputs to ~39px there. The pair of `add_vms` inputs is the one exception —
+ * they still share a row, at ~132px each.
+ */
 export function ScenarioControls({ active, onChange }: ScenarioControlsProps): React.JSX.Element {
-  const [draft, setDraft] = React.useState<DraftState>(DEFAULT_DRAFT);
+  // Initializer, not a sync effect: the draft is the user's in-progress edit
+  // and must not be clobbered while they type. A reopened pane is a fresh
+  // mount, which is exactly when re-seeding is wanted.
+  const [draft, setDraft] = React.useState<DraftState>(() => scenarioToDraft(active));
   const [error, setError] = React.useState<string | null>(null);
 
   const updateDraft = (patch: Partial<DraftState>): void => {
@@ -101,8 +136,8 @@ export function ScenarioControls({ active, onChange }: ScenarioControlsProps): R
           </Button>
         ) : null}
       </div>
-      <div className="grid grid-cols-12 items-end gap-2">
-        <label className="col-span-12 sm:col-span-4">
+      <div data-testid="scenario-fields" className="space-y-2">
+        <label className="block">
           <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
             Type
           </span>
@@ -122,7 +157,7 @@ export function ScenarioControls({ active, onChange }: ScenarioControlsProps): R
         </label>
 
         {draft.kind === 'lose_hosts' ? (
-          <label className="col-span-12 sm:col-span-4">
+          <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
               Hosts to drop
             </span>
@@ -139,8 +174,8 @@ export function ScenarioControls({ active, onChange }: ScenarioControlsProps): R
         ) : null}
 
         {draft.kind === 'add_vms' ? (
-          <>
-            <label className="col-span-6 sm:col-span-2">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
               <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
                 VM count
               </span>
@@ -154,7 +189,7 @@ export function ScenarioControls({ active, onChange }: ScenarioControlsProps): R
                 className="mt-1"
               />
             </label>
-            <label className="col-span-6 sm:col-span-2">
+            <label className="block">
               <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
                 Size (GB)
               </span>
@@ -168,11 +203,11 @@ export function ScenarioControls({ active, onChange }: ScenarioControlsProps): R
                 className="mt-1"
               />
             </label>
-          </>
+          </div>
         ) : null}
 
         {draft.kind === 'delay_procurement' ? (
-          <label className="col-span-12 sm:col-span-4">
+          <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
               Delay (months)
             </span>
@@ -188,7 +223,7 @@ export function ScenarioControls({ active, onChange }: ScenarioControlsProps): R
           </label>
         ) : null}
 
-        <div className="col-span-12 flex items-center gap-2 sm:col-span-4 sm:justify-end">
+        <div className="flex items-center justify-end gap-2 pt-1">
           <Button type="button" variant="accent" size="sm" onClick={apply}>
             Apply
           </Button>
