@@ -23,9 +23,10 @@ import { ConflictError } from './errors.js';
  *   - label (`name`) / description / thresholds — operator-owned; `name` is
  *     pinned via `nameIsCustom`, not rejected.
  *   - `commissionedAt` / `commissionedAtProvisional` — the #194 confirm flow.
- *   - `appendCapacity` — sync writes no HostMetricCapacity rows yet (#198), so it
- *     is the operator's only path to give a synced cluster any capacity; guarding
- *     it now would strand every synced cluster at capacity 0 forever.
+ *   - `appendCapacity` on a MANUAL host — the operator's capacity path. On a SYNCED
+ *     host it is now refused (#198): sync writes each host's installed memory as its
+ *     capacity, so vCenter owns it and the two writers must not fight. See
+ *     {@link assertHostCapacityAppendable}.
  *   - archive/unarchive and lifecycle transitions — sync never writes those.
  */
 
@@ -68,6 +69,21 @@ export function assertHostDeletable(source: string, hostId: string): void {
     throw new ConflictError(
       'SYNC_OWNED_FIELD',
       `Host ${hostId} is synced from a vCenter connection and cannot be deleted directly. Manage synced hosts from the vCenter connection settings.`,
+    );
+  }
+}
+
+/**
+ * A synced host's capacity is sync-owned once #198 lands: sync records each host's
+ * installed memory from vCenter, so the operator appendCapacity path would fight
+ * the sync writer. Refuse it on synced hosts (parity with {@link assertHostDeletable});
+ * manual hosts keep the operator path open.
+ */
+export function assertHostCapacityAppendable(source: string, hostId: string): void {
+  if (isSynced(source)) {
+    throw new ConflictError(
+      'SYNC_OWNED_FIELD',
+      `Host ${hostId} is synced from a vCenter connection, which owns its capacity; capacity cannot be appended directly. Manage synced hosts from the vCenter connection settings.`,
     );
   }
 }

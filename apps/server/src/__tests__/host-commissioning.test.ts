@@ -27,11 +27,12 @@ import { makeTestEnv } from './test-helpers.js';
  * confirmed date. That last test is the contract #196's sync-owned-field guard
  * must not break.
  *
- * @ai-note There is deliberately no live-forecast assertion here: a merged synced
- * host carries ZERO HostMetricCapacity rows (that write is #190/#191), so
- * `commissionedAt` has no observable forecast effect yet. This PR pre-positions
- * the date; capacity rows below are fabricated only to exercise the
- * INVALID_COMMISSIONED_AT guard.
+ * @ai-note There is deliberately no live-forecast assertion here: this file pins
+ * the confirm-flow contract directly, and its fixtures are built via `makeHost`
+ * rather than a live sync. The forecast effect of a synced host's capacity — which
+ * #198 now writes on sync — and its interaction with `commissionedAt` is covered in
+ * the vsphere-sync and forecast suites. Capacity rows below are fabricated only to
+ * exercise the INVALID_COMMISSIONED_AT guard.
  */
 let server: FastifyInstance;
 
@@ -52,7 +53,8 @@ async function provisionalHost(
     source: 'vsphere',
     commissionedAtProvisional: true,
     commissionedAt: opts.commissionedAt ?? new Date('2026-07-01T00:00:00.000Z'),
-    // A real synced host has no capacity rows yet; pass one only to arm the guard.
+    // This fixture omits capacity rows by default to keep the confirm-flow tests
+    // focused; pass one only to arm the INVALID_COMMISSIONED_AT guard.
     initialCapacity:
       opts.withCapacityAt !== undefined
         ? [{ effectiveFrom: opts.withCapacityAt, amount: 512 }]

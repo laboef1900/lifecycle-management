@@ -1,5 +1,5 @@
-import type { VsphereSyncResult } from '@lcm/shared';
-import type { PrismaClient } from '@prisma/client';
+import { startOfUtcMonth, type VsphereSyncResult } from '@lcm/shared';
+import { Prisma, type PrismaClient } from '@prisma/client';
 
 import type {
   CollectedCluster,
@@ -107,9 +107,18 @@ export class VsphereSyncService {
       return { ...empty, outcome: 'identity_mismatch', error: 'vCenter identity changed' };
     }
 
+    // Resolve the memory metric once, up front. It is seeded reference data, so a
+    // miss is a deploy fault worth surfacing immediately rather than part-way
+    // through a fleet. Threaded into host reconciliation, which now records each
+    // host's installed memory as its capacity (#198) — the numbers a synced
+    // cluster's forecast reads instead of "unknown".
+    const memoryMetricId = (
+      await this.prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } })
+    ).id;
+
     const stats = { ...empty };
     for (const cluster of inventory.clusters) {
-      const result = await this.reconcileCluster(tenantId, connectionId, cluster);
+      const result = await this.reconcileCluster(tenantId, connectionId, cluster, memoryMetricId);
       stats.clustersCreated += result.created ? 1 : 0;
       stats.clustersUpdated += result.created ? 0 : 1;
       stats.hostsCreated += result.hostsCreated;
@@ -140,6 +149,7 @@ export class VsphereSyncService {
     tenantId: string,
     connectionId: string,
     collected: CollectedCluster,
+    memoryMetricId: string,
   ): Promise<{
     created: boolean;
     hostsCreated: number;
@@ -187,7 +197,13 @@ export class VsphereSyncService {
       created = true;
     }
 
-    const hostStats = await this.reconcileHosts(tenantId, connectionId, clusterId, collected);
+    const hostStats = await this.reconcileHosts(
+      tenantId,
+      connectionId,
+      clusterId,
+      collected,
+      memoryMetricId,
+    );
     return { created, ...hostStats };
   }
 
@@ -196,13 +212,27 @@ export class VsphereSyncService {
     connectionId: string,
     clusterId: string,
     collected: CollectedCluster,
+    memoryMetricId: string,
   ): Promise<{ hostsCreated: number; hostsUpdated: number; hostsMissing: number }> {
     let hostsCreated = 0;
     let hostsUpdated = 0;
 
     for (const host of collected.hosts) {
+      const now = new Date();
+      // vCenter reports installed memory in GiB; it becomes this host's capacity.
+      // Decimal(18,3) via toFixed(3), matching the snapshot/live-usage idiom.
+      const desiredMemory = new Prisma.Decimal(host.memoryGiB.toFixed(3));
+
       const existing = await this.prisma.host.findUnique({
         where: { connectionId_externalId: { connectionId, externalId: host.moref } },
+        // Only the latest memory row is needed to decide whether capacity changed.
+        include: {
+          capacities: {
+            where: { metricTypeId: memoryMetricId },
+            orderBy: { effectiveFrom: 'desc' },
+            take: 1,
+          },
+        },
       });
 
       if (existing) {
@@ -221,9 +251,10 @@ export class VsphereSyncService {
             externalName: host.name,
             ...(existing.nameIsCustom ? {} : { name: host.name }),
             clusterId,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
           },
         });
+        await this.reconcileHostCapacity(tenantId, existing, memoryMetricId, desiredMemory, now);
         hostsUpdated += 1;
       } else {
         await this.prisma.host.create({
@@ -239,9 +270,23 @@ export class VsphereSyncService {
             // commissioned, and effectiveCapacityAt returns 0 before that date —
             // which the forecast renders as unknown utilization for every earlier
             // month. Flagged so the operator confirms the real date (Q9c).
-            commissionedAt: new Date(),
+            commissionedAt: now,
             commissionedAtProvisional: true,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: now,
+            // Capacity begins exactly when the host does. `effectiveFrom` is a
+            // @db.Date and `commissionedAt` uses the same instant, so the two are
+            // date-aligned by construction and the forecast has capacity from the
+            // host's first modelled month. See reconcileHostCapacity for re-syncs.
+            capacities: {
+              create: [
+                {
+                  tenantId,
+                  metricTypeId: memoryMetricId,
+                  effectiveFrom: now,
+                  amount: desiredMemory,
+                },
+              ],
+            },
           },
         });
         hostsCreated += 1;
@@ -257,6 +302,57 @@ export class VsphereSyncService {
     });
 
     return { hostsCreated, hostsUpdated, hostsMissing: missing.count };
+  }
+
+  /**
+   * Append a synced host's memory capacity when it first appears or changes (#198).
+   *
+   * Capacity rows are append-forward-only: `effective_from` is a @db.Date and the
+   * unique index is (host, metric, effective_from). The rules:
+   *  - no rows yet (a host imported before #198, or one whose create failed to seed
+   *    it) → seed one at the host's commissioning date so its history starts where
+   *    the host does;
+   *  - unchanged memory → write nothing, so idempotent re-syncs never accrete rows;
+   *  - changed memory (up OR down — the invariant bounds the DATE, not the amount) →
+   *    append one row effective from the start of the current month, but only if
+   *    that is strictly later than the newest row. A second change within the same
+   *    month cannot append at month granularity and waits for next month.
+   *
+   * `skipDuplicates` makes a same-period collision a no-op rather than a throw —
+   * the same idiom the snapshot uses, and what keeps sync's "degrade, never crash"
+   * contract intact if two passes ever race on the same period.
+   */
+  private async reconcileHostCapacity(
+    tenantId: string,
+    host: {
+      id: string;
+      commissionedAt: Date;
+      capacities: { effectiveFrom: Date; amount: Prisma.Decimal }[];
+    },
+    memoryMetricId: string,
+    desiredMemory: Prisma.Decimal,
+    now: Date,
+  ): Promise<void> {
+    const latest = host.capacities[0];
+
+    const effectiveFrom = latest ? startOfUtcMonth(now) : host.commissionedAt;
+    if (latest) {
+      if (latest.amount.equals(desiredMemory)) return;
+      if (effectiveFrom <= latest.effectiveFrom) return;
+    }
+
+    await this.prisma.hostMetricCapacity.createMany({
+      data: [
+        {
+          hostId: host.id,
+          tenantId,
+          metricTypeId: memoryMetricId,
+          effectiveFrom,
+          amount: desiredMemory,
+        },
+      ],
+      skipDuplicates: true,
+    });
   }
 
   /**

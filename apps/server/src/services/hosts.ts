@@ -14,7 +14,11 @@ import { formatDate } from '../lib/dates.js';
 import { NotFoundError, UnprocessableError } from './errors.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
-import { assertHostCreatableUnderCluster, assertHostDeletable } from './sync-ownership.js';
+import {
+  assertHostCapacityAppendable,
+  assertHostCreatableUnderCluster,
+  assertHostDeletable,
+} from './sync-ownership.js';
 
 const CAPACITY_DUPLICATE: UniqueConstraintMapping = {
   code: 'CAPACITY_DUPLICATE_DATE',
@@ -254,6 +258,10 @@ export class HostsService {
           if (!host) {
             throw new NotFoundError('Host', id);
           }
+
+          // A synced host's capacity is owned by vCenter (#198); refuse the operator
+          // path so it cannot fight the sync writer. Manual hosts stay open.
+          assertHostCapacityAppendable(host.source, id);
 
           if (input.effectiveFrom < host.commissionedAt) {
             throw new UnprocessableError(
