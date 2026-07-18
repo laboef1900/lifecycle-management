@@ -6,7 +6,7 @@ import type {
 } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { AlertTriangle, X } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import * as m from 'motion/react-m';
 
@@ -25,6 +25,7 @@ import { BulletMeter } from '@/components/fleet/bullet-meter';
 import { LiveUsageSection } from '@/components/fleet/live-usage';
 import { baselineAgeDays, isBaselineStale } from '@/components/fleet/stale-baseline';
 import { KpiTile } from '@/components/overview/kpi-tile';
+import { BackButton } from '@/components/ui/back-button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { RunwayPill } from '@/components/ui/runway-pill';
@@ -125,7 +126,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     };
   }, []);
 
-  // Focus management (spec §5): move focus to the close button on open,
+  // Focus management (spec §5): move focus to the back button on open,
   // restore it to whatever was previously focused on close — a single
   // synchronous effect, deliberately not Radix's FocusScope: FocusScope's
   // `trapped` mode installs a MutationObserver that, whenever focus is on
@@ -268,7 +269,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       </div>
 
       <div className="space-y-6 p-5 sm:p-6">
-        {/* The close button is a single, stable element outside the
+        {/* The back button is a single, stable element outside the
             loading-state branching below (deliberately never swapped for a
             different button instance) — the skeleton/error/loaded header
             content around it reflows freely without ever unmounting it, so
@@ -285,7 +286,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
               <PanelHeaderContent cluster={clusterQuery.data} headingId={headingId} />
             )}
           </div>
-          <CloseButton ref={closeButtonRef} onClose={requestClose} />
+          <BackButton ref={closeButtonRef} onClick={requestClose} className="ml-auto" />
         </header>
 
         {clusterQuery.data && metric ? (
@@ -410,30 +411,6 @@ function forecastHeading(procurement: ProcurementInfo): string {
   const orderPart = procurement.orderByDate ? ` · order by ${procurement.orderByDate}` : '';
   return `Forecast — warn ≈ ${monthLabel}${orderPart}`;
 }
-
-const CloseButton = ({
-  onClose,
-  ref,
-}: {
-  onClose: () => void;
-  ref: React.RefObject<HTMLButtonElement | null>;
-}): React.JSX.Element => (
-  <button
-    ref={ref}
-    type="button"
-    onClick={onClose}
-    className="ml-auto flex shrink-0 items-center gap-2 rounded-[var(--radius)] border border-border px-2.5 py-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] text-fg-muted transition-colors hover:border-border-strong hover:text-foreground"
-  >
-    <X className="h-3.5 w-3.5" aria-hidden />
-    Close
-    <kbd
-      aria-hidden
-      className="rounded border border-border px-1 py-0.5 text-[9px] font-semibold text-fg-subtle"
-    >
-      Esc
-    </kbd>
-  </button>
-);
 
 function PanelHeaderContent({
   cluster,

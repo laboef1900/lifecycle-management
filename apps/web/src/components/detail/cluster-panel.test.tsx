@@ -155,7 +155,7 @@ describe('<ClusterPanel>', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders as a modal dialog and moves focus to the close button on open (PR review fix 3)', async () => {
+  it('renders as a modal dialog and moves focus to the back button on open (PR review fix 3)', async () => {
     // aria-modal="true" now matches reality: the route wraps the fleet
     // console in an `inert` container while this panel is open (see
     // apps/web/src/routes/_app.clusters.$id.tsx), and the hand-rolled Tab
@@ -164,7 +164,7 @@ describe('<ClusterPanel>', () => {
     render(<Harness show />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /close/i })).toHaveFocus();
+      expect(screen.getByRole('button', { name: /back/i })).toHaveFocus();
     });
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
@@ -183,15 +183,15 @@ describe('<ClusterPanel>', () => {
     expect(dialog.style.boxShadow).toBe('');
   });
 
-  it('gives the close button an accessible name of exactly "Close", not "Close Esc" (MINOR fix)', async () => {
+  it('gives the back button an accessible name of exactly "Back", not "Back Esc" (MINOR fix)', async () => {
     // The visible <kbd>Esc</kbd> hint must not concatenate into the
     // accessible name — it's decorative for sighted keyboard users only.
     render(<Harness show />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /close/i })).toHaveFocus();
+      expect(screen.getByRole('button', { name: /back/i })).toHaveFocus();
     });
-    expect(screen.getByRole('button', { name: 'Close' })).toHaveAccessibleName('Close');
+    expect(screen.getByRole('button', { name: 'Back' })).toHaveAccessibleName('Back');
   });
 
   it('restores focus to the previously-focused element after the panel closes', async () => {
@@ -201,7 +201,7 @@ describe('<ClusterPanel>', () => {
     expect(trigger).toHaveFocus();
 
     rerender(<Harness show />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
 
     rerender(<Harness show={false} />);
     await waitFor(() => expect(trigger).toHaveFocus());
@@ -217,7 +217,7 @@ describe('<ClusterPanel>', () => {
 
   it('Esc navigates to / after the exit transition', async () => {
     render(<Harness show />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
 
     const dialog = screen.getByRole('dialog');
     dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -235,7 +235,7 @@ describe('<ClusterPanel>', () => {
     const user = userEvent.setup();
     render(<Harness show />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
     await screen.findByText('esx-01');
 
     await user.click(screen.getByRole('button', { name: 'Delete' }));
@@ -253,13 +253,13 @@ describe('<ClusterPanel>', () => {
     expect(screen.getByRole('dialog', { name: /prod-east/i })).toBeInTheDocument();
   });
 
-  it('the close button navigates to / and the live region announces the close first', async () => {
+  it('the back button navigates to / and the live region announces the close first', async () => {
     render(<Harness show />);
     await screen.findByText('Prod-East');
     expect(screen.getByRole('status')).toHaveTextContent('Cluster Prod-East detail opened.');
 
     const user = (await import('@testing-library/user-event')).default.setup();
-    await user.click(screen.getByRole('button', { name: /close/i }));
+    await user.click(screen.getByRole('button', { name: /back/i }));
 
     // The "closed" announcement is set synchronously, before the delayed navigate.
     expect(screen.getByRole('status')).toHaveTextContent('Cluster Prod-East detail closed.');
@@ -281,9 +281,9 @@ describe('<ClusterPanel>', () => {
 
     const user = userEvent.setup();
     render(<Harness show />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
 
-    await user.click(screen.getByRole('button', { name: /close/i }));
+    await user.click(screen.getByRole('button', { name: /back/i }));
 
     // Reduced motion forbids *animation*, not a deferred navigation: the
     // navigate must NOT fire synchronously with the click...
@@ -316,7 +316,7 @@ describe('<ClusterPanel>', () => {
     const user = userEvent.setup();
     render(<Harness show />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /close/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByRole('button', { name: 'Apply' }));
