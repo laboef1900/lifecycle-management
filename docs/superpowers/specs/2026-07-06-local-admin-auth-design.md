@@ -10,8 +10,8 @@
 LCM authenticates with **OIDC only** today. `AuthConfig.mode` is a two-value
 enum: `disabled` (open — every request gets an anonymous `ADMIN` principal) and
 `oidc` (all `/api/*` except `/api/auth/*` require a valid `lcm_session` cookie).
-CLAUDE.md states the intent explicitly: *"OIDC only — there are no local
-passwords, so no bcrypt/argon2."*
+CLAUDE.md states the intent explicitly: _"OIDC only — there are no local
+passwords, so no bcrypt/argon2."_
 
 That leaves a **first-run bootstrap gap**. To secure the app you must be in
 `oidc` mode, which requires a working IdP. The only "secured" state is coupled to
@@ -41,6 +41,7 @@ that line will be updated as part of this work.
 ## 2. Goals / non-goals
 
 **Goals**
+
 - A `local` auth mode that gates the API using only local username+password
   accounts.
 - Local login also usable in `oidc` mode as a break-glass session source.
@@ -51,6 +52,7 @@ that line will be updated as part of this work.
   Settings UI — **no new env-based app settings**.
 
 **Non-goals (YAGNI)**
+
 - Self-service password reset via email, MFA/TOTP, password-strength meters
   beyond a length policy, account recovery questions.
 - SCIM / user provisioning, per-resource ACLs (role stays the existing
@@ -64,14 +66,14 @@ that line will be updated as part of this work.
 `AuthConfig.mode` becomes a three-value enum. The `@lcm/shared` schemas and every
 hardcoded `'disabled' | 'oidc'` union are widened to include `'local'`.
 
-| Mode | API gate | Session sources |
-|------|----------|-----------------|
-| `disabled` | open (anonymous `ADMIN`) — **unchanged** | — |
-| `local` *(new)* | gated | local username+password only |
-| `oidc` | gated | OIDC **and** local admin (break-glass) |
+| Mode            | API gate                                 | Session sources                        |
+| --------------- | ---------------------------------------- | -------------------------------------- |
+| `disabled`      | open (anonymous `ADMIN`) — **unchanged** | —                                      |
+| `local` _(new)_ | gated                                    | local username+password only           |
+| `oidc`          | gated                                    | OIDC **and** local admin (break-glass) |
 
 **Gate reuse (key simplification).** `plugins/auth.ts` already treats
-`mode === 'disabled'` as anonymous-admin and *every other mode* as
+`mode === 'disabled'` as anonymous-admin and _every other mode_ as
 "session required for `/api/*` except `/api/auth/*`". A session minted by local
 login is an ordinary `Session` row, so the gate honors it with **no change to its
 core logic**. The only auth-plugin-adjacent change is `/auth/me` (see §6).
@@ -82,6 +84,7 @@ strict OIDC-only later, disable or delete the local accounts.
 
 **Transition guards** (enforced in the settings-auth update handler + a Zod
 `superRefine`):
+
 - Cannot switch **into** `local` unless ≥1 enabled local user with a password
   hash exists (prevents instant lockout).
 - Cannot switch **into** `oidc` unless OIDC config is valid (existing rule).
@@ -111,7 +114,7 @@ disabled            Boolean   @default(false)
   transition guard.
 - **Alternative considered:** a separate `LocalCredential` table for
   identity/credential separation. Rejected for now — the codebase already treats
-  `User` as *the* auth principal (`SessionUser`, the gate, sessions cascade), so
+  `User` as _the_ auth principal (`SessionUser`, the gate, sessions cascade), so
   columns-on-`User` is the lower-friction, cohesive choice.
 
 ## 5. Password hashing
@@ -138,6 +141,7 @@ New routes under the already-open `/api/auth/*` and the admin-gated
 `/api/settings/auth/*`.
 
 **Authentication (`routes/auth.ts`)**
+
 - `POST /api/auth/local/login` `{ username, password }`
   - Rejected unless mode is `local` or `oidc`.
   - Look up `issuer='local', subject=username`. If missing/disabled/locked or
@@ -159,6 +163,7 @@ New routes under the already-open `/api/auth/*` and the admin-gated
   a session. Response gains nothing else.
 
 **Management (`routes/settings-auth.ts`, admin-gated)**
+
 - `GET /api/settings/auth/local-users` → list (`LocalUserSummary`; never the hash).
 - `POST /api/settings/auth/local-users` `{ username, password, role }` → create.
 - `PATCH /api/settings/auth/local-users/:id` → `{ disabled?, role? }`.
@@ -206,6 +211,7 @@ setup step for `local`-over-HTTPS.
 ## 9. Shared contracts (`packages/shared/src/schemas`)
 
 Contract-first (extend/define Zod, derive TS types):
+
 - Widen `mode` enum → `['disabled', 'local', 'oidc']` in `authConfigUpdateSchema`,
   `authConfigResponseSchema`, and `AuthConfigResponse`.
 - New `auth-local.ts`: `localLoginSchema` (`username`, `password`),
@@ -227,6 +233,14 @@ Contract-first (extend/define Zod, derive TS types):
 - **Lockout recovery:** existing `RECOVERY_DISABLE_AUTH=true` + restart drops to
   `disabled` (open), where the operator resets the password/creates an admin in
   Settings, then restarts. Documented in `docs/operations.md`.
+
+> **SUPERSEDED IN PART (2026-07-18, issue #222).** The lockout-recovery bullet
+> above is still the right procedure, but at the time it was written the
+> override was **persisted** to the `auth_config` row, so the final "then
+> restarts" did not actually restore the previous mode. The override is now
+> in-memory for that boot only and never writes to the row — clearing the flag
+> and restarting does restore the stored mode on its own. Do not re-introduce
+> the DB write. See `docs/design/2026-07-18-issue-222-break-glass-override.md`.
 
 ## 11. Security considerations (OWASP)
 

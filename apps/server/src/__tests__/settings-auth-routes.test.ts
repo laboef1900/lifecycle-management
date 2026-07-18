@@ -100,6 +100,18 @@ describe('/api/settings/auth', () => {
     return server;
   }
 
+  /**
+   * Closes one server early (the two-boot tests below need the first instance
+   * gone before the second boots) and stops tracking just that instance.
+   * `created.length = 0` would drop the tracking entries for every OTHER
+   * server too, silently leaking them past the afterEach that closes them.
+   */
+  async function closeAndRelease(server: FastifyInstance): Promise<void> {
+    await server.close();
+    const index = created.indexOf(server);
+    if (index !== -1) created.splice(index, 1);
+  }
+
   async function createUserSession(role: 'ADMIN' | 'VIEWER'): Promise<string> {
     const user = await prisma.user.create({
       data: {
@@ -799,6 +811,167 @@ describe('/api/settings/auth', () => {
       const rows = list.json() as Array<{ id: string; disabled: boolean }>;
       expect(rows.find((u) => u.id === secondId)?.disabled).toBe(true);
       expect(rows.find((u) => u.id === firstId)?.disabled).toBe(false);
+    });
+  });
+
+  describe('break-glass (RECOVERY_DISABLE_AUTH) — #222', () => {
+    it('GET /settings/auth reports the stored mode and forceDisabledReason during break-glass', async () => {
+      // First boot seeds an oidc row from the OIDC env vars, then the
+      // break-glass override masks it in memory only.
+      const server = await buildServer({
+        env: makeOidcTestEnv({ CONFIG_ENCRYPTION_KEY, RECOVERY_DISABLE_AUTH: true }),
+        prisma,
+      });
+      created.push(server);
+
+      expect(server.authConfig.current.mode).toBe('disabled');
+
+      const get = await server.inject({ method: 'GET', url: '/api/settings/auth' });
+      expect(get.statusCode).toBe(200);
+      const body = get.json();
+
+      // The response must describe what is STORED (so the form echoes the
+      // stored mode back in its PUT instead of clobbering it with 'disabled'),
+      // qualified by forceDisabledReason so the UI can say auth is actually off
+      // AND name the recovery (clear the env var, restart).
+      expect(body.mode).toBe('oidc');
+      expect(body.forceDisabledReason).toBe('break_glass');
+    });
+
+    it('GET /settings/auth reports forceDisabledReason=secret_decrypt_failure on a decrypt-degraded boot', async () => {
+      // THE regression this field exists for. The decrypt degrade produces the
+      // identical enforced-vs-stored divergence as break-glass but with
+      // break-glass OFF; an indicator gated on break-glass alone answered
+      // {mode:'oidc', no indicator} while every /api route served an anonymous
+      // ADMIN — the Settings page rendered as a normal, secured OIDC
+      // deployment over a wide-open API.
+      const seeded = await buildServer({
+        env: makeOidcTestEnv({ CONFIG_ENCRYPTION_KEY }),
+        prisma,
+      });
+      expect(seeded.authConfig.current.mode).toBe('oidc');
+      await closeAndRelease(seeded);
+
+      // Reboot with a ROTATED key: the stored secrets no longer decrypt.
+      const server = await buildServer({
+        env: makeOidcTestEnv({ CONFIG_ENCRYPTION_KEY: ROTATED_CONFIG_ENCRYPTION_KEY }),
+        prisma,
+      });
+      created.push(server);
+
+      // Enforced disabled (open API) while the row still says oidc.
+      expect(server.authConfig.current.mode).toBe('disabled');
+      expect(server.authConfig.storedMode).toBe('oidc');
+      expect(server.authConfig.breakGlass).toBe(false);
+
+      const get = await server.inject({ method: 'GET', url: '/api/settings/auth' });
+      expect(get.statusCode).toBe(200);
+      const body = get.json();
+
+      expect(body.mode).toBe('oidc');
+      expect(body.forceDisabledReason).toBe('secret_decrypt_failure');
+    });
+
+    it('reports forceDisabledReason null on a normal boot whose stored mode is disabled', async () => {
+      // Enforced `disabled` matching a stored `disabled` is NOT a divergence.
+      const server = await buildDisabledServer();
+
+      const get = await server.inject({ method: 'GET', url: '/api/settings/auth' });
+
+      expect(get.statusCode).toBe(200);
+      expect(get.json().mode).toBe('disabled');
+      expect(get.json().forceDisabledReason).toBeNull();
+    });
+
+    it('reports forceDisabledReason null on a normal boot that is actually enforcing oidc', async () => {
+      const server = await buildOidcServer();
+      const token = await createUserSession('ADMIN');
+
+      const get = await server.inject({
+        method: 'GET',
+        url: '/api/settings/auth',
+        headers: { cookie: `${SESSION_COOKIE}=${token}` },
+      });
+
+      expect(get.statusCode).toBe(200);
+      expect(get.json().mode).toBe('oidc');
+      expect(get.json().forceDisabledReason).toBeNull();
+    });
+
+    it('a PUT during break-glass keeps the override and refreshes the stored mode', async () => {
+      // Invariants 3 + 4 in one round trip through the real route: saving in
+      // Settings mid-recovery must NOT re-lock the operator out, and the
+      // response must report the mode that was just WRITTEN (a stale storedMode
+      // would round-trip the old one straight back into the DB).
+      const setup = await buildDisabledServer();
+      const create = await setup.inject({
+        method: 'POST',
+        url: '/api/settings/auth/local-users',
+        payload: { username: 'bgput', password: 'twelvecharsok!', role: 'ADMIN' },
+      });
+      expect(create.statusCode).toBe(201);
+      await closeAndRelease(setup);
+
+      const server = await buildServer({
+        env: makeTestEnv({ CONFIG_ENCRYPTION_KEY, RECOVERY_DISABLE_AUTH: true }),
+        prisma,
+      });
+      created.push(server);
+      expect(server.authConfig.storedMode).toBe('disabled');
+
+      const put = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/auth',
+        payload: localModePayload,
+      });
+
+      expect(put.statusCode).toBe(200);
+      // The write landed and is reported back...
+      expect(put.json().mode).toBe('local');
+      expect(server.authConfig.storedMode).toBe('local');
+      const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+      expect(row!.mode).toBe('local');
+      // ...but the override survived the reload, so the API stays open until the
+      // operator clears RECOVERY_DISABLE_AUTH and restarts — and the response
+      // says so, now that stored `local` diverges from enforced `disabled`.
+      expect(server.authConfig.current.mode).toBe('disabled');
+      expect(put.json().forceDisabledReason).toBe('break_glass');
+    });
+
+    it('the last-admin guard stays armed during break-glass', async () => {
+      const setup = await buildDisabledServer();
+      const create = await setup.inject({
+        method: 'POST',
+        url: '/api/settings/auth/local-users',
+        payload: { username: 'bgadmin', password: 'twelvecharsok!', role: 'ADMIN' },
+      });
+      const { id } = create.json();
+      const enable = await setup.inject({
+        method: 'PUT',
+        url: '/api/settings/auth',
+        payload: localModePayload,
+      });
+      expect(enable.statusCode).toBe(200);
+      await closeAndRelease(setup);
+
+      // Break-glass boot against the stored `local` row. The guard keys off
+      // the STORED mode; keying it off the enforced mode would let the
+      // operator delete their last admin and hard-lock the next clean boot.
+      const server = await buildServer({
+        env: makeTestEnv({ CONFIG_ENCRYPTION_KEY, RECOVERY_DISABLE_AUTH: true }),
+        prisma,
+      });
+      created.push(server);
+      expect(server.authConfig.current.mode).toBe('disabled');
+      expect(server.authConfig.storedMode).toBe('local');
+
+      const del = await server.inject({
+        method: 'DELETE',
+        url: `/api/settings/auth/local-users/${id}`,
+      });
+
+      expect(del.statusCode).toBe(422);
+      expect(del.json().error.code).toBe('LAST_LOCAL_ADMIN');
     });
   });
 });

@@ -126,6 +126,11 @@ function fakeAuthConfigPlugin(initial: EffectiveAuthConfig) {
     async (fastify) => {
       fastify.decorate('authConfig', {
         current: initial,
+        // No override in these tests: enforced == stored, break-glass off.
+        storedMode: initial.mode,
+        breakGlass: false,
+        overrideCause: null,
+        overrideCauses: [],
         service: {} as unknown as AuthConfigService,
         reload: async () => {},
       });
