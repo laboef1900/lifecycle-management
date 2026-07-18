@@ -269,11 +269,22 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeButtonRef.current?.focus();
     return () => {
-      if (lastFocusRef.current && document.contains(lastFocusRef.current)) {
-        lastFocusRef.current.focus();
+      const last = lastFocusRef.current;
+      if (last && last !== document.body && document.contains(last)) {
+        last.focus();
+        return;
       }
+      // The route makes the console `inert` in the same commit that mounts
+      // this panel, and a real browser blurs the focused tile the moment it
+      // goes inert — so by the time the capture above ran, `activeElement`
+      // was already <body> and there is nothing recorded to restore
+      // (observed in Playwright; jsdom never blurs inert subtrees, which is
+      // why the unit suite can't see it). Fall back to the tile that opens
+      // this cluster — the trigger in every pointer/keyboard path through
+      // the console, and still the best landing spot after a ⌘K jump.
+      document.querySelector<HTMLElement>(`a[data-cluster-id="${clusterId}"]`)?.focus();
     };
-  }, []);
+  }, [clusterId]);
 
   // Tab trap (spec §5 "focus trap in"): cycles Tab/Shift+Tab within the
   // panel's own focusable elements while it's open. Deliberately hand-rolled
