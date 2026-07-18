@@ -37,6 +37,14 @@
   --accent: #8f6400;
   --accent-foreground: #ffffff;
   --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
+  /* @ai-note accent-toned micro-labels sitting on an accent wash (the order-by
+     rail's lead-time zone label). Ratios below are measured against the wash
+     over the card, not the bare card, since that is what the text is painted
+     on. The mockup softens the label to 75% accent, which clears AA in dark
+     (5.6:1) but reaches only 2.97:1 in light — far short of the 4.5:1 floor for
+     9px text. Light therefore keeps the accent at full strength (4.67:1);
+     html.dark below restores the mockup's softening. */
+  --accent-label: var(--accent);
   --accent-gradient: linear-gradient(
     135deg,
     var(--accent),
@@ -118,6 +126,7 @@ html.dark {
   --accent: #ffc53d;
   --accent-foreground: #171c2c;
   --accent-soft: color-mix(in oklab, var(--accent) 15%, transparent);
+  --accent-label: color-mix(in oklab, var(--accent) 75%, transparent);
   --accent-gradient: linear-gradient(
     135deg,
     var(--accent),
