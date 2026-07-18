@@ -602,6 +602,25 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(indicator).toHaveTextContent('Lose 1 host');
     // A non-colour cue: the summary text is present in the button's accessible name.
     expect(screen.getByTestId('scenario-button')).toHaveAccessibleName(/lose 1 host/i);
+    // The colour cue must track the scenario *line*, which is the consumption
+    // token (violet) — not the amber accent, which now reads as the warn
+    // threshold. Asserted on the class because the token resolves via CSS that
+    // jsdom does not apply; this is the only guard on that pairing.
+    expect(screen.getByTestId('scenario-button').className).toContain('--chart-consumption');
+  });
+
+  it('leaves the header button untinted while no scenario is applied', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    // Opening the pane alone must not tint the toggle — only an applied
+    // scenario does, so the tint means "the chart is showing a scenario".
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+
+    expect(screen.getByTestId('scenario-button').className).not.toContain('--chart-consumption');
+    expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
   });
 
   it('exposes disclosure state on the header button and toggles the pane closed on a second click', async () => {
