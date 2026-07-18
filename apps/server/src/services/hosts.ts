@@ -35,6 +35,38 @@ const hostInclude = {
 
 type HostRow = Prisma.HostGetPayload<{ include: typeof hostInclude }>;
 
+interface CommissioningCapacityRow {
+  id: string;
+  metricTypeId: string;
+  effectiveFrom: Date;
+}
+
+/**
+ * Capacity rows seeded with a provisional commissioning date must move with that
+ * date when the operator confirms an earlier one. Only the earliest row for each
+ * metric is eligible, and only when it is aligned exactly with the old provisional
+ * date; later capacity changes remain immutable history.
+ */
+function provisionalCapacityRowsToMove(host: {
+  commissionedAt: Date;
+  commissionedAtProvisional: boolean;
+  capacities: CommissioningCapacityRow[];
+}): string[] {
+  if (!host.commissionedAtProvisional) return [];
+
+  const earliestByMetric = new Map<string, CommissioningCapacityRow>();
+  for (const capacity of host.capacities) {
+    const earliest = earliestByMetric.get(capacity.metricTypeId);
+    if (!earliest || capacity.effectiveFrom < earliest.effectiveFrom) {
+      earliestByMetric.set(capacity.metricTypeId, capacity);
+    }
+  }
+
+  return [...earliestByMetric.values()]
+    .filter((capacity) => capacity.effectiveFrom.getTime() === host.commissionedAt.getTime())
+    .map((capacity) => capacity.id);
+}
+
 export class HostsService {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -131,7 +163,9 @@ export class HostsService {
   async update(tenantId: string, id: string, input: HostUpdateInput): Promise<HostResponse> {
     const existing = await this.prisma.host.findFirst({
       where: { id, tenantId },
-      include: { capacities: { select: { effectiveFrom: true } } },
+      include: {
+        capacities: { select: { id: true, metricTypeId: true, effectiveFrom: true } },
+      },
     });
     if (!existing) {
       throw new NotFoundError('Host', id);
@@ -178,7 +212,20 @@ export class HostsService {
     if (input.eolAt !== undefined) data.eolAt = input.eolAt ?? null;
     if (input.runPastEol !== undefined) data.runPastEol = input.runPastEol;
 
-    await this.prisma.host.update({ where: { id }, data });
+    const capacityRowsToMove =
+      input.commissionedAt !== undefined && input.commissionedAt < existing.commissionedAt
+        ? provisionalCapacityRowsToMove(existing)
+        : [];
+
+    await this.prisma.$transaction(async (tx) => {
+      if (input.commissionedAt !== undefined && capacityRowsToMove.length > 0) {
+        await tx.hostMetricCapacity.updateMany({
+          where: { id: { in: capacityRowsToMove } },
+          data: { effectiveFrom: input.commissionedAt },
+        });
+      }
+      await tx.host.update({ where: { id }, data });
+    });
     return this.getById(tenantId, id);
   }
 
@@ -207,7 +254,9 @@ export class HostsService {
         // ids are unique per the schema refine, so one lookup covers every entry.
         const existing = await tx.host.findMany({
           where: { id: { in: ids }, tenantId },
-          include: { capacities: { select: { effectiveFrom: true } } },
+          include: {
+            capacities: { select: { id: true, metricTypeId: true, effectiveFrom: true } },
+          },
         });
         const byId = new Map(existing.map((h) => [h.id, h]));
         for (const entry of input.hosts) {
@@ -227,6 +276,15 @@ export class HostsService {
           }
         }
         for (const entry of input.hosts) {
+          const host = byId.get(entry.hostId)!;
+          const capacityRowsToMove =
+            entry.commissionedAt < host.commissionedAt ? provisionalCapacityRowsToMove(host) : [];
+          if (capacityRowsToMove.length > 0) {
+            await tx.hostMetricCapacity.updateMany({
+              where: { id: { in: capacityRowsToMove } },
+              data: { effectiveFrom: entry.commissionedAt },
+            });
+          }
           await tx.host.update({
             where: { id: entry.hostId },
             data: { commissionedAt: entry.commissionedAt, commissionedAtProvisional: false },

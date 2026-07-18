@@ -293,15 +293,37 @@ export class VsphereSyncService {
       }
     }
 
-    // Hosts that vanished are MARKED, never deleted — their capacity rows feed the
-    // forecast, and a partial API answer must not silently shrink the fleet.
+    // Hosts that vanished are MARKED, never deleted. The collector deliberately
+    // omits disconnected/unreadable hosts because they provide no live capacity, so
+    // append a zero-capacity step while they are absent. A later successful sync
+    // appends their measured memory again, preserving history in both directions.
     const seen = collected.hosts.map((h) => h.moref);
-    const missing = await this.prisma.host.updateMany({
+    const missingHosts = await this.prisma.host.findMany({
       where: { connectionId, clusterId, externalId: { notIn: seen.length ? seen : ['__none__'] } },
-      data: { lastSyncedAt: new Date() },
+      include: {
+        capacities: {
+          where: { metricTypeId: memoryMetricId },
+          orderBy: { effectiveFrom: 'desc' },
+          take: 1,
+        },
+      },
     });
+    const missingAt = new Date();
+    for (const missing of missingHosts) {
+      await this.prisma.host.update({
+        where: { id: missing.id },
+        data: { lastSyncedAt: missingAt },
+      });
+      await this.reconcileHostCapacity(
+        tenantId,
+        missing,
+        memoryMetricId,
+        new Prisma.Decimal(0),
+        missingAt,
+      );
+    }
 
-    return { hostsCreated, hostsUpdated, hostsMissing: missing.count };
+    return { hostsCreated, hostsUpdated, hostsMissing: missingHosts.length };
   }
 
   /**
@@ -316,7 +338,12 @@ export class VsphereSyncService {
    *  - changed memory (up OR down — the invariant bounds the DATE, not the amount) →
    *    append one row effective from the start of the current month, but only if
    *    that is strictly later than the newest row. A second change within the same
-   *    month cannot append at month granularity and waits for next month.
+   *    month cannot append at month granularity and waits for next month;
+   *  - zero is the reversible "currently missing" marker. Availability transitions
+   *    use the observed UTC day (rather than the month start), preserving the
+   *    installed-memory row before a disconnect while still taking effect before the
+   *    next forecast month. A second transition on the same day updates that day's
+   *    latest row because @db.Date cannot represent two states within one day.
    *
    * `skipDuplicates` makes a same-period collision a no-op rather than a throw —
    * the same idiom the snapshot uses, and what keeps sync's "degrade, never crash"
@@ -327,7 +354,7 @@ export class VsphereSyncService {
     host: {
       id: string;
       commissionedAt: Date;
-      capacities: { effectiveFrom: Date; amount: Prisma.Decimal }[];
+      capacities: { id: string; effectiveFrom: Date; amount: Prisma.Decimal }[];
     },
     memoryMetricId: string,
     desiredMemory: Prisma.Decimal,
@@ -335,10 +362,24 @@ export class VsphereSyncService {
   ): Promise<void> {
     const latest = host.capacities[0];
 
-    const effectiveFrom = latest ? startOfUtcMonth(now) : host.commissionedAt;
+    const availabilityTransition =
+      latest !== undefined && (latest.amount.isZero() || desiredMemory.isZero());
+    const effectiveFrom = latest
+      ? availabilityTransition
+        ? startOfUtcDay(now)
+        : startOfUtcMonth(now)
+      : host.commissionedAt;
     if (latest) {
       if (latest.amount.equals(desiredMemory)) return;
-      if (effectiveFrom <= latest.effectiveFrom) return;
+      if (effectiveFrom <= latest.effectiveFrom) {
+        if (availabilityTransition) {
+          await this.prisma.hostMetricCapacity.update({
+            where: { id: latest.id },
+            data: { amount: desiredMemory },
+          });
+        }
+        return;
+      }
     }
 
     await this.prisma.hostMetricCapacity.createMany({
@@ -406,6 +447,10 @@ export class VsphereSyncService {
     // label, so sync stays idempotent rather than renaming things on every run.
     return stillClashes ? `${qualified} ${Date.now()}` : qualified;
   }
+}
+
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 function classify(err: unknown): 'unreachable' | 'auth_failed' | 'tls_untrusted' {
