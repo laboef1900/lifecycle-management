@@ -347,6 +347,9 @@ than zero, so the provisional date is safe but approximate. A cluster with uncon
 hosts shows an **_N_ hosts need commissioning dates** hint; confirm the real dates
 under the cluster's **Hosts** tab (admin only, one date per host, applied atomically).
 Confirming clears the flag; a re-sync never overwrites a confirmed date.
+The initial host-capacity step moves with an earlier confirmed date, so historical
+forecast months gain the capacity that was previously hidden behind the provisional
+import date; later memory and availability changes keep their original dates.
 
 ### Sync-owned fields
 
