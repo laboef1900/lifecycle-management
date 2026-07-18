@@ -17,6 +17,7 @@ import { buildClusterForecastEntries, type ClusterForecastEntry } from '@/lib/fo
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 
 import { ClusterTile } from './cluster-tile';
+import { FleetFilter } from './fleet-filter';
 import { FleetVerdict } from './fleet-verdict';
 import { OrderByRail, orderByUrgency, type OrderByRailItem } from './order-by-rail';
 import { isBaselineStale } from './stale-baseline';
@@ -59,12 +60,21 @@ export function sortClustersByUrgency(entries: SortEntry[]): SortEntry[] {
  */
 export function FleetConsole(): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false);
+  // Whether the user has operated the archived filter at least once this
+  // mount: gates the sr-only announcement below so the status region never
+  // "announces" the default state on load.
+  const [archivedTouched, setArchivedTouched] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [linkedClusterId, setLinkedClusterId] = useState<string | null>(null);
   // Stable across renders (PR review fix 4d) so the per-tile wrapper's
   // hover/focus props don't force `ClusterTile` (now `memo`-wrapped) to
   // treat every tile as changed just because FleetConsole re-rendered.
   const handleTileLinkStart = useCallback((id: string) => setLinkedClusterId(id), []);
   const handleTileLinkEnd = useCallback(() => setLinkedClusterId(null), []);
+  const handleShowArchivedChange = useCallback((next: boolean) => {
+    setShowArchived(next);
+    setArchivedTouched(true);
+  }, []);
 
   const clustersQuery = useQuery({
     queryKey: ['clusters', { includeArchived: false }],
@@ -82,14 +92,31 @@ export function FleetConsole(): React.JSX.Element {
   const liveUsageById = new Map((liveUsageQuery.data?.items ?? []).map((u) => [u.clusterId, u]));
   const liveUsagePending = liveUsageQuery.isPending;
 
+  // Enabled while the Filter popover is open too (#243), not only once the
+  // toggle is on: the popover's "Show archived (N)" item carries the live
+  // count, so the count must be real by the time the user reads the item.
   const archivedClustersQuery = useQuery({
     queryKey: ['clusters', { includeArchived: true }],
     queryFn: () => api.clusters.list({ includeArchived: true }),
-    enabled: showArchived,
+    enabled: showArchived || filterOpen,
   });
   const archivedOnly = (archivedClustersQuery.data?.items ?? []).filter(
     (c) => c.archivedAt !== null,
   );
+  const archivedCount = archivedClustersQuery.data ? archivedOnly.length : null;
+
+  // Filter-change announcement (#243, WCAG 4.1.3-adjacent): describes the
+  // resulting mixed view in words. Derived, so when the archived list arrives
+  // after the toggle the message refines itself in place; gated on
+  // `archivedTouched` so page load announces nothing.
+  const visibleCount = clusters.length + (showArchived ? archivedOnly.length : 0);
+  const archiveAnnouncement = !archivedTouched
+    ? ''
+    : showArchived
+      ? archivedCount === null
+        ? 'Showing archived clusters.'
+        : `Showing ${visibleCount} cluster${visibleCount === 1 ? '' : 's'} including ${archivedOnly.length} archived.`
+      : `Showing ${clusters.length} cluster${clusters.length === 1 ? '' : 's'}.`;
 
   const forecastQueries = useQueries({
     queries: clusters.map((cluster) => {
@@ -175,6 +202,14 @@ export function FleetConsole(): React.JSX.Element {
   // one instead of leaving the page headingless.
   return (
     <div className="space-y-3">
+      <div
+        data-testid="fleet-filter-announcement"
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+      >
+        {archiveAnnouncement}
+      </div>
       {isError ? (
         <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive shadow-none">
           <h1 className="sr-only">Fleet capacity console</h1>
@@ -230,21 +265,6 @@ export function FleetConsole(): React.JSX.Element {
             onTickHover={setLinkedClusterId}
           />
 
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setShowArchived((v) => !v)}
-              className="inline-flex h-8 items-center gap-2 rounded-[var(--radius)] border border-border bg-background px-2.5 text-xs font-medium text-fg-muted transition-colors hover:bg-card-hover hover:text-foreground"
-              aria-pressed={showArchived}
-            >
-              <span
-                aria-hidden
-                className={`inline-block h-2 w-2 rounded-full ${showArchived ? 'bg-accent' : 'bg-border'}`}
-              />
-              {showArchived ? 'Hide archived' : 'Show archived'}
-            </button>
-          </div>
-
           <div className="grid grid-cols-12 gap-3">
             <div className="col-span-12">
               <FleetVerdict
@@ -256,12 +276,25 @@ export function FleetConsole(): React.JSX.Element {
               />
             </div>
 
-            <p
-              role="note"
-              className="col-span-12 -mt-1 mb-[-4px] text-right text-[9px] font-semibold uppercase tracking-[0.14em] text-fg-subtle"
-            >
-              Sorted by order-by date
-            </p>
+            {/* Toolbar row directly above the tile grid (#243): the sort note
+                and the Filter control that owns the archived toggle — a
+                visible control attached to the list it filters, not a
+                stranded row of its own. */}
+            <div className="col-span-12 -mt-1 mb-[-4px] flex items-center justify-end gap-3">
+              <p
+                role="note"
+                className="text-[9px] font-semibold uppercase tracking-[0.14em] text-fg-subtle"
+              >
+                Sorted by order-by date
+              </p>
+              <FleetFilter
+                showArchived={showArchived}
+                onShowArchivedChange={handleShowArchivedChange}
+                archivedCount={archivedCount}
+                open={filterOpen}
+                onOpenChange={setFilterOpen}
+              />
+            </div>
 
             {sortedEntries.map((entry) => (
               <div

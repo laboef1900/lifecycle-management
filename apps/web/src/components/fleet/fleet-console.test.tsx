@@ -6,7 +6,7 @@ import type {
   TenantSettings,
 } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -289,7 +289,9 @@ describe('<FleetConsole> (render)', () => {
     renderConsole();
 
     expect(await screen.findByText('CL-Active')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /show archived/i }));
+    // #243: the archived toggle lives in the Filter popover on the toolbar.
+    await user.click(screen.getByTestId('fleet-filter-button'));
+    await user.click(await screen.findByRole('checkbox', { name: /show archived/i }));
 
     expect(await screen.findByText('CL-Retired')).toBeInTheDocument();
     const archivedTile = screen.getByText('CL-Retired').closest('a[data-cluster-id]');
@@ -297,6 +299,67 @@ describe('<FleetConsole> (render)', () => {
     const scoped = within(archivedTile as HTMLElement);
     expect(scoped.getByText('—')).toBeInTheDocument();
     expect(archivedTile).not.toHaveTextContent('0+');
+  });
+
+  it('Filter popover carries the live archived count, an active-count badge, and announces the mixed view (#243)', async () => {
+    const active = makeCluster({ id: 'c1', name: 'CL-Active' });
+    const archived = makeCluster({
+      id: 'c9',
+      name: 'CL-Retired',
+      archivedAt: '2026-01-01T00:00:00Z',
+    });
+    vi.spyOn(api.clusters, 'list').mockImplementation((params) =>
+      Promise.resolve({
+        items: params?.includeArchived ? [active, archived] : [active],
+        total: params?.includeArchived ? 2 : 1,
+        limit: 100,
+        offset: 0,
+      }),
+    );
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(makeForecast());
+
+    const user = userEvent.setup();
+    renderConsole();
+    expect(await screen.findByText('CL-Active')).toBeInTheDocument();
+
+    // Nothing is announced for the default state on load.
+    expect(screen.getByTestId('fleet-filter-announcement')).toHaveTextContent('');
+
+    const trigger = screen.getByTestId('fleet-filter-button');
+    // Radix exposes the disclosure state on the trigger.
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    // Default view → no active-count badge, no active tone.
+    expect(screen.queryByTestId('fleet-filter-count')).toBeNull();
+
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+
+    // Opening the popover enables the archived query, so the checkbox item
+    // carries the real count — before the toggle is ever switched on.
+    const checkbox = await screen.findByRole('checkbox', { name: /show archived \(1\)/i });
+    expect(checkbox).not.toBeChecked();
+
+    await user.click(checkbox);
+    expect(checkbox).toBeChecked();
+
+    // The mixed view stays explainable from the toolbar without reopening
+    // the popover: active tone + `· 1` count on the trigger…
+    expect(await screen.findByTestId('fleet-filter-count')).toHaveTextContent('· 1');
+    // …and the change is announced in words with the resulting totals.
+    await waitFor(() =>
+      expect(screen.getByTestId('fleet-filter-announcement')).toHaveTextContent(
+        'Showing 2 clusters including 1 archived.',
+      ),
+    );
+
+    await user.click(checkbox);
+    await waitFor(() =>
+      expect(screen.getByTestId('fleet-filter-announcement')).toHaveTextContent(
+        'Showing 1 cluster.',
+      ),
+    );
+    expect(screen.queryByTestId('fleet-filter-count')).toBeNull();
   });
 });
 
@@ -416,8 +479,9 @@ describe('<FleetConsole> Add-cluster affordance lives in Settings only (#223)', 
 
     renderConsole();
 
-    // The toolbar only exists on the populated branch — wait for it.
-    expect(await screen.findByRole('button', { name: /show archived/i })).toBeInTheDocument();
+    // The toolbar only exists on the populated branch — wait for it (#243:
+    // the console control is now the Filter popover trigger).
+    expect(await screen.findByTestId('fleet-filter-button')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add cluster/i })).toBeNull();
     expect(screen.queryByText('+ Add cluster')).toBeNull();
     expect(screen.queryByRole('link', { name: /add a cluster in settings/i })).toBeNull();
