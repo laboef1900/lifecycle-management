@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 
+import type { AuthForceDisabledReason } from '@lcm/shared';
+
 import { loadKey } from '../crypto/secret-box.js';
 import type { Env } from '../env.js';
 import {
@@ -16,7 +18,61 @@ declare module 'fastify' {
 }
 
 export interface AuthConfigState {
+  /**
+   * The auth config as ENFORCED — any in-memory override already applied.
+   * Every authentication/authorization gate reads this.
+   */
   current: EffectiveAuthConfig;
+  /**
+   * The mode as STORED in `auth_config.mode`, unmasked, refreshed on every
+   * load and every `reload()`. Presentation (`sanitize()`) and the last-admin
+   * lockout guards read this, never `current.mode` — see the split documented
+   * on `enforce()` below.
+   *
+   * @ai-warning Must be reassigned on the state object at every derivation
+   * site. A stale value round-trips the wrong mode back into the DB through
+   * the Settings form, which re-introduces #222 through the front door.
+   */
+  storedMode: EffectiveAuthConfig['mode'];
+  /**
+   * `env.RECOVERY_DISABLE_AUTH` captured once at plugin registration.
+   * Immutable for the process lifetime — never re-read from `process.env`.
+   */
+  readonly breakGlass: boolean;
+  /**
+   * Which in-memory override (if any) force-disabled the effective mode on this
+   * boot: `break_glass` for `RECOVERY_DISABLE_AUTH`, `secret_decrypt_failure` for
+   * the undecryptable-secret degrade, `null` when neither fired.
+   *
+   * Boot-scoped and immutable: `breakGlass` is a property of the process, and a
+   * decrypt failure can only be resolved by restarting with a different
+   * `CONFIG_ENCRYPTION_KEY`. Note this records the CAUSE, not the divergence —
+   * break-glass over a row already stored as `disabled` sets it without any
+   * enforced-vs-stored disagreement. `sanitize()` derives the reported reason
+   * from the actual divergence and uses this only to attribute it.
+   *
+   * @ai-note Precedence when BOTH fire on the same boot is `break_glass`: it is
+   * the operator's deliberate action and is immediately reversible (clear the env
+   * var, restart), so it is the recovery step to surface first. Fixing the key
+   * alone would not lift the override. Read `overrideCauses` when you need to
+   * know whether a SECOND cause is also active.
+   */
+  readonly overrideCause: AuthForceDisabledReason | null;
+  /**
+   * EVERY in-memory override active on this boot, ordered by the same
+   * precedence `overrideCause` applies — `overrideCause` is simply this list's
+   * head (or `null` when it is empty). Empty when no override fired.
+   *
+   * Exists because the reported reason is deliberately single-valued (the API
+   * contract names one recovery step, not a set). Without this, an operator who
+   * clears `RECOVERY_DISABLE_AUTH` after a boot where the decrypt degrade ALSO
+   * fired would restart into a still-disabled API with a second cause they were
+   * never told about. The boot log names the extra cause explicitly, and this
+   * field lets presentation hint at it without widening the response schema.
+   *
+   * Boot-scoped and immutable for the same reasons as `overrideCause`.
+   */
+  readonly overrideCauses: readonly AuthForceDisabledReason[];
   service: AuthConfigService;
   reload(): Promise<void>;
 }
@@ -42,6 +98,15 @@ export class AuthConfigStrictBootError extends Error {
 const SINGLETON_ID = 'singleton';
 
 /**
+ * `AuthConfig.mode` is a plain String column, not the union — normalize it
+ * exactly as `AuthConfigService.toEffective()` does, so a stray value can only
+ * ever read as the closed-by-default `disabled`.
+ */
+function normalizeStoredMode(mode: string): EffectiveAuthConfig['mode'] {
+  return mode === 'oidc' ? 'oidc' : mode === 'local' ? 'local' : 'disabled';
+}
+
+/**
  * Decorates `fastify.authConfig` — the boot-time-loaded, live-reloadable view
  * of `EffectiveAuthConfig` (Task C3's DB-backed source of truth). Registered
  * after `prisma`, before `auth`/`oidc` (those plugins read `authConfig.current`
@@ -57,31 +122,43 @@ const SINGLETON_ID = 'singleton';
  *     both).
  *  3. Fail-safe guard: if load() couldn't decrypt for ANY reason
  *     (`AuthSecretDecryptError` — key missing, key wrong, or ciphertext
- *     corrupted, while a secret is stored), force the row to mode=disabled
- *     with a *direct* prisma update that touches ONLY the `mode` column —
- *     never `service.update()`, which would try to re-encrypt secrets using
- *     a key we don't have, and never clearing
- *     `clientSecretEnc`/`signingSecretEnc`, since the stored ciphertext may
- *     still be recoverable (key fixed, or rolled back to the previous one)
+ *     corrupted, while a secret is stored), degrade the EFFECTIVE mode to
+ *     `disabled` **in memory only** (#222). The stored row is not written at
+ *     all: `service.update()` would try to re-encrypt secrets with a key we
+ *     don't have, and even a direct `mode`-only write would destroy the
+ *     operator's configuration — restoring or rolling back
+ *     `CONFIG_ENCRYPTION_KEY` must recover the deployment exactly as it was,
+ *     with nothing to re-enter. `clientSecretEnc`/`signingSecretEnc` are
+ *     likewise never cleared: the stored ciphertext may still be recoverable
  *     and is the only copy of an externally-sourced client secret. Log
- *     loudly, then hand-build the effective config from the (re-fetched) row
- *     without decrypting, instead of calling service.load()/toEffective()
- *     again — those would throw the exact same error again since the
- *     ciphertext is still there by design.
+ *     loudly, then hand-build the effective config from the row already
+ *     fetched below, without decrypting — calling
+ *     service.load()/toEffective() again would throw the exact same error,
+ *     this time outside the try/catch, crashing boot.
  *  3b. Strict boot (opt-in): if `AUTH_STRICT_BOOT` is set, step 3's decrypt
- *     failure fired, AND the row's stored mode is `oidc`, abort boot with
- *     `AuthConfigStrictBootError` (before the force-disable update, leaving the
+ *     failure fired, AND the row's stored mode is NOT `disabled` (i.e. `oidc`
+ *     or `local` — anything the degrade would actually open up), abort boot
+ *     with `AuthConfigStrictBootError` (before anything is written, leaving the
  *     configured row intact) instead of degrading to the open mode=disabled
  *     state — unless `RECOVERY_DISABLE_AUTH` is also set, which still wins as the
  *     deliberate override. A row already stored as `disabled` that merely retains
  *     a leftover encrypted secret degrades normally: failing open is not a
- *     downgrade there, so refusing boot would be a spurious outage.
- *  4. Break-glass: if `RECOVERY_DISABLE_AUTH` is set, force mode=disabled the
- *     same direct way, warn loudly, and reload — but only re-run
- *     `service.load()` when step 2 actually succeeded at decrypting (a valid
- *     key and no prior decrypt failure); otherwise reusing `service.load()`
- *     here would immediately hit the same undecryptable row and crash boot
- *     outside the try/catch above, so `current` is instead updated in memory.
+ *     downgrade there, so refusing boot would be a spurious outage (#136 F1).
+ *     The guard is the divergence predicate, never a mode enumeration — scoping
+ *     it to `oidc` alone let a stored `local` deployment fail OPEN under an
+ *     explicitly-enabled security control (#222).
+ *  4. Break-glass: if `RECOVERY_DISABLE_AUTH` is set, `enforce()` masks the
+ *     effective mode to `disabled` **in memory only** — applied to the boot
+ *     value AND to every later `reload()`, so the override is sticky for the
+ *     whole process lifetime and no Settings write can silently re-lock the
+ *     operator out mid-recovery. It never writes `auth_config`, so clearing
+ *     the env var and restarting resumes the configured mode with no operator
+ *     action in Settings (#222).
+ *
+ * @ai-note A break-glass boot is NOT write-free: `service.load()` itself may
+ * still create the singleton row, seed it from env, or upgrade a missing
+ * signing secret. What is guaranteed is that neither the break-glass override
+ * nor the decrypt degrade ever writes `auth_config.mode`.
  */
 const authConfigPluginFn: FastifyPluginAsync<AuthConfigPluginOptions> = async (
   fastify,
@@ -90,14 +167,48 @@ const authConfigPluginFn: FastifyPluginAsync<AuthConfigPluginOptions> = async (
   const key = env.CONFIG_ENCRYPTION_KEY ? loadKey(env.CONFIG_ENCRYPTION_KEY) : null;
   const service = new AuthConfigService(fastify.prisma, key, fastify.log);
 
+  // Captured once, never re-read from process.env: the override is a property
+  // of this process, immutable for its lifetime (invariant 5).
+  const breakGlass = env.RECOVERY_DISABLE_AUTH === true;
+
+  /**
+   * The ONLY producer of the break-glass override. In-memory only:
+   * `auth_config` is never written by it, so clearing `RECOVERY_DISABLE_AUTH`
+   * and restarting resumes the configured mode (#222).
+   *
+   * Applied at EVERY site where `state.current` is derived — the boot load and
+   * `reload()` — because the override is a pure function of the process, not a
+   * one-time boot event. Skipping it in `reload()` would let
+   * `POST /settings/auth/rotate-signing-secret` (which reloads but never
+   * touches `mode`) resurrect the stored `oidc`/`local` and lock the operator
+   * out on the very next request, mid-recovery, with the flag still set.
+   *
+   * @ai-warning Every value assigned to `state.current` must come from here.
+   * The decrypt degrade below is the one deliberate exception: it is a second,
+   * distinct override with its own cause, and hardcodes `mode: 'disabled'`.
+   */
+  const enforce = (loaded: EffectiveAuthConfig): EffectiveAuthConfig => {
+    if (!breakGlass) return loaded;
+    fastify.log.warn(
+      { event: 'auth_config.break_glass_override_applied', storedMode: loaded.mode },
+      'RECOVERY_DISABLE_AUTH=true: overriding the effective auth mode to disabled (break-glass). ' +
+        'The stored configuration is untouched.',
+    );
+    return { ...loaded, mode: 'disabled' };
+  };
+
   let current: EffectiveAuthConfig;
-  // Tracks whether the initial decrypt attempt below failed, so the
-  // RECOVERY_DISABLE_AUTH branch further down knows it must NOT re-run
-  // service.load() (which would hit the same undecryptable row again and
-  // crash boot outside this try/catch) even though `key` is non-null.
-  let decryptFailed = false;
+  let storedMode: EffectiveAuthConfig['mode'];
+  // Set by the decrypt-degrade path below. Recorded so `sanitize()` can name the
+  // cause of an enforced-vs-stored divergence: before this existed the degrade
+  // produced the exact same divergence as break-glass but reported no cause at
+  // all, so GET /settings/auth answered "oidc" with no force-disabled indicator
+  // over a wide-open API.
+  let decryptDegraded = false;
   try {
-    current = await service.load(env);
+    const loaded = await service.load(env);
+    storedMode = loaded.mode;
+    current = enforce(loaded);
   } catch (err) {
     // The only expected failure mode here is AuthConfigService throwing
     // AuthSecretDecryptError because a stored secret column exists but can't
@@ -107,20 +218,32 @@ const authConfigPluginFn: FastifyPluginAsync<AuthConfigPluginOptions> = async (
     if (!(err instanceof AuthSecretDecryptError)) {
       throw err;
     }
-    decryptFailed = true;
-    // A decrypt failure only warrants refusing boot when the STORED mode is
-    // 'oidc' — that is the only case where degrading to mode=disabled is a
-    // genuine downgrade to an open API. A row already stored as 'disabled' that
-    // merely retains a leftover encrypted secret (oidc -> disabled via Settings)
-    // is already closed, so strict boot must not refuse it; it degrades normally.
+    // A decrypt failure only warrants refusing boot when degrading would
+    // actually WIDEN access — i.e. when the stored mode is not already
+    // `disabled`. The guard is therefore the divergence predicate
+    // (`normalizeStoredMode(...) !== 'disabled'`), not an enumeration of modes.
+    //
+    // @ai-warning Do NOT re-narrow this to `=== 'oidc'`. That scoping existed
+    // once (#136 F1) to stop a legitimately-disabled deployment that merely
+    // retains stale ciphertext from refusing to boot — `toEffective()` decrypts
+    // leftover secret columns regardless of the row's mode, which is why such a
+    // row reaches this path at all. The `!== 'disabled'` form preserves that
+    // exemption exactly, while closing the fail-open it left behind (#222): a
+    // row stored as `local` with an undecryptable secret degraded to an open,
+    // anonymous-ADMIN API despite strict boot being explicitly enabled.
     const storedRow = await fastify.prisma.authConfig.findUnique({ where: { id: SINGLETON_ID } });
     // Opt-in strict boot: refuse to start rather than silently degrade a
-    // configured oidc deployment to an open mode=disabled API. RECOVERY_DISABLE_AUTH
-    // still wins as the deliberate break-glass override. Throw BEFORE the
-    // force-disable update so the stored configured row is left untouched for
-    // recovery. Raised outside the guarded load() (in the catch), so it
-    // propagates and aborts boot.
-    if (storedRow?.mode === 'oidc' && env.AUTH_STRICT_BOOT && !env.RECOVERY_DISABLE_AUTH) {
+    // configured (oidc OR local) deployment to an open mode=disabled API.
+    // RECOVERY_DISABLE_AUTH still wins as the deliberate break-glass override.
+    // Throw BEFORE anything is written so the stored configured row is left
+    // untouched for recovery. Raised outside the guarded load() (in the catch),
+    // so it propagates and aborts boot.
+    if (
+      storedRow !== null &&
+      normalizeStoredMode(storedRow.mode) !== 'disabled' &&
+      env.AUTH_STRICT_BOOT &&
+      !env.RECOVERY_DISABLE_AUTH
+    ) {
       fastify.log.fatal(
         { err, event: 'auth_config.strict_boot_refused' },
         'AUTH_STRICT_BOOT is set and the stored auth configuration secret could not be decrypted ' +
@@ -135,68 +258,146 @@ const authConfigPluginFn: FastifyPluginAsync<AuthConfigPluginOptions> = async (
       );
     }
     fastify.log.error(
-      { err },
+      { err, event: 'auth_config.decrypt_degraded' },
       'AuthConfig has a stored secret that could not be decrypted (CONFIG_ENCRYPTION_KEY missing, ' +
-        'wrong/rotated, or the ciphertext is corrupted); forcing mode=disabled to fail safe instead ' +
-        'of crashing. The stored encrypted secret(s) are left intact — fixing or rolling back ' +
-        'CONFIG_ENCRYPTION_KEY, or re-entering the secret in Settings, will allow re-enabling oidc.',
+        'wrong/rotated, or the ciphertext is corrupted); degrading the EFFECTIVE mode to disabled ' +
+        'in memory to fail safe instead of crashing. The stored configuration and encrypted ' +
+        'secret(s) are left completely intact — fixing or rolling back CONFIG_ENCRYPTION_KEY and ' +
+        'restarting restores the configured mode with nothing to re-enter.',
     );
-    // Force mode ONLY — never null out clientSecretEnc/signingSecretEnc here.
-    // toEffective() would decrypt whatever secret columns are populated
-    // unconditionally regardless of mode, so calling service.load()/
-    // toEffective() again below would throw the exact same error — but that
-    // is fine, because we deliberately do NOT call them again. We build
-    // `current` by hand from the row `update()` just returned instead.
-    const row = await fastify.prisma.authConfig.update({
-      where: { id: SINGLETON_ID },
-      data: { mode: 'disabled' },
-    });
+    // The row is NOT written (#222): degrading in memory keeps the operator's
+    // configuration recoverable by restoring the key alone. `current` is
+    // hand-built from the row fetched above rather than via
+    // service.load()/toEffective(), which would decrypt the still-present
+    // ciphertext and throw the identical error — this time outside the
+    // try/catch, crashing boot.
+    if (storedRow === null) {
+      // Unreachable in practice: service.load() creates the singleton row
+      // before it can throw a decrypt error. Fail loud rather than guess.
+      throw err;
+    }
+    storedMode = normalizeStoredMode(storedRow.mode);
+    decryptDegraded = true;
+    // Hardcoded, NOT produced by enforce(): the decrypt degrade is a second,
+    // distinct override with its own cause, and applies whether or not
+    // break-glass is also active. clientSecret/signingSecret stay null —
+    // they genuinely could not be decrypted.
     current = {
       mode: 'disabled',
-      issuerUrl: row.issuerUrl,
-      clientId: row.clientId,
+      issuerUrl: storedRow.issuerUrl,
+      clientId: storedRow.clientId,
       clientSecret: null,
       signingSecret: null,
-      appBaseUrl: row.appBaseUrl,
-      scopes: row.scopes,
-      roleClaim: row.roleClaim,
-      adminValues: row.adminValues,
-      defaultRole: row.defaultRole === 'viewer' ? 'viewer' : 'admin',
-      allowedEmailDomains: row.allowedEmailDomains,
-      allowedEmails: row.allowedEmails,
-      sessionTtlHours: row.sessionTtlHours,
-      allowInsecure: row.allowInsecure,
+      appBaseUrl: storedRow.appBaseUrl,
+      scopes: storedRow.scopes,
+      roleClaim: storedRow.roleClaim,
+      adminValues: storedRow.adminValues,
+      defaultRole: storedRow.defaultRole === 'viewer' ? 'viewer' : 'admin',
+      allowedEmailDomains: storedRow.allowedEmailDomains,
+      allowedEmails: storedRow.allowedEmails,
+      sessionTtlHours: storedRow.sessionTtlHours,
+      allowInsecure: storedRow.allowInsecure,
     };
   }
 
-  if (env.RECOVERY_DISABLE_AUTH) {
+  // Precedence-ordered: break-glass first — see the `overrideCause` docstring.
+  const overrideCauses: readonly AuthForceDisabledReason[] = [
+    ...(breakGlass ? (['break_glass'] as const) : []),
+    ...(decryptDegraded ? (['secret_decrypt_failure'] as const) : []),
+  ];
+  // The single reported cause is this list's head; the tail is what the boot log
+  // below and any presentation hint use to warn about the NEXT cause waiting.
+  const overrideCause: AuthForceDisabledReason | null = overrideCauses[0] ?? null;
+
+  if (breakGlass) {
+    // Naming the second cause here is the whole mitigation for the
+    // single-valued contract: the operator who reads this line knows that
+    // clearing the env var alone will not restore the stored mode.
+    const alsoDecryptDegraded = decryptDegraded;
     fastify.log.warn(
-      'RECOVERY_DISABLE_AUTH=true: forcing AuthConfig mode=disabled (break-glass override). ' +
-        'Remove this env var once access is restored via the settings UI.',
+      { event: 'auth_config.break_glass_active', storedMode, overrideCauses, alsoDecryptDegraded },
+      'RECOVERY_DISABLE_AUTH=true: authentication is force-disabled for THIS boot only ' +
+        '(break-glass override). The stored auth configuration is preserved untouched — clearing ' +
+        'this env var and restarting fully restores it, with no change needed in Settings. The ' +
+        'override also survives in-session reloads, so saving in Settings persists but does not ' +
+        'take effect until that restart. While it is set, /api is open to an anonymous ADMIN.' +
+        (alsoDecryptDegraded
+          ? ' A SECOND override is also active on this boot: the stored auth secret could not be ' +
+            'decrypted. Clearing RECOVERY_DISABLE_AUTH alone will NOT restore the stored mode — ' +
+            'restore the correct CONFIG_ENCRYPTION_KEY as well.'
+          : ''),
     );
-    await fastify.prisma.authConfig.update({
-      where: { id: SINGLETON_ID },
-      data: { mode: 'disabled' },
-    });
-    // Only safe to re-load through the service (which decrypts stored
-    // secrets) when we actually have a key AND the initial load above didn't
-    // already fail to decrypt with it. With no key, or a key that's present
-    // but wrong (rotated) / a corrupted ciphertext, service.load()/
-    // toEffective() would throw the same AuthSecretDecryptError as the guard
-    // above — but this time outside the try/catch, crashing boot instead of
-    // failing safe. In that case `current` is already a valid disabled
-    // config (either hand-built by the guard above, or loaded normally when
-    // there was no secret to decrypt), so just force it disabled in memory
-    // without touching the encrypted columns.
-    current =
-      key !== null && !decryptFailed ? await service.load(env) : { ...current, mode: 'disabled' };
   }
 
   const state: AuthConfigState = {
     current,
+    storedMode,
+    breakGlass,
+    overrideCause,
+    overrideCauses,
     service,
     async reload() {
-      state.current = await service.load(env);
+      try {
+        const next = await service.load(env);
+        // Assigned on the STATE, never a closure-local `let`: a stale
+        // storedMode would round-trip the wrong mode back into the DB via the
+        // Settings form (see the AuthConfigState docstring).
+        state.storedMode = next.mode;
+        state.current = enforce(next);
+      } catch (err) {
+        if (!(err instanceof AuthSecretDecryptError)) throw err;
+        // A write landed (e.g. `PUT /settings/auth`) but the re-read could not
+        // decrypt. `state.current` is deliberately left alone — this path must
+        // never widen what is enforced — but `storedMode` would otherwise keep
+        // its pre-write value and round-trip the OLD mode back into the DB
+        // through the Settings form. Re-read the raw row (no decryption, so it
+        // cannot throw the same error again) to make storedMode reflect the most
+        // recent successful WRITE as well as the most recent successful load.
+        const row = await fastify.prisma.authConfig.findUnique({ where: { id: SINGLETON_ID } });
+        if (row) state.storedMode = normalizeStoredMode(row.mode);
+        // A divergence can FIRST ARISE here, at runtime: the write landed, so
+        // storedMode advances, while `state.current` is deliberately frozen.
+        // `authStartupWarnings` only runs once, at boot (server.ts), so without
+        // this the operator gets no signal at all — and docs/operations.md tells
+        // them the error log is one of the two things that make this state
+        // visible. Same event name and same `error` level as the boot alarm, so
+        // one log query finds every occurrence regardless of when it arose.
+        if (state.current.mode === 'disabled' && state.storedMode !== 'disabled') {
+          fastify.log.error(
+            {
+              err,
+              event: 'auth_config.open_despite_configuration',
+              storedMode: state.storedMode,
+              enforcedMode: state.current.mode,
+            },
+            `Authentication is DISABLED in memory while the stored configuration is ` +
+              `'${state.storedMode}': /api is open to an anonymous ADMIN. This divergence arose ` +
+              'at runtime — a Settings write landed but the re-read could not be decrypted, so ' +
+              'the enforced mode was left untouched. Restore CONFIG_ENCRYPTION_KEY and restart.',
+          );
+        } else if (state.current.mode !== 'disabled' && state.current.mode !== state.storedMode) {
+          // The INVERSE stale case, and the safe direction: what is enforced is
+          // STRICTER than what is stored (e.g. still enforcing 'oidc' after the
+          // row was rewritten to 'disabled'). `sanitize()` reports
+          // forceDisabledReason=null here by design — see the asymmetry note on
+          // AuthConfigService.sanitize(). It understates access and never
+          // overstates it, so enforcement is deliberately NOT widened to match;
+          // it is only made observable.
+          fastify.log.warn(
+            {
+              event: 'auth_config.enforced_stricter_than_stored',
+              storedMode: state.storedMode,
+              enforcedMode: state.current.mode,
+            },
+            `Authentication is still ENFORCED as '${state.current.mode}' while the stored ` +
+              `configuration now reads '${state.storedMode}': the write landed but the re-read ` +
+              'could not be decrypted, so the enforced mode was left untouched. This fails ' +
+              'closed (access is stricter than configured); Settings will show the stored mode. ' +
+              'Restore CONFIG_ENCRYPTION_KEY and restart to converge.',
+          );
+        }
+        throw err;
+      }
     },
   };
 

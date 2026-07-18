@@ -31,8 +31,41 @@ export const authConfigTestSchema = z.strictObject({
 });
 export type AuthConfigTest = z.infer<typeof authConfigTestSchema>;
 
+/**
+ * Why authentication is force-disabled in memory while the stored mode says
+ * otherwise. The value names the CAUSE because the operator's recovery differs:
+ *
+ * - `break_glass` — `RECOVERY_DISABLE_AUTH=true`. Clear the env var and restart.
+ * - `secret_decrypt_failure` — a stored auth secret could not be decrypted
+ *   (`CONFIG_ENCRYPTION_KEY` missing, wrong, or rotated). Restore or roll back the
+ *   key and restart.
+ */
+export type AuthForceDisabledReason = 'break_glass' | 'secret_decrypt_failure';
+
 export interface AuthConfigResponse {
+  /**
+   * The mode as STORED in `auth_config.mode` — never the enforced value.
+   * `forceDisabledReason` qualifies whether it is currently ENFORCED: while that
+   * field is non-null the enforced mode is `disabled` no matter what this reports.
+   *
+   * @ai-warning The Settings form defaults from this field and echoes it back in
+   * `PUT /api/settings/auth`, which persists `mode` unconditionally. Reporting the
+   * enforced mode here would clobber the stored `oidc`/`local` config on the first
+   * save during a break-glass boot — that is issue #222 re-entering through the UI.
+   */
   mode: 'disabled' | 'local' | 'oidc';
+  /**
+   * `null` when there is no divergence — the enforced mode equals `mode` above.
+   * Non-null when authentication is force-disabled IN MEMORY while the stored
+   * `mode` is something else; the value names the cause (see
+   * `AuthForceDisabledReason`). Both overrides are in-memory and boot-scoped: the
+   * stored configuration reported above is untouched and resumes once the cause is
+   * removed and the server restarts.
+   *
+   * Consumers MUST surface a non-null value — otherwise the response reads as
+   * "OIDC enabled" over a fully open API.
+   */
+  forceDisabledReason: AuthForceDisabledReason | null;
   issuerUrl: string | null;
   clientId: string | null;
   appBaseUrl: string | null;
@@ -53,6 +86,7 @@ export interface AuthConfigResponse {
 
 export const authConfigResponseSchema: z.ZodType<AuthConfigResponse> = z.object({
   mode: z.enum(['disabled', 'local', 'oidc']),
+  forceDisabledReason: z.enum(['break_glass', 'secret_decrypt_failure']).nullable(),
   issuerUrl: z.string().nullable(),
   clientId: z.string().nullable(),
   appBaseUrl: z.string().nullable(),

@@ -1,6 +1,6 @@
 import type { AuthConfig, PrismaClient } from '@prisma/client';
 
-import type { AuthConfigResponse, AuthConfigUpdate } from '@lcm/shared';
+import type { AuthConfigResponse, AuthConfigUpdate, AuthForceDisabledReason } from '@lcm/shared';
 
 import { decrypt, encrypt, generateSecret } from '../crypto/secret-box.js';
 import type { Env } from '../env.js';
@@ -292,15 +292,62 @@ export class AuthConfigService {
     };
   }
 
-  /** Never includes secret values — only booleans indicating whether one is set. */
+  /**
+   * Never includes secret values — only booleans indicating whether one is set.
+   *
+   * `provenance.storedMode` (NOT `effective.mode`) is reported as `mode`,
+   * because the Settings form defaults its mode selector from this response
+   * and always echoes `mode` back in its PUT. Reporting the *enforced* mode
+   * during a break-glass boot would make the first save clobber the stored
+   * `oidc`/`local` with `disabled` and re-introduce #222 through the UI.
+   * `forceDisabledReason` is what stops that from reading as "OIDC is on" over
+   * a wide-open API — the two fields are only correct together.
+   *
+   * @ai-warning `forceDisabledReason` is derived from the ACTUAL enforced-vs-
+   * stored divergence, never from a cause flag alone. Gating it on break-glass
+   * only (as the first cut did) silently omitted the identical divergence
+   * produced by the decrypt degrade, which reads as a normal, secured OIDC
+   * deployment over an anonymous-ADMIN API.
+   *
+   * @ai-note The predicate is deliberately ASYMMETRIC. It fires only when the
+   * enforced mode is LOOSER than the stored one (enforced `disabled`, stored
+   * `oidc`/`local`) — the direction that overstates security over an open API.
+   * The inverse (enforced `oidc`/`local` while the row now reads `disabled`,
+   * reachable when a Settings write lands but the re-read cannot be decrypted)
+   * reports `forceDisabledReason: null`, so the UI renders an ordinary
+   * 'Disabled' page while the API is in fact still enforcing. That is the SAFE
+   * direction: it understates the caller's access and never overstates it, and
+   * contorting this field to express "stricter than stored" would overload a
+   * flag whose only consumer is a force-DISABLED warning. It is made observable
+   * instead, via `auth_config.enforced_stricter_than_stored` at `warn` from the
+   * auth-config plugin's reload path. Do not widen enforcement to converge.
+   */
   sanitize(
     effective: EffectiveAuthConfig,
+    provenance: {
+      storedMode: EffectiveAuthConfig['mode'];
+      /** Cause recorded by the auth-config plugin; only ever used to attribute. */
+      overrideCause: AuthForceDisabledReason | null;
+    },
     redirectUri: string,
     discoveryStatus: AuthConfigResponse['discoveryStatus'],
     lastError: string | null,
   ): AuthConfigResponse {
+    // The enforced mode can only be `disabled` while something else is stored
+    // when an in-memory override is active, so this has no false positives.
+    const forceDisabled = effective.mode === 'disabled' && provenance.storedMode !== 'disabled';
+    // A divergence with no recorded cause is a bug in the plugin, not an
+    // absence of override — reporting `null` there would render a
+    // secured-looking page over an open API, which is exactly the failure this
+    // field exists to prevent. Fall back to the conservative non-null value so
+    // a divergence is NEVER reportable as null.
+    const forceDisabledReason: AuthForceDisabledReason | null = forceDisabled
+      ? (provenance.overrideCause ?? 'secret_decrypt_failure')
+      : null;
+
     return {
-      mode: effective.mode,
+      mode: provenance.storedMode,
+      forceDisabledReason,
       issuerUrl: effective.issuerUrl,
       clientId: effective.clientId,
       appBaseUrl: effective.appBaseUrl,

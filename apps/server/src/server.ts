@@ -6,11 +6,15 @@ import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import underPressure from '@fastify/under-pressure';
 import type { PrismaClient } from '@prisma/client';
-import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyInstance,
+  type FastifyServerOptions,
+} from 'fastify';
 
 import type { Env } from './env.js';
 import { authConfigPlugin } from './plugins/auth-config.js';
-import { authPlugin, authStartupWarnings } from './plugins/auth.js';
+import { authPlugin, authStartupWarnings, type AuthStartupWarning } from './plugins/auth.js';
 import { errorHandlerPlugin } from './plugins/error-handler.js';
 import { oidcPlugin } from './plugins/oidc.js';
 import { prismaPlugin } from './plugins/prisma.js';
@@ -82,10 +86,10 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(authConfigPlugin, { env });
 
   // Config is loaded once authConfigPlugin has registered; warnings must
-  // reflect the actual (config-driven) auth state, not raw env.
-  for (const warning of authStartupWarnings(server.authConfig.current, env.NODE_ENV)) {
-    server.log.warn(warning);
-  }
+  // reflect the actual (config-driven) auth state, not raw env. Each finding
+  // carries its own level — the enforced-vs-stored divergence alarm is an
+  // `error`, not a `warn` (see authStartupWarnings).
+  logAuthStartupWarnings(server.log, authStartupWarnings(server.authConfig, env.NODE_ENV));
 
   await server.register(authPlugin);
   await server.register(oidcPlugin);
@@ -128,6 +132,22 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   });
 
   return server;
+}
+
+/**
+ * Emits each boot-time auth finding at ITS OWN level — the enforced-vs-stored
+ * divergence alarm is an `error`, not a `warn`. Exported (rather than inlined in
+ * `buildServer`) purely so the level dispatch is directly assertable: in tests
+ * `buildServer` runs with `logger: false`, so a regression to a hardcoded
+ * `server.log.warn` would otherwise be invisible to the whole suite.
+ */
+export function logAuthStartupWarnings(
+  log: FastifyBaseLogger,
+  warnings: AuthStartupWarning[],
+): void {
+  for (const warning of warnings) {
+    log[warning.level]({ event: warning.event }, warning.message);
+  }
 }
 
 function buildLoggerConfig(env: Env): NonNullable<FastifyServerOptions['logger']> {

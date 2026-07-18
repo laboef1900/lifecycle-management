@@ -82,9 +82,18 @@ export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> =
     }
   });
 
+  /**
+   * Presentation reads the STORED mode, not the enforced one — enforcement
+   * (the gate above, `plugins/auth.ts`) is the only consumer of
+   * `authConfig.current.mode`. See `AuthConfigService.sanitize`.
+   */
   const sanitizedView = (): AuthConfigResponse =>
     service.sanitize(
       fastify.authConfig.current,
+      {
+        storedMode: fastify.authConfig.storedMode,
+        overrideCause: fastify.authConfig.overrideCause,
+      },
       fastify.oidc.redirectUri,
       fastify.oidc.status,
       fastify.oidc.lastError,
@@ -222,7 +231,11 @@ export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> =
 
     // Guard (never leave `local` mode with zero enabled admins) and mutation
     // both run atomically inside `disableOrDemoteGuarded` — see its docstring.
-    await localUsers.disableOrDemoteGuarded(id, body, fastify.authConfig.current.mode);
+    // Keyed on the STORED mode: during a break-glass boot the enforced mode is
+    // `disabled`, which would disarm the guard and let the operator delete
+    // their last admin — producing a hard lockout on the next clean boot,
+    // since the stored row still says `local`.
+    await localUsers.disableOrDemoteGuarded(id, body, fastify.authConfig.storedMode);
     return reply.code(204).send();
   });
 
@@ -237,8 +250,10 @@ export const settingsAuthRoutes: FastifyPluginAsync<SettingsAuthRoutesOptions> =
   fastify.delete('/settings/auth/local-users/:id', async (request, reply) => {
     const { id } = localUserIdParamsSchema.parse(request.params);
 
-    // Guard + delete run atomically inside `removeGuarded` — see its docstring.
-    await localUsers.removeGuarded(id, fastify.authConfig.current.mode);
+    // Guard + delete run atomically inside `removeGuarded` — see its
+    // docstring. Keyed on the STORED mode for the same reason as the PATCH
+    // route above.
+    await localUsers.removeGuarded(id, fastify.authConfig.storedMode);
     return reply.code(204).send();
   });
 };
