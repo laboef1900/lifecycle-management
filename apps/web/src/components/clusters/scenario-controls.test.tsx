@@ -72,4 +72,45 @@ describe('<ScenarioControls>', () => {
     );
     expect(screen.getByTestId('scenario-summary')).toHaveTextContent(/Add 30 × 16 GB VMs/);
   });
+
+  it('seeds the draft from the active scenario, so Apply cannot silently replace it with the defaults', async () => {
+    // The pane unmounts on close (#226), so every reopen is a fresh mount: a
+    // form showing "Lose hosts / 1" beside "Active: Delay procurement by 6 mo"
+    // turns one Apply click into an unintended scenario swap.
+    const onChange = vi.fn();
+    render(
+      <ScenarioControls active={{ kind: 'delay_procurement', months: 6 }} onChange={onChange} />,
+    );
+
+    expect(screen.getByLabelText(/delay \(months\)/i)).toHaveValue(6);
+    expect(screen.queryByLabelText(/hosts to drop/i)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /apply/i }));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'delay_procurement', months: 6 });
+  });
+
+  it('seeds both add_vms fields from the active scenario', () => {
+    render(
+      <ScenarioControls active={{ kind: 'add_vms', count: 30, sizeGb: 64 }} onChange={() => {}} />,
+    );
+    expect(screen.getByLabelText(/vm count/i)).toHaveValue(30);
+    expect(screen.getByLabelText(/size \(gb\)/i)).toHaveValue(64);
+  });
+
+  it('falls back to the defaults when no scenario is active', () => {
+    render(<ScenarioControls active={null} onChange={() => {}} />);
+    expect(screen.getByLabelText(/hosts to drop/i)).toHaveValue(1);
+  });
+
+  it('stacks the fields instead of using the viewport-wide 12-column row', () => {
+    // The only host is the cluster panel's ~272px Scenario pane, where the old
+    // `sm:col-span-*` row squeezed the number inputs to ~39px. jsdom has no
+    // layout, so the guard is on the layout classes themselves.
+    render(
+      <ScenarioControls active={{ kind: 'add_vms', count: 30, sizeGb: 64 }} onChange={() => {}} />,
+    );
+    const fields = screen.getByTestId('scenario-fields');
+    expect(fields).not.toHaveClass('grid-cols-12');
+    expect(fields.querySelector('[class*="sm:col-span-"]')).toBeNull();
+  });
 });

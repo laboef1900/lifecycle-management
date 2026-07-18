@@ -6,6 +6,7 @@ import type {
 } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
+import { cva } from 'class-variance-authority';
 import { AlertTriangle, SlidersHorizontal, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
@@ -55,6 +56,53 @@ const EXIT_MS = 200;
  *  widths and the pane overlays the content below the `lg` breakpoint. */
 const SCENARIO_PANE_WIDTH = 340;
 
+/** Below this width the pane cannot sit beside the content column, so it
+ *  overlays it instead (mirrors the `lg:` utilities on the `m.aside`). Kept as
+ *  one constant so the media query and the Tailwind class can't drift apart. */
+const PANE_SIDE_BY_SIDE_QUERY = '(min-width: 1024px)';
+
+/**
+ * The header chip-button recipe, single-sourced (review finding: the class
+ * string was copy-pasted verbatim between the Scenario toggle and the pane's
+ * close control). `tone: 'active'` uses the consumption token rather than the
+ * amber accent so the indicator points at the violet scenario line it labels —
+ * amber is double-booked as the warn-threshold color (styles.css §chart tokens).
+ */
+const chipButton = cva(
+  'flex shrink-0 items-center gap-2 rounded-[var(--radius)] border px-2.5 py-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] transition-colors',
+  {
+    variants: {
+      tone: {
+        default: 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
+        active:
+          'border-[var(--chart-consumption)] text-[var(--chart-consumption)] hover:border-[var(--chart-consumption)]',
+      },
+    },
+    defaultVariants: { tone: 'default' },
+  },
+);
+
+/**
+ * Focusable elements the panel's Tab trap may cycle through.
+ *
+ * Two exclusions, both about elements that exist but must not receive focus:
+ * `getClientRects()` drops `display: none` subtrees (e.g. the inactive tab
+ * panels), and `[inert]` drops the content column while the Scenario pane
+ * overlays it below `lg` — occluded elements still report client rects, so
+ * without the `inert` filter Tab would park focus on controls hidden behind
+ * the pane (WCAG 2.2 AA 2.4.11 Focus Not Obscured).
+ *
+ * @ai-note jsdom has no layout, so `getClientRects()` is empty for every
+ * element there; tests that exercise the trap must stub it.
+ */
+export function collectFocusable(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((el) => el.closest('[inert]') === null && el.getClientRects().length > 0);
+}
+
 /**
  * Scopes Escape handling to keydowns whose real DOM target is inside the
  * panel's own subtree (CRITICAL fix — panel Escape handler vs nested
@@ -103,7 +151,9 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const panelRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const scenarioButtonRef = useRef<HTMLButtonElement>(null);
+  const paneRef = useRef<HTMLElement>(null);
   const paneCloseRef = useRef<HTMLButtonElement>(null);
+  const restorePaneFocusRef = useRef(false);
   const closeTimerRef = useRef<number | null>(null);
 
   const [isClosing, setIsClosing] = useState(false);
@@ -115,6 +165,9 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const [windowSelection, setWindowSelection] = useState<ForecastWindow>('24mo');
   const [scenario, setScenario] = useState<ScenarioWire | null>(null);
   const isWide = useMediaQuery('(min-width: 640px)');
+  const paneIsSideBySide = useMediaQuery(PANE_SIDE_BY_SIDE_QUERY);
+  // Below `lg` the pane cannot sit beside the content column — it overlays it.
+  const paneOverlaysContent = paneOpen && !paneIsSideBySide;
   const canManage = useIsAdmin();
 
   const clusterQuery = useQuery({
@@ -168,11 +221,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     if (event.key !== 'Tab') return;
     const container = panelRef.current;
     if (!container) return;
-    const focusable = Array.from(
-      container.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      ),
-    ).filter((el) => el.getClientRects().length > 0);
+    const focusable = collectFocusable(container);
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
     if (!first || !last) return;
@@ -213,19 +262,49 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   }, []);
 
   // Scenario pane (#226): the header button toggles it; Esc and the pane's own
-  // close control return focus to the button (focus into the pane on open is
-  // owned by ScenarioPaneBody's mount effect). Closing the pane never clears an
+  // close control return focus to the button. Closing the pane never clears an
   // active scenario — the header button keeps that visible. Pane open/close is
   // deliberately NOT announced on the shared polite live region: it would clobber
   // the scenario-change announcements, and moving focus into the labeled pane is
   // itself the assistive-tech cue.
-  const togglePane = useCallback(() => {
-    setPaneOpen((open) => !open);
-  }, []);
+  //
+  // Focus is driven from the `paneOpen` *state*, not from the pane's mount
+  // (review finding): AnimatePresence recycles a same-key child that re-enters
+  // while its 200ms exit is still running, so a fast close→reopen never
+  // remounts the body and a mount-only effect would silently skip moving focus
+  // into the pane.
   const closePane = useCallback(() => {
+    // Only reclaim focus if it currently sits inside the pane that is about to
+    // disappear (or nowhere at all). At `lg` and up the content column stays
+    // interactive beside the pane, so an Esc pressed while the user is working
+    // in the hosts table must close the pane without yanking them back up to
+    // the header (review finding: the unconditional focus steal).
+    const active = document.activeElement;
+    const focusInsidePane =
+      active instanceof HTMLElement &&
+      (paneRef.current?.contains(active) ?? false) &&
+      document.contains(active);
+    restorePaneFocusRef.current = focusInsidePane || active === document.body || active === null;
     setPaneOpen(false);
-    scenarioButtonRef.current?.focus();
   }, []);
+  const togglePane = useCallback(() => {
+    if (paneOpen) {
+      closePane();
+      return;
+    }
+    setPaneOpen(true);
+  }, [paneOpen, closePane]);
+
+  useEffect(() => {
+    if (paneOpen) {
+      paneCloseRef.current?.focus();
+      return;
+    }
+    if (restorePaneFocusRef.current) {
+      restorePaneFocusRef.current = false;
+      scenarioButtonRef.current?.focus();
+    }
+  }, [paneOpen]);
 
   const baselineDate = clusterQuery.data?.baselineDate;
   const metric = clusterQuery.data?.metrics[0];
@@ -309,7 +388,22 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
           full-height flex sibling (a `position: fixed` pane would be broken by
           the root's animating `x` transform, which becomes its containing
           block). */}
-      <div className="min-w-0 flex-1 overflow-y-auto">
+      {/* `inert` while the pane overlays this column (below `lg`): the pane is
+          an opaque 340px strip painted over the column's right edge, covering
+          the Back/Scenario buttons entirely. Occluded controls keep their
+          client rects, so without this they stay in the Tab cycle and focus
+          lands on invisible, pointer-unreachable elements — WCAG 2.2 AA 2.4.11
+          (Focus Not Obscured). `inert` also removes them from the a11y tree,
+          which is the honest description of an overlaid column; the pane's own
+          close control and Esc remain the way out, and at `lg`+ (where the pane
+          is a flex sibling and nothing is covered) the column stays fully
+          interactive. `collectFocusable` skips `[inert]` subtrees so the
+          hand-rolled Tab trap agrees with the browser. */}
+      <div
+        data-testid="panel-content"
+        inert={paneOverlaysContent}
+        className="min-w-0 flex-1 overflow-y-auto"
+      >
         <div className="space-y-6 p-5 sm:p-6">
           {/* The back button is a single, stable element outside the
             loading-state branching below (deliberately never swapped for a
@@ -422,6 +516,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
         {paneOpen ? (
           <m.aside
             key="scenario-pane"
+            ref={paneRef}
             id={paneId}
             aria-labelledby={paneHeadingId}
             className="absolute inset-y-0 right-0 z-10 overflow-hidden border-l border-border lg:relative lg:inset-auto lg:z-auto"
@@ -496,10 +591,15 @@ function forecastHeading(procurement: ProcurementInfo, capacityKnown: boolean): 
 
 /**
  * Header toggle for the Scenario pane (#226). When a scenario is active it
- * carries the scenario summary as visible text (not colour alone — the amber
- * accent is paired with the `describeScenario` label), so a closed pane never
- * hides that the displayed forecast is hypothetical. `aria-expanded` +
- * `aria-controls` expose the disclosure state to assistive tech.
+ * carries the scenario summary as visible text (not colour alone — the tint is
+ * paired with the `describeScenario` label), so a closed pane never hides that
+ * the displayed forecast is hypothetical. `aria-expanded` + `aria-controls`
+ * expose the disclosure state to assistive tech.
+ *
+ * The active tint is `--chart-consumption` (violet), matching the scenario
+ * series on the forecast chart directly below it. It used to be the amber
+ * `--accent`, which since the chart-color split is the *warn threshold* hue —
+ * the chip color-associated with the hairline it does not describe.
  */
 function ScenarioButton({
   active,
@@ -522,19 +622,14 @@ function ScenarioButton({
       aria-expanded={open}
       {...(open ? { 'aria-controls': controlsId } : {})}
       data-testid="scenario-button"
-      className={cn(
-        'flex shrink-0 items-center gap-2 rounded-[var(--radius)] border px-2.5 py-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] transition-colors',
-        active
-          ? 'border-accent text-accent hover:border-accent'
-          : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
-      )}
+      className={chipButton({ tone: active ? 'active' : 'default' })}
     >
       <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
       Scenario
       {active ? (
         <span
           data-testid="scenario-active-indicator"
-          className="rounded-sm border border-accent/40 px-1 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-accent"
+          className="rounded-sm border border-[color-mix(in_oklab,var(--chart-consumption)_40%,transparent)] px-1 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-[var(--chart-consumption)]"
         >
           {describeScenario(active)}
         </span>
@@ -544,10 +639,11 @@ function ScenarioButton({
 }
 
 /**
- * Inner content of the Scenario pane. Kept separate from the animating
- * `m.aside` so its mount effect (move focus into the pane on open) runs once
- * per open. Anchored to the pane's right edge at a fixed width so the text
- * doesn't reflow while the `m.aside` width animates 0 → open and clips it.
+ * Inner content of the Scenario pane. Anchored to the pane's right edge at a
+ * fixed width so the text doesn't reflow while the `m.aside` width animates
+ * 0 → open and clips it. Focus-into-pane on open is owned by the parent's
+ * `paneOpen` effect, not by this component's mount — AnimatePresence can
+ * recycle the body instead of remounting it (see `closePane`).
  */
 function ScenarioPaneBody({
   headingId,
@@ -564,9 +660,6 @@ function ScenarioPaneBody({
   onClose: () => void;
   closeRef: React.RefObject<HTMLButtonElement | null>;
 }): React.JSX.Element {
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, [closeRef]);
   return (
     <div className="absolute inset-y-0 right-0 flex flex-col overflow-y-auto p-5" style={{ width }}>
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -580,8 +673,8 @@ function ScenarioPaneBody({
           ref={closeRef}
           type="button"
           onClick={onClose}
-          aria-label="Close scenario panel"
-          className="flex shrink-0 items-center gap-2 rounded-[var(--radius)] border border-border px-2.5 py-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] text-fg-muted transition-colors hover:border-border-strong hover:text-foreground"
+          aria-label="Close scenario pane"
+          className={chipButton()}
         >
           <X className="h-3.5 w-3.5" aria-hidden />
           <kbd

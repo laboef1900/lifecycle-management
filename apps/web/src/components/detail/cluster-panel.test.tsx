@@ -8,11 +8,43 @@ import { api } from '@/lib/api-client';
 
 import {
   ClusterPanel,
+  collectFocusable,
   computeScenarioDeltaLabel,
   isEscapeTargetInsidePanel,
 } from './cluster-panel';
 
 const CLUSTER_ID = 'cl-1';
+
+/**
+ * The panel reads two viewport breakpoints (`640px` for the compact chart,
+ * `1024px` for pane side-by-side vs. overlay). The shared setup stub answers
+ * `false` to every query, i.e. the narrowest viewport — good for the overlay
+ * cases, useless for the side-by-side ones, so tests that care state a width.
+ */
+function stubViewportWidth(width: number): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockImplementation((query: string) => {
+      const minWidth = /min-width:\s*(\d+)px/.exec(query)?.[1];
+      return {
+        matches: minWidth === undefined ? false : width >= Number(minWidth),
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      };
+    }),
+  );
+}
+
+/** jsdom has no layout, so `getClientRects()` is empty for every element and
+ *  the panel's Tab trap short-circuits. Give every element a box so the trap
+ *  actually runs. */
+function stubLayoutBoxes(): void {
+  const rects = [{ width: 10, height: 10 }] as unknown as DOMRectList;
+  vi.spyOn(Element.prototype, 'getClientRects').mockReturnValue(rects);
+}
 const navigateMock = vi.fn();
 
 vi.mock('@tanstack/react-router', () => ({
@@ -419,7 +451,7 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     const scenarioButton = screen.getByTestId('scenario-button');
     await user.click(scenarioButton);
 
-    const paneClose = await screen.findByRole('button', { name: 'Close scenario panel' });
+    const paneClose = await screen.findByRole('button', { name: 'Close scenario pane' });
     await waitFor(() => expect(paneClose).toHaveFocus());
 
     await user.click(paneClose);
@@ -467,6 +499,195 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(indicator).toHaveTextContent('Lose 1 host');
     // A non-colour cue: the summary text is present in the button's accessible name.
     expect(screen.getByTestId('scenario-button')).toHaveAccessibleName(/lose 1 host/i);
+  });
+
+  it('exposes disclosure state on the header button and toggles the pane closed on a second click', async () => {
+    stubViewportWidth(1280); // side-by-side: the header button stays interactive
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    expect(scenarioButton).toHaveAttribute('aria-expanded', 'false');
+    expect(scenarioButton).not.toHaveAttribute('aria-controls');
+
+    await user.click(scenarioButton);
+    await screen.findByTestId('scenario-controls');
+    expect(scenarioButton).toHaveAttribute('aria-expanded', 'true');
+
+    // aria-controls must point at the element that actually holds the controls.
+    const controlsId = scenarioButton.getAttribute('aria-controls') ?? '';
+    expect(controlsId).not.toBe('');
+    const pane = document.getElementById(controlsId);
+    expect(pane).not.toBeNull();
+    expect(pane).toContainElement(screen.getByTestId('scenario-controls'));
+
+    // Third close affordance: the header button itself.
+    await user.click(scenarioButton);
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(scenarioButton).toHaveAttribute('aria-expanded', 'false');
+    expect(scenarioButton).not.toHaveAttribute('aria-controls');
+    expect(scenarioButton).toHaveFocus();
+  });
+
+  it('takes the covered content column out of the interaction while the pane overlays it (WCAG 2.4.11)', async () => {
+    stubViewportWidth(900); // below lg: the 340px pane is painted over the column
+    stubLayoutBoxes();
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const content = screen.getByTestId('panel-content');
+    expect(content).not.toHaveAttribute('inert');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    const paneClose = await screen.findByRole('button', { name: 'Close scenario pane' });
+    await waitFor(() => expect(paneClose).toHaveFocus());
+
+    // The whole covered column is inert — including the Back and Scenario
+    // buttons the pane paints over.
+    expect(content).toHaveAttribute('inert');
+    const backButton = screen.getByRole('button', { name: 'Back' });
+    expect(content).toContainElement(backButton);
+
+    // ...and the panel's own Tab trap agrees: Shift+Tab off the pane's first
+    // control wraps to the pane's last control, never onto a covered one.
+    await user.tab({ shift: true });
+    expect(backButton).not.toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Apply' })).toHaveFocus();
+
+    // Closing the pane hands the column back.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(content).not.toHaveAttribute('inert'));
+  });
+
+  it('leaves the content column interactive when the pane sits beside it (lg and up)', async () => {
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    expect(screen.getByTestId('panel-content')).not.toHaveAttribute('inert');
+  });
+
+  it('Esc with the pane open but focus in the content column closes the pane without stealing focus', async () => {
+    // Reachable only at lg and up, where the column stays interactive beside
+    // the pane. The pane must still swallow the first Esc (the panel stays
+    // open), but the user keeps their place in the content.
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    await user.click(scenarioButton);
+    await screen.findByTestId('scenario-controls');
+
+    const hostsTab = screen.getByRole('tab', { name: 'Hosts' });
+    hostsTab.focus();
+    expect(hostsTab).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(hostsTab).toHaveFocus();
+    expect(scenarioButton).not.toHaveFocus();
+  });
+
+  it('re-seeds the form from the applied scenario when the pane is reopened', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    const countInput = await screen.findByLabelText(/hosts to drop/i);
+    await user.clear(countInput);
+    await user.type(countInput, '3');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Scenario active: Lose 3 hosts.'),
+    );
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    // Not the DEFAULT_DRAFT "1": a stray Apply must not silently replace the
+    // applied scenario with the defaults.
+    expect(screen.getByLabelText(/hosts to drop/i)).toHaveValue(3);
+  });
+
+  it('moves focus into the pane even when it is reopened immediately after closing', async () => {
+    // Guards the AnimatePresence exit-window race: a same-key child that
+    // re-enters mid-exit is recycled, not remounted, so focus must be driven
+    // by the open state rather than by the pane body's mount. jsdom cannot
+    // reliably hold the 200ms exit open, so this asserts the behaviour rather
+    // than reproducing the timing — the mount-only effect it replaces is gone.
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    await user.click(scenarioButton);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus(),
+    );
+
+    // Close and reopen without waiting for the exit animation to finish.
+    await user.keyboard('{Escape}');
+    await user.click(scenarioButton);
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus(),
+    );
+  });
+});
+
+describe('collectFocusable (Tab-trap candidates)', () => {
+  beforeEach(() => {
+    // jsdom has no layout: stand in for it, with `data-unrendered` marking the
+    // elements a real browser would report no client rects for.
+    const rects = [{ width: 10, height: 10 }] as unknown as DOMRectList;
+    const noRects = [] as unknown as DOMRectList;
+    vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function getClientRects(
+      this: Element,
+    ) {
+      return this.hasAttribute('data-unrendered') ? noRects : rects;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('skips elements inside an inert subtree (the pane-covered content column)', () => {
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div id="content" inert><button id="covered">Back</button></div>
+      <aside><button id="pane-close">Close</button></aside>
+    `;
+    document.body.appendChild(container);
+    try {
+      expect(collectFocusable(container).map((el) => el.id)).toEqual(['pane-close']);
+    } finally {
+      document.body.removeChild(container);
+    }
+  });
+
+  it('skips elements with no layout box (e.g. an inactive tab panel)', () => {
+    const container = document.createElement('div');
+    container.innerHTML =
+      '<button id="shown">Shown</button><button id="hidden" data-unrendered>Hidden</button>';
+    document.body.appendChild(container);
+    try {
+      expect(collectFocusable(container).map((el) => el.id)).toEqual(['shown']);
+    } finally {
+      document.body.removeChild(container);
+    }
   });
 });
 
