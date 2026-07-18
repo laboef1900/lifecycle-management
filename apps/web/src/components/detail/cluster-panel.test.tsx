@@ -319,6 +319,9 @@ describe('<ClusterPanel>', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
     await screen.findByTestId('kpi-strip');
 
+    // ScenarioControls now lives in the slide-in pane (#226) — open it first.
+    await user.click(screen.getByTestId('scenario-button'));
+
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() =>
       expect(screen.getByRole('status')).toHaveTextContent('Scenario active: Lose 1 host.'),
@@ -326,6 +329,96 @@ describe('<ClusterPanel>', () => {
 
     await user.click(screen.getByTestId('scenario-clear'));
     expect(screen.getByRole('status')).toHaveTextContent('Baseline forecast restored.');
+  });
+});
+
+describe('<ClusterPanel> scenario pane (#226)', () => {
+  beforeEach(() => {
+    navigateMock.mockClear();
+    vi.spyOn(api.clusters, 'get').mockResolvedValue(cluster());
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(forecast());
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(forecast());
+    vi.spyOn(api.clusters, 'liveUsage').mockResolvedValue({ items: [] });
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 500,
+      offset: 0,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not render ScenarioControls inline; it lives in the pane opened from the header button', async () => {
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    // Inline controls are gone until the pane is opened.
+    expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('scenario-button'));
+    expect(await screen.findByTestId('scenario-controls')).toBeInTheDocument();
+  });
+
+  it('opening the pane moves focus into it; closing returns focus to the Scenario button', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    await user.click(scenarioButton);
+
+    const paneClose = await screen.findByRole('button', { name: 'Close scenario panel' });
+    await waitFor(() => expect(paneClose).toHaveFocus());
+
+    await user.click(paneClose);
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(scenarioButton).toHaveFocus();
+  });
+
+  it('Esc closes the pane first (focus back on the button), then a second Esc closes the panel', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const scenarioButton = screen.getByTestId('scenario-button');
+    await user.click(scenarioButton);
+    await screen.findByTestId('scenario-controls');
+
+    // First Esc: closes the pane only — the panel must NOT navigate.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(scenarioButton).toHaveFocus();
+
+    // Second Esc (focus on the in-panel button): now the panel closes.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: '/' }));
+  });
+
+  it('keeps the active scenario clearly indicated on the header button after the pane is closed', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Scenario active: Lose 1 host.'),
+    );
+
+    // Close the pane; the applied scenario must survive and stay visible.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+
+    const indicator = screen.getByTestId('scenario-active-indicator');
+    expect(indicator).toBeInTheDocument();
+    expect(indicator).toHaveTextContent('Lose 1 host');
+    // A non-colour cue: the summary text is present in the button's accessible name.
+    expect(screen.getByTestId('scenario-button')).toHaveAccessibleName(/lose 1 host/i);
   });
 });
 
