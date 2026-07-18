@@ -106,6 +106,11 @@ describe('utilStatus', () => {
     expect(utilStatus(1)).toBe('crit');
     expect(utilStatus(1.5)).toBe('crit');
   });
+  it('returns unknown for null (capacity 0 — unknowable, never a green "ok")', () => {
+    // Q9d (#200): a null utilization must not fall through to 'ok'; "unknown" is a
+    // visible gap, not the reassuring healthy state.
+    expect(utilStatus(null)).toBe('unknown');
+  });
 });
 
 describe('KpiStatus type', () => {

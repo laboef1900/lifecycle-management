@@ -36,12 +36,14 @@ export interface ClusterTileProps {
 }
 
 const STATUS_BADGE: Record<
-  'ok' | 'warn' | 'crit',
-  { variant: 'success' | 'warning' | 'danger'; label: string }
+  'ok' | 'warn' | 'crit' | 'unknown',
+  { variant: 'success' | 'warning' | 'danger' | 'outline'; label: string }
 > = {
   ok: { variant: 'success', label: 'OK' },
   warn: { variant: 'warning', label: 'WARN' },
   crit: { variant: 'danger', label: 'CRIT' },
+  // Capacity 0 ⇒ utilization unknowable. Neutral outline, not a green "OK" (#200).
+  unknown: { variant: 'outline', label: 'UNKNOWN' },
 };
 
 const ORDER_CHIP_TONE: Record<'now' | 'soon' | 'planned', string> = {
@@ -199,9 +201,15 @@ export const ClusterTile = memo(function ClusterTile({
     );
   }
 
-  const currentUtil = cluster.metrics[0]?.utilization ?? 0;
+  // Preserve null (capacity 0 ⇒ unknowable); never `?? 0`, which reads as "0% used,
+  // healthy" — the Q9d lie on a purchasing surface (#200).
+  const currentUtil = cluster.metrics[0]?.utilization ?? null;
   const status = utilStatus(currentUtil, thresholds);
   const badge = STATUS_BADGE[status];
+  const utilText =
+    currentUtil === null
+      ? 'Utilization unknown (no capacity recorded)'
+      : `${(currentUtil * 100).toFixed(1)}% used`;
   const orderByDate = forecast?.procurement.orderByDate ?? null;
   const urgency = orderByUrgency(orderByDate);
   const isArchived = Boolean(cluster.archivedAt);
@@ -220,14 +228,14 @@ export const ClusterTile = memo(function ClusterTile({
         ? `past crit ${runway.pastThresholdPct}%`
         : 'no breach';
   const verdict = runway.breachLabel
-    ? `${(currentUtil * 100).toFixed(1)}% used — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
+    ? `${utilText} — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
     : runway.pastLabel === 'warn'
       ? runway.pastCritDate
-        ? `${(currentUtil * 100).toFixed(1)}% used — already past warn; reaches crit ≈ ${formatMonthShort(runway.pastCritDate)}.`
-        : `${(currentUtil * 100).toFixed(1)}% used — already past warn; crit beyond the ${runway.value}-month window.`
+        ? `${utilText} — already past warn; reaches crit ≈ ${formatMonthShort(runway.pastCritDate)}.`
+        : `${utilText} — already past warn; crit beyond the ${runway.value}-month window.`
       : runway.pastLabel === 'crit'
-        ? `${(currentUtil * 100).toFixed(1)}% used — already past crit.`
-        : `${(currentUtil * 100).toFixed(1)}% used — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
+        ? `${utilText} — already past crit.`
+        : `${utilText} — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
 
   // Live usage / sync summary, appended so assistive tech hears it — the tile's
   // aria-label overrides its visible content, so the visible LIVE line below
@@ -236,7 +244,9 @@ export const ClusterTile = memo(function ClusterTile({
   const provisionalCount = cluster.provisionalHostCount ?? 0;
 
   const ariaLabel = [
-    `${cluster.name}: ${(currentUtil * 100).toFixed(1)} percent utilized`,
+    currentUtil === null
+      ? `${cluster.name}: utilization unknown, no capacity recorded`
+      : `${cluster.name}: ${(currentUtil * 100).toFixed(1)} percent utilized`,
     isArchived
       ? 'archived — no forecast'
       : `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,

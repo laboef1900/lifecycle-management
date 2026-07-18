@@ -515,14 +515,30 @@ function ClusterDetailKpiStrip({
           <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
             Current utilization
           </p>
-          <p className="font-mono text-xl font-medium tabular-nums text-foreground sm:text-2xl">
-            {(metric.utilization * 100).toFixed(1)}%
-          </p>
-          <BulletMeter
-            value={metric.utilization * 100}
-            warn={forecast.effectiveThresholds.warn * 100}
-            crit={forecast.effectiveThresholds.crit * 100}
-          />
+          {metric.utilization === null ? (
+            // Capacity 0 ⇒ unknowable. Render an explicit gap — em-dash + reason,
+            // never a meter (a 0-width bar is the "0% used, healthy" lie). Q9d (#200).
+            <>
+              <p
+                className="font-mono text-xl font-medium tabular-nums text-fg-muted sm:text-2xl"
+                aria-label="utilization unknown — no capacity recorded"
+              >
+                —
+              </p>
+              <p className="text-[11px] text-fg-muted">Unknown — no capacity recorded</p>
+            </>
+          ) : (
+            <>
+              <p className="font-mono text-xl font-medium tabular-nums text-foreground sm:text-2xl">
+                {(metric.utilization * 100).toFixed(1)}%
+              </p>
+              <BulletMeter
+                value={metric.utilization * 100}
+                warn={forecast.effectiveThresholds.warn * 100}
+                crit={forecast.effectiveThresholds.crit * 100}
+              />
+            </>
+          )}
           <p className="font-mono text-[11px] tabular-nums text-fg-muted">
             {numberFormat.format(Math.round(metric.currentConsumption))} GB used
           </p>

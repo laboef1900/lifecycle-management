@@ -68,6 +68,29 @@ describe('POST /api/clusters', () => {
     });
   });
 
+  it('reports utilization null (never 0) for a zero-capacity cluster', async () => {
+    // A cluster with capacity 0 — a synced cluster before its hosts carry capacity,
+    // or any zero-capacity month. Rendering "0% used" here reads as "healthy, plenty
+    // of headroom", the exact lie Q9d exists to prevent on purchasing surfaces.
+    const name = uniqueName('zero-capacity');
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name,
+        baselineDate: '2026-05-01',
+        baselines: [{ metricTypeKey: 'memory_gb', baselineConsumption: 50, baselineCapacity: 0 }],
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json() as {
+      metrics: Array<{ currentCapacity: number; utilization: number | null }>;
+    };
+    expect(body.metrics[0]!.currentCapacity).toBe(0);
+    expect(body.metrics[0]!.utilization).toBeNull();
+  });
+
   it('returns 400 on missing required fields', async () => {
     const response = await server.inject({
       method: 'POST',

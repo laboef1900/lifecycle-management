@@ -370,7 +370,10 @@ export class ClustersService {
       const point = forecast.months[0];
       const currentConsumption = point?.consumption ?? baselineConsumption;
       const currentCapacity = point?.capacity ?? baselineCapacity;
-      const utilization = point?.utilization ?? 0;
+      // Preserve the forecast's null (capacity 0 ⇒ unknowable). NEVER `?? 0`: that
+      // laundered "unknown" into "0% used" — healthy, plenty of headroom — on the
+      // surfaces that drive hardware purchasing. Recorded decision Q9d (#200).
+      const utilization = point ? point.utilization : null;
 
       return {
         metricTypeKey: b.metricType.key,
