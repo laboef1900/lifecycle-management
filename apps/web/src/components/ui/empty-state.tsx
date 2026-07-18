@@ -45,9 +45,12 @@ const titleVariants = cva('', {
   defaultVariants: { size: 'default' },
 });
 
-const descriptionVariants = cva('text-fg-muted', {
+// `mx-auto` in both sizes: the description is width-capped but the title is not,
+// so inside the shrink-to-fit text wrapper a title wider than the cap would
+// otherwise left-align the description instead of centring it.
+const descriptionVariants = cva('mx-auto text-fg-muted', {
   variants: {
-    size: { default: 'max-w-sm text-xs', hero: 'mx-auto max-w-md text-sm' },
+    size: { default: 'max-w-sm text-xs', hero: 'max-w-md text-sm' },
   },
   defaultVariants: { size: 'default' },
 });
@@ -63,8 +66,6 @@ export interface EmptyStateProps extends VariantProps<typeof emptyStateVariants>
   description?: string;
   action?: React.ReactNode;
   className?: string;
-  /** Set when the empty state owns a landmark/anchor target. */
-  id?: string;
 }
 
 export function EmptyState({
@@ -74,10 +75,9 @@ export function EmptyState({
   action,
   className,
   size,
-  id,
 }: EmptyStateProps): React.JSX.Element {
   return (
-    <Card {...(id ? { id } : {})} className={cn(emptyStateVariants({ size }), className)}>
+    <Card className={cn(emptyStateVariants({ size }), className)}>
       {icon ? (
         <div aria-hidden className={iconVariants({ size })}>
           {icon}

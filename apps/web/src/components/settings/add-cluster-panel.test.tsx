@@ -38,6 +38,7 @@ function renderWithClient(ui: React.ReactNode) {
 describe('<AddClusterPanel>', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     // `restoreAllMocks` does not reset a hoisted `vi.fn`; state the defaults.
     useIsAdminMock.mockReset();
     useIsAdminMock.mockReturnValue(true);
@@ -88,7 +89,14 @@ describe('<AddClusterPanel>', () => {
 
     it('scrolls instantly under prefers-reduced-motion', () => {
       locationHashMock.mockReturnValue('add-cluster');
-      vi.spyOn(window, 'matchMedia').mockImplementation(
+      // `stubGlobal`, NOT `vi.spyOn(window, 'matchMedia')`: the shared setup
+      // installs matchMedia as a `vi.fn()`, and `spyOn` on an existing mock
+      // returns that same mock rather than wrapping it — so there is no
+      // original for `restoreAllMocks` to put back and the reduced-motion
+      // implementation leaks into whichever test runs next (caught under
+      // `--sequence.shuffle`). `unstubAllGlobals` in `afterEach` is exact.
+      vi.stubGlobal(
+        'matchMedia',
         (query: string) =>
           ({
             matches: query === '(prefers-reduced-motion: reduce)',

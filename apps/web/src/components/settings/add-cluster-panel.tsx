@@ -5,7 +5,7 @@ import { AdminOnly } from '@/components/auth/admin-only';
 import { CreateClusterDialog } from '@/components/clusters/create-cluster-dialog';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { ADD_CLUSTER_HASH } from '@/lib/anchors';
+import { ADD_CLUSTER_HASH, useAnchorFocusRequest } from '@/lib/anchors';
 import { useMediaQuery } from '@/lib/use-media-query';
 
 /**
@@ -30,6 +30,7 @@ export function AddClusterPanel(): React.JSX.Element {
  */
 function AddClusterCard(): React.JSX.Element {
   const hash = useLocation({ select: (location) => location.hash });
+  const focusRequests = useAnchorFocusRequest(ADD_CLUSTER_HASH);
   const cardRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
@@ -39,18 +40,24 @@ function AddClusterCard(): React.JSX.Element {
   // /settings left both the viewport and focus nowhere near the promised
   // control. Move both to it.
   //
-  // @ai-note Keyed on `hash`, not a bare mount effect, so the deep link still
-  // works when the user is already on /settings — TanStack Router navigates via
-  // pushState, which fires no `hashchange` event.
+  // @ai-note Two independent triggers, and both are needed. `hash` covers
+  // arriving from elsewhere (including a reload or a shared link), where this
+  // component mounts with the hash already set. `focusRequests` covers
+  // re-invoking the action while the URL is *already* /settings#add-cluster —
+  // that navigation produces an identical location, so a hash-only dependency
+  // never changes and the action would be a silent no-op. See lib/anchors.ts.
   useEffect(() => {
     if (hash !== ADD_CLUSTER_HASH) return;
+    // Read only to declare the dependency honestly: its *value* is meaningless,
+    // its *change* is the signal that re-runs this effect.
+    void focusRequests;
     cardRef.current?.scrollIntoView({
       behavior: prefersReducedMotion ? 'auto' : 'smooth',
       block: 'start',
     });
     // `preventScroll` so focusing doesn't jump-cut past the smooth scroll above.
     triggerRef.current?.focus({ preventScroll: true });
-  }, [hash, prefersReducedMotion]);
+  }, [hash, focusRequests, prefersReducedMotion]);
 
   return (
     <Card ref={cardRef} id={ADD_CLUSTER_HASH} className="scroll-mt-24 p-6">

@@ -15,7 +15,7 @@ import {
 import { useEffect, useState } from 'react';
 
 import { useTheme, type Theme } from '@/components/theme/use-theme';
-import { ADD_CLUSTER_HASH } from '@/lib/anchors';
+import { ADD_CLUSTER_HASH, requestAnchorFocus } from '@/lib/anchors';
 import { api } from '@/lib/api-client';
 import { useIsAdmin } from '@/lib/auth';
 import { cn } from '@/lib/utils';
@@ -119,12 +119,21 @@ export function CommandPalette(): React.JSX.Element {
                   // panel (which scrolls itself into view and takes focus).
                   // `keywords` keeps the pre-#223 "create cluster" muscle memory
                   // searchable.
+                  //
+                  // @ai-warning The `requestAnchorFocus` call is load-bearing,
+                  // not belt-and-braces: navigating to a location the user is
+                  // already at is a no-op the panel cannot observe, so without
+                  // it re-running this action from /settings#add-cluster does
+                  // nothing at all. See lib/anchors.ts.
                   <PaletteItem
                     icon={Plus}
                     label="Add cluster — Settings"
                     keywords={['create cluster', 'new cluster', 'add cluster']}
                     onSelect={() =>
-                      runAndClose(() => navigate({ to: '/settings', hash: ADD_CLUSTER_HASH }))
+                      runAndClose(() => {
+                        void navigate({ to: '/settings', hash: ADD_CLUSTER_HASH });
+                        requestAnchorFocus(ADD_CLUSTER_HASH);
+                      })
                     }
                   />
                 ) : null}
