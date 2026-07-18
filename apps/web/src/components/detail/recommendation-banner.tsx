@@ -8,14 +8,17 @@ import { cn } from '@/lib/utils';
 export interface RecommendationBannerProps {
   procurement: ProcurementInfo;
   today?: Date;
+  /** False when the current forecast has no capacity denominator. */
+  capacityKnown?: boolean;
 }
 
-type Tone = 'crit' | 'planned' | 'none';
+type Tone = 'crit' | 'planned' | 'none' | 'unknown';
 
 const TONE_CLASS: Record<Tone, string> = {
   crit: 'border-l-destructive bg-destructive/5 text-foreground',
   planned: 'border-l-steel bg-steel/5 text-foreground',
   none: 'border-l-border bg-muted/30 text-fg-muted',
+  unknown: 'border-l-border-strong bg-muted/30 text-fg-muted',
 };
 
 const TONE_CHIP: Record<Tone, { label: string; className: string }> = {
@@ -25,6 +28,7 @@ const TONE_CHIP: Record<Tone, { label: string; className: string }> = {
   },
   planned: { label: 'PLANNED', className: 'border-steel/40 bg-steel/10 text-steel' },
   none: { label: 'OK', className: 'border-border text-fg-muted' },
+  unknown: { label: 'UNKNOWN', className: 'border-border-strong text-fg-muted' },
 };
 
 /**
@@ -39,15 +43,19 @@ const TONE_CHIP: Record<Tone, { label: string; className: string }> = {
 export function RecommendationBanner({
   procurement,
   today = new Date(),
+  capacityKnown = true,
 }: RecommendationBannerProps): React.JSX.Element {
-  const kpi = deriveProcurementKpi(procurement, today);
+  const kpi = deriveProcurementKpi(procurement, today, capacityKnown);
   const { orderByDate, leadTimeWeeks } = procurement;
   const leadPhrase = `${leadTimeWeeks}-wk lead`;
 
   let tone: Tone;
   let message: string;
 
-  if (kpi.status === 'ok' && orderByDate === null) {
+  if (kpi.status === 'unknown') {
+    tone = 'unknown';
+    message = 'Capacity unknown — record capacity before relying on procurement timing.';
+  } else if (kpi.status === 'ok' && orderByDate === null) {
     tone = 'none';
     message = 'No order needed in this forecast window.';
   } else if (orderByDate === null) {

@@ -1,6 +1,6 @@
 import type { ClusterResponse, ForecastResponse, HostResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -168,6 +168,54 @@ describe('<ClusterPanel>', () => {
     });
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
+  });
+
+  it('shows "unknown" (never 0.0%) for the current utilization of a zero-capacity cluster (#200)', async () => {
+    vi.spyOn(api.clusters, 'get').mockResolvedValue(
+      cluster({
+        metrics: [
+          {
+            metricTypeKey: 'memory_gb',
+            metricTypeDisplayName: 'Memory',
+            unit: 'GB',
+            baselineConsumption: 500,
+            baselineCapacity: 0,
+            currentConsumption: 500,
+            currentCapacity: 0,
+            utilization: null,
+          },
+        ],
+      }),
+    );
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({
+        months: [
+          { month: '2026-07-01', consumption: 500, capacity: 0, utilization: null },
+          { month: '2026-08-01', consumption: 550, capacity: 0, utilization: null },
+        ],
+      }),
+    );
+
+    render(<Harness show />);
+    const strip = await screen.findByTestId('kpi-strip');
+    // The 0%-lie must never render on the purchasing-decision KPI strip.
+    expect(strip).not.toHaveTextContent('0.0%');
+    // A text-carried "unknown" reason, not color alone.
+    expect(within(strip).getAllByText(/no capacity recorded/i)).toHaveLength(2);
+    expect(within(strip).getByText(/^unknown — no capacity$/i)).toBeInTheDocument();
+    expect(
+      within(strip).getByText(/capacity required for procurement timing/i),
+    ).toBeInTheDocument();
+    expect(within(strip).queryByText(/no projected breach/i)).toBeNull();
+    expect(within(strip).queryByText(/\d+\+? mo/i)).toBeNull();
+
+    const banner = screen.getByTestId('recommendation-banner');
+    expect(banner).toHaveTextContent(/capacity unknown/i);
+    expect(banner).not.toHaveTextContent(/no order needed/i);
+    expect(
+      screen.getByRole('heading', { name: /forecast — capacity unknown/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /no breach/i })).toBeNull();
   });
 
   it('renders as a fullscreen takeover: keeps the .cluster-panel class and drops the partial-panel left border/shadow (user decision 2026-07-17)', async () => {

@@ -1125,7 +1125,7 @@ exports[`forecast characterization (behaviour as of pre-#177 dev) > zero baselin
 }
 `;
 
-exports[`forecast characterization (behaviour as of pre-#177 dev) > zero-capacity months render as 0% utilization 1`] = `
+exports[`forecast characterization (behaviour as of pre-#177 dev) > zero-capacity months render as null utilization, never 0% 1`] = `
 {
   "applications": [],
   "baselineHistory": [

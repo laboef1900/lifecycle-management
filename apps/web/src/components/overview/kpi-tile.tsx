@@ -8,6 +8,9 @@ const tileVariants = cva('p-3.5 transition-colors', {
   variants: {
     status: {
       ok: '',
+      // Unknown (capacity 0): a neutral border — visibly not healthy-green and not
+      // alarm-red, a legible gap rather than a reassuring lie (Q9d, #200).
+      unknown: 'border-l-2 border-l-border',
       attention: 'border-l-2 border-l-accent',
       warn: 'border-l-2 border-l-warning',
       crit: 'border-l-2 border-l-destructive',

@@ -44,6 +44,14 @@ describe('clusterResponseSchema', () => {
     expect(clusterResponseSchema.safeParse(literal).success).toBe(true);
   });
 
+  it('accepts a null utilization for a zero-capacity metric (unknowable, never 0%)', () => {
+    const unknown = {
+      ...literal,
+      metrics: [{ ...literal.metrics[0], currentCapacity: 0, utilization: null }],
+    };
+    expect(clusterResponseSchema.safeParse(unknown).success).toBe(true);
+  });
+
   it('rejects a non-numeric utilization', () => {
     const bad = {
       ...literal,

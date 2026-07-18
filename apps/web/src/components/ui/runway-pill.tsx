@@ -7,6 +7,8 @@ import type { RunwaySummary } from '@/lib/forecast-summary';
 
 interface RunwayPillProps {
   summary: RunwaySummary | undefined;
+  /** Current capacity is missing, so an all-clear runway cannot be calculated. */
+  unknown?: boolean;
   /** Forecast horizon length in months, used to display "N+ mo" when no breach. */
   horizonMonths?: number;
   /** Effective warn/crit thresholds. Defaults to system 70/90. */
@@ -15,9 +17,17 @@ interface RunwayPillProps {
 
 export function RunwayPill({
   summary,
+  unknown = false,
   horizonMonths,
   thresholds = SYSTEM_DEFAULTS,
 }: RunwayPillProps): React.JSX.Element {
+  if (unknown) {
+    return (
+      <Badge variant="outline">
+        <span>Unknown — no capacity</span>
+      </Badge>
+    );
+  }
   if (!summary) {
     return (
       <Badge variant="outline">

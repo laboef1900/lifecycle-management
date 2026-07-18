@@ -129,13 +129,13 @@ describe('forecast characterization (behaviour as of pre-#177 dev)', () => {
   });
 
   /**
-   * A host commissioned AFTER the window opens contributes 0 until then
-   * (`forecast.ts:177`), and `forecast.ts:138` renders zero capacity as 0%
-   * utilization — i.e. "maximum headroom, healthy" where the truth is unknown.
-   * Recorded deliberately: #177 changes this to `null` per the gate's Q9d, so
-   * THIS snapshot is expected to diff there, and only here.
+   * A host commissioned AFTER the window opens contributes 0 until then, and zero
+   * capacity renders as `null` utilization — unknowable, NOT "0% / maximum headroom,
+   * healthy". The engine adopted this with #177 per the gate's Q9d (the snapshot
+   * below already records `null`); #200 carried that same null out through
+   * `ClustersService.toResponse` and the UI. This snapshot must stay byte-identical.
    */
-  it('zero-capacity months render as 0% utilization', async () => {
+  it('zero-capacity months render as null utilization, never 0%', async () => {
     const cluster = await makeCluster(prisma, {
       id: 'fc-zero-capacity',
       name: 'fc-zero-capacity',

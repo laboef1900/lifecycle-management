@@ -262,6 +262,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   });
 
   const activeForecast = scenario && scenarioQuery.data ? scenarioQuery.data : forecastQuery.data;
+  const activeCapacityKnown = metric?.utilization !== null;
   const scenarioDeltaLabel =
     scenario && forecastQuery.data && scenarioQuery.data
       ? computeScenarioDeltaLabel(forecastQuery.data, scenarioQuery.data)
@@ -344,13 +345,17 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
           {clusterQuery.data && metric ? (
             <>
               {activeForecast ? (
-                <RecommendationBanner procurement={activeForecast.procurement} />
+                <RecommendationBanner
+                  procurement={activeForecast.procurement}
+                  capacityKnown={activeCapacityKnown}
+                />
               ) : null}
 
               {forecastQuery.data ? (
                 <ClusterDetailKpiStrip
                   forecast={activeForecast ?? forecastQuery.data}
                   metric={metric}
+                  capacityKnown={activeCapacityKnown}
                   isScenario={Boolean(scenario && scenarioQuery.data)}
                 />
               ) : null}
@@ -368,7 +373,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                   </p>
                   <h3 className="text-base font-semibold">
                     {activeForecast
-                      ? forecastHeading(activeForecast.procurement)
+                      ? forecastHeading(activeForecast.procurement, activeCapacityKnown)
                       : 'Capacity forecast'}
                   </h3>
                 </div>
@@ -481,7 +486,8 @@ export function computeScenarioDeltaLabel(
   return `${arrow} warn ${Math.abs(delta)} mo ${direction}${monthLabel}`;
 }
 
-function forecastHeading(procurement: ProcurementInfo): string {
+function forecastHeading(procurement: ProcurementInfo, capacityKnown: boolean): string {
+  if (!capacityKnown && procurement.breachMonth === null) return 'Forecast — capacity unknown';
   if (procurement.breachMonth === null) return 'Forecast — no breach in window';
   const monthLabel = formatMonthLong(procurement.breachMonth);
   const orderPart = procurement.orderByDate ? ` · order by ${procurement.orderByDate}` : '';
@@ -650,15 +656,19 @@ function FlagChip({
 function ClusterDetailKpiStrip({
   forecast,
   metric,
+  capacityKnown,
   isScenario = false,
 }: {
   forecast: ForecastResponse;
   metric: MetricStateResponse;
+  capacityKnown: boolean;
   isScenario?: boolean;
 }): React.JSX.Element {
   const headroom = Math.max(0, metric.currentCapacity - metric.currentConsumption);
   const summary = runwayToWarn(forecast.months, forecast.effectiveThresholds);
-  const procurementKpi = deriveProcurementKpi(forecast.procurement);
+  const runwayUnknown =
+    !capacityKnown && summary.months === null && summary.alreadyBreached === false;
+  const procurementKpi = deriveProcurementKpi(forecast.procurement, new Date(), capacityKnown);
   return (
     <div data-testid="kpi-strip" className="space-y-2">
       {isScenario ? (
@@ -671,14 +681,30 @@ function ClusterDetailKpiStrip({
           <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
             Current utilization
           </p>
-          <p className="font-mono text-xl font-medium tabular-nums text-foreground sm:text-2xl">
-            {(metric.utilization * 100).toFixed(1)}%
-          </p>
-          <BulletMeter
-            value={metric.utilization * 100}
-            warn={forecast.effectiveThresholds.warn * 100}
-            crit={forecast.effectiveThresholds.crit * 100}
-          />
+          {metric.utilization === null ? (
+            // Capacity 0 ⇒ unknowable. Render an explicit gap — em-dash + reason,
+            // never a meter (a 0-width bar is the "0% used, healthy" lie). Q9d (#200).
+            <>
+              <p
+                className="font-mono text-xl font-medium tabular-nums text-fg-muted sm:text-2xl"
+                aria-label="utilization unknown — no capacity recorded"
+              >
+                —
+              </p>
+              <p className="text-[11px] text-fg-muted">Unknown — no capacity recorded</p>
+            </>
+          ) : (
+            <>
+              <p className="font-mono text-xl font-medium tabular-nums text-foreground sm:text-2xl">
+                {(metric.utilization * 100).toFixed(1)}%
+              </p>
+              <BulletMeter
+                value={metric.utilization * 100}
+                warn={forecast.effectiveThresholds.warn * 100}
+                crit={forecast.effectiveThresholds.crit * 100}
+              />
+            </>
+          )}
           <p className="font-mono text-[11px] tabular-nums text-fg-muted">
             {numberFormat.format(Math.round(metric.currentConsumption))} GB used
           </p>
@@ -686,8 +712,12 @@ function ClusterDetailKpiStrip({
         <KpiTile
           className="col-span-12 sm:col-span-6 lg:col-span-3"
           label="Headroom"
-          value={`${numberFormat.format(Math.round(headroom))} GB`}
-          caption={`of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`}
+          value={capacityKnown ? `${numberFormat.format(Math.round(headroom))} GB` : '—'}
+          caption={
+            capacityKnown
+              ? `of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`
+              : 'unknown — no capacity recorded'
+          }
           status={utilStatus(metric.utilization, forecast.effectiveThresholds)}
         />
         <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-6 lg:col-span-3">
@@ -697,6 +727,7 @@ function ClusterDetailKpiStrip({
           <div className="mt-1.5">
             <RunwayPill
               summary={summary}
+              unknown={runwayUnknown}
               horizonMonths={forecast.months.length}
               thresholds={forecast.effectiveThresholds}
             />
