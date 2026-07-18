@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { CommandPalette } from '@/components/command/command-palette';
 import { ThemeProvider } from '@/components/theme/theme-provider';
@@ -16,9 +16,10 @@ vi.mock('@tanstack/react-router', async () => {
   };
 });
 
-// The palette gates its "Create cluster" action on admin (#223); mock the hook
-// so tests control the role without a router context. Default admin; the viewer
-// test flips it.
+// The palette gates its Add-cluster action on admin (#223); mock the hook so
+// tests control the role without a router context. Default admin; the viewer
+// test flips it and `afterEach` puts it back — never rely on a reset at the end
+// of a test body, which a failing assertion above it would skip.
 const { useIsAdminMock } = vi.hoisted(() => ({ useIsAdminMock: vi.fn(() => true) }));
 vi.mock('@/lib/auth', () => ({ useIsAdmin: () => useIsAdminMock() }));
 
@@ -34,6 +35,16 @@ function wrap(node: React.ReactElement): React.ReactElement {
 }
 
 describe('CommandPalette', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // `restoreAllMocks` only restores `vi.spyOn` spies — a hoisted `vi.fn`
+    // keeps whatever `mockReturnValue` the last test set. Reset it and state
+    // the file default explicitly so the suite is order-independent.
+    useIsAdminMock.mockReset();
+    useIsAdminMock.mockReturnValue(true);
+    navigateMock.mockReset();
+  });
+
   test('opens via window CustomEvent and filters cluster items', async () => {
     vi.spyOn(api.clusters, 'list').mockResolvedValue({
       items: [
@@ -138,7 +149,7 @@ describe('CommandPalette', () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: '/' });
   });
 
-  test('admins get a "Create cluster" action that navigates to /settings (#223)', async () => {
+  test('admins get an Add-cluster action deep-linked to the Settings panel (#223)', async () => {
     useIsAdminMock.mockReturnValue(true);
     vi.spyOn(api.clusters, 'list').mockResolvedValue({
       items: [],
@@ -151,12 +162,50 @@ describe('CommandPalette', () => {
 
     window.dispatchEvent(new CustomEvent('lcm:open-command-palette'));
     await screen.findByPlaceholderText(/search/i);
-    await user.click(screen.getByText('Create cluster'));
+    await user.click(screen.getByText('Add cluster — Settings'));
 
-    expect(navigateMock).toHaveBeenCalledWith({ to: '/settings' });
+    // The hash is what makes the label honest: /settings alone lands above the
+    // fold with focus on <body>; the hash scrolls and focuses the panel.
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/settings', hash: 'add-cluster' });
   });
 
-  test('viewers do not see the "Create cluster" action (#223)', async () => {
+  test('the Add-cluster action names its destination, not the retired dialog (#223)', async () => {
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    render(wrap(<CommandPalette />));
+
+    window.dispatchEvent(new CustomEvent('lcm:open-command-palette'));
+    await screen.findByPlaceholderText(/search/i);
+
+    expect(screen.getByText('Add cluster — Settings')).toBeInTheDocument();
+    // The old label promised an in-place dialog that no longer exists.
+    expect(screen.queryByText('Create cluster')).not.toBeInTheDocument();
+  });
+
+  test('the Add-cluster action is still findable by typing "create" (#223)', async () => {
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    const user = userEvent.setup();
+    render(wrap(<CommandPalette />));
+
+    window.dispatchEvent(new CustomEvent('lcm:open-command-palette'));
+    const input = await screen.findByPlaceholderText(/search/i);
+    await user.type(input, 'create cluster');
+
+    await waitFor(() => {
+      expect(screen.getByText('Add cluster — Settings')).toBeInTheDocument();
+    });
+  });
+
+  test('viewers do not see the Add-cluster action (#223)', async () => {
     useIsAdminMock.mockReturnValue(false);
     vi.spyOn(api.clusters, 'list').mockResolvedValue({
       items: [],
@@ -169,9 +218,8 @@ describe('CommandPalette', () => {
     window.dispatchEvent(new CustomEvent('lcm:open-command-palette'));
     await screen.findByPlaceholderText(/search/i);
 
-    expect(screen.queryByText('Create cluster')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add cluster — Settings')).not.toBeInTheDocument();
     // The rest of the palette still renders — the gate is targeted.
     expect(screen.getByText('Go to settings')).toBeInTheDocument();
-    useIsAdminMock.mockReturnValue(true);
   });
 });
