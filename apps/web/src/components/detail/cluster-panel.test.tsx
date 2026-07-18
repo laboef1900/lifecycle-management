@@ -9,9 +9,12 @@ import { api } from '@/lib/api-client';
 
 import {
   ClusterPanel,
+  PANE_CLOSED,
   collectFocusable,
   computeScenarioDeltaLabel,
   isEscapeTargetInsidePanel,
+  paneIsOnScreen,
+  panePresenceReducer,
   scenarioPaneLayout,
 } from './cluster-panel';
 
@@ -679,23 +682,44 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(screen.getByTestId('panel-content')).not.toHaveAttribute('inert');
   });
 
-  it('builds the pane close control without hand-rolling a <kbd> keycap', async () => {
-    // The control used to carry a verbatim copy of BackButton's <kbd> class
-    // string — the third copy of a recipe this file single-sources through
-    // `chipButton`, and the one that made ui/kbd.tsx's "every <kbd> comes from
-    // here" claim false. The Esc binding is now exposed via aria-keyshortcuts
-    // instead of a hand-styled keycap.
+  it('shows a visible Esc keycap on the pane close control, sourced from ui/kbd.tsx', async () => {
+    // Two requirements that pull against each other.
+    //
+    // 1. The keycap must stay VISIBLE. `aria-keyshortcuts` alone is not an
+    //    affordance — no browser renders it — so dropping the keycap would
+    //    silently remove the hint sighted pointer users had, and would leave
+    //    this control inconsistent with the BackButton a few elements away in
+    //    the panel header, which shows the same kind of hint.
+    // 2. It must not be a hand-rolled <kbd>. The control used to carry a
+    //    verbatim copy of BackButton's <kbd> class string, which is what made
+    //    ui/kbd.tsx's "every keycap comes from here" claim false.
+    //
+    // `font-mono` is the discriminator for requirement 2: it comes from the
+    // Kbd primitive's base recipe, whereas a hand-rolled keycap inside this
+    // button inherits the button's own mono face and never sets it. It also
+    // survives PR #234, which keeps `border border-border font-mono` as the
+    // shared base while moving the box styles into size variants.
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
     const paneBody = await screen.findByTestId('scenario-pane-body');
-    expect(paneBody.querySelector('kbd')).toBeNull();
+
+    const keycap = paneBody.querySelector('kbd');
+    expect(keycap).not.toBeNull();
+    expect(keycap).toBeVisible();
+    expect(keycap).toHaveTextContent('Esc');
+    expect(keycap).toHaveClass('font-mono', 'border-border');
 
     const close = within(paneBody).getByRole('button', { name: 'Close scenario pane' });
+    expect(close).toContainElement(keycap);
     expect(close).toHaveAttribute('aria-keyshortcuts', 'Escape');
-    // WCAG 2.5.3: the visible label has to be part of the accessible name.
+    // The keycap is decorative: aria-hidden keeps it out of the accessible
+    // name, which stays exactly "Close scenario pane" (asserted by the
+    // getByRole above) and still contains the visible "Close" — WCAG 2.5.3
+    // Label in Name.
+    expect(keycap).toHaveAttribute('aria-hidden');
     expect(close).toHaveTextContent('Close');
   });
 
@@ -841,38 +865,127 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
 
   it('recovers cleanly when the pane is reopened mid-exit and closed again', async () => {
     // Guards the AnimatePresence exit-window race: a same-key child that
-    // re-enters mid-exit is recycled, not remounted, so focus must be driven
-    // by the open state rather than by the pane body's mount. The re-entry also
-    // cancels the exit, and a cancelled exit never fires `onExitComplete` — so
-    // the "still exiting" flag that now holds the containment has to be cleared
-    // on open too, or the panel would be stuck in a closing state forever.
+    // re-enters mid-exit is recycled, not remounted, so focus must be driven by
+    // the open state rather than by the pane body's mount.
+    //
+    // MUST run under `AnimatedHarness`. Under `Harness` (no LazyMotion)
+    // AnimatePresence drops an exiting child synchronously, so there is no exit
+    // window at all and the reopen below would be an ordinary closed->open
+    // cycle that exercises nothing. The `toBe(bodyBeforeClose)` identity
+    // assertion is what proves the child was recycled rather than remounted —
+    // i.e. that the race was really entered.
+    //
     // Runs at lg+ because that is the only width where a mid-exit reopen is
     // reachable: below lg the Scenario button is inert until the exit finishes.
+    //
+    // The `exiting`-flag half of this race is guarded separately and directly by
+    // the `panePresenceReducer` suite below — it is a pure state transition with
+    // no observable rendering consequence while `open` is true, so no
+    // integration test here can pin it. Kept honest deliberately.
     stubViewportWidth(1280);
-    const user = userEvent.setup();
-    render(<Harness show />);
+    render(<AnimatedHarness />);
     await screen.findByTestId('kpi-strip');
 
     const scenarioButton = screen.getByTestId('scenario-button');
-    await user.click(scenarioButton);
+    fireEvent.click(scenarioButton);
+    const bodyBeforeClose = await screen.findByTestId('scenario-pane-body');
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus(),
     );
 
-    // Close and reopen without waiting for the exit animation to finish.
-    await user.keyboard('{Escape}');
-    await user.click(scenarioButton);
+    // Synchronous dispatch with nothing awaited in between: an animation frame
+    // can only run once the stack unwinds, so the reopen lands inside the exit
+    // window. (`userEvent` awaits internally and would let the 200ms exit
+    // finish first on a loaded runner.)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Close scenario pane' }), {
+      key: 'Escape',
+    });
+    // Mid-exit: still mounted, still painting over the column.
+    expect(screen.getByTestId('scenario-pane-body')).toBe(bodyBeforeClose);
+    // A real pointer click focuses the button it hits; `fireEvent.click` does
+    // not, so do it explicitly. Without this, focus would never leave the pane
+    // close control and the "focus came back" assertion below would hold
+    // vacuously — including for a mount-driven implementation.
+    scenarioButton.focus();
+    expect(scenarioButton).toHaveFocus();
+    fireEvent.click(scenarioButton);
 
+    // Recycled, not remounted — the same DOM node came back, which is exactly
+    // why a mount-driven focus effect would silently skip moving focus here.
+    expect(screen.getByTestId('scenario-pane-body')).toBe(bodyBeforeClose);
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus(),
     );
 
-    // A stuck "exiting" flag would leave the panel believing the pane is
-    // permanently on screen, and the focus restore below would never run.
-    await user.keyboard('{Escape}');
+    // And the recycled pane still closes cleanly, restoring focus to the
+    // trigger once the (real, uncancelled) exit has finished.
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Close scenario pane' }), {
+      key: 'Escape',
+    });
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
     await waitFor(() => expect(scenarioButton).toHaveFocus());
     expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('applies the containment as soon as the pane opens, not after the enter animation', async () => {
+    // Pins the deliberate enter/exit asymmetry documented at the `inert` site.
+    // The exit side holds the containment until `onExitComplete`; the enter side
+    // applies it on the opening commit, accepting a <=280ms window in which part
+    // of the column is visible but inert. Deferring it to match the exit side
+    // would instead leave the column *interactive* while the sheet covers it —
+    // the WCAG 2.4.11 condition the containment exists to prevent.
+    stubViewportWidth(900);
+    render(<AnimatedHarness />);
+    await screen.findByTestId('kpi-strip');
+
+    const content = screen.getByTestId('panel-content');
+    expect(content).not.toHaveAttribute('inert');
+
+    fireEvent.click(screen.getByTestId('scenario-button'));
+
+    // Asserted before anything is awaited, so the 280ms enter animation cannot
+    // have progressed, let alone completed.
+    expect(content).toHaveAttribute('inert');
+  });
+});
+
+describe('panePresenceReducer (AnimatePresence exit-window state)', () => {
+  it('marks the pane on screen while it is open', () => {
+    const open = panePresenceReducer(PANE_CLOSED, 'open');
+    expect(open).toEqual({ open: true, exiting: false });
+    expect(paneIsOnScreen(open)).toBe(true);
+  });
+
+  it('keeps the pane on screen after close until the exit completes', () => {
+    // This is what holds the content column's `inert` across the 200ms exit:
+    // dropping it the instant `open` flips false would hand the column back
+    // while the sheet is still painted over it.
+    const exiting = panePresenceReducer(panePresenceReducer(PANE_CLOSED, 'open'), 'close');
+    expect(exiting).toEqual({ open: false, exiting: true });
+    expect(paneIsOnScreen(exiting)).toBe(true);
+
+    const gone = panePresenceReducer(exiting, 'exit-complete');
+    expect(gone).toEqual(PANE_CLOSED);
+    expect(paneIsOnScreen(gone)).toBe(false);
+  });
+
+  it('clears the exiting flag when the pane re-enters mid-exit', () => {
+    // The invariant no integration test can observe: a mid-exit re-entry
+    // cancels the exit, and a cancelled exit never fires `onExitComplete`
+    // (AnimatePresence drops the key from its `exitComplete` map), so `open` is
+    // the only place the flag can be cleared. While the pane is open a stale
+    // flag is masked by `open` in `paneIsOnScreen` — it shows up only as
+    // `exiting` no longer meaning "exiting", and as the next close inheriting a
+    // state it did not produce.
+    const exiting = panePresenceReducer(panePresenceReducer(PANE_CLOSED, 'open'), 'close');
+    expect(exiting.exiting).toBe(true);
+
+    const reopened = panePresenceReducer(exiting, 'open');
+    expect(reopened).toEqual({ open: true, exiting: false });
+  });
+
+  it('leaves a fully closed pane closed when a stray exit-complete arrives', () => {
+    expect(panePresenceReducer(PANE_CLOSED, 'exit-complete')).toEqual(PANE_CLOSED);
   });
 });
 
