@@ -32,8 +32,17 @@ function SettingsPage(): React.JSX.Element {
   // this page — and its document keydown listener — stays mounted with a stale
   // `canGoBack === true` for a beat. A second activation inside that window
   // (double-clicked Back, double-tapped Esc) would pop a *second* entry and can
-  // eject the user out of the SPA entirely. The latch is never reset: the page
-  // unmounts once the navigation lands.
+  // eject the user out of the SPA entirely.
+  //
+  // The latch is deliberately never reset. That is safe only while every
+  // goBack() outcome unmounts this page — today it does: `/settings` has no
+  // search-param or child-route variant that `history.back()` could land on,
+  // and the `navigate({ to: '/' })` fallback always leaves. Do NOT "fix" this
+  // by clearing the ref on location change: this page can stay mounted for a
+  // beat *after* the location flips (a pending route load on the way out), and
+  // a reset inside that window re-opens the exact double-pop this guards. If
+  // `/settings` ever gains a variant back() can land on, gate the reset on that
+  // navigation specifically — otherwise Back and Esc go dead for the visit.
   const navigatedRef = useRef(false);
   const goBack = useCallback((): void => {
     if (navigatedRef.current) return;
@@ -46,13 +55,15 @@ function SettingsPage(): React.JSX.Element {
   }, [canGoBack, router, navigate]);
 
   // Esc goes back, mirroring the panel's affordance. A document-level listener
-  // is required (not a wrapper onKeyDown): Settings has no focus trap and every
-  // entry path (topbar link, `g s`, ⌘K) leaves focus on <body>, where a
-  // wrapper handler would never fire. Guards, in order: ignore OS key auto-
-  // repeat (holding Esc is one intent, not ~30 of them); skip if another
-  // handler already consumed the event; skip when typing in a field (Esc means
-  // "cancel this edit"); skip while a dismissible overlay is open so it — not
-  // the page — handles Escape (dirty-form gating is out of scope, #225).
+  // is required (not a wrapper onKeyDown): Settings has no focus trap, so focus
+  // on arrival is wherever the entry path left it — on <body> for the topbar
+  // link and the `g s` shortcut, where a wrapper handler would never fire.
+  //
+  // Guards, in order: ignore OS key auto-repeat (holding Esc is one intent, not
+  // ~30 of them); skip if another handler already consumed the event; skip when
+  // typing in a field (Esc means "cancel this edit"); skip while a dismissible
+  // overlay is open so it — not the page — handles Escape (dirty-form gating is
+  // out of scope, #225).
   useEffect(() => {
     const handler = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;

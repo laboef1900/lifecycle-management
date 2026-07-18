@@ -199,8 +199,25 @@ describe('/_app/settings Back button + Esc', () => {
   });
 
   it('removes the document listener on unmount (no stray Esc navigation)', async () => {
+    // Handler *identity* is half the assertion, deliberately: a behaviour-only
+    // probe is vacuous here. If the cleanup regresses, every earlier test in
+    // this file leaks a listener too, and the first of those `preventDefault()`s
+    // the probe Escape — so this test's own leaked handler would bail on the
+    // `defaultPrevented` guard and the spy would stay clean. Two defences:
+    // capture what was registered and require it back at removeEventListener,
+    // and dispatch a *non-cancelable* Escape below so no leaked handler can
+    // mask this one.
+    const addSpy = vi.spyOn(document, 'addEventListener');
+    const removeSpy = vi.spyOn(document, 'removeEventListener');
+
     const { router, unmount } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
     await screen.findByRole('heading', { name: 'Settings' });
+
+    const registered = addSpy.mock.calls
+      .filter(([type]) => type === 'keydown')
+      .map(([, listener]) => listener);
+    expect(registered).toHaveLength(1);
+
     // Asserted on the history spy, not on `router.state`: once RouterProvider
     // unmounts, nothing subscribes the router to the history, so a leaked pop
     // would move the history without ever showing up in `state.location`.
@@ -209,7 +226,18 @@ describe('/_app/settings Back button + Esc', () => {
     // A leaked document-level listener is this design's highest-blast-radius
     // regression: Esc would keep popping history from anywhere in the app.
     unmount();
-    document.dispatchEvent(escapeEvent());
+
+    const unregistered = removeSpy.mock.calls
+      .filter(([type]) => type === 'keydown')
+      .map(([, listener]) => listener);
+    for (const listener of registered) {
+      expect(unregistered).toContain(listener);
+    }
+
+    // `cancelable: false` makes `preventDefault()` a no-op, so a leaked handler
+    // from any sibling test cannot swallow this probe before it reaches a
+    // (hypothetically) leaked handler of our own.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(back).not.toHaveBeenCalled();

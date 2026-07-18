@@ -4,12 +4,13 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 /**
- * Keycap chip. Two sizes so every rendered `<kbd>` in the app comes from here:
- * `default` is the raised chip used by the topbar ⌘K hint and the shortcuts
- * dialog; `xs` is the flat micro-hint that sits *inside* a chip button (the
- * BackButton's "Esc"), where the raised gradient keycap would overpower a
- * 10.5px label. Only the element, border token, and mono face are shared —
- * each size owns its own box so the two looks can't half-merge.
+ * Keycap chip, in the two sizes the app needs — render a keycap from here
+ * rather than hand-rolling a `<kbd>` class string. `default` is the raised chip
+ * used by the topbar ⌘K hint and the shortcuts dialog; `xs` is the flat
+ * micro-hint that sits *inside* a chip button (the BackButton's "Esc"), where
+ * the raised gradient keycap would overpower a 10.5px label. Only the element,
+ * border token, and mono face are shared — each size owns its own box so the
+ * two looks can't half-merge.
  */
 const kbdVariants = cva('border border-border font-mono', {
   variants: {
