@@ -1,6 +1,7 @@
 import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router';
 import { useCallback, useEffect } from 'react';
 
+import { AddClusterPanel } from '@/components/settings/add-cluster-panel';
 import { AuthenticationForm } from '@/components/settings/authentication-form';
 import { CategoriesForm } from '@/components/settings/categories-form';
 import { ForecastThresholdsForm } from '@/components/settings/forecast-thresholds-form';
@@ -66,6 +67,7 @@ function SettingsPage(): React.JSX.Element {
       <ForecastThresholdsForm />
       <CategoriesForm />
       <VcenterConnectionsPanel />
+      <AddClusterPanel />
       {canManageAuth ? <AuthenticationForm /> : null}
     </div>
   );

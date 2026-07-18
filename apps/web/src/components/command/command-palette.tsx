@@ -16,10 +16,10 @@ import { useEffect, useState } from 'react';
 
 import { useTheme, type Theme } from '@/components/theme/use-theme';
 import { api } from '@/lib/api-client';
+import { useIsAdmin } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
 const OPEN_EVENT = 'lcm:open-command-palette';
-const CREATE_CLUSTER_EVENT = 'lcm:open-create-cluster';
 const SHORTCUTS_EVENT = 'lcm:open-shortcuts';
 
 export function CommandPalette(): React.JSX.Element {
@@ -27,6 +27,7 @@ export function CommandPalette(): React.JSX.Element {
   const [search, setSearch] = useState('');
   const navigate = useNavigate();
   const { setTheme } = useTheme();
+  const isAdmin = useIsAdmin();
 
   const clustersQuery = useQuery({
     queryKey: ['clusters'],
@@ -111,13 +112,13 @@ export function CommandPalette(): React.JSX.Element {
               ) : null}
 
               <PaletteGroup heading="Actions">
-                <PaletteItem
-                  icon={Plus}
-                  label="Create cluster"
-                  onSelect={() =>
-                    runAndClose(() => window.dispatchEvent(new CustomEvent(CREATE_CLUSTER_EVENT)))
-                  }
-                />
+                {isAdmin ? (
+                  <PaletteItem
+                    icon={Plus}
+                    label="Create cluster"
+                    onSelect={() => runAndClose(() => navigate({ to: '/settings' }))}
+                  />
+                ) : null}
                 <PaletteItem
                   icon={Settings}
                   label="View keyboard shortcuts"

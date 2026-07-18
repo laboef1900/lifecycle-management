@@ -35,11 +35,11 @@ vi.mock('@tanstack/react-router', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
-  // Skips CreateClusterDialog (AdminOnly renders nothing for non-admins),
-  // which otherwise pulls in its own mutation/toast wiring irrelevant here.
-  useIsAdmin: () => false,
-}));
+// The empty-state Add-cluster CTA is `AdminOnly`-gated. Default to viewer so the
+// existing render tests stay unaffected; the empty-state test flips it to admin
+// to assert the Settings link appears.
+const { useIsAdminMock } = vi.hoisted(() => ({ useIsAdminMock: vi.fn(() => false) }));
+vi.mock('@/lib/auth', () => ({ useIsAdmin: () => useIsAdminMock() }));
 
 vi.mock('@/lib/use-chart-colors', () => ({
   useChartColors: () => ({
@@ -336,7 +336,39 @@ describe('<FleetConsole> heading (every render branch has an h1)', () => {
     // heading — both the loading and empty branches render an identical
     // sr-only h1, so asserting the heading alone could pass while still on
     // the (also headed) loading branch.
-    expect(await screen.findByText('No clusters yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No clusters yet')).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+  });
+
+  it('shows the admin an Add-cluster CTA in the empty state linking to Settings', async () => {
+    useIsAdminMock.mockReturnValue(true);
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+
+    renderConsole();
+
+    const link = await screen.findByRole('link', { name: /add a cluster in settings/i });
+    expect(link).toHaveAttribute('href', '/settings');
+  });
+
+  it('hides the empty-state CTA link from viewers', async () => {
+    useIsAdminMock.mockReturnValue(false);
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+
+    renderConsole();
+
+    expect(await screen.findByText('No clusters yet')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /add a cluster in settings/i })).toBeNull();
   });
 });

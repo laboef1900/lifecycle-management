@@ -38,7 +38,10 @@ test('create cluster, add host + application, chart reflects updates', async ({
       /^(Fleet runway is|Fleet is healthy|Fleet capacity console)/,
     );
 
-    // Create the cluster from the console's toolbar row (spec §4.5).
+    // Adding a cluster is now a configuration task on the Settings page
+    // (#223) — the console no longer has a "+ Add cluster" control. Create it
+    // from the Settings "Add cluster" panel, then return to the console.
+    await page.goto('/settings');
     await page.getByRole('button', { name: '+ Add cluster' }).click();
     const createDialog = page.getByRole('dialog', { name: 'New cluster' });
     await createDialog.getByRole('textbox', { name: 'Name' }).fill(clusterName);
@@ -46,6 +49,8 @@ test('create cluster, add host + application, chart reflects updates', async ({
     await createDialog.getByRole('spinbutton', { name: 'Capacity (GB)' }).fill('5000');
     await createDialog.getByRole('button', { name: 'Create cluster' }).click();
     await expect(createDialog).toBeHidden();
+
+    await page.goto('/');
 
     // The cluster's uniform tile appears in the grid, linking to its detail
     // panel, showing the right utilization (1000/5000 = 20.0%, spec §4.4).
