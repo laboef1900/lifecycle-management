@@ -248,6 +248,7 @@ describe('operator rename pins a synced host label (nameIsCustom parity)', () =>
     const conn = await connections.create('default', {
       name: `so-conn-${Date.now()}`,
       hostname: 'vcenter.corp.local',
+      port: 443,
       username: 'u',
       password: 'p',
       enabled: true,

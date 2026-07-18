@@ -258,6 +258,7 @@ export const vsphereConnectionResponseSchema: z.ZodType<VsphereConnectionRespons
   id: z.string(),
   name: z.string(),
   hostname: z.string(),
+  port: z.number(),
   username: z.string(),
   tlsMode: vsphereTlsModeSchema,
   pinnedRootFingerprintSha256: z.string().nullable(),

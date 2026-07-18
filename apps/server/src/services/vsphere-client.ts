@@ -78,10 +78,8 @@ export interface SoapCallOptions {
    */
   signal?: AbortSignal;
   /**
-   * Destination TCP port. **Defaults to 443 and production never sets it.** The
-   * ONLY caller that passes a value is the integration test suite, so a
-   * Testcontainers-mapped vcsim port is reachable (#199 owns a real, configurable
-   * port). This is a port number, not a TLS relaxation: `verifiedTlsOptions` keeps
+   * Destination TCP port. Configurable per connection (#199), defaulting to 443.
+   * This is a port number, not a TLS relaxation: `verifiedTlsOptions` keeps
    * `rejectUnauthorized: true` and the `ca:` root pin regardless of port.
    */
   port?: number;
@@ -96,9 +94,9 @@ export interface SoapCallOptions {
  *
  * @ai-warning `verifiedTlsOptions` always sets `rejectUnauthorized: true` and has
  * no branch that relaxes it. Do not add an options parameter that could. The
- * `options.port` seam is a destination port only — it cannot weaken trust. See
- * `vsphere-tls.ts` for why the intuitive `checkServerIdentity` alternative fails
- * open.
+ * `options.port` value (configurable per connection, #199) is a destination port
+ * only — it cannot weaken trust. See `vsphere-tls.ts` for why the intuitive
+ * `checkServerIdentity` alternative fails open.
  */
 export async function soapCall(
   hostname: string,
@@ -182,6 +180,7 @@ function classifyTransportError(err: unknown): VsphereLoginOutcome {
  */
 export async function verifyLogin(input: {
   hostname: string;
+  port?: number;
   username: string;
   password: string;
   pinnedRootPem: string | null;
@@ -190,6 +189,9 @@ export async function verifyLogin(input: {
   // the function, so there is nothing to leak across a restart and nothing to
   // keep alive.
   let cookie: string | null = null;
+  // Built conditionally: under exactOptionalPropertyTypes, `{ port: undefined }` is
+  // not assignable to `port?: number`. Omitting the key lets the collector default it.
+  const callOptions = input.port !== undefined ? { port: input.port } : {};
 
   try {
     // 1. RetrieveServiceContent — unauthenticated, and it yields both the
@@ -201,6 +203,7 @@ export async function verifyLogin(input: {
       'RetrieveServiceContent',
       `<urn:RetrieveServiceContent><urn:_this type="ServiceInstance">${SERVICE_INSTANCE}</urn:_this></urn:RetrieveServiceContent>`,
       null,
+      callOptions,
     );
     if (contentRes.status !== 200) return { outcome: 'not_a_vcenter', about: null };
 
@@ -219,6 +222,7 @@ export async function verifyLogin(input: {
       'Login',
       `<urn:Login><urn:_this type="SessionManager">${escapeXml(sessionManager)}</urn:_this><urn:userName>${escapeXml(input.username)}</urn:userName><urn:password>${escapeXml(input.password)}</urn:password></urn:Login>`,
       cookie,
+      callOptions,
     );
     if (loginRes.status !== 200) return { outcome: 'auth_failed', about: null };
     cookie = loginRes.setCookie;
@@ -230,6 +234,7 @@ export async function verifyLogin(input: {
       'Logout',
       `<urn:Logout><urn:_this type="SessionManager">${escapeXml(sessionManager)}</urn:_this></urn:Logout>`,
       cookie,
+      callOptions,
     ).catch(() => undefined);
 
     return { outcome: 'ok', about };

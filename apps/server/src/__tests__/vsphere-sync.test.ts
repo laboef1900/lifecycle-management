@@ -74,6 +74,7 @@ async function makeConn(name = uniq('conn')): Promise<string> {
   const c = await connections.create('default', {
     name,
     hostname: 'vcenter.corp.local',
+    port: 443,
     username: 'u',
     password: 'p',
     enabled: true,

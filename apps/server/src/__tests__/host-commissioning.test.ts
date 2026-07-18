@@ -383,6 +383,7 @@ describe('⚠️ re-sync NEVER overwrites an operator-confirmed commissionedAt',
     const conn = await connections.create('default', {
       name: `hc-conn-${Date.now()}`,
       hostname: 'vcenter.corp.local',
+      port: 443,
       username: 'u',
       password: 'p',
       enabled: true,

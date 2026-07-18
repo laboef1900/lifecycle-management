@@ -50,6 +50,8 @@ export class VsphereSyncService {
     connectionId: string,
     credentials: {
       hostname: string;
+      /** vCenter port; omitted defaults to 443 in the collector (#199). */
+      port?: number;
       username: string;
       password: string;
       pinnedRootPem: string | null;

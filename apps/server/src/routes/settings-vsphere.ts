@@ -55,6 +55,15 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
 ) => {
   const service = new VsphereConnectionsService(fastify.prisma, opts.configKey);
 
+  // Tighter per-IP budget on every endpoint that can directly open an outbound
+  // socket OR enqueue/re-arm background work against a stored caller-selected
+  // host:port (#199 design C5). Creation is intentionally included: it seeds an
+  // immediately-due scheduler job, so omitting it would let an anonymous caller in
+  // `disabled` mode bypass the probe/verify limit through persistent background
+  // retries. Inert in ordinary tests (the rate-limit plugin is not registered
+  // there — see server.ts), exactly like the auth routes' limit.
+  const outboundWorkRateLimit = { rateLimit: { max: 10, timeWindow: '1 minute' } };
+
   /**
    * Bootstrap-safe admin gate, mirroring `settings-auth.ts`. Open while auth is
    * disabled (there are no accounts to authenticate against, and this panel is how
@@ -79,15 +88,20 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
     },
   );
 
-  fastify.post('/settings/vsphere/connections', async (request, reply) => {
-    const body = vsphereConnectionCreateSchema.parse(request.body);
-    guardTarget(body.hostname);
-    const created = await service.create(request.tenantId, body);
-    return reply.code(201).send(created);
-  });
+  fastify.post(
+    '/settings/vsphere/connections',
+    { config: outboundWorkRateLimit },
+    async (request, reply) => {
+      const body = vsphereConnectionCreateSchema.parse(request.body);
+      guardTarget(body.hostname);
+      const created = await service.create(request.tenantId, body);
+      return reply.code(201).send(created);
+    },
+  );
 
   fastify.put(
     '/settings/vsphere/connections/:id',
+    { config: outboundWorkRateLimit },
     async (request): Promise<VsphereConnectionResponse> => {
       const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
       const body = vsphereConnectionUpdateSchema.parse(request.body);
@@ -96,12 +110,13 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
       // the server can tell whether it is the RIGHT one. Without this check the gate
       // is decorative — an anonymous caller would repoint a connection by sending
       // any string at all, then wait for the next poll to deliver the credential.
-      const touchesTrustMaterial = body.hostname !== undefined || body.username !== undefined;
+      const touchesTrustMaterial =
+        body.hostname !== undefined || body.port !== undefined || body.username !== undefined;
       if (touchesTrustMaterial) {
         if (!body.password) {
           throw new UnprocessableError(
             'PASSWORD_REQUIRED',
-            'Changing the hostname or username requires re-entering the password',
+            'Changing the hostname, port, or username requires re-entering the password',
           );
         }
         const ok = await service.passwordMatches(request.tenantId, id, body.password);
@@ -138,77 +153,93 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
    * no trust material and discloses nothing, so a password gate here would be
    * friction on a benign action, not the control — see the file header.
    */
-  fastify.post('/settings/vsphere/connections/:id/sync', async (request, reply) => {
-    const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
-    const { dueAt } = await service.requestSyncNow(request.tenantId, id);
-    const body: VsphereSyncNowResponse = { dueAt: dueAt.toISOString() };
-    return reply.code(202).send(body);
-  });
+  fastify.post(
+    '/settings/vsphere/connections/:id/sync',
+    { config: outboundWorkRateLimit },
+    async (request, reply) => {
+      const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
+      const { dueAt } = await service.requestSyncNow(request.tenantId, id);
+      const body: VsphereSyncNowResponse = { dueAt: dueAt.toISOString() };
+      return reply.code(202).send(body);
+    },
+  );
 
   /**
    * PHASE 1 — reachability + certificate capture. **Sends no credential**, and the
    * schema carries none, so it cannot forward one even by mistake.
    */
-  fastify.post('/settings/vsphere/probe', async (request): Promise<VsphereProbeResult> => {
-    const body = vsphereProbeSchema.parse(request.body);
-    guardTarget(body.hostname);
+  fastify.post(
+    '/settings/vsphere/probe',
+    { config: outboundWorkRateLimit },
+    async (request): Promise<VsphereProbeResult> => {
+      const body = vsphereProbeSchema.parse(request.body);
+      guardTarget(body.hostname);
 
-    const result = await probeCertificate(body.hostname);
-    if (result.outcome !== 'ok' || !result.chain) {
-      request.log.info({ event: 'vsphere.probe', outcome: result.outcome }, 'vCenter probe failed');
+      const result = await probeCertificate(body.hostname, body.port);
+      if (result.outcome !== 'ok' || !result.chain) {
+        request.log.info(
+          { event: 'vsphere.probe', outcome: result.outcome },
+          'vCenter probe failed',
+        );
+        return {
+          reachable: false,
+          trustedBySystemRoots: false,
+          rootFingerprintSha256: null,
+          validFrom: null,
+          validTo: null,
+          outcome: result.outcome === 'unreachable' ? 'unreachable' : 'tls_untrusted',
+        };
+      }
+
+      // Only the fingerprint and validity leave the server — never subject, issuer,
+      // or SANs. A fingerprint is a hash: useless for enumerating a network, and
+      // exactly what an admin compares against `govc about.cert -thumbprint`.
       return {
-        reachable: false,
-        trustedBySystemRoots: false,
-        rootFingerprintSha256: null,
-        validFrom: null,
-        validTo: null,
-        outcome: result.outcome === 'unreachable' ? 'unreachable' : 'tls_untrusted',
+        reachable: true,
+        trustedBySystemRoots: result.chain.trustedBySystemRoots,
+        rootFingerprintSha256: result.chain.rootFingerprintSha256,
+        validFrom: result.chain.validFrom,
+        validTo: result.chain.validTo,
+        outcome: 'ok',
       };
-    }
-
-    // Only the fingerprint and validity leave the server — never subject, issuer,
-    // or SANs. A fingerprint is a hash: useless for enumerating a network, and
-    // exactly what an admin compares against `govc about.cert -thumbprint`.
-    return {
-      reachable: true,
-      trustedBySystemRoots: result.chain.trustedBySystemRoots,
-      rootFingerprintSha256: result.chain.rootFingerprintSha256,
-      validFrom: result.chain.validFrom,
-      validTo: result.chain.validTo,
-      outcome: 'ok',
-    };
-  });
+    },
+  );
 
   /**
    * PHASE 2 — verify the credential logs in. The password comes from the request
    * body and is **required by the contract with no stored fallback**.
    */
-  fastify.post('/settings/vsphere/verify', async (request): Promise<VsphereVerifyResult> => {
-    const body = vsphereVerifySchema.parse(request.body);
-    guardTarget(body.hostname);
+  fastify.post(
+    '/settings/vsphere/verify',
+    { config: outboundWorkRateLimit },
+    async (request): Promise<VsphereVerifyResult> => {
+      const body = vsphereVerifySchema.parse(request.body);
+      guardTarget(body.hostname);
 
-    // No pinned root is available for an unsaved connection, so this verifies
-    // against the system trust store. A self-signed vCenter therefore reports
-    // `tls_untrusted` until its CA is confirmed and pinned — which is the intended
-    // order: vet the certificate, THEN send the credential.
-    const result = await verifyLogin({
-      hostname: body.hostname,
-      username: body.username,
-      password: body.password,
-      pinnedRootPem: null,
-    });
+      // No pinned root is available for an unsaved connection, so this verifies
+      // against the system trust store. A self-signed vCenter therefore reports
+      // `tls_untrusted` until its CA is confirmed and pinned — which is the intended
+      // order: vet the certificate, THEN send the credential.
+      const result = await verifyLogin({
+        hostname: body.hostname,
+        port: body.port,
+        username: body.username,
+        password: body.password,
+        pinnedRootPem: null,
+      });
 
-    // @ai-warning The log line carries the OUTCOME only. Never the password, never
-    // the raw error — `authorization`/`cookie` redaction does not cover a body we
-    // log ourselves.
-    request.log.info({ event: 'vsphere.verify', outcome: result.outcome }, 'vCenter verify');
+      // @ai-warning The log line carries the OUTCOME only. Never the password, never
+      // the raw error — `authorization`/`cookie` redaction does not cover a body we
+      // log ourselves.
+      request.log.info({ event: 'vsphere.verify', outcome: result.outcome }, 'vCenter verify');
 
-    return {
-      outcome: result.outcome,
-      instanceUuid: result.about?.instanceUuid ?? null,
-      apiVersion: result.about?.apiVersion ?? null,
-    };
-  });
+      return {
+        outcome: result.outcome,
+        instanceUuid: result.about?.instanceUuid ?? null,
+        apiVersion: result.about?.apiVersion ?? null,
+      };
+    },
+  );
 
   /**
    * Pin a confirmed CA root. Requires the password: this mutates trust material,
@@ -216,6 +247,7 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
    */
   fastify.post(
     '/settings/vsphere/connections/:id/trust-ca',
+    { config: outboundWorkRateLimit },
     async (request): Promise<VsphereConnectionResponse> => {
       const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
       const body = vsphereTrustCaSchema.parse(request.body);
@@ -232,7 +264,7 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
       // Re-probe rather than trusting a client-supplied PEM: the server pins what IT
       // observes, and the admin's fingerprint only has to agree. A client-supplied
       // certificate would let a caller pin an anchor the server never saw.
-      const probe = await probeCertificate(connection.hostname);
+      const probe = await probeCertificate(connection.hostname, connection.port);
       if (probe.outcome !== 'ok' || !probe.chain) {
         throw new UnprocessableError(
           'VCENTER_UNREACHABLE',

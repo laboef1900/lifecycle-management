@@ -4,7 +4,12 @@ import {
   type PeerCertificate,
 } from 'node:tls';
 
-/** vCenter always speaks https on 443. Not configurable — see `vsphere.ts`. */
+/**
+ * The default vCenter HTTPS port. Overridable per connection since #199 — the port
+ * is a destination only and never relaxes trust (`verifiedTlsOptions` keeps
+ * `rejectUnauthorized: true` and the `ca:` pin regardless). Still the default for
+ * the schema column, the shared `.default(443)`, and the params below.
+ */
 export const VCENTER_PORT = 443;
 
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -69,7 +74,10 @@ function rootOf(leaf: DetailedPeerCertificate): DetailedPeerCertificate {
  * `checkServerIdentity`'s Go equivalent, `VerifyPeerCertificate`, which DOES run
  * on verification failure. Node has no equivalent. The model does not port.)
  */
-export async function probeCertificate(hostname: string): Promise<TlsProbeResult> {
+export async function probeCertificate(
+  hostname: string,
+  port: number = VCENTER_PORT,
+): Promise<TlsProbeResult> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result: TlsProbeResult): void => {
@@ -81,7 +89,7 @@ export async function probeCertificate(hostname: string): Promise<TlsProbeResult
 
     const socket = tlsConnect({
       host: hostname,
-      port: VCENTER_PORT,
+      port,
       servername: hostname,
       // Safe ONLY because this path sends nothing. See the @ai-warning above.
       rejectUnauthorized: false,
@@ -149,12 +157,10 @@ export function verifiedTlsOptions(
   pinnedRootPem: string | null,
   port: number = VCENTER_PORT,
 ): { host: string; port: number; servername: string; rejectUnauthorized: true; ca?: string[] } {
-  // @ai-warning `port` defaults to 443 and production never overrides it (the
-  // hostname regex in `@lcm/shared` carries no port, and app config has none — that
-  // is #199). A non-default value is supplied ONLY by the integration test suite so
-  // a Testcontainers-mapped vcsim port is reachable. It changes the destination
-  // socket ONLY: `rejectUnauthorized: true` and the `ca:` root pin are unaffected,
-  // so there is still no code path that relaxes trust.
+  // @ai-warning `port` is configurable per connection (#199), defaulting to 443. It
+  // changes the destination socket ONLY: `rejectUnauthorized: true` and the `ca:`
+  // root pin are unaffected, so no port value can relax trust. This is why widening
+  // the port range is safe — the pin, not the port, is the gate.
   return {
     host: hostname,
     port,

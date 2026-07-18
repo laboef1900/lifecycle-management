@@ -112,6 +112,60 @@ describe('vSphere contracts — the hostname is a hostname, not a URL', () => {
   });
 });
 
+describe('vSphere contracts — the configurable port (#199)', () => {
+  const base = {
+    name: 'vc-prod',
+    hostname: 'vcenter.corp.local',
+    username: 'svc-lcm',
+    password: 'pw',
+  };
+
+  it('accepts a create with an explicit port', () => {
+    const r = vsphereConnectionCreateSchema.safeParse({ ...base, port: 8443 });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.port).toBe(8443);
+  });
+
+  it('defaults the port to 443 when omitted (existing payloads stay valid)', () => {
+    const r = vsphereConnectionCreateSchema.safeParse(base);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.port).toBe(443);
+  });
+
+  it.each([0, 65536, -1, 1.5])('rejects an out-of-range or non-integer port %s', (port) => {
+    expect(vsphereConnectionCreateSchema.safeParse({ ...base, port }).success).toBe(false);
+  });
+
+  it('threads a port through probe and verify, defaulting to 443', () => {
+    const probe = vsphereProbeSchema.safeParse({ hostname: 'vcenter.corp.local', port: 8443 });
+    expect(probe.success).toBe(true);
+    if (probe.success) expect(probe.data.port).toBe(8443);
+    const probeDefault = vsphereProbeSchema.safeParse({ hostname: 'vcenter.corp.local' });
+    expect(probeDefault.success && probeDefault.data.port).toBe(443);
+    expect(
+      vsphereVerifySchema.safeParse({ hostname: 'h', username: 'u', password: 'p', port: 8443 })
+        .success,
+    ).toBe(true);
+  });
+
+  it('treats a port change as trust material — it requires re-entering the password', () => {
+    // A port repoints where the credential is sent (host:PORT), so in disabled mode
+    // it must be gated exactly like a hostname change (#199, option A).
+    expect(vsphereConnectionUpdateSchema.safeParse({ port: 8443 }).success).toBe(false);
+    expect(vsphereConnectionUpdateSchema.safeParse({ port: 8443, password: 'pw' }).success).toBe(
+      true,
+    );
+  });
+
+  it('still rejects a port smuggled inline in the hostname', () => {
+    // The port has its own field; the hostname regex must keep rejecting host:port
+    // so the parser-differential trick stays closed.
+    expect(vsphereProbeSchema.safeParse({ hostname: 'vcenter.corp.local:8443' }).success).toBe(
+      false,
+    );
+  });
+});
+
 describe('vsphereSyncOutcomeSchema', () => {
   it("accepts 'skipped' — the identity guard refusing is an outcome, not a failure", () => {
     // vsphere.ts's own @ai-warning: `skipped` is how the guard reports "this

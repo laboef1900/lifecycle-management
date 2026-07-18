@@ -21,11 +21,19 @@ import { api, describeApiError } from '@/lib/api-client';
 interface AddFormState {
   name: string;
   hostname: string;
+  /** String while typing; parsed to a number on submit/probe. Defaults to '443'. */
+  port: string;
   username: string;
   password: string;
 }
 
-const EMPTY_FORM: AddFormState = { name: '', hostname: '', username: '', password: '' };
+const EMPTY_FORM: AddFormState = {
+  name: '',
+  hostname: '',
+  port: '443',
+  username: '',
+  password: '',
+};
 
 /**
  * Settings panel for vCenter connections (#175, epic #172).
@@ -57,7 +65,8 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
 
   // Step 1 — reachability + certificate. No credential leaves the browser here.
   const probeMutation = useMutation({
-    mutationFn: () => api.settings.vsphere.probe({ hostname: form.hostname }),
+    mutationFn: () =>
+      api.settings.vsphere.probe({ hostname: form.hostname, port: Number(form.port) }),
     onSuccess: (result) => {
       setProbe(result);
       if (result.outcome === 'unreachable') toast.error('Could not reach that host');
@@ -70,6 +79,7 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
       api.settings.vsphere.connections.create({
         name: form.name,
         hostname: form.hostname,
+        port: Number(form.port),
         username: form.username,
         password: form.password,
         enabled: true,
@@ -138,7 +148,7 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
                   <ConnectionStatusBadge connection={c} />
                 </div>
                 <p className="text-muted-foreground font-mono text-xs">
-                  {c.username}@{c.hostname}
+                  {`${c.username}@${c.hostname}${c.port !== 443 ? `:${c.port}` : ''}`}
                   {c.apiVersion ? ` · vCenter ${c.apiVersion}` : ''}
                 </p>
                 <SyncStateLine syncState={c.syncState} />
@@ -205,6 +215,21 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
                 setProbe(null); // a new host means the old certificate says nothing
               }}
               placeholder="vcenter.corp.local"
+              required
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span>Port</span>
+            <Input
+              type="number"
+              min={1}
+              max={65535}
+              value={form.port}
+              onChange={(e) => {
+                setForm({ ...form, port: e.target.value });
+                setProbe(null); // a different port is a different endpoint
+              }}
+              placeholder="443"
               required
             />
           </label>

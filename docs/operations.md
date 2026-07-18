@@ -257,7 +257,7 @@ disclosure" — data LCM already serves from its own API in the default auth mod
 
 ### Adding a connection
 
-1. Enter a name, hostname, username and password.
+1. Enter a name, hostname, port (default 443), username and password.
 2. **Check certificate** — this contacts the host and reads its certificate. **No
    credential is sent at this step**, deliberately: the certificate is vetted
    _before_ the password is ever transmitted.
@@ -272,9 +272,36 @@ disclosure" — data LCM already serves from its own API in the default auth mod
 If the certificate is signed by a CA your system already trusts, there is nothing
 to confirm and the panel says so.
 
+> **SECURITY NOTE — vCenter connection testing.** While auth is `disabled`
+> (the default) or under a break-glass override, **Check certificate**
+> (`POST /api/settings/vsphere/probe`) and connection verification
+> (`/api/settings/vsphere/verify`) are reachable by anyone who can reach the
+> server, with no session. Because the port is configurable to any value in
+> 1-65535, these endpoints can test whether an internal host answers TLS on
+> an arbitrary port **from the server's network position** — a coarse
+> internal port scanner (SSRF-adjacent). Every settings route that can probe,
+> create, re-arm, or re-point this outbound work is rate-limited to 10
+> requests/minute/IP. The background scheduler additionally claims at most
+> five due connections per one-minute tick, oldest first. Established vCenters
+> get priority and at most one slot is available to a connection that has never
+> connected successfully, so anonymous first-contact rows cannot starve normal
+> inventory work or turn the HTTP limit into unbounded concurrent background
+> probes. These controls bound work; they do not make the endpoint a security
+> boundary, and a determined caller on a trusted network can still sweep
+> slowly. Responses are deliberately coarse —
+> reachable or not, plus a certificate fingerprint, never the subject,
+> issuer, or SANs. Private addresses are permitted by design (a vCenter is
+> private). Stored credentials are never sent to a request-supplied host, and
+> changing a saved connection's hostname or port requires re-entering the
+> vCenter password; an untrusted certificate is pinned to an
+> out-of-band-confirmed root and a change fails rather than silently
+> trusting. Keep the deployment on a trusted network — behind a firewall/VPN,
+> not exposed to the open internet — during setup or while any break-glass
+> override is active, and use a read-only vCenter service account.
+
 ### Changing a saved connection
 
-**Changing the hostname or username requires re-entering the password.** This is
+**Changing the hostname, port, or username requires re-entering the password.** This is
 not a UI nicety — it is the control that protects the credential. In the default
 `disabled` auth mode every request carries an anonymous ADMIN principal, so the only
 thing distinguishing you from anyone else who can reach the server is knowledge of
