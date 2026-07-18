@@ -8,7 +8,7 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -46,12 +46,17 @@ function renderSettingsRoute(auth: AuthState, initialEntries: string[]) {
     history: createMemoryHistory({ initialEntries }),
   });
 
-  render(
+  const { unmount } = render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  return { router };
+  return { router, unmount };
+}
+
+/** An untrusted Escape as it arrives at the document listener. */
+function escapeEvent(): KeyboardEvent {
+  return new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
 }
 
 const baseAuthConfig: AuthConfigResponse = {
@@ -153,5 +158,105 @@ describe('/_app/settings Back button + Esc', () => {
     } finally {
       document.body.removeChild(input);
     }
+  });
+
+  it('ignores an Escape a nearer handler already consumed (defaultPrevented)', async () => {
+    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    await screen.findByRole('heading', { name: 'Settings' });
+
+    // Neither a typing target nor an overlay, so `defaultPrevented` is the only
+    // guard that can stop this Escape — it pins the ordering contract that lets
+    // any nearer handler consume Escape before the page acts on it.
+    const consumer = document.createElement('div');
+    consumer.addEventListener('keydown', (event) => event.preventDefault());
+    document.body.appendChild(consumer);
+    try {
+      consumer.dispatchEvent(escapeEvent());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(router.state.location.pathname).toBe('/settings');
+    } finally {
+      document.body.removeChild(consumer);
+    }
+  });
+
+  it('ignores OS auto-repeat Escape keydowns (holding Esc is one intent)', async () => {
+    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    await screen.findByRole('heading', { name: 'Settings' });
+    const back = vi.spyOn(router.history, 'back');
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+        repeat: true,
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(back).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe('/settings');
+  });
+
+  it('removes the document listener on unmount (no stray Esc navigation)', async () => {
+    const { router, unmount } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    await screen.findByRole('heading', { name: 'Settings' });
+    // Asserted on the history spy, not on `router.state`: once RouterProvider
+    // unmounts, nothing subscribes the router to the history, so a leaked pop
+    // would move the history without ever showing up in `state.location`.
+    const back = vi.spyOn(router.history, 'back');
+
+    // A leaked document-level listener is this design's highest-blast-radius
+    // regression: Esc would keep popping history from anywhere in the app.
+    unmount();
+    document.dispatchEvent(escapeEvent());
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(back).not.toHaveBeenCalled();
+  });
+
+  it('pops exactly one history entry when Escape is pressed twice in a row', async () => {
+    // Three entries so an over-pop is observable: index 2 → back → '/' (1),
+    // → back again → '/settings' (0).
+    const { router } = renderSettingsRoute(disabledAuth, ['/settings', '/', '/settings']);
+    await screen.findByRole('heading', { name: 'Settings' });
+    const back = vi.spyOn(router.history, 'back');
+
+    // Both in the same task: in a real browser `history.back()` only lands on a
+    // later popstate task, so the page — and this listener — is still mounted
+    // with a stale `canGoBack` when the second Escape arrives.
+    document.dispatchEvent(escapeEvent());
+    document.dispatchEvent(escapeEvent());
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(back).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(router.state.location.pathname).toBe('/');
+  });
+
+  it('navigates once when Back is double-clicked', async () => {
+    const { router } = renderSettingsRoute(disabledAuth, ['/settings', '/', '/settings']);
+    await screen.findByRole('heading', { name: 'Settings' });
+    const back = vi.spyOn(router.history, 'back');
+    const button = screen.getByRole('button', { name: 'Back' });
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(back).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(router.state.location.pathname).toBe('/');
+  });
+
+  it('exposes the Esc shortcut to assistive tech without polluting the name', async () => {
+    renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    await screen.findByRole('heading', { name: 'Settings' });
+
+    // The visual `Esc` hint is aria-hidden, so `aria-keyshortcuts` is the only
+    // channel that announces the binding — and it must not join the name.
+    const button = screen.getByRole('button', { name: 'Back' });
+    expect(button).toHaveAccessibleName('Back');
+    expect(button).toHaveAttribute('aria-keyshortcuts', 'Escape');
   });
 });

@@ -1,5 +1,5 @@
 import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/react-router';
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 import { AddClusterPanel } from '@/components/settings/add-cluster-panel';
 import { AuthenticationForm } from '@/components/settings/authentication-form';
@@ -25,7 +25,19 @@ function SettingsPage(): React.JSX.Element {
   // Go back to the previous route when there is real history to pop, else fall
   // back to the fleet console — a deep link/refresh onto /settings has no prior
   // entry (useCanGoBack tracks `__TSR_index !== 0`), so it lands on `/`.
+  //
+  // @ai-warning One-shot latch, mirroring the cluster panel's `isClosing` guard.
+  // `router.history.back()` is `window.history.back()`: the traversal is queued
+  // and only lands on a later task (popstate → router transition → unmount), so
+  // this page — and its document keydown listener — stays mounted with a stale
+  // `canGoBack === true` for a beat. A second activation inside that window
+  // (double-clicked Back, double-tapped Esc) would pop a *second* entry and can
+  // eject the user out of the SPA entirely. The latch is never reset: the page
+  // unmounts once the navigation lands.
+  const navigatedRef = useRef(false);
   const goBack = useCallback((): void => {
+    if (navigatedRef.current) return;
+    navigatedRef.current = true;
     if (canGoBack) {
       router.history.back();
     } else {
@@ -36,13 +48,15 @@ function SettingsPage(): React.JSX.Element {
   // Esc goes back, mirroring the panel's affordance. A document-level listener
   // is required (not a wrapper onKeyDown): Settings has no focus trap and every
   // entry path (topbar link, `g s`, ⌘K) leaves focus on <body>, where a
-  // wrapper handler would never fire. Guards, in order: skip if another handler
-  // already consumed the event; skip when typing in a field (Esc means "cancel
-  // this edit"); skip while a dismissible overlay is open so it — not the page
-  // — handles Escape (dirty-form gating is intentionally out of scope, #225).
+  // wrapper handler would never fire. Guards, in order: ignore OS key auto-
+  // repeat (holding Esc is one intent, not ~30 of them); skip if another
+  // handler already consumed the event; skip when typing in a field (Esc means
+  // "cancel this edit"); skip while a dismissible overlay is open so it — not
+  // the page — handles Escape (dirty-form gating is out of scope, #225).
   useEffect(() => {
     const handler = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
+      if (event.repeat) return;
       if (event.defaultPrevented) return;
       if (isTypingTarget(event.target)) return;
       if (isOverlayOpen()) return;
