@@ -268,8 +268,10 @@ test.describe('cluster lifecycle', () => {
       await page.goto('/');
       await expect(page.getByRole('link', { name: new RegExp(name) })).toHaveCount(0);
 
-      // Show archived toggle reveals the cluster's (muted) tile.
-      await page.getByRole('button', { name: /show archived/i }).click();
+      // The archived toggle lives in the Filter popover (#243): open it and
+      // check the "Show archived (N)" item to reveal the cluster's tile.
+      await page.getByTestId('fleet-filter-button').click();
+      await page.getByRole('checkbox', { name: /show archived/i }).check();
       await expect(page.getByRole('link', { name: new RegExp(name) })).toBeVisible();
 
       // Unarchive via UI.
@@ -320,9 +322,11 @@ test.describe('cluster lifecycle', () => {
     // The lifecycle card now navigates to `/` (spec §5.6), not `/clusters`.
     await expect(page).toHaveURL('/');
 
-    // Cluster gone from default and showArchived lists.
+    // Cluster gone from default and showArchived lists (#243: the archived
+    // toggle is a checkbox inside the Filter popover).
     await expect(page.getByRole('link', { name: new RegExp(name) })).toHaveCount(0);
-    await page.getByRole('button', { name: /show archived/i }).click();
+    await page.getByTestId('fleet-filter-button').click();
+    await page.getByRole('checkbox', { name: /show archived/i }).check();
     await expect(page.getByRole('link', { name: new RegExp(name) })).toHaveCount(0);
 
     // API confirms 404.
