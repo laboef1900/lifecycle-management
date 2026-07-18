@@ -273,7 +273,12 @@ body {
 
 /* Cluster detail slide-in panel (spec §5): fullscreen takeover — 100vw at
    every width (user decision 2026-07-17, superseding the former 58vw side
-   panel with its 1100px breakpoint). The console beneath is fully covered. */
+   panel with its 1100px breakpoint). The console beneath is fully covered.
+
+   @ai-warning `scenarioPaneLayout` (components/detail/cluster-panel.tsx) sizes
+   the below-`lg` Scenario sheet to 100vw so that it covers this panel exactly,
+   which is what makes the `inert` it applies to the content column honest.
+   Narrow this and the sheet would leave part of an inert column on screen. */
 .cluster-panel {
   width: 100vw;
 }
