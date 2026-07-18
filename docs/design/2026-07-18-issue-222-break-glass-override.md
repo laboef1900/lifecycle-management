@@ -309,7 +309,10 @@ Harness: `buildTestServer(envOverrides)` at `__tests__/auth-config-plugin.test.t
 
 ### `apps/server/src/__tests__/auth-plugin.test.ts`
 
-7. `'authStartupWarnings raises an error-level divergence alarm in every NODE_ENV'` — `authStartupWarnings({ current: {…mode:'disabled'}, storedMode: 'oidc', breakGlass: true }, 'test')` contains `{ level: 'error', event: 'auth_config.open_despite_configuration' }`.
+7. `'authStartupWarnings raises an error-level divergence alarm in every NODE_ENV'` — `authStartupWarnings({ current: {…mode:'disabled'}, storedMode: 'oidc', overrideCauses: ['break_glass'] }, 'test')` contains `{ level: 'error', event: 'auth_config.open_despite_configuration' }`.
+
+   The alarm reads `overrideCauses`, not the `breakGlass` boolean. Both overrides can fire on one boot — break-glass skips the strict-boot guard (`… && !env.RECOVERY_DISABLE_AUTH`) and falls through to the decrypt degrade — and naming only the break-glass recovery there tells the operator to clear the flag and restart, a restart that re-degrades on the still-undecryptable secret (or, under `AUTH_STRICT_BOOT`, refuses to boot mid-incident). Since this is the line an incident review searches for, it has to stand alone rather than relying on the sibling `break_glass_active` warn. Covered by `'names BOTH recovery steps when break-glass and the decrypt degrade fire on the same boot'`; a cause-free divergence still raises the alarm with generic recovery copy, preserving the assert-on-STATE property.
+
 8. End-to-end gate proof (`buildServer({ env, prisma })` + `inject`, template at `auth-plugin.test.ts:57-66`): boot with the flag → `GET /api/clusters` 200 anonymous; close; boot without it → 401.
 
 ### `apps/server/src/__tests__/settings-auth-routes.test.ts`

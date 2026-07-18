@@ -82,10 +82,10 @@ export interface AuthStartupWarning {
  * divergence alarm below is its replacement.
  */
 export function authStartupWarnings(
-  state: Pick<AuthConfigState, 'current' | 'storedMode' | 'breakGlass'>,
+  state: Pick<AuthConfigState, 'current' | 'storedMode' | 'overrideCauses'>,
   nodeEnv: Env['NODE_ENV'],
 ): AuthStartupWarning[] {
-  const { current: config, storedMode, breakGlass } = state;
+  const { current: config, storedMode, overrideCauses } = state;
   const warnings: AuthStartupWarning[] = [];
   if (config.mode === 'disabled' && nodeEnv === 'production') {
     warnings.push({
@@ -102,16 +102,45 @@ export function authStartupWarnings(
   // incident-grade fact in every environment. Asserts on the STATE rather than
   // enumerating causes, so it also covers any future override mechanism.
   if (config.mode === 'disabled' && storedMode !== 'disabled') {
+    // Reads the full cause LIST, not the `breakGlass` boolean: both overrides
+    // can fire on the same boot (break-glass skips the strict-boot guard and
+    // falls through to the decrypt degrade), and naming only the break-glass
+    // recovery there sends the operator into a restart that degrades straight
+    // back open on the still-undecryptable secret — or, under
+    // AUTH_STRICT_BOOT, refuses to boot mid-incident. This is the line
+    // docs/operations.md points at during an incident review, so it has to
+    // stand alone. See the `overrideCause` @ai-note in auth-config.ts.
+    const causes = new Set(overrideCauses);
+    const decryptFailed = causes.has('secret_decrypt_failure');
+    let recovery: string;
+    if (causes.has('break_glass')) {
+      recovery =
+        'Cause: RECOVERY_DISABLE_AUTH=true. Clear it and restart to restore the stored mode.';
+      if (decryptFailed) {
+        recovery +=
+          ' A SECOND override is also active on this boot: the stored auth secret could not be ' +
+          'decrypted. Clearing RECOVERY_DISABLE_AUTH alone will NOT restore the stored mode — ' +
+          'restore the correct CONFIG_ENCRYPTION_KEY as well.';
+      }
+    } else if (decryptFailed) {
+      recovery =
+        'Cause: the stored auth secret could not be decrypted. Restore CONFIG_ENCRYPTION_KEY ' +
+        'and restart to restore the stored mode.';
+    } else {
+      // Divergence with no recorded cause: unreachable today, but the alarm
+      // asserts on STATE so it survives a future override mechanism that
+      // forgets to register itself in `overrideCauses`.
+      recovery =
+        'Cause: an in-memory override force-disabled authentication for this boot. Restart to ' +
+        'restore the stored mode.';
+    }
     warnings.push({
       level: 'error',
       event: 'auth_config.open_despite_configuration',
       message:
         `Authentication is DISABLED in memory while the stored configuration is '${storedMode}': ` +
         '/api is open to an anonymous ADMIN. ' +
-        (breakGlass
-          ? 'Cause: RECOVERY_DISABLE_AUTH=true. Clear it and restart to restore the stored mode.'
-          : 'Cause: the stored auth secret could not be decrypted. Restore CONFIG_ENCRYPTION_KEY ' +
-            'and restart to restore the stored mode.'),
+        recovery,
     });
   }
   if (

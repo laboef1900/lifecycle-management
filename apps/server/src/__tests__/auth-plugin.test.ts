@@ -331,13 +331,13 @@ describe('authStartupWarnings', () => {
   /**
    * Wraps an `EffectiveAuthConfig` in the auth-config state shape
    * `authStartupWarnings` now takes. Defaults to no divergence (stored ==
-   * enforced, no break-glass) so the pre-existing cases below are unaffected.
+   * enforced, no override) so the pre-existing cases below are unaffected.
    */
   function makeState(
     current: EffectiveAuthConfig,
-    overrides: Partial<Pick<AuthConfigState, 'storedMode' | 'breakGlass'>> = {},
-  ): Pick<AuthConfigState, 'current' | 'storedMode' | 'breakGlass'> {
-    return { current, storedMode: current.mode, breakGlass: false, ...overrides };
+    overrides: Partial<Pick<AuthConfigState, 'storedMode' | 'overrideCauses'>> = {},
+  ): Pick<AuthConfigState, 'current' | 'storedMode' | 'overrideCauses'> {
+    return { current, storedMode: current.mode, overrideCauses: [], ...overrides };
   }
 
   it('warns about disabled auth in production, wide-open oidc, and insecure issuers', () => {
@@ -356,7 +356,7 @@ describe('authStartupWarnings', () => {
   it('raises an error-level divergence alarm in every NODE_ENV', () => {
     const state = makeState(makeConfig({ mode: 'disabled' }), {
       storedMode: 'oidc',
-      breakGlass: true,
+      overrideCauses: ['break_glass'],
     });
 
     for (const nodeEnv of ['test', 'development', 'production'] as const) {
@@ -370,14 +370,17 @@ describe('authStartupWarnings', () => {
   });
 
   it('names the cause-specific recovery: CONFIG_ENCRYPTION_KEY for a decrypt degrade, not break-glass', () => {
-    // Every other assertion on this alarm sets breakGlass: true, so the
+    // Every other assertion on this alarm sets the break-glass cause, so the
     // decrypt-cause half of the recovery copy was never executed. That branch
     // is the one an operator reads during exactly the incident #222 is about —
     // a divergence with break-glass OFF — and telling them to "clear
     // RECOVERY_DISABLE_AUTH" there is advice that cannot work, because the flag
     // they are being told to clear is not set.
     const decryptAlarm = authStartupWarnings(
-      makeState(makeConfig({ mode: 'disabled' }), { storedMode: 'oidc', breakGlass: false }),
+      makeState(makeConfig({ mode: 'disabled' }), {
+        storedMode: 'oidc',
+        overrideCauses: ['secret_decrypt_failure'],
+      }),
       'production',
     ).find((w) => w.event === 'auth_config.open_despite_configuration');
 
@@ -390,13 +393,51 @@ describe('authStartupWarnings', () => {
     // The break-glass branch must still name ITS own recovery — the two arms
     // are only meaningful if they actually differ.
     const breakGlassAlarm = authStartupWarnings(
-      makeState(makeConfig({ mode: 'disabled' }), { storedMode: 'local', breakGlass: true }),
+      makeState(makeConfig({ mode: 'disabled' }), {
+        storedMode: 'local',
+        overrideCauses: ['break_glass'],
+      }),
       'production',
     ).find((w) => w.event === 'auth_config.open_despite_configuration');
 
     expect(breakGlassAlarm?.message).toContain('RECOVERY_DISABLE_AUTH');
     expect(breakGlassAlarm?.message).not.toContain('CONFIG_ENCRYPTION_KEY');
     expect(breakGlassAlarm?.message).toContain("stored configuration is 'local'");
+  });
+
+  it('names BOTH recovery steps when break-glass and the decrypt degrade fire on the same boot', () => {
+    // Break-glass skips the strict-boot guard (`... && !env.RECOVERY_DISABLE_AUTH`)
+    // and falls through to the decrypt degrade, so `overrideCauses` carries both.
+    // Keying the copy off the break-glass boolean alone told the operator to
+    // clear the env var and restart — a restart that re-degrades on the still-
+    // undecryptable secret, leaving /api open while they believe they closed it.
+    const bothAlarm = authStartupWarnings(
+      makeState(makeConfig({ mode: 'disabled' }), {
+        storedMode: 'oidc',
+        overrideCauses: ['break_glass', 'secret_decrypt_failure'],
+      }),
+      'production',
+    ).find((w) => w.event === 'auth_config.open_despite_configuration');
+
+    expect(bothAlarm?.level).toBe('error');
+    // Break-glass keeps precedence: it is the reversible step, surfaced first.
+    expect(bothAlarm?.message).toContain('RECOVERY_DISABLE_AUTH');
+    // ...but the second cause must be named, or the recovery advice is a trap.
+    expect(bothAlarm?.message).toContain('CONFIG_ENCRYPTION_KEY');
+    expect(bothAlarm?.message).toContain('SECOND override');
+    expect(bothAlarm?.message).toContain('will NOT restore the stored mode');
+  });
+
+  it('still names a cause-free divergence rather than falling silent', () => {
+    // The alarm asserts on STATE, not on an enumeration of causes, so a future
+    // override that forgets to register in `overrideCauses` must still raise it.
+    const alarm = authStartupWarnings(
+      makeState(makeConfig({ mode: 'disabled' }), { storedMode: 'oidc', overrideCauses: [] }),
+      'production',
+    ).find((w) => w.event === 'auth_config.open_despite_configuration');
+
+    expect(alarm?.level).toBe('error');
+    expect(alarm?.message).toContain('open to an anonymous ADMIN');
   });
 
   it('does not raise the divergence alarm when the enforced mode matches the stored mode', () => {
@@ -411,7 +452,10 @@ describe('authStartupWarnings', () => {
     // directly — hence `logAuthStartupWarnings` being exported from server.ts.
     const log = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), fatal: vi.fn() };
     const warnings = authStartupWarnings(
-      makeState(makeConfig({ mode: 'disabled' }), { storedMode: 'oidc', breakGlass: true }),
+      makeState(makeConfig({ mode: 'disabled' }), {
+        storedMode: 'oidc',
+        overrideCauses: ['break_glass'],
+      }),
       'production',
     );
 
