@@ -1,5 +1,5 @@
 import type { ForecastResponse } from '@lcm/shared';
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
   Area,
   CartesianGrid,
@@ -45,12 +45,25 @@ interface ForecastChartProps {
 const numberFormat = new Intl.NumberFormat('en-US');
 
 /**
- * Resize debounce for the chart container, in ms. Sits above the scenario
- * pane's 280 ms enter / 200 ms exit width transition (`cluster-panel.tsx`) so
- * an animating pane re-measures the chart once, on settle, instead of once per
- * animation frame.
+ * Resize debounce for the chart container, in ms.
+ *
+ * Recharts throttles its ResizeObserver callback with `{ leading: false,
+ * trailing: true }`, so to collapse an animating pane into a SINGLE re-measure
+ * this value must exceed the pane's longest transition. `cluster-panel.tsx`
+ * animates the scenario pane's width over 280 ms on enter (200 ms on exit), so
+ * 300 ms is the smallest value that lets the enter settle inside one throttle
+ * window; at 200 ms the enter would fire once mid-flight at an intermediate
+ * width and again on settle. The trade is that the shorter 200 ms exit
+ * re-measures up to ~100 ms after it has settled.
+ *
+ * @ai-warning This ALSO delays `onResize` on mount: recharts calls `onResize`
+ * only from the throttled callback, never from the synchronous
+ * `getBoundingClientRect()` it does when the observer is attached. `chartWidth`
+ * is therefore seeded from the container directly (see the layout effect
+ * below) — without that seed the event-label planner would have no width for
+ * the first ~300 ms and render unplanned labels that then jump into place.
  */
-const RESIZE_DEBOUNCE_MS = 200;
+const RESIZE_DEBOUNCE_MS = 300;
 
 export function ForecastChart({
   forecast,
@@ -62,6 +75,18 @@ export function ForecastChart({
   // Measured SVG width from ResponsiveContainer; the event-label planner needs
   // it to resolve label collisions and clamp boxes in pixel space.
   const [chartWidth, setChartWidth] = useState<number | null>(null);
+  const chartBoxRef = useRef<HTMLDivElement>(null);
+  // Seed the measured width before the first paint. `onResize` is debounced by
+  // RESIZE_DEBOUNCE_MS and recharts never fires it eagerly, so waiting for it
+  // would leave `chartWidth` null — and the event-label planner without its
+  // pixel-space collision/clamp pass — for the whole debounce window on every
+  // panel open. This box is the ResponsiveContainer's parent and carries no
+  // padding or border, so its width IS the width recharts goes on to report;
+  // any drift self-corrects on the first debounced `onResize`.
+  useLayoutEffect(() => {
+    const measured = chartBoxRef.current?.getBoundingClientRect().width ?? 0;
+    if (measured > 0) setChartWidth(measured);
+  }, []);
   // The scenario forecast (when active) drives every series — consumption,
   // capacity, thresholds, hosts, events — per spec §5.4; the baseline
   // `forecast` prop then only supplies the "was: baseline" ghost values.
@@ -171,6 +196,7 @@ export function ForecastChart({
     <Card className="p-4">
       {/* TODO(a11y): fold cluster/metric identity into this label before any multi-chart layout (PR 2 Radix rebuild). */}
       <div
+        ref={chartBoxRef}
         className="w-full"
         style={{ height: CHART_HEIGHT }}
         role="img"
@@ -183,7 +209,8 @@ export function ForecastChart({
           // animation resizes this container on EVERY frame. Undebounced, each
           // frame re-renders the whole ComposedChart plus the pixel-space
           // event-label collision planner (~17 re-renders per open) and janks
-          // the very animation it accompanies.
+          // the very animation it accompanies. The mount measurement does NOT
+          // wait for this — see the seeding layout effect above.
           debounce={RESIZE_DEBOUNCE_MS}
           onResize={(width) => setChartWidth(width > 0 ? width : null)}
         >

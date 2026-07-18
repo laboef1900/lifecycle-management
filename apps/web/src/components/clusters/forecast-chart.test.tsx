@@ -32,7 +32,17 @@ function renderChart(
 // pulling in a full chart canvas.
 // The ResponsiveContainer stub renders a fragment, so there is no DOM node to
 // hang a data-attribute on — capture the props under test out-of-band instead.
-const containerProbe = vi.hoisted(() => ({ debounce: undefined as number | undefined }));
+const containerProbe = vi.hoisted(() => ({
+  debounce: undefined as number | undefined,
+  /**
+   * When true the stub withholds `onResize` entirely, reproducing what real
+   * recharts does during the debounce window after mount: it calls `onResize`
+   * ONLY from its throttled (`leading: false`) ResizeObserver callback, never
+   * from the synchronous `getBoundingClientRect()` it performs when attaching
+   * the observer.
+   */
+  withholdOnResize: false,
+}));
 
 vi.mock('recharts', async () => {
   const { useEffect } = await import('react');
@@ -46,11 +56,13 @@ vi.mock('recharts', async () => {
     onResize?: (width: number, height: number) => void;
     debounce?: number;
   }): React.JSX.Element => {
-    // Simulate the initial measurement recharts performs on mount. The stub
-    // invokes onResize directly, so the real `debounce` timing is not
-    // simulated here — the prop is asserted instead (see the debounce test).
+    // Stands in for the first throttled ResizeObserver callback. The stub fires
+    // it immediately rather than after `debounce` ms, so real timing is not
+    // simulated here — the prop is asserted instead (see the debounce test),
+    // and `withholdOnResize` covers the pre-callback window.
     useEffect(() => {
       containerProbe.debounce = debounce;
+      if (containerProbe.withholdOnResize) return;
       onResize?.(800, 320);
     }, [onResize, debounce]);
     return <>{children}</>;
@@ -358,16 +370,72 @@ describe('ForecastChart props mapping', () => {
     expect(screen.getByRole('img', { name: 'Capacity forecast chart' })).toBeInTheDocument();
   });
 
-  it('debounces container resize so the animating scenario pane cannot re-render it per frame', () => {
-    // At lg+ the scenario pane is a flex sibling whose width animates 0->340px
-    // (280 ms enter / 200 ms exit), resizing this container every frame. Without
-    // a debounce each frame re-renders the whole ComposedChart plus the
-    // pixel-space event-label collision planner. The debounce must clear the
-    // exit transition so the chart re-measures once, on settle.
+  it('debounces container resize past the LONGEST pane transition so it settles in one window', () => {
+    // At lg+ the scenario pane is a flex sibling whose width animates 0->340px,
+    // resizing this container every frame. Without a debounce each frame
+    // re-renders the whole ComposedChart plus the pixel-space event-label
+    // collision planner. Recharts throttles with `leading: false`, so the
+    // debounce must exceed the pane's LONGEST transition (`cluster-panel.tsx`
+    // ENTER_TRANSITION = 280 ms) for the animation to settle inside a single
+    // throttle window; at 280 or below the enter fires once mid-flight at an
+    // intermediate width and again on settle.
     containerProbe.debounce = undefined;
     renderChart(makeForecast());
 
-    expect(containerProbe.debounce).toBeGreaterThanOrEqual(200);
+    expect(containerProbe.debounce).toBeGreaterThan(280);
+  });
+
+  it('measures the chart on mount instead of waiting for the debounced onResize', () => {
+    // Regression guard for the debounce above. recharts calls `onResize` ONLY
+    // from its throttled (leading:false) ResizeObserver callback, so the first
+    // one lands a full debounce window after mount. If the component waited for
+    // it, `chartWidth` would stay null for that window and
+    // planEventLabelOffsets would skip its plot-edge clamp — every panel open
+    // would show unplanned event labels that then jump into place.
+    const forecast = makeForecast({
+      // A single event in the FIRST month: unmeasured its offset is 0, measured
+      // the planner pushes it right so the box clears the plot's left edge.
+      events: [makeEvent({ id: 'edge', effectiveDate: '2026-05-10' })],
+    });
+    const boxX = (): string | null =>
+      screen.getAllByTestId('reference-dot')[0]?.querySelector('rect')?.getAttribute('x') ?? null;
+
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect');
+    const measurable = (width: number): DOMRect =>
+      ({ width, height: 320, top: 0, left: 0, right: width, bottom: 320, x: 0, y: 0 }) as DOMRect;
+
+    try {
+      // 1. onResize withheld (we are inside the debounce window) but the DOM is
+      //    measurable — this is the path the fix adds.
+      containerProbe.withholdOnResize = true;
+      rectSpy.mockReturnValue(measurable(800));
+      const { unmount: unmountSeeded } = renderChart(forecast);
+      const seeded = boxX();
+      unmountSeeded();
+
+      // 2. Same, but nothing can be measured (zero-width container), so the
+      //    planner genuinely has no width to work with.
+      rectSpy.mockReturnValue(measurable(0));
+      const { unmount: unmountBlind } = renderChart(forecast);
+      const unmeasured = boxX();
+      unmountBlind();
+
+      // 3. The debounced onResize finally fires with the same 800px width.
+      containerProbe.withholdOnResize = false;
+      rectSpy.mockReturnValue(measurable(0));
+      renderChart(forecast);
+      const afterOnResize = boxX();
+
+      // The mount seed must already produce the planned layout...
+      expect(seeded).not.toBeNull();
+      expect(seeded).toBe(afterOnResize);
+      // ...and it must actually be doing something: without a measurable width
+      // the same render lays the label out differently.
+      expect(seeded).not.toBe(unmeasured);
+    } finally {
+      containerProbe.withholdOnResize = false;
+      rectSpy.mockRestore();
+    }
   });
 
   it('fills axis tick text with fg-subtle, not the axis line color (dark-theme contrast fix)', () => {

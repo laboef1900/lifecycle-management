@@ -2,13 +2,24 @@ import type { ForecastMonthPoint } from '@lcm/shared';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { todayIso } from '@/lib/format';
+
 import { ClusterTileChart } from './cluster-tile-chart';
+
+// Distinct stroke per role so a hairline can be identified by what it IS rather
+// than by its position in the JSX. `capacity` deliberately differs from
+// `utilizationCrit` here, matching the real palette (`--chart-capacity` is a
+// slate, `--destructive` a red) — they used to share a hex, which made the two
+// lines indistinguishable to a test.
+const WARN_STROKE = '#b45309';
+const CRIT_STROKE = '#b91c1c';
+const CAPACITY_STROKE = '#3a455e';
 
 vi.mock('@/lib/use-chart-colors', () => ({
   useChartColors: () => ({
     consumption: '#8a6016',
     consumptionFill: 'rgba(138, 96, 22, 0.10)',
-    capacity: '#b91c1c',
+    capacity: '#3a455e',
     grid: '#e5e5e5',
     axis: '#737373',
     utilizationOk: '#525252',
@@ -18,6 +29,27 @@ vi.mock('@/lib/use-chart-colors', () => ({
     eventPalette: [],
   }),
 }));
+
+/**
+ * The horizontal reference line carrying `stroke`, or null when none is drawn.
+ * Order-independent by construction: reordering the JSX must not fail a test.
+ */
+function hairline(stroke: string): HTMLElement | null {
+  return screen.queryAllByTestId(/^refline-y-/).find((el) => el.dataset.stroke === stroke) ?? null;
+}
+
+/** `'2026-07-01'` + delta months, for fixtures anchored to the real current month. */
+function shiftMonth(monthIso: string, delta: number): string {
+  const d = new Date(`${monthIso}T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + delta);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
+
+// `todayIso()` is the 1st of the CURRENT month, and the component splits
+// actual/forecast at whichever fixture row matches it. Fixtures that assert on
+// that split must therefore be built from it, not from a hardcoded date, or
+// they silently change meaning once the calendar moves on.
+const CURRENT_MONTH = todayIso();
 
 // A minimal stand-in for the Recharts tooltip content render props — just the
 // fields the tile chart's content function reads.
@@ -89,11 +121,27 @@ vi.mock('recharts', () => {
       </div>
     ),
     Line: ({ dataKey }: { dataKey: string }) => <div data-testid={`line-${dataKey}`} />,
-    // `data-y` is surfaced separately from the testid so tests can assert the
-    // clamped y of every hairline in render order (warn, crit, capacity) even
-    // when two of them collapse onto the same clamped value.
-    ReferenceLine: ({ x, y }: { x?: string; y?: number }) => (
-      <div data-testid={x !== undefined ? `refline-x-${x}` : `refline-y-${y}`} data-y={y} />
+    // `data-y`, `data-stroke` and `data-dash` are surfaced alongside the testid
+    // so a test can identify a hairline by its role (stroke) and assert both
+    // where it sits and whether it is marked off-scale — including when two of
+    // them clamp onto the same y and the testid alone would be ambiguous.
+    ReferenceLine: ({
+      x,
+      y,
+      stroke,
+      strokeDasharray,
+    }: {
+      x?: string;
+      y?: number;
+      stroke?: string;
+      strokeDasharray?: string;
+    }) => (
+      <div
+        data-testid={x !== undefined ? `refline-x-${x}` : `refline-y-${y}`}
+        data-y={y}
+        data-stroke={stroke}
+        data-dash={strokeDasharray}
+      />
     ),
     ReferenceDot: ({ x, y, fill }: { x: string; y: number; fill?: string }) => (
       <div data-testid="breach-dot" data-x={x} data-y={y} data-fill={fill} />
@@ -209,9 +257,11 @@ describe('<ClusterTileChart>', () => {
     // A cluster already past capacity (>125 %) must pin to the ceiling: letting
     // it through would either expand the axis (breaking cross-tile
     // comparability) or, with allowDataOverflow, draw off-window.
+    // Anchored to the real current month so the actual/forecast split below
+    // stays index 0 whatever month the suite runs in.
     const overMonths: ForecastMonthPoint[] = [
-      { month: '2026-07-01', consumption: 1400, capacity: 1000, utilization: 1.4 },
-      { month: '2026-08-01', consumption: 1600, capacity: 1000, utilization: 1.6 },
+      { month: CURRENT_MONTH, consumption: 1400, capacity: 1000, utilization: 1.4 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 1600, capacity: 1000, utilization: 1.6 },
     ];
     render(
       <ClusterTileChart
@@ -227,17 +277,22 @@ describe('<ClusterTileChart>', () => {
       forecast: number | null;
     }>;
     // True util is preserved for the tooltip; only the plotted values clamp.
-    expect(rows[0]).toEqual({ month: '2026-07-01', util: 140, actual: 125, forecast: 125 });
-    expect(rows[1]).toEqual({ month: '2026-08-01', util: 160, actual: null, forecast: 125 });
+    expect(rows[0]).toEqual({ month: CURRENT_MONTH, util: 140, actual: 125, forecast: 125 });
+    expect(rows[1]).toEqual({
+      month: shiftMonth(CURRENT_MONTH, 1),
+      util: 160,
+      actual: null,
+      forecast: 125,
+    });
     // The breach dot rides the same clamp — at util 140 it must sit at 125.
     expect(screen.getByTestId('breach-dot').dataset.y).toBe('125');
   });
 
   it('pins the breach dot to the floor when the warn threshold is below the window', () => {
-    // Mirror of the above: warn=0.35 makes month 0 (10 % util) a breach, and the
+    // Mirror of the above: warn=0.05 makes month 0 (10 % util) a breach, and the
     // dot must clamp UP to the 40 % floor rather than render off-window.
     const lowMonths: ForecastMonthPoint[] = [
-      { month: '2026-07-01', consumption: 100, capacity: 1000, utilization: 0.1 },
+      { month: CURRENT_MONTH, consumption: 100, capacity: 1000, utilization: 0.1 },
     ];
     render(
       <ClusterTileChart
@@ -269,12 +324,13 @@ describe('<ClusterTileChart>', () => {
     expect(screen.getByTestId('refline-y-100')).toBeInTheDocument();
   });
 
-  it('clamps a sub-40% warn threshold up to the floor so its hairline stays visible', () => {
+  it('clamps a sub-40% warn threshold up to the floor and marks it off-scale', () => {
     // percentSchema allows thresholds down to 0.01, so warn=0.35 is a legal,
     // saveable config. Recharts' ReferenceLine defaults to ifOverflow="discard"
     // and would render NOTHING below the 40% floor — while the breach dot still
     // pins to the floor and the aria-label still names the threshold. Clamping
-    // keeps the tile self-consistent.
+    // keeps the tile self-consistent; the off-scale dash keeps it honest, so a
+    // hairline pinned at 40% cannot be read as "warn is configured at 40%".
     render(
       <ClusterTileChart
         months={months}
@@ -282,21 +338,29 @@ describe('<ClusterTileChart>', () => {
         orderByDate={null}
       />,
     );
-    // Render order: warn, crit, then the fixed 100% capacity line.
-    const ys = screen.getAllByTestId(/^refline-y-/).map((el) => el.dataset.y);
-    expect(ys).toEqual(['40', '50', '100']);
+    expect(hairline(WARN_STROKE)?.dataset.y).toBe('40');
+    expect(hairline(WARN_STROKE)?.dataset.dash).toBe('1 2'); // off-scale cue
+    // Crit is inside the window, so it keeps the normal hairline dash —
+    // proving the cue tracks the clamp rather than being applied blanket.
+    expect(hairline(CRIT_STROKE)?.dataset.y).toBe('50');
+    expect(hairline(CRIT_STROKE)?.dataset.dash).toBe('4 3');
+    expect(hairline(CAPACITY_STROKE)?.dataset.y).toBe('100');
   });
 
-  it('clamps a sub-40% CRIT threshold to the floor too, and keeps the aria-label truthful', () => {
+  it('merges warn into crit when BOTH clamp to the same edge, instead of hiding warn under it', () => {
     render(
       <ClusterTileChart months={months} thresholds={{ warn: 0.2, crit: 0.3 }} orderByDate={null} />,
     );
-    // Both hairlines collapse onto the floor: the whole visible window is then
-    // genuinely at or above crit, which is what the tile shows.
-    const ys = screen.getAllByTestId(/^refline-y-/).map((el) => el.dataset.y);
-    expect(ys).toEqual(['40', '40', '100']);
-    // The clamp is presentational only — the accessible description must still
-    // report the REAL configured percentages, not the clamped floor.
+    // Both thresholds sit below the window and clamp to the same y. Drawing two
+    // coincident hairlines would render warn permanently invisible beneath crit
+    // while still implying two bands; a single off-scale line in the more severe
+    // color is what the scale can actually show.
+    expect(hairline(WARN_STROKE)).toBeNull();
+    expect(hairline(CRIT_STROKE)?.dataset.y).toBe('40');
+    expect(hairline(CRIT_STROKE)?.dataset.dash).toBe('1 2');
+    expect(hairline(CAPACITY_STROKE)?.dataset.y).toBe('100');
+    // The clamp and the merge are presentational only — the accessible
+    // description must still report the REAL configured percentages.
     const label = screen.getByRole('img').getAttribute('aria-label') ?? '';
     expect(label).toContain('Warn threshold 20 percent');
     expect(label).toContain('Critical threshold 30 percent');
