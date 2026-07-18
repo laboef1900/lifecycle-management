@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { LazyMotion, MotionConfig, domAnimation } from 'motion/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { api } from '@/lib/api-client';
 
 import {
@@ -111,6 +112,23 @@ const navigateMock = vi.fn();
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigateMock,
+  // Minimal Link stand-in for the BackLink (#243): renders the real anchor
+  // semantics the component promises (href, ref, aria attributes) without
+  // router context. SPA navigation on click is TanStack's own behavior and is
+  // covered by the Playwright suite against a real router.
+  Link: ({
+    to,
+    children,
+    ref,
+    ...rest
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+    to: string;
+    ref?: React.Ref<HTMLAnchorElement>;
+  }) => (
+    <a href={to} ref={ref} {...rest}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -221,8 +239,12 @@ function Harness({ show }: { show: boolean }): React.JSX.Element {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return (
     <QueryClientProvider client={client}>
-      <button type="button">Open trigger</button>
-      {show ? <ClusterPanel clusterId={CLUSTER_ID} /> : null}
+      {/* app.tsx mounts TooltipProvider app-wide; the BackLink and
+          recommendation chip (#243) render Radix Tooltips that need it. */}
+      <TooltipProvider>
+        <button type="button">Open trigger</button>
+        {show ? <ClusterPanel clusterId={CLUSTER_ID} /> : null}
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }
@@ -238,11 +260,13 @@ function AnimatedHarness(): React.JSX.Element {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return (
     <QueryClientProvider client={client}>
-      <LazyMotion features={domAnimation} strict>
-        <MotionConfig reducedMotion="user">
-          <ClusterPanel clusterId={CLUSTER_ID} />
-        </MotionConfig>
-      </LazyMotion>
+      <TooltipProvider>
+        <LazyMotion features={domAnimation} strict>
+          <MotionConfig reducedMotion="user">
+            <ClusterPanel clusterId={CLUSTER_ID} />
+          </MotionConfig>
+        </LazyMotion>
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }
@@ -278,7 +302,7 @@ describe('<ClusterPanel>', () => {
     render(<Harness show />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /back/i })).toHaveFocus();
+      expect(screen.getByTestId('panel-back-link')).toHaveFocus();
     });
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
@@ -323,7 +347,7 @@ describe('<ClusterPanel>', () => {
     expect(within(strip).queryByText(/no projected breach/i)).toBeNull();
     expect(within(strip).queryByText(/\d+\+? mo/i)).toBeNull();
 
-    const banner = screen.getByTestId('recommendation-banner');
+    const banner = screen.getByTestId('recommendation-chip');
     expect(banner).toHaveTextContent(/capacity unknown/i);
     expect(banner).not.toHaveTextContent(/no order needed/i);
     expect(
@@ -345,15 +369,34 @@ describe('<ClusterPanel>', () => {
     expect(dialog.style.boxShadow).toBe('');
   });
 
-  it('gives the back button an accessible name of exactly "Back", not "Back Esc" (MINOR fix)', async () => {
-    // The visible <kbd>Esc</kbd> hint must not concatenate into the
-    // accessible name — it's decorative for sighted keyboard users only.
+  it('renders the back control as a real link to /, named "Back to clusters", first in DOM order (#243)', async () => {
+    // Link semantics, not history.back(): works on deep links and
+    // middle-click. The icon is aria-hidden and the sr-only text is the whole
+    // accessible name; aria-keyshortcuts states the Esc binding (the visible
+    // keycap moved into the tooltip).
     render(<Harness show />);
+    await screen.findByText('Prod-East');
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /back/i })).toHaveFocus();
-    });
-    expect(screen.getByRole('button', { name: 'Back' })).toHaveAccessibleName('Back');
+    const back = screen.getByRole('link', { name: 'Back to clusters' });
+    expect(back).toBe(screen.getByTestId('panel-back-link'));
+    expect(back).toHaveAccessibleName('Back to clusters');
+    expect(back).toHaveAttribute('href', '/');
+    expect(back).toHaveAttribute('aria-keyshortcuts', 'Escape');
+
+    // First in DOM and tab order — before the h1 (WCAG 2.4.3 focus order).
+    const heading = screen.getByRole('heading', { level: 1, name: 'Prod-East' });
+    expect(back.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('deletes the "Cluster" eyebrow and renders the description as a clamped second line (#243)', async () => {
+    render(<Harness show />);
+    await screen.findByText('Prod-East');
+
+    // Eyebrow deleted, not demoted: the back control, KPI strip, and context
+    // already say "cluster", so the label earned nothing.
+    expect(screen.queryByText('Cluster', { exact: true })).toBeNull();
+    const description = screen.getByText('Primary production cluster');
+    expect(description).toHaveClass('line-clamp-1');
   });
 
   it('restores focus to the previously-focused element after the panel closes', async () => {
@@ -363,7 +406,7 @@ describe('<ClusterPanel>', () => {
     expect(trigger).toHaveFocus();
 
     rerender(<Harness show />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByTestId('panel-back-link')).toHaveFocus());
 
     rerender(<Harness show={false} />);
     await waitFor(() => expect(trigger).toHaveFocus());
@@ -398,7 +441,7 @@ describe('<ClusterPanel>', () => {
 
   it('Esc navigates to / on the same frame — no exit animation, no close delay (#243)', async () => {
     render(<Harness show />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByTestId('panel-back-link')).toHaveFocus());
 
     const dialog = screen.getByRole('dialog');
     dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -418,7 +461,7 @@ describe('<ClusterPanel>', () => {
     const user = userEvent.setup();
     render(<Harness show />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByTestId('panel-back-link')).toHaveFocus());
     await screen.findByText('esx-01');
 
     await user.click(screen.getByRole('button', { name: 'Delete' }));
@@ -436,34 +479,20 @@ describe('<ClusterPanel>', () => {
     expect(screen.getByRole('dialog', { name: /prod-east/i })).toBeInTheDocument();
   });
 
-  it('the back control navigates to / synchronously (#243 — no deferred close)', async () => {
-    // The 200ms close delay existed to let a "detail closed" live-region
-    // announcement be read before unmount. With the instant close (#243) the
-    // announcement is gone with the delay — focus returning to the trigger
-    // tile is the assistive-tech cue that the dialog closed (the restore is
-    // covered by its own test above).
-    render(<Harness show />);
-    await screen.findByText('Prod-East');
-    expect(screen.getByRole('status')).toHaveTextContent('Cluster Prod-East detail opened.');
-
-    const user = (await import('@testing-library/user-event')).default.setup();
-    await user.click(screen.getByRole('button', { name: /back/i }));
-
-    expect(navigateMock).toHaveBeenCalledWith({ to: '/' });
-  });
-
   it('announces "Cluster <name> detail opened." once the cluster loads', async () => {
     render(<Harness show />);
     await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent('Cluster Prod-East detail opened.'),
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Cluster Prod-East detail opened.',
+      ),
     );
   });
 
-  it('renders the KPI strip, recommendation banner, and tabs once data loads', async () => {
+  it('renders the KPI strip, recommendation chip, and tabs once data loads', async () => {
     render(<Harness show />);
 
     expect(await screen.findByTestId('kpi-strip')).toBeInTheDocument();
-    expect(screen.getByTestId('recommendation-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('recommendation-chip')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Hosts' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /apps/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Settings' })).toBeInTheDocument();
@@ -474,7 +503,7 @@ describe('<ClusterPanel>', () => {
     const user = userEvent.setup();
     render(<Harness show />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /back/i })).toHaveFocus());
+    await waitFor(() => expect(screen.getByTestId('panel-back-link')).toHaveFocus());
     await screen.findByTestId('kpi-strip');
 
     // ScenarioControls now lives in the slide-in pane (#226) — open it first.
@@ -482,11 +511,15 @@ describe('<ClusterPanel>', () => {
 
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent('Scenario active: Lose 1 host.'),
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Lose 1 host.',
+      ),
     );
 
     await user.click(screen.getByTestId('scenario-clear'));
-    expect(screen.getByRole('status')).toHaveTextContent('Baseline forecast restored.');
+    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+      'Baseline forecast restored.',
+    );
   });
 });
 
@@ -567,7 +600,9 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await user.click(screen.getByTestId('scenario-button'));
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent('Scenario active: Lose 1 host.'),
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Lose 1 host.',
+      ),
     );
 
     // Close the pane; the applied scenario must survive and stay visible.
@@ -658,16 +693,17 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(paneAside).not.toBeNull();
     expect(paneAside).toHaveClass('max-lg:bg-black/40');
 
-    // Only because nothing is visible under it is `inert` on the whole column
-    // honest — including the Back and Scenario buttons the sheet covers.
+    // Only because the sheet layer takes every pointer hit is `inert` on the
+    // whole column honest — including the back link and Scenario button it
+    // covers.
     expect(content).toHaveAttribute('inert');
-    const backButton = screen.getByRole('button', { name: 'Back' });
-    expect(content).toContainElement(backButton);
+    const backLink = screen.getByTestId('panel-back-link');
+    expect(content).toContainElement(backLink);
 
     // ...and the panel's own Tab trap agrees: Shift+Tab off the pane's first
     // control wraps to the pane's last control, never onto a covered one.
     await user.tab({ shift: true });
-    expect(backButton).not.toHaveFocus();
+    expect(backLink).not.toHaveFocus();
     expect(screen.getByRole('button', { name: 'Apply' })).toHaveFocus();
 
     // Closing the pane hands the column back.
@@ -865,7 +901,9 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await user.type(countInput, '3');
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent('Scenario active: Lose 3 hosts.'),
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Lose 3 hosts.',
+      ),
     );
 
     await user.keyboard('{Escape}');

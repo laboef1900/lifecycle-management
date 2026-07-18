@@ -21,12 +21,12 @@ import {
   WindowControls,
   type ForecastWindow,
 } from '@/components/clusters/window-controls';
-import { RecommendationBanner } from '@/components/detail/recommendation-banner';
+import { RecommendationChip } from '@/components/detail/recommendation-chip';
 import { BulletMeter } from '@/components/fleet/bullet-meter';
 import { LiveUsageSection } from '@/components/fleet/live-usage';
 import { baselineAgeDays, isBaselineStale } from '@/components/fleet/stale-baseline';
 import { KpiTile } from '@/components/overview/kpi-tile';
-import { BackButton } from '@/components/ui/back-button';
+import { BackLink } from '@/components/ui/back-link';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -214,7 +214,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const paneHeadingId = useId();
   const paneId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLAnchorElement>(null);
   const scenarioButtonRef = useRef<HTMLButtonElement>(null);
   const paneRef = useRef<HTMLElement>(null);
   const paneCloseRef = useRef<HTMLButtonElement>(null);
@@ -475,7 +475,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
         handleTabTrap(event);
       }}
     >
-      <div className="sr-only" role="status" aria-live="polite">
+      <div data-testid="panel-live-region" className="sr-only" role="status" aria-live="polite">
         {liveMessage}
       </div>
 
@@ -529,46 +529,55 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
         className="min-w-0 flex-1 overflow-y-auto"
       >
         <div className="space-y-6 p-5 sm:p-6">
-          {/* The back button is a single, stable element outside the
+          {/* Two-line page header (#243, the Polaris/Primer/Carbon anatomy):
+            line 1 is one flex row — icon-only back link hard left, h1 name,
+            inline status chips, flexible spacer, action group right — and
+            line 2 is the description, clamped so long text never pushes the
+            KPI strip. The back link is a single, stable element outside the
             loading-state branching below (deliberately never swapped for a
-            different button instance) — the skeleton/error/loaded header
+            different element instance) — the skeleton/error/loaded header
             content around it reflows freely without ever unmounting it, so
             it can't lose the focus the mount effect above placed on it when
             the cluster query resolves and the skeleton gives way to the real
-            header. */}
-          <header className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">
+            header. It is also first in DOM and tab order, before the h1
+            (WCAG 2.4.3). */}
+          <header className="space-y-1">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <BackLink ref={closeButtonRef} />
               {clusterQuery.isPending ? (
                 <HeaderSkeleton />
               ) : clusterQuery.isError || !clusterQuery.data ? (
-                <ErrorCard message={clusterQuery.error?.message ?? 'Cluster not found'} />
+                <div className="min-w-0 flex-1">
+                  <ErrorCard message={clusterQuery.error?.message ?? 'Cluster not found'} />
+                </div>
               ) : (
-                <PanelHeaderContent cluster={clusterQuery.data} />
-              )}
-            </div>
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              {clusterQuery.data && metric ? (
-                <ScenarioButton
-                  ref={scenarioButtonRef}
-                  active={scenario}
-                  open={paneOpen}
-                  controlsId={paneId}
-                  onClick={togglePane}
+                <PanelTitle
+                  cluster={clusterQuery.data}
+                  procurement={activeForecast?.procurement}
+                  capacityKnown={activeCapacityKnown}
                 />
-              ) : null}
-              <BackButton ref={closeButtonRef} onClick={requestClose} />
+              )}
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                {clusterQuery.data && metric ? (
+                  <ScenarioButton
+                    ref={scenarioButtonRef}
+                    active={scenario}
+                    open={paneOpen}
+                    controlsId={paneId}
+                    onClick={togglePane}
+                  />
+                ) : null}
+              </div>
             </div>
+            {clusterQuery.data?.description ? (
+              <p className="line-clamp-1 pl-10 text-sm text-fg-muted [overflow-wrap:anywhere]">
+                {clusterQuery.data.description}
+              </p>
+            ) : null}
           </header>
 
           {clusterQuery.data && metric ? (
             <>
-              {activeForecast ? (
-                <RecommendationBanner
-                  procurement={activeForecast.procurement}
-                  capacityKnown={activeCapacityKnown}
-                />
-              ) : null}
-
               {forecastQuery.data ? (
                 <ClusterDetailKpiStrip
                   forecast={activeForecast ?? forecastQuery.data}
@@ -853,29 +862,43 @@ function ScenarioPaneBody({
   );
 }
 
-function PanelHeaderContent({ cluster }: { cluster: ClusterResponse }): React.JSX.Element {
+/**
+ * Title-row content of the two-line header (#243): the h1 (the panel's only
+ * top-level heading — the "Cluster" eyebrow is deleted, not demoted; the back
+ * control, KPI strip, and context already say "cluster") followed by the
+ * ambient-state chip group. The recommendation chip leads it — proximity
+ * binds status to the entity — with the baseline flag and archived badge as
+ * the remaining "ambient state" chips this slot is for. `procurement` is
+ * undefined until the forecast resolves; the chip simply appears then.
+ */
+function PanelTitle({
+  cluster,
+  procurement,
+  capacityKnown,
+}: {
+  cluster: ClusterResponse;
+  procurement: ProcurementInfo | undefined;
+  capacityKnown: boolean;
+}): React.JSX.Element {
   const stale = isBaselineStale(cluster.baselineDate);
   const ageDays = baselineAgeDays(cluster.baselineDate);
   return (
     <>
-      <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">Cluster</p>
-      <div className="mt-1 flex flex-wrap items-baseline gap-2">
-        <h2 className="font-display text-[21px] font-semibold leading-[1.1] tracking-[-0.01em] [overflow-wrap:anywhere]">
-          {cluster.name}
-        </h2>
-        {cluster.archivedAt ? (
-          <Badge variant="outline">Archived {cluster.archivedAt.slice(0, 10)}</Badge>
+      <h1 className="min-w-0 font-display text-[21px] font-semibold leading-[1.1] tracking-[-0.01em] [overflow-wrap:anywhere]">
+        {cluster.name}
+      </h1>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {procurement ? (
+          <RecommendationChip procurement={procurement} capacityKnown={capacityKnown} />
         ) : null}
-      </div>
-      {cluster.description ? (
-        <p className="mt-1 text-sm text-fg-muted [overflow-wrap:anywhere]">{cluster.description}</p>
-      ) : null}
-      <div className="mt-2 flex flex-wrap gap-1.5">
         {stale ? (
           <FlagChip tone="warn">⚠ BASELINE {ageDays} D OLD</FlagChip>
         ) : (
           <FlagChip tone="muted">BASELINE {cluster.baselineDate}</FlagChip>
         )}
+        {cluster.archivedAt ? (
+          <Badge variant="outline">Archived {cluster.archivedAt.slice(0, 10)}</Badge>
+        ) : null}
       </div>
     </>
   );
@@ -993,14 +1016,11 @@ function ClusterDetailKpiStrip({
 }
 
 /** The dialog's own `aria-label` covers the pending state, so this no longer
- *  carries a stand-in heading purely to keep `aria-labelledby` resolvable. */
+ *  carries a stand-in heading purely to keep `aria-labelledby` resolvable.
+ *  A single title-height bar: it stands in for the h1 inside the one-row
+ *  title line (#243); the description line simply appears once loaded. */
 function HeaderSkeleton(): React.JSX.Element {
-  return (
-    <div className="space-y-2">
-      <div className="h-7 w-48 animate-pulse rounded bg-muted" />
-      <div className="h-4 w-64 animate-pulse rounded bg-muted" />
-    </div>
-  );
+  return <div className="h-7 w-48 animate-pulse rounded bg-muted" />;
 }
 
 function ChartSkeleton(): React.JSX.Element {

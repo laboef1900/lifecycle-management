@@ -138,7 +138,7 @@ test.describe('cluster identity + baseline edit', () => {
       const panel = page.locator('.cluster-panel');
       // The panel header name is an h2 (spec §5.1) — the page's only h1 is
       // the fleet verdict headline computed on the console beneath.
-      await expect(panel.getByRole('heading', { name: originalName, level: 2 })).toBeVisible();
+      await expect(panel.getByRole('heading', { name: originalName, level: 1 })).toBeVisible();
 
       await panel.getByRole('tab', { name: 'Settings' }).click();
 
@@ -157,7 +157,7 @@ test.describe('cluster identity + baseline edit', () => {
       await page.getByRole('button', { name: /^save$/i }).click();
       await putResponse;
 
-      await expect(panel.getByRole('heading', { name: newName, level: 2 })).toBeVisible();
+      await expect(panel.getByRole('heading', { name: newName, level: 1 })).toBeVisible();
     } finally {
       // Restore the cluster name so subsequent runs are deterministic.
       await request.put(`/api/clusters/${cluster.id}`, { data: { name: originalName } });
