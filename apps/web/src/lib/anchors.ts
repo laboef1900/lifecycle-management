@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 
 /**
  * URL hashes that deep-link to a specific panel within a page.
@@ -12,20 +12,21 @@ import { useSyncExternalStore } from 'react';
 /** Settings → Add cluster panel (`apps/web/src/components/settings/add-cluster-panel.tsx`). */
 export const ADD_CLUSTER_HASH = 'add-cluster';
 
-interface AnchorFocusRequest {
-  readonly hash: string;
-  readonly count: number;
-}
-
-const NO_REQUEST: AnchorFocusRequest = { hash: '', count: 0 };
-
-let request: AnchorFocusRequest = NO_REQUEST;
+/**
+ * How many focus requests each anchor has received. Per anchor, and
+ * monotonically increasing.
+ *
+ * @ai-warning Do NOT collapse this into a single "newest request" record. A
+ * subscriber's value would then fall to 0 whenever some *other* anchor is
+ * requested — and a fall is a dependency *change* like any other, so requesting
+ * anchor B would re-run anchor A's effect. Because the request lands
+ * synchronously while the router's hash follows a tick later, A would still see
+ * its own hash in the URL at that moment and would steal the scroll and focus
+ * meant for B. There is only one anchor today; the second one added would hit
+ * this. See `anchors.test.tsx`.
+ */
+const requestCounts = new Map<string, number>();
 const listeners = new Set<() => void>();
-
-/** Snapshot identity is stable between requests, as `useSyncExternalStore` requires. */
-function getRequest(): AnchorFocusRequest {
-  return request;
-}
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
@@ -52,22 +53,22 @@ function subscribe(listener: () => void): () => void {
  * TanStack Router's same-URL navigation semantics.
  */
 export function requestAnchorFocus(hash: string): void {
-  request = { hash, count: request.count + 1 };
+  requestCounts.set(hash, (requestCounts.get(hash) ?? 0) + 1);
   for (const listener of listeners) listener();
 }
 
 /**
- * Number of focus requests aimed at `hash` — changes on every invocation, and
- * is `0` while the latest request targets some other anchor. Use it as an
- * effect dependency alongside the location hash.
+ * Number of focus requests aimed at `hash` — its *value* is meaningless, its
+ * *change* is the signal. Use it as an effect dependency alongside the location
+ * hash; `add-cluster-panel.tsx` is the reference implementation.
+ *
+ * Requests aimed at other anchors are invisible here: the snapshot is a plain
+ * number, so `useSyncExternalStore`'s `Object.is` check turns them into a true
+ * no-op — no re-render, no effect re-run. Counters only ever increase, so a
+ * count left over from an earlier interaction (or an earlier test) can never
+ * fire an effect on its own, which is why this module needs no reset seam.
  */
 export function useAnchorFocusRequest(hash: string): number {
-  const current = useSyncExternalStore(subscribe, getRequest, getRequest);
-  return current.hash === hash ? current.count : 0;
-}
-
-/** Test-only: drop the pending request so suites do not leak into each other. */
-export function resetAnchorFocusRequests(): void {
-  request = NO_REQUEST;
-  for (const listener of listeners) listener();
+  const getSnapshot = useCallback(() => requestCounts.get(hash) ?? 0, [hash]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

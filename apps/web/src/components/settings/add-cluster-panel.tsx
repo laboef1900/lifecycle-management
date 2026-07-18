@@ -38,14 +38,29 @@ function AddClusterCard(): React.JSX.Element {
   // Deep link from the ⌘K palette and the fleet empty-state CTA (#223 review
   // follow-up): this panel is the fourth on the page, so arriving at the top of
   // /settings left both the viewport and focus nowhere near the promised
-  // control. Move both to it.
+  // control.
   //
-  // @ai-note Two independent triggers, and both are needed. `hash` covers
-  // arriving from elsewhere (including a reload or a shared link), where this
-  // component mounts with the hash already set. `focusRequests` covers
-  // re-invoking the action while the URL is *already* /settings#add-cluster —
-  // that navigation produces an identical location, so a hash-only dependency
-  // never changes and the action would be a silent no-op. See lib/anchors.ts.
+  // @ai-note Division of labour with the router, measured against router-core
+  // 1.171 rather than assumed: on a *committed* navigation whose target carries
+  // a hash — a cold load at /settings#add-cluster, or a cross-page link from
+  // the fleet console — TanStack's scroll restoration already runs
+  // `document.getElementById(hash).scrollIntoView(true)`, an instant jump
+  // (`defaultHashScrollIntoView` is true and we don't override it). What it
+  // never does is move focus, and it does nothing at all when the navigation
+  // resolves to the URL the user is already on: `commitLocation` takes its
+  // same-URL branch, no location change is published, and no scroll runs.
+  //
+  // So this effect owns the focus move on every path, and owns the scroll on
+  // the re-invoke path where it is the only one. On the two navigation paths
+  // its scroll re-targets an already-settled position and is a no-op — cheaper
+  // than branching on which path we arrived by, and it keeps this panel correct
+  // independently of the router's scroll settings.
+  //
+  // Both dependencies are load-bearing. `hash` covers arriving from elsewhere
+  // (reload, shared link, cold mount). `focusRequests` covers re-invoking the
+  // action while the URL is *already* /settings#add-cluster — that navigation
+  // produces an identical location, so a hash-only dependency never changes and
+  // the action would be a silent no-op. See lib/anchors.ts.
   useEffect(() => {
     if (hash !== ADD_CLUSTER_HASH) return;
     // Read only to declare the dependency honestly: its *value* is meaningless,

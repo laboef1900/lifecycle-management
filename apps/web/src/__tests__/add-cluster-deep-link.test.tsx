@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandPalette } from '@/components/command/command-palette';
 import { AddClusterPanel } from '@/components/settings/add-cluster-panel';
 import { ThemeProvider } from '@/components/theme/theme-provider';
-import { resetAnchorFocusRequests } from '@/lib/anchors';
 import { api } from '@/lib/api-client';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -103,7 +102,11 @@ describe('⌘K → "Add cluster" deep link (integration: palette + panel)', () =
     useIsAdminMock.mockReset();
     useIsAdminMock.mockReturnValue(true);
     routerMock.reset();
-    resetAnchorFocusRequests();
+    // The anchor request counts are intentionally left alone: they only ever
+    // increase, so a count carried over from an earlier test cannot re-run a
+    // freshly mounted panel's effect — the effect reacts to a *change*, and a
+    // new mount simply reads the current value as its baseline. See
+    // lib/anchors.test.tsx.
   });
 
   async function invokeAddClusterAction(user: ReturnType<typeof userEvent.setup>): Promise<void> {
