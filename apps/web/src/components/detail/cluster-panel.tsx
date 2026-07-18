@@ -6,7 +6,6 @@ import type {
 } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { cva } from 'class-variance-authority';
 import { AlertTriangle, SlidersHorizontal, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useReducer, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
@@ -29,6 +28,7 @@ import { baselineAgeDays, isBaselineStale } from '@/components/fleet/stale-basel
 import { KpiTile } from '@/components/overview/kpi-tile';
 import { BackButton } from '@/components/ui/back-button';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Kbd } from '@/components/ui/kbd';
 import { RunwayPill } from '@/components/ui/runway-pill';
@@ -89,32 +89,14 @@ export function scenarioPaneLayout(sideBySide: boolean): {
 }
 
 /**
- * The header chip-button recipe, single-sourced (review finding: the class
- * string was copy-pasted verbatim between the Scenario toggle and the pane's
- * close control). `tone: 'active'` uses the consumption token rather than the
- * amber accent so the indicator points at the violet scenario line it labels —
- * amber is double-booked as the warn-threshold color (styles.css §chart tokens).
- *
- * @ai-context One copy of this recipe still lives in `ui/back-button.tsx`. PR
- * #234 moves that one onto `Button`'s `chip` variant + `chip` size; once it has
- * landed, delete this `cva` and render both call sites as
- * `<Button variant="chip" size="chip">`, keeping only the `tone: 'active'`
- * classes as a local `className` override. Minting the shared primitive here
- * instead would collide with that PR, which is why it is still local.
+ * Active-scenario tone for the Scenario toggle. It uses the consumption token
+ * rather than the amber accent so the indicator points at the violet scenario
+ * line it labels — amber is double-booked as the warn-threshold color
+ * (styles.css §chart tokens). Everything else about the chip look comes from
+ * `Button`'s `chip` variant + `chip` size, which is the single source.
  */
-const chipButton = cva(
-  'flex shrink-0 items-center gap-2 rounded-[var(--radius)] border px-2.5 py-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] transition-colors',
-  {
-    variants: {
-      tone: {
-        default: 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
-        active:
-          'border-[var(--chart-consumption)] text-[var(--chart-consumption)] hover:border-[var(--chart-consumption)]',
-      },
-    },
-    defaultVariants: { tone: 'default' },
-  },
-);
+const SCENARIO_ACTIVE_TONE =
+  'border-[var(--chart-consumption)] text-[var(--chart-consumption)] hover:border-[var(--chart-consumption)]';
 
 /**
  * The Scenario pane's presence state machine.
@@ -774,14 +756,16 @@ function ScenarioButton({
   ref: React.RefObject<HTMLButtonElement | null>;
 }): React.JSX.Element {
   return (
-    <button
+    <Button
       ref={ref}
       type="button"
+      variant="chip"
+      size="chip"
       onClick={onClick}
       aria-expanded={open}
       {...(open ? { 'aria-controls': controlsId } : {})}
       data-testid="scenario-button"
-      className={chipButton({ tone: active ? 'active' : 'default' })}
+      {...(active ? { className: SCENARIO_ACTIVE_TONE } : {})}
     >
       <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
       Scenario
@@ -793,7 +777,7 @@ function ScenarioButton({
           {describeScenario(active)}
         </span>
       ) : null}
-    </button>
+    </Button>
   );
 }
 
@@ -839,32 +823,28 @@ function ScenarioPaneBody({
         </h3>
         {/* Icon + "Close" + Esc keycap, matching the sibling BackButton in the
             panel header — the two controls sit a few elements apart and had
-            drifted apart visually. The keycap comes from `ui/kbd.tsx` rather
-            than the hand-copied `<kbd>` class string that used to live here
-            (review finding [20]); the local overrides below reproduce that
-            primitive's flat micro-hint look, and collapse to `size="xs"` once
-            PR #234 lands that variant. `aria-hidden` on both the icon and the
-            keycap keeps the accessible name exactly "Close scenario pane",
-            which contains the visible "Close" (WCAG 2.5.3 Label in Name);
-            `aria-keyshortcuts` states the binding machine-readably, since no
-            browser surfaces it visually — that is what the keycap is for. */}
-        <button
+            drifted apart visually. Both now render the same primitives (the
+            `chip` Button + the `xs` Kbd), so they cannot drift again.
+            `aria-hidden` on both the icon and the keycap keeps the accessible
+            name exactly "Close scenario pane", which contains the visible
+            "Close" (WCAG 2.5.3 Label in Name); `aria-keyshortcuts` states the
+            binding machine-readably, since no browser surfaces it visually —
+            that is what the keycap is for. */}
+        <Button
           ref={closeRef}
           type="button"
+          variant="chip"
+          size="chip"
           onClick={onClose}
           aria-label="Close scenario pane"
           aria-keyshortcuts="Escape"
-          className={chipButton()}
         >
           <X className="h-3.5 w-3.5" aria-hidden />
           Close
-          <Kbd
-            aria-hidden
-            className="h-auto min-w-0 rounded bg-none px-1 py-0.5 text-[9px] font-semibold text-fg-subtle shadow-none dark:shadow-none"
-          >
+          <Kbd aria-hidden size="xs">
             Esc
           </Kbd>
-        </button>
+        </Button>
       </div>
       <div className="w-full max-w-sm">
         <ScenarioControls active={scenario} onChange={onChange} />
