@@ -180,6 +180,10 @@ describe('<ClusterTile>', () => {
   });
 
   it('renders an "unknown" state for a zero-capacity cluster, never "0.0% used" (#200)', () => {
+    const unknownMonths: ForecastMonthPoint[] = [
+      { month: '2026-07-01', consumption: 500, capacity: 0, utilization: null },
+      { month: '2026-08-01', consumption: 550, capacity: 0, utilization: null },
+    ];
     render(
       <ClusterTile
         entry={entry({
@@ -197,8 +201,13 @@ describe('<ClusterTile>', () => {
               },
             ],
           }),
+          months: unknownMonths,
+          summary: { months: null, alreadyBreached: false },
         })}
-        forecast={forecast()}
+        forecast={forecast({
+          months: unknownMonths,
+          procurement: { leadTimeWeeks: 13, orderByDate: null, breachMonth: null },
+        })}
         thresholds={{ warn: 0.7, crit: 0.9 }}
       />,
     );
@@ -211,7 +220,14 @@ describe('<ClusterTile>', () => {
     // Assistive tech hears "unknown", never "0 percent utilized".
     const link = screen.getByRole('link');
     expect(link.getAttribute('aria-label')).toMatch(/utilization unknown/i);
+    expect(link.getAttribute('aria-label')).toMatch(/runway unknown/i);
+    expect(link.getAttribute('aria-label')).toMatch(/order status unknown/i);
     expect(link.getAttribute('aria-label')).not.toMatch(/0 percent utilized/);
+    expect(screen.getByText(/capacity unknown/i)).toBeInTheDocument();
+    expect(screen.getByText(/order status unknown/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no breach/i)).toBeNull();
+    expect(screen.queryByText(/no order needed/i)).toBeNull();
+    expect(link).not.toHaveTextContent(/\d+\+? MO/);
   });
 
   it('reflects an already-past-warn breach in the runway sub-line, badge, and verdict when crit is never reached in-window (finding 1)', () => {

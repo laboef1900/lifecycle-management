@@ -44,7 +44,7 @@ function months(values: Array<[string, number, number]>): ForecastMonthPoint[] {
     month,
     consumption,
     capacity,
-    utilization: capacity > 0 ? consumption / capacity : 0,
+    utilization: capacity > 0 ? consumption / capacity : null,
   }));
 }
 
@@ -180,6 +180,58 @@ describe('<FleetVerdict>', () => {
     expect(heading).toHaveTextContent(/fleet is healthy/i);
     expect(heading).toHaveTextContent(/no orders due before/i);
     expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('renders an explicit unknown state when fleet capacity is incomplete', () => {
+    render(
+      <FleetVerdict
+        summary={summary({
+          totalConsumption: 500,
+          totalCapacity: 0,
+          utilization: null,
+          worstCluster: null,
+          perClusterSeries: [
+            {
+              clusterId: 'c1',
+              clusterName: 'CL-Oracle',
+              months: months([['2026-07-01', 500, 0]]),
+            },
+          ],
+          fleetMonths: [{ month: '2026-07-01', capacityTotal: 0 }],
+        })}
+        earliest={null}
+        staleCount={0}
+        openOrderCount={0}
+        hostCount={null}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      /fleet capacity is unknown/i,
+    );
+    expect(screen.queryByText(/fleet is healthy/i)).toBeNull();
+    expect(screen.queryByText(/no orders due/i)).toBeNull();
+    expect(screen.getAllByText('UNKNOWN')).toHaveLength(2);
+    expect(screen.getByText('status unknown')).toBeInTheDocument();
+    expect(screen.queryByText('0.0%')).toBeNull();
+    expect(screen.queryByLabelText(/fleet utilization/i)).toBeNull();
+  });
+
+  it('preserves a known urgent order without inventing fleet runway when another capacity is unknown', () => {
+    render(
+      <FleetVerdict
+        summary={summary({ utilization: null })}
+        earliest={{ cluster: cluster('c1', 'CL-Oracle'), procurement: procurement() }}
+        staleCount={0}
+        openOrderCount={1}
+        hostCount={null}
+      />,
+    );
+
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading).toHaveTextContent(/fleet capacity is unknown/i);
+    expect(heading).toHaveTextContent(/CL-Oracle still needs an order by Sep 14/i);
+    expect(heading).not.toHaveTextContent(/fleet runway is/i);
   });
 
   it('renders the verdict headline as the page h1', () => {

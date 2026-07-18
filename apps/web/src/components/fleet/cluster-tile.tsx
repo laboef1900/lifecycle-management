@@ -214,28 +214,35 @@ export const ClusterTile = memo(function ClusterTile({
   const urgency = orderByUrgency(orderByDate);
   const isArchived = Boolean(cluster.archivedAt);
   const runway = computeRunway(entry, thresholds);
+  const runwayUnknown =
+    currentUtil === null && runway.breachLabel === null && runway.pastLabel === null;
+  const orderUnknown = currentUtil === null && orderByDate === null;
   const stale = isBaselineStale(cluster.baselineDate);
   const ageDays = baselineAgeDays(cluster.baselineDate);
   const events = forecast?.events ?? [];
 
-  const runwaySub = runway.breachLabel
-    ? `to ${runway.breachLabel} ${formatMonthShort(runway.breachDate!)}`
-    : runway.pastLabel === 'warn'
-      ? runway.pastCritDate
-        ? `past warn ${runway.pastThresholdPct}% — crit ≈ ${formatMonthShort(runway.pastCritDate)}`
-        : `past warn ${runway.pastThresholdPct}% — crit beyond window`
-      : runway.pastLabel === 'crit'
-        ? `past crit ${runway.pastThresholdPct}%`
-        : 'no breach';
-  const verdict = runway.breachLabel
-    ? `${utilText} — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
-    : runway.pastLabel === 'warn'
-      ? runway.pastCritDate
-        ? `${utilText} — already past warn; reaches crit ≈ ${formatMonthShort(runway.pastCritDate)}.`
-        : `${utilText} — already past warn; crit beyond the ${runway.value}-month window.`
-      : runway.pastLabel === 'crit'
-        ? `${utilText} — already past crit.`
-        : `${utilText} — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
+  const runwaySub = runwayUnknown
+    ? 'capacity unknown'
+    : runway.breachLabel
+      ? `to ${runway.breachLabel} ${formatMonthShort(runway.breachDate!)}`
+      : runway.pastLabel === 'warn'
+        ? runway.pastCritDate
+          ? `past warn ${runway.pastThresholdPct}% — crit ≈ ${formatMonthShort(runway.pastCritDate)}`
+          : `past warn ${runway.pastThresholdPct}% — crit beyond window`
+        : runway.pastLabel === 'crit'
+          ? `past crit ${runway.pastThresholdPct}%`
+          : 'no breach';
+  const verdict = runwayUnknown
+    ? `${utilText} — runway and breach timing cannot be calculated.`
+    : runway.breachLabel
+      ? `${utilText} — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
+      : runway.pastLabel === 'warn'
+        ? runway.pastCritDate
+          ? `${utilText} — already past warn; reaches crit ≈ ${formatMonthShort(runway.pastCritDate)}.`
+          : `${utilText} — already past warn; crit beyond the ${runway.value}-month window.`
+        : runway.pastLabel === 'crit'
+          ? `${utilText} — already past crit.`
+          : `${utilText} — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
 
   // Live usage / sync summary, appended so assistive tech hears it — the tile's
   // aria-label overrides its visible content, so the visible LIVE line below
@@ -249,10 +256,14 @@ export const ClusterTile = memo(function ClusterTile({
       : `${cluster.name}: ${(currentUtil * 100).toFixed(1)} percent utilized`,
     isArchived
       ? 'archived — no forecast'
-      : `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,
+      : runwayUnknown
+        ? 'runway unknown — capacity required to calculate breach timing'
+        : `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,
     orderByDate
       ? `order by ${orderByDate} (${formatRelativeDays(orderByDate)})`
-      : 'no order needed',
+      : orderUnknown
+        ? 'order status unknown — capacity required'
+        : 'no order needed',
     stale ? `baseline ${ageDays} days old — re-measure` : null,
     liveSummary || null,
     !isArchived && provisionalCount > 0
@@ -296,6 +307,13 @@ export const ClusterTile = memo(function ClusterTile({
           >
             —
           </span>
+        ) : runwayUnknown ? (
+          <>
+            <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-fg-muted">
+              —
+            </span>
+            <span className="pb-1 font-mono text-[10px] text-fg-muted">{runwaySub}</span>
+          </>
         ) : (
           <>
             <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-accent">
@@ -316,7 +334,9 @@ export const ClusterTile = memo(function ClusterTile({
         >
           {orderByDate
             ? `ORDER BY ${orderByDate} · ${formatRelativeDays(orderByDate).toUpperCase()}`
-            : '— · NO ORDER NEEDED'}
+            : orderUnknown
+              ? '— · ORDER STATUS UNKNOWN'
+              : '— · NO ORDER NEEDED'}
         </span>
       </div>
 

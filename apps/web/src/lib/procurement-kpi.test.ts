@@ -15,6 +15,18 @@ describe('deriveProcurementKpi', () => {
     expect(r.caption).toMatch(/no projected breach/i);
   });
 
+  it('returns unknown instead of an all-clear when procurement timing lacks capacity', () => {
+    const r = deriveProcurementKpi(
+      { leadTimeWeeks: 8, orderByDate: null, breachMonth: null },
+      today,
+      false,
+    );
+    expect(r.value).toBe('—');
+    expect(r.status).toBe('unknown');
+    expect(r.caption).toMatch(/capacity required/i);
+    expect(r.caption).not.toMatch(/no projected breach/i);
+  });
+
   it('marks an order-by date in the past as crit / overdue', () => {
     const r = deriveProcurementKpi(
       { leadTimeWeeks: 8, orderByDate: '2026-04-01', breachMonth: '2026-06-01' },

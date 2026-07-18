@@ -3,7 +3,7 @@ import type { ProcurementInfo } from '@lcm/shared';
 import { daysUntil } from '@/lib/dates';
 import { formatMonthLong } from '@/lib/format-month';
 
-export type ProcurementKpiStatus = 'ok' | 'attention' | 'warn' | 'crit';
+export type ProcurementKpiStatus = 'ok' | 'unknown' | 'attention' | 'warn' | 'crit';
 
 export interface ProcurementKpi {
   value: string;
@@ -16,7 +16,15 @@ const URGENT_DAYS = 28;
 export function deriveProcurementKpi(
   info: ProcurementInfo,
   today: Date = new Date(),
+  capacityKnown = true,
 ): ProcurementKpi {
+  if (!capacityKnown && info.breachMonth === null && info.orderByDate === null) {
+    return {
+      value: '—',
+      caption: 'unknown — capacity required for procurement timing',
+      status: 'unknown',
+    };
+  }
   if (info.breachMonth === null || info.orderByDate === null) {
     return {
       value: '—',
