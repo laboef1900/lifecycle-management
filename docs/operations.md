@@ -230,8 +230,33 @@ runs each migration in a transaction, so a failure rolls the whole thing back: n
 table is dropped, no `captured_at` is rewritten, and the database is left exactly as
 the previous release left it. `prisma migrate deploy` then exits non-zero and
 **Fastify never starts**, so the service serves nothing rather than serving wrong
-numbers. This is a **blocked deploy, not corruption** — the pre-drop image still
-boots against that database.
+numbers. Your data is intact: this is a **blocked deploy, not corruption**.
+
+> ⚠️ **It is still a full outage, and rolling the image back does not end it.**
+> Prisma writes the failed attempt into `_prisma_migrations` _outside_ the
+> migration's transaction, so Postgres rolling the migration back does not clear it —
+> the row survives with `finished_at` and `rolled_back_at` both NULL. Every
+> subsequent `prisma migrate deploy` then stops at **P3009**
+> (`migrate found failed migrations in the target database`) and exits 1. That
+> includes the **previous image**: Prisma's failed-migration check reads the database
+> records only and never intersects them with the migrations on disk, so an image
+> whose migrations directory does not even contain this migration still refuses.
+> `entrypoint.ts` exits on that non-zero status, Fastify never starts,
+> `restart: unless-stopped` restart-loops `server`, and `web`'s
+> `depends_on: condition: service_healthy` keeps the whole stack down.
+>
+> **Clearing the record is therefore part of restoring service, not only part of
+> rolling forward** — see "Clearing the failed-migration record" below. Roll forward
+> (the normal path): fix the data per the guard you hit, clear the record, redeploy.
+> Need the previous image serving _now_: clear the record first, then deploy the old
+> tag — the schema still matches it, because the migration did roll back. The
+> `migrate resolve` command works from either image; it addresses the record by
+> migration name and does not need that migration present on disk.
+>
+> _Verified end to end against PostgreSQL 18 with Prisma 7.8: guard RAISE → P3018 and
+> exit 1, DDL rolled back and rows intact; `migrate deploy` from a migrations directory
+> lacking the migration → P3009 and exit 1; `migrate resolve --rolled-back` from that
+> same directory → exit 0, and `migrate deploy` then boots clean._
 
 Two guards can stop it, and they call for different responses. Read the RAISE message
 in `docker compose logs server` to tell them apart.
@@ -380,9 +405,14 @@ Stop and investigate; do not delete rows to make the guard pass.
 
 #### Clearing the failed-migration record
 
-Fixing the data is not enough on its own. Prisma recorded the failed attempt, so the
-next `deploy` refuses with **P3009** (`migrate found failed migrations in the target
-database`) instead of retrying. Clear the record, then redeploy:
+**Not optional, and not only a roll-forward step.** Prisma recorded the failed
+attempt outside the migration's transaction, so the record outlived the rollback and
+now refuses **every** `deploy` with **P3009**
+(`migrate found failed migrations in the target database`) instead of retrying —
+including a `deploy` run by an older image that never shipped this migration, which
+is why an image rollback alone leaves the stack down (see the callout under "Baseline
+history migration (#177/#195) — rollback"). Fixing the data is necessary but not
+sufficient. Clear the record, then redeploy:
 
 ```bash
 docker compose run --rm server node_modules/prisma/build/index.js migrate resolve \
