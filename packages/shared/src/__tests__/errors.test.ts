@@ -27,6 +27,18 @@ describe('SERVICE_ERROR_CODES', () => {
     expect(SERVICE_ERROR_CODES).toContain('BASELINE_PERIOD_OCCUPIED');
   });
 
+  it('carries BASELINE_PERIOD_NOT_MEASURED (a date-only edit dragged FORWARD)', () => {
+    // The other direction of the same edit (#195). A date-only PUT carries no
+    // values, so the only way to honour a LATER period would be to re-date a
+    // measurement onto a month nobody measured — which absorbs deltas that
+    // started after the capture, lets the row shadow the real snapshot for that
+    // period, and clears staleness without measuring anything. There is nothing
+    // honest to write, so it is refused; the corrective action differs from
+    // BASELINE_PERIOD_OCCUPIED (submit the values, which appends), so the code
+    // has to differ too.
+    expect(SERVICE_ERROR_CODES).toContain('BASELINE_PERIOD_NOT_MEASURED');
+  });
+
   it('contains no duplicate codes', () => {
     // TS will never catch this. The array is `as const` and NOT sorted, so a
     // second copy of an existing literal is legal TypeScript that the derived

@@ -146,11 +146,11 @@ describe('baseline history — append semantics', () => {
 
   it('a mid-month RE-DATE snaps the moved row to the first of the month', async () => {
     // The update path's own `startOfUtcMonth`, which the create tests cannot
-    // reach. A date-only edit MOVES the metric's newest row onto the submitted
-    // period; unsnapped, that row lands at 2026-06-15 and becomes the one anchor
-    // in the table the period unique key — the monthly idempotency guarantee —
-    // cannot deduplicate against next month's snapshot at 2026-06-01.
-    const id = await createCluster(uniqueName('snap-redate'), '2026-05-01', 100, 1000);
+    // reach. A date-only edit MOVES the metric's newest row BACK onto the
+    // submitted period; unsnapped, that row lands at 2026-06-15 and becomes the
+    // one anchor in the table the period unique key — the monthly idempotency
+    // guarantee — cannot deduplicate against that month's snapshot at 2026-06-01.
+    const id = await createCluster(uniqueName('snap-redate'), '2026-07-01', 100, 1000);
 
     const res = await server.inject({
       method: 'PUT',

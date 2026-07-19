@@ -282,10 +282,23 @@ export class ClustersService {
         this.prisma.cluster.update({ where: { id }, data }),
         // Ordered before the value upserts below so those address a moved row at
         // its NEW period and correct it in place rather than duplicating it.
+        //
+        // `source: 'manual'` is not incidental — it is the same rule the schema
+        // states for `cluster_baseline_history` ("an admin correcting a bad sync is
+        // an explicit overwrite that flips `source` to manual") and the same flip
+        // the value upsert below performs. A row whose period a HUMAN chose is no
+        // longer a vCenter measurement, and leaving `vsphere` on it makes two other
+        // mechanisms lie about purchasing numbers: forecast.ts `absorbed` treats
+        // the anchor as a measurement boundary and swallows every tracked delta
+        // dated at or before the hand-picked date, and VsphereSnapshotService's
+        // `skipDuplicates` yields the period to it on the stated grounds that "a
+        // human has corrected this period" — true only once the row says so.
+        // Recorded decision Q9a keeps baselineDate corrections OPEN on a synced
+        // cluster, so the edit is allowed; this is what makes allowing it safe.
         ...moves.map((move) =>
           this.prisma.clusterBaselineHistory.update({
             where: { id: move.id },
-            data: { capturedAt: move.capturedAt },
+            data: { capturedAt: move.capturedAt, source: 'manual' },
           }),
         ),
       ];
@@ -479,9 +492,13 @@ export class ClustersService {
    * A row is moved only when there is no honest alternative, so `writing` decides
    * far more than it looks:
    *
-   * - `undefined` — the request carries NO values. There is nothing to append, so
-   *   re-dating each metric's newest row is the only way to honour the date
-   *   without fabricating a measurement nobody took.
+   * - `undefined` — the request carries NO values, so the direction decides. Only
+   *   a target EARLIER than a metric's newest row is expressible: nothing can be
+   *   appended, and the row is at a period later than the one the operator says it
+   *   was captured in, so re-dating it is the honest reading. A LATER target is
+   *   refused (BASELINE_PERIOD_NOT_MEASURED) rather than moved — see the refusal
+   *   below. Dragging a row forward is exactly the "fabricating a measurement
+   *   nobody took" this branch exists to avoid, not an alternative to it.
    * - a set — the request carries values, and only the metrics it NAMES may move.
    *   An omitted metric must be untouched (#181, same rule the upsert follows):
    *   re-dating a row the payload never described is exactly the silent edit that
@@ -516,17 +533,58 @@ export class ClustersService {
     writing: ReadonlySet<string> | undefined,
   ): Promise<Array<{ id: string; capturedAt: Date }>> {
     const newest = (await this.loadNewestBaselines(tenantId, [clusterId])).get(clusterId) ?? [];
-    const moving = newest.filter((row) => {
-      if (row.capturedAt.getTime() === target.getTime()) return false;
-      if (writing === undefined) return true;
-      return writing.has(row.metricTypeId) && row.capturedAt.getTime() > target.getTime();
-    });
+
+    // A date-only request onto a period LATER than a metric's newest row has no
+    // honest interpretation, so it is refused before anything is planned.
+    //
+    // @ai-warning Refused PER REQUEST, never per metric. A cluster whose metrics
+    // sit at different periods (the normal case — the snapshot job writes
+    // memory_gb only) can have one metric legally moving back onto the target
+    // while another would have to move forward. Applying the legal half is worse
+    // than refusing: `ClusterResponse.baselineDate` is MIN over newest-per-metric,
+    // so the response still reports the un-moved metric's older period, the
+    // operator's submitted date is echoed back changed, and baseline-edit-form.tsx
+    // resets it away — a silent partial write with a 200 OK.
+    //
+    // Moving forward instead would be silent in three purchasing-visible ways, all
+    // erring the same way (defer hardware that is needed): the move writes
+    // `capturedAt` only, so a `vsphere` row stays labelled measured and forecast.ts
+    // `absorbed` swallows every delta dated at or before the NEW anchor —
+    // consumption measured after the capture simply disappears; the row then
+    // occupies the current period, where VsphereSnapshotService's
+    // `skipDuplicates` drops the month's real measurement in its favour; and a
+    // metric that lags by design is dragged forward, clearing the staleness
+    // `deriveBaselineDate`'s MIN exists to report without measuring anything.
+    if (writing === undefined) {
+      const unmeasured = newest.filter((row) => row.capturedAt < target);
+      if (unmeasured.length > 0) {
+        const period = formatDate(target).slice(0, 7);
+        const keys = unmeasured.map((row) => row.metricType.key).join(', ');
+        throw new UnprocessableError(
+          'BASELINE_PERIOD_NOT_MEASURED',
+          `No ${keys} baseline is recorded at or after ${period}, so there is no measurement ` +
+            `to re-date onto that period. Changing the date alone moves an existing ` +
+            `measurement; it cannot create one. To record a baseline for ${period}, submit the ` +
+            `values for it — that appends a new measurement instead of moving one.`,
+        );
+      }
+    }
+
+    // Backwards only, in BOTH branches: a target later than a metric's newest row
+    // is an ordinary new monthly measurement, which the upsert appends (epic #172
+    // exists to accumulate those) — moving instead would delete a measurement on
+    // every forward-dated save. `> target` subsumes the equality case, which is
+    // the cluster already anchored where the operator says it is: unchanged.
+    const moving = newest.filter(
+      (row) => row.capturedAt > target && (writing === undefined || writing.has(row.metricTypeId)),
+    );
     // Nothing to move covers four cases, and all are no-ops rather than writes: a
     // synced cluster between import and its first snapshot has no row to re-date
-    // (creating one would invent a measurement nobody took), a cluster already
-    // anchored on the submitted period is simply unchanged, a metric the payload
-    // omitted stays untouched, and a named metric recording a later period is
-    // appended rather than re-dated.
+    // (creating one would invent a measurement nobody took, and the refusal above
+    // cannot fire because there is no row to be earlier than the target), a
+    // cluster already anchored on the submitted period is simply unchanged, a
+    // metric the payload omitted stays untouched, and a named metric recording a
+    // later period is appended rather than re-dated.
     if (moving.length === 0) return [];
 
     // The moving rows themselves are excluded: a backwards move starts from a
