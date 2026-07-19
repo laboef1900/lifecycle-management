@@ -816,6 +816,45 @@ describe('PUT /api/clusters/:id — a date-only edit re-anchors baseline history
     expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 300]);
   });
 
+  it('is not blocked by a DIFFERENT metric already occupying the target period', async () => {
+    // The occupancy check is per metric, because the unique key is
+    // (cluster, metric, period). A cluster-wide "is that period taken?" check
+    // would look simpler and would refuse this legitimate edit: memory already
+    // sits on the target, and moving cpu onto it conflicts with nothing.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195e' },
+      update: {},
+      create: { key: 'cpu_cores_195e', displayName: 'CPU (test)', unit: 'cores' },
+    });
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('per-metric-occupancy'),
+      baselineDate: new Date(Date.UTC(2026, 5, 1)), // memory already at June
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'cpu_cores_195e',
+          capturedAt: new Date(Date.UTC(2026, 4, 1)), // cpu at May, must move
+          baselineConsumption: 8,
+          baselineCapacity: 64,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { baselineDate: '2026-06-01' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.capturedAt.toISOString().slice(0, 10) === '2026-06-01')).toBe(true);
+  });
+
   it('is a no-op on a cluster with no baseline history', async () => {
     // A synced cluster before its first snapshot has nothing to re-date. It must
     // not fabricate a measurement nobody took just to honour the submitted date.
