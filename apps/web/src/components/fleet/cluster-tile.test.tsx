@@ -133,7 +133,13 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText(/IN /)).toBeInTheDocument();
   });
 
-  it('shows a "no order needed" chip when there is no projected order-by date', () => {
+  // Spec §4.4 amendment (2026-07-19, #243 Part B): a healthy tile restated
+  // the all-clear four ways (OK badge, "24+ MO no breach", this chip, and a
+  // baseline chip repeating the same date on every tile) — the one tile that
+  // someday reads ORDER BY wouldn't stand out. The order chip now renders
+  // only when there is something to say: a real order-by date, or the
+  // unknown-capacity case (covered separately below).
+  it('omits the order chip entirely when there is no projected order-by date and capacity is known', () => {
     render(
       <ClusterTile
         entry={entry()}
@@ -143,7 +149,7 @@ describe('<ClusterTile>', () => {
         thresholds={{ warn: 0.7, crit: 0.9 }}
       />,
     );
-    expect(screen.getByText(/no order needed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no order needed/i)).toBeNull();
   });
 
   it('shows a stale-baseline warning chip past 90 days', () => {
@@ -157,7 +163,11 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText(/⚠ BASELINE \d+ D OLD/)).toBeInTheDocument();
   });
 
-  it('shows a plain baseline chip for a fresh baseline', () => {
+  // Same spec §4.4 amendment as above: the baseline chip is now shown only
+  // in its stale/warn variant — a fresh baseline repeating its date on every
+  // tile added no information the "BASELINES ✓ all fresh" verdict instrument
+  // didn't already state.
+  it('omits the baseline chip entirely for a fresh baseline', () => {
     render(
       <ClusterTile
         entry={entry({ cluster: cluster({ baselineDate: '2026-06-20' }) })}
@@ -165,7 +175,7 @@ describe('<ClusterTile>', () => {
         thresholds={{ warn: 0.7, crit: 0.9 }}
       />,
     );
-    expect(screen.getByText(/BASELINE 2026-06-20/)).toBeInTheDocument();
+    expect(screen.queryByText(/BASELINE 2026-06-20/)).toBeNull();
     expect(screen.queryByText(/⚠/)).toBeNull();
   });
 
@@ -228,6 +238,15 @@ describe('<ClusterTile>', () => {
     expect(screen.queryByText(/no breach/i)).toBeNull();
     expect(screen.queryByText(/no order needed/i)).toBeNull();
     expect(link).not.toHaveTextContent(/\d+\+? MO/);
+    // Finding: the verdict named the problem ("runway and breach timing
+    // cannot be calculated") but never the fix — the Hosts tab is the only
+    // path off this state for a synced cluster with no recorded capacity.
+    expect(screen.getByText(/add host capacity to calculate runway/i)).toBeInTheDocument();
+    // The a11y path names the same fix. aria-label overrides the tile's
+    // visible content, so a screen-reader user who only heard "capacity
+    // required" would be left in exactly the dead end this item removes.
+    expect(link.getAttribute('aria-label')).toMatch(/add host capacity/i);
+    expect(link.getAttribute('aria-label')).not.toMatch(/capacity required to calculate/i);
   });
 
   it('reflects an already-past-warn breach in the runway sub-line, badge, and verdict when crit is never reached in-window (finding 1)', () => {
@@ -416,5 +435,68 @@ describe('<ClusterTile>', () => {
       />,
     );
     expect(screen.getByText(/4 HOSTS NEED DATES/)).toBeInTheDocument();
+  });
+
+  it('describes a genuinely healthy runway with the raw horizon length, not the numeral\'s "+" (finding: "24+-month window")', () => {
+    // A cluster that never crosses warn/crit anywhere in-window: distinct
+    // from the default entry() fixture (already past warn) and from the
+    // past-warn/past-crit fixtures above — this is computeRunway's final,
+    // genuinely-unbreached branch, where `plus` is always true because the
+    // numeral itself is an open-ended "{horizon}+ MO" countdown. The
+    // window-boundary sentence describes a fixed fact (the window is
+    // exactly `horizon` months long) and must not inherit that "+".
+    const healthyMonths: ForecastMonthPoint[] = [
+      { month: '2026-07-01', consumption: 12000, capacity: 24576, utilization: 12000 / 24576 },
+      { month: '2026-08-01', consumption: 12200, capacity: 24576, utilization: 12200 / 24576 },
+    ];
+    render(
+      <ClusterTile
+        entry={entry({ months: healthyMonths, summary: { months: null, alreadyBreached: false } })}
+        forecast={forecast({ months: healthyMonths })}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+      />,
+    );
+    expect(screen.getByText(/no breach in the 2-month window/i)).toBeInTheDocument();
+    expect(screen.queryByText(/2\+-month window/i)).toBeNull();
+  });
+
+  // Finding: sub-10px micro text on tiles violates the design system's own
+  // --text-label 10px floor (styles.css). Contrast passes, but 9px uppercase
+  // tracked mono is hard to read on the primary console. This tile's own
+  // portion: the order chip (was 9.5px) and FlagChip (was 9px).
+  describe('micro-text floor', () => {
+    it('floors the order chip at 10px, not 9.5px', () => {
+      render(
+        <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      const chip = screen.getByText(/ORDER BY 2026-12-28/);
+      expect(chip.className).toMatch(/text-\[10px\]/);
+      expect(chip.className).not.toMatch(/text-\[9\.5px\]/);
+    });
+
+    it('floors the FlagChip at 10px, not 9px', () => {
+      render(
+        <ClusterTile
+          entry={entry()}
+          forecast={forecast({
+            events: [
+              {
+                id: 'e1',
+                effectiveDate: '2026-09-01',
+                category: 'hardware',
+                title: 'Decommission',
+                description: null,
+                consumptionDelta: null,
+                capacityDelta: -2000,
+              },
+            ],
+          })}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      const chip = screen.getByText(/EVENT/);
+      expect(chip.className).toMatch(/text-\[10px\]/);
+      expect(chip.className).not.toMatch(/text-\[9px\]/);
+    });
   });
 });

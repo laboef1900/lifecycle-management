@@ -234,7 +234,9 @@ export const ClusterTile = memo(function ClusterTile({
           ? `past crit ${runway.pastThresholdPct}%`
           : 'no breach';
   const verdict = runwayUnknown
-    ? `${utilText} — runway and breach timing cannot be calculated.`
+    ? // Names the destination, not just the problem (#243 audit): a synced
+      // cluster with no recorded host capacity is a dead end otherwise.
+      `${utilText} — add host capacity to calculate runway.`
     : runway.breachLabel
       ? `${utilText} — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
       : runway.pastLabel === 'warn'
@@ -243,7 +245,11 @@ export const ClusterTile = memo(function ClusterTile({
           : `${utilText} — already past warn; crit beyond the ${runway.value}-month window.`
         : runway.pastLabel === 'crit'
           ? `${utilText} — already past crit.`
-          : `${utilText} — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
+          : // `runway.value` is the exact horizon length here (the numeral's
+            // own "+" marks an open-ended countdown; this sentence describes
+            // a fixed window boundary and must not inherit it — it previously
+            // read "no breach in the 24+-month window" on a 24-month window).
+            `${utilText} — no breach in the ${runway.value}-month window.`;
 
   // Live usage / sync summary, appended so assistive tech hears it — the tile's
   // aria-label overrides its visible content, so the visible LIVE line below
@@ -258,7 +264,11 @@ export const ClusterTile = memo(function ClusterTile({
     isArchived
       ? 'archived — no forecast'
       : runwayUnknown
-        ? 'runway unknown — capacity required to calculate breach timing'
+        ? // Names the destination for the a11y path too, matching the visible
+          // verdict above: the screen-reader user is the one who can least
+          // afford this dead end, and aria-label overrides the tile's visible
+          // content, so leaving it at "capacity required" hid the only fix.
+          'runway unknown — add host capacity to calculate breach timing'
         : `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,
     orderByDate
       ? `order by ${orderByDate} (${formatRelativeDays(orderByDate)})`
@@ -331,20 +341,27 @@ export const ClusterTile = memo(function ClusterTile({
             <span className="pb-1 font-mono text-[10px] text-fg-muted">{runwaySub}</span>
           </>
         )}
-        <span
-          className={cn(
-            'ml-auto rounded border px-1.5 py-0.5 font-mono text-[9.5px] font-bold tracking-[0.08em]',
-            orderByDate
-              ? ORDER_CHIP_TONE[urgency === 'none' ? 'planned' : urgency]
-              : 'border-border text-fg-muted',
-          )}
-        >
-          {orderByDate
-            ? `ORDER BY ${orderByDate} · ${formatRelativeDays(orderByDate).toUpperCase()}`
-            : orderUnknown
-              ? '— · ORDER STATUS UNKNOWN'
-              : '— · NO ORDER NEEDED'}
-        </span>
+        {/*
+          Spec §4.4 amendment (2026-07-19, #243 Part B): the chip renders
+          only when there's something to say — a real order-by date, or the
+          unknown-capacity case (still an information-bearing state, unlike
+          the old "— · NO ORDER NEEDED" placeholder, which just repeated the
+          all-clear a tile had already stated three other ways).
+        */}
+        {orderByDate || orderUnknown ? (
+          <span
+            className={cn(
+              'ml-auto rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold tracking-[0.08em]',
+              orderByDate
+                ? ORDER_CHIP_TONE[urgency === 'none' ? 'planned' : urgency]
+                : 'border-border text-fg-muted',
+            )}
+          >
+            {orderByDate
+              ? `ORDER BY ${orderByDate} · ${formatRelativeDays(orderByDate).toUpperCase()}`
+              : '— · ORDER STATUS UNKNOWN'}
+          </span>
+        ) : null}
       </div>
 
       <p className="text-[11px] leading-[1.45] text-fg-muted">
@@ -358,18 +375,22 @@ export const ClusterTile = memo(function ClusterTile({
       <div className="flex flex-wrap gap-1">
         {!isArchived ? <ProvisionalHostHint count={provisionalCount} /> : null}
         {events.length > 0 ? (
-          <FlagChip tone="warn">
+          <FlagChip>
             EVENT ×{events.length}
             {events[0]
               ? ` · ${formatMonthShort(`${events[0].effectiveDate.slice(0, 7)}-01`).toUpperCase()}`
               : ''}
           </FlagChip>
         ) : null}
-        {stale ? (
-          <FlagChip tone="warn">⚠ BASELINE {ageDays} D OLD</FlagChip>
-        ) : (
-          <FlagChip tone="muted">BASELINE {cluster.baselineDate}</FlagChip>
-        )}
+        {/*
+          Spec §4.4 amendment (2026-07-19, #243 Part B): the baseline chip
+          now renders only in its stale/warn variant — a fresh baseline
+          repeating its date on every tile added no information the
+          "BASELINES ✓ all fresh" verdict instrument didn't already state.
+          That leaves FlagChip with a single (warn) tone — its muted variant
+          is gone, not just unused.
+        */}
+        {stale ? <FlagChip>⚠ BASELINE {ageDays} D OLD</FlagChip> : null}
       </div>
 
       <div className="mt-auto">
@@ -379,20 +400,9 @@ export const ClusterTile = memo(function ClusterTile({
   );
 });
 
-function FlagChip({
-  tone,
-  children,
-}: {
-  tone: 'warn' | 'muted';
-  children: React.ReactNode;
-}): React.JSX.Element {
+function FlagChip({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <span
-      className={cn(
-        'rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-[0.05em]',
-        tone === 'warn' ? 'border-warning/35 text-warning' : 'border-border text-fg-muted',
-      )}
-    >
+    <span className="rounded-sm border border-warning/35 px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-[0.05em] text-warning">
       {children}
     </span>
   );
