@@ -824,6 +824,10 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     const indicator = screen.getByTestId('scenario-active-indicator');
     expect(indicator).toBeInTheDocument();
     expect(indicator).toHaveTextContent('Lose 1 host');
+    // Floored at the design system's own --text-label 10px minimum (#243 Part
+    // B item 7) — this was the one sub-10px micro text left in this file.
+    expect(indicator).toHaveClass('text-[10px]');
+    expect(indicator.className).not.toMatch(/text-\[9(\.\d+)?px\]/);
     // A non-colour cue: the summary text is present in the button's accessible name.
     expect(screen.getByTestId('scenario-button')).toHaveAccessibleName(/lose 1 host/i);
     // The colour cue must track the scenario *line*, which is the consumption

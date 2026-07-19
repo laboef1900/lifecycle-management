@@ -855,7 +855,7 @@ function ScenarioButton({
       {active ? (
         <span
           data-testid="scenario-active-indicator"
-          className="rounded-sm border border-[color-mix(in_oklab,var(--chart-consumption)_40%,transparent)] px-1 py-0.5 text-[9px] font-semibold normal-case tracking-normal text-[var(--chart-consumption)]"
+          className="rounded-sm border border-[color-mix(in_oklab,var(--chart-consumption)_40%,transparent)] px-1 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-[var(--chart-consumption)]"
         >
           {describeScenario(active)}
         </span>
