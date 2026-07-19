@@ -96,10 +96,12 @@ describe('deriveRecommendation', () => {
     expect(rec.chipLabel).toBe('UNKNOWN');
     expect(rec.shortText).toBe('Capacity unknown');
     expect(rec.message).not.toMatch(/no order needed/i);
-    // The old copy named the problem but never the fix: record capacity
-    // *where* (the Hosts tab), not just that it's missing.
+    // The old copy named the problem but never the fix: name capacity's
+    // location (the Hosts tab), not just that it's missing — and use the
+    // same "add host capacity to calculate …" phrasing cluster-tile.tsx's
+    // verdict/aria-label already ship, so the two surfaces read as one voice.
     expect(rec.message).toBe(
-      'Capacity unknown — record host capacity on the Hosts tab to enable forecasting.',
+      'Capacity unknown — add host capacity on the Hosts tab to calculate runway.',
     );
   });
 
@@ -214,6 +216,26 @@ describe('<RecommendationChip> unknown-capacity fix action (#243 Part B item 4)'
     expect(requestAnchorFocus).toHaveBeenCalledWith(HOSTS_TAB_HASH);
   });
 
+  it('is reachable and operable by keyboard alone — Tab to focus, Enter or Space to activate', async () => {
+    // Not pointer-only: a native <button> fires a click on Enter/Space by
+    // itself, but this pins that behavior against regression (e.g. a future
+    // change wrapping it in a non-button element, or an errant
+    // preventDefault on keydown swallowing the browser's default activation).
+    const user = userEvent.setup();
+    renderUnknownChip();
+    const trigger = screen.getByTestId('recommendation-chip-trigger');
+
+    await user.tab();
+    expect(trigger).toHaveFocus();
+
+    await user.keyboard('{Enter}');
+    expect(requestAnchorFocus).toHaveBeenCalledWith(HOSTS_TAB_HASH);
+
+    vi.mocked(requestAnchorFocus).mockClear();
+    await user.keyboard(' ');
+    expect(requestAnchorFocus).toHaveBeenCalledWith(HOSTS_TAB_HASH);
+  });
+
   it("keeps the tooltip hover-only — a focus-opened tooltip would swallow the panel's first Esc, same rationale as BackLink", async () => {
     const user = userEvent.setup();
     renderUnknownChip();
@@ -225,7 +247,7 @@ describe('<RecommendationChip> unknown-capacity fix action (#243 Part B item 4)'
 
     await user.hover(screen.getByTestId('recommendation-chip-trigger'));
     const tooltip = await screen.findByRole('tooltip');
-    expect(tooltip).toHaveTextContent(/record host capacity on the hosts tab/i);
+    expect(tooltip).toHaveTextContent(/add host capacity on the hosts tab/i);
   });
 
   it('leaves every other tone as the non-interactive span with no anchor request', async () => {

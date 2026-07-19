@@ -72,10 +72,13 @@ export function deriveRecommendation(
     tone = 'unknown';
     shortText = 'Capacity unknown';
     // Names the fix location, not just the problem (#243 Part B item 4) — the
-    // Hosts tab is the only place capacity can be recorded, and vSphere sync
+    // Hosts tab is the only place capacity can be added, and vSphere sync
     // writes no host capacity (#198), so this is the normal first-run state
-    // for a synced cluster on the surface that drives purchasing.
-    message = 'Capacity unknown — record host capacity on the Hosts tab to enable forecasting.';
+    // for a synced cluster on the surface that drives purchasing. Phrasing
+    // ("add host capacity to calculate …") matches cluster-tile.tsx's own
+    // unknown-capacity verdict/aria-label, so the two surfaces read as one
+    // voice rather than two dialects for the same gap.
+    message = 'Capacity unknown — add host capacity on the Hosts tab to calculate runway.';
   } else if (kpi.status === 'ok' && orderByDate === null) {
     tone = 'none';
     shortText = 'No order needed';
