@@ -92,6 +92,34 @@ function deriveBaselineDate(newest: readonly NewestBaselineRow[], fallback: Date
   return min ?? startOfUtcMonth(fallback);
 }
 
+/**
+ * Does a submitted baseline CORRECT the metric's stored newest values, or merely
+ * repeat them back?
+ *
+ * @ai-note The discriminator between an edit the operator made and one
+ * baseline-edit-form.tsx carried along: it submits every rendered metric whenever
+ * any one number is dirty, pre-filled from `ClusterResponse.metrics` — which is
+ * exactly this newest row. So "differs from stored" reconstructs the per-metric
+ * dirty flag the wire format drops.
+ *
+ * Compared with `Decimal.equals`, not `===`/`toNumber()`: these are
+ * `Decimal(18,3)` and the stored side comes back scale-padded, so 900 and 900.000
+ * are the same measurement and must not read as a correction.
+ *
+ * A metric with no stored row has nothing to repeat, so anything submitted for it
+ * is new information.
+ */
+function correctsStoredValues(
+  submitted: { baselineConsumption: Prisma.Decimal; baselineCapacity: Prisma.Decimal },
+  stored: NewestBaselineRow | undefined,
+): boolean {
+  if (stored === undefined) return true;
+  return (
+    !submitted.baselineConsumption.equals(stored.baselineConsumption) ||
+    !submitted.baselineCapacity.equals(stored.baselineCapacity)
+  );
+}
+
 export class ClustersService {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -243,8 +271,22 @@ export class ClustersService {
         input.baselineDate === undefined ? undefined : startOfUtcMonth(input.baselineDate);
 
       // Resolved BEFORE the re-anchor is planned, because which rows may move
-      // depends on which metrics the payload is about to record a value for.
+      // depends on what the payload is about to record for each metric.
       const rows = input.baselines === undefined ? [] : await this.resolveBaselineRows(input);
+
+      // The stored newest row per metric, read once and used for two decisions
+      // below: which rows the re-anchor may move, and which submitted values say
+      // anything new. Only a DATED request needs it — a dateless payload lands
+      // each value on that metric's own period and compares nothing.
+      const stored =
+        target === undefined
+          ? new Map<string, NewestBaselineRow>()
+          : new Map(
+              ((await this.loadNewestBaselines(tenantId, [id])).get(id) ?? []).map((row) => [
+                row.metricTypeId,
+                row,
+              ]),
+            );
 
       // @ai-warning A submitted baselineDate is considered on EVERY path,
       // including alongside `baselines`. Branching on `baselines` first is the
@@ -260,21 +302,49 @@ export class ClustersService {
       // Which metrics may move is not "all of them", though — see
       // `planBaselineReanchor`. `undefined` here means the request writes no
       // values at all, which is the only case where re-dating every metric is
-      // right; a request that does carry values re-dates only what it names, and
-      // only when appending cannot express the edit.
+      // right; a request that does carry values re-dates only what it CORRECTS,
+      // and only when appending cannot express the edit.
+      //
+      // @ai-warning Corrects, never merely NAMES. baseline-edit-form.tsx submits
+      // every metric it renders the moment any one number is dirty, so presence in
+      // `baselines` is not evidence the operator touched that metric — and the
+      // form pre-fills its date from `ClusterResponse.baselineDate`, MIN over the
+      // newest row per metric, i.e. the STALEST one. Correcting the stale metric
+      // and the date therefore arrives here naming a fresher metric whose newest
+      // row sits after the target, and re-dating on presence alone drags that
+      // fresher measurement backwards onto a date chosen for a different metric —
+      // destroying it. Comparing against the stored values is what separates the
+      // two: an unchanged metric is untouched, the same rule #181 applies to an
+      // OMITTED one.
+      //
+      // `undefined` vs an EMPTY set is a real distinction, not an accident of
+      // types. `undefined` means "no values at all" and takes the date-only
+      // re-anchor (every metric may move back onto the target). An empty set means
+      // "values were submitted but none changed" — moves nothing and writes
+      // nothing, so the request is a no-op beyond the `updatedAt` bump. The form
+      // cannot produce the empty-set case (it omits `baselines` entirely when no
+      // number is dirty), and treating a contradictory hand-built "all unchanged
+      // plus a new date" payload as a no-op is safer than re-dating rows the caller
+      // did not actually edit.
       //
       // Keyed on `rows`, not on `input.baselines !== undefined`, so an empty array
-      // degrades to the date-only re-anchor rather than to silence. The schema's
-      // `.min(1)` makes that unreachable today, and this is not the place to find
-      // out if it is ever relaxed: the silent branch would revert the operator's
-      // date edit with a 200, which is the exact failure this method exists to
-      // prevent.
-      const writingMetricIds =
-        rows.length === 0 ? undefined : new Set(rows.map((row) => row.metricTypeId));
+      // still degrades to the date-only re-anchor rather than to silence. The
+      // schema's `.min(1)` makes that unreachable today, and this is not the place
+      // to find out if it is ever relaxed: the silent branch would revert the
+      // operator's date edit with a 200, which is the exact failure this method
+      // exists to prevent.
+      const correcting =
+        rows.length === 0
+          ? undefined
+          : new Set(
+              rows
+                .filter((row) => correctsStoredValues(row, stored.get(row.metricTypeId)))
+                .map((row) => row.metricTypeId),
+            );
       const moves =
         target === undefined
           ? []
-          : await this.planBaselineReanchor(tenantId, id, target, writingMetricIds);
+          : await this.planBaselineReanchor(tenantId, id, [...stored.values()], target, correcting);
 
       const writes: Prisma.PrismaPromise<unknown>[] = [
         // Runs even when `data` is empty, so a date-only edit still bumps
@@ -283,27 +353,68 @@ export class ClustersService {
         // Ordered before the value upserts below so those address a moved row at
         // its NEW period and correct it in place rather than duplicating it.
         //
-        // `source: 'manual'` is not incidental — it is the same rule the schema
-        // states for `cluster_baseline_history` ("an admin correcting a bad sync is
-        // an explicit overwrite that flips `source` to manual") and the same flip
-        // the value upsert below performs. A row whose period a HUMAN chose is no
-        // longer a vCenter measurement, and leaving `vsphere` on it makes two other
-        // mechanisms lie about purchasing numbers: forecast.ts `absorbed` treats
-        // the anchor as a measurement boundary and swallows every tracked delta
-        // dated at or before the hand-picked date, and VsphereSnapshotService's
-        // `skipDuplicates` yields the period to it on the stated grounds that "a
-        // human has corrected this period" — true only once the row says so.
-        // Recorded decision Q9a keeps baselineDate corrections OPEN on a synced
-        // cluster, so the edit is allowed; this is what makes allowing it safe.
+        // @ai-warning `capturedAt` ONLY. A move re-dates a measurement; it does
+        // not re-measure it. The values are still whoever recorded them, so
+        // `source` is left exactly as it was — period and provenance are separate
+        // facts about one row. Provenance flips to manual when a human overwrites
+        // the VALUES, which is what the upsert below does and what the schema's
+        // rule ("an admin correcting a bad sync is an explicit overwrite that
+        // flips `source` to manual") actually describes.
+        //
+        // Flipping it HERE reads plausible — a human picked the period — and is
+        // purchasing-critical in the wrong direction. `absorbed` in forecast.ts is
+        // SOURCE-gated and all-or-nothing, so relabelling stops it absorbing
+        // anything at all, including deltas dated before the new anchor that the
+        // measurement genuinely contains. On a synced cluster that re-adds a
+        // pre-anchor `capacityDelta` the baseline already counted: capacity
+        // inflates, utilization FALLS, and nothing was measured and no value was
+        // submitted. That is the defer-hardware direction the re-anchor guard
+        // exists to prevent. Keeping the label keeps the DATE-based boundary,
+        // which a backward move only ever narrows — strictly fewer deltas
+        // absorbed than before the edit, i.e. more consumption counted, the safe
+        // direction. `clusters.test.ts` pins both halves.
+        //
+        // The two mechanisms that would have argued for the flip need a FORWARD
+        // move, and `planBaselineReanchor` refuses those:
+        //  - `absorbed` swallowing MORE than it did needs the anchor to advance;
+        //    a backward target cannot.
+        //  - `VsphereSnapshotService`'s `skipDuplicates` is ON CONFLICT DO NOTHING
+        //    on the period unique index and never reads `source`, so no value of
+        //    this column changes which period it yields. It writes
+        //    `startOfUtcMonth(measuredAt)` — the current month — and a backward
+        //    move only ever VACATES the period it left.
         ...moves.map((move) =>
           this.prisma.clusterBaselineHistory.update({
             where: { id: move.id },
-            data: { capturedAt: move.capturedAt, source: 'manual' },
+            data: { capturedAt: move.capturedAt },
           }),
         ),
       ];
 
-      if (rows.length > 0) {
+      // @ai-warning The write side of "presence is not a correction", and it is
+      // load-bearing rather than tidy. Restricting only the MOVE above would leave
+      // the upsert writing every NAMED metric at the target regardless — so an
+      // unchanged metric still lands there, and when the target holds (or is
+      // before) that metric's own row the two collide: a same-period write flips a
+      // `vsphere` row to `manual` and re-runs `absorbed` against a hand-picked date
+      // (the MAJOR A failure, reached a second way), and a before-period write
+      // drops the metric's fresher numbers onto an older recorded period. Both
+      // touch a metric the operator did not, on data that buys hardware.
+      //
+      // So when a date is submitted, an unchanged metric is treated EXACTLY like an
+      // omitted one — not written at all. #181's principle, verbatim, extended from
+      // "the payload never mentioned it" to "the payload mentioned it but changed
+      // nothing". The corrected metrics still write at the target, which is what
+      // lands the submitted date on the response's MIN so the form does not reset
+      // it. A dateless request keeps writing every row: each lands on its own newest
+      // period (never a shared target), so there is nothing to collide with and the
+      // per-metric in-place correction is the whole point of that path.
+      const recording =
+        target === undefined
+          ? rows
+          : rows.filter((row) => correcting?.has(row.metricTypeId) ?? false);
+
+      if (recording.length > 0) {
         // The period a manual entry lands in: the supplied baselineDate when the
         // caller changed it, otherwise THAT METRIC's own newest recorded period.
         // Snapped to the first of the month so manual and vSphere baselines share
@@ -332,7 +443,7 @@ export class ClustersService {
             ? await this.loadNewestPeriodsByMetric(
                 tenantId,
                 id,
-                rows.map((row) => row.metricTypeId),
+                recording.map((row) => row.metricTypeId),
               )
             : new Map<string, Date>();
         const openingPeriod = firstOfCurrentMonth();
@@ -348,7 +459,7 @@ export class ClustersService {
           // is an explicit correction, so it upserts rather than erroring — and
           // flips `source` back to manual, since a human has overridden whatever
           // the sync captured.
-          ...rows.map((row) => {
+          ...recording.map((row) => {
             const capturedAt = target ?? newestPeriods.get(row.metricTypeId) ?? openingPeriod;
             return this.prisma.clusterBaselineHistory.upsert({
               where: {
@@ -489,8 +600,8 @@ export class ClustersService {
    * @ai-warning This is the one place the append-only history is MUTATED rather
    * than appended to, so both the exclusions and the refusal are load-bearing.
    *
-   * A row is moved only when there is no honest alternative, so `writing` decides
-   * far more than it looks:
+   * A row is moved only when there is no honest alternative, so `correcting`
+   * decides far more than it looks:
    *
    * - `undefined` — the request carries NO values, so the direction decides. Only
    *   a target EARLIER than a metric's newest row is expressible: nothing can be
@@ -499,17 +610,22 @@ export class ClustersService {
    *   refused (BASELINE_PERIOD_NOT_MEASURED) rather than moved — see the refusal
    *   below. Dragging a row forward is exactly the "fabricating a measurement
    *   nobody took" this branch exists to avoid, not an alternative to it.
-   * - a set — the request carries values, and only the metrics it NAMES may move.
-   *   An omitted metric must be untouched (#181, same rule the upsert follows):
-   *   re-dating a row the payload never described is exactly the silent edit that
-   *   principle exists to prevent. Of the named metrics, one whose target is LATER
-   *   than its newest row is recording an ordinary new monthly measurement — the
-   *   upsert appends it and the older rows stay, which is what epic #172 exists to
-   *   accumulate, so moving instead would delete a measurement on every
-   *   forward-dated save. That leaves the genuine case: a target EARLIER than the
-   *   metric's newest row, where appending would leave the OLD row newest, so the
-   *   response would echo neither the submitted date nor the submitted values and
-   *   the form would reset both away.
+   * - a set — the request carries values, and only the metrics whose values it
+   *   CORRECTS may move. Naming is not correcting: the form submits every rendered
+   *   metric once any one number is dirty, so the set is built by comparing each
+   *   submitted pair against that metric's stored newest row. An omitted metric
+   *   must be untouched (#181, same rule the upsert follows) and an unchanged one
+   *   is the same case wearing the form's clothes — re-dating a row the operator
+   *   never touched is exactly the silent edit that principle exists to prevent,
+   *   and it lands on the metric the form pre-filled the date FROM being the
+   *   stalest, so the fresher measurement is the one destroyed. Of the corrected
+   *   metrics, one whose target is LATER than its newest row is recording an
+   *   ordinary new monthly measurement — the upsert appends it and the older rows
+   *   stay, which is what epic #172 exists to accumulate, so moving instead would
+   *   delete a measurement on every forward-dated save. That leaves the genuine
+   *   case: a target EARLIER than the metric's newest row, where appending would
+   *   leave the OLD row newest, so the response would echo neither the submitted
+   *   date nor the submitted values and the form would reset both away.
    *
    * The refusal has to be phrased as "would this reorder?", not "is the target
    * period taken?". The narrow version reads plausible — the moving row is a
@@ -529,11 +645,11 @@ export class ClustersService {
   private async planBaselineReanchor(
     tenantId: string,
     clusterId: string,
+    /** The newest row per metric, read by the caller — see `stored` in `update`. */
+    newest: readonly NewestBaselineRow[],
     target: Date,
-    writing: ReadonlySet<string> | undefined,
+    correcting: ReadonlySet<string> | undefined,
   ): Promise<Array<{ id: string; capturedAt: Date }>> {
-    const newest = (await this.loadNewestBaselines(tenantId, [clusterId])).get(clusterId) ?? [];
-
     // A date-only request onto a period LATER than a metric's newest row has no
     // honest interpretation, so it is refused before anything is planned.
     //
@@ -555,7 +671,7 @@ export class ClustersService {
     // `skipDuplicates` drops the month's real measurement in its favour; and a
     // metric that lags by design is dragged forward, clearing the staleness
     // `deriveBaselineDate`'s MIN exists to report without measuring anything.
-    if (writing === undefined) {
+    if (correcting === undefined) {
       const unmeasured = newest.filter((row) => row.capturedAt < target);
       if (unmeasured.length > 0) {
         const period = formatDate(target).slice(0, 7);
@@ -576,15 +692,17 @@ export class ClustersService {
     // every forward-dated save. `> target` subsumes the equality case, which is
     // the cluster already anchored where the operator says it is: unchanged.
     const moving = newest.filter(
-      (row) => row.capturedAt > target && (writing === undefined || writing.has(row.metricTypeId)),
+      (row) =>
+        row.capturedAt > target && (correcting === undefined || correcting.has(row.metricTypeId)),
     );
-    // Nothing to move covers four cases, and all are no-ops rather than writes: a
+    // Nothing to move covers five cases, and all are no-ops rather than writes: a
     // synced cluster between import and its first snapshot has no row to re-date
     // (creating one would invent a measurement nobody took, and the refusal above
     // cannot fire because there is no row to be earlier than the target), a
     // cluster already anchored on the submitted period is simply unchanged, a
-    // metric the payload omitted stays untouched, and a named metric recording a
-    // later period is appended rather than re-dated.
+    // metric the payload omitted stays untouched, a metric the payload repeats
+    // unchanged is untouched for the same reason, and a corrected metric recording
+    // a later period is appended rather than re-dated.
     if (moving.length === 0) return [];
 
     // The moving rows themselves are excluded: a backwards move starts from a
