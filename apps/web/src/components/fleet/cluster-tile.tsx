@@ -7,7 +7,8 @@ import { memo } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { utilStatus, type ClusterForecastEntry } from '@/lib/forecast-summary';
-import { formatMonthShort } from '@/lib/format-month';
+import { RUNWAY_UNIT } from '@/lib/format';
+import { formatDateShort, formatMonthShort } from '@/lib/format-month';
 import { cn } from '@/lib/utils';
 
 import { ClusterTileChart } from './cluster-tile-chart';
@@ -271,7 +272,7 @@ export const ClusterTile = memo(function ClusterTile({
           'runway unknown — add host capacity to calculate breach timing'
         : `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,
     orderByDate
-      ? `order by ${orderByDate} (${formatRelativeDays(orderByDate)})`
+      ? `order by ${formatDateShort(orderByDate)} (${formatRelativeDays(orderByDate)})`
       : orderUnknown
         ? 'order status unknown — capacity required'
         : 'no order needed',
@@ -336,7 +337,7 @@ export const ClusterTile = memo(function ClusterTile({
             <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-accent">
               {runway.value}
               {runway.plus ? '+' : ''}
-              <span className="ml-1 text-xs font-semibold text-fg-muted">MO</span>
+              <span className="ml-1 text-xs font-semibold text-fg-muted">{RUNWAY_UNIT}</span>
             </span>
             <span className="pb-1 font-mono text-[10px] text-fg-muted">{runwaySub}</span>
           </>
@@ -358,7 +359,7 @@ export const ClusterTile = memo(function ClusterTile({
             )}
           >
             {orderByDate
-              ? `ORDER BY ${orderByDate} · ${formatRelativeDays(orderByDate).toUpperCase()}`
+              ? `ORDER BY ${formatDateShort(orderByDate).toUpperCase()} · ${formatRelativeDays(orderByDate).toUpperCase()}`
               : '— · ORDER STATUS UNKNOWN'}
           </span>
         ) : null}

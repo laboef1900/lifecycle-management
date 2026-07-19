@@ -2,6 +2,7 @@ import { SYSTEM_DEFAULTS } from '@lcm/shared';
 import * as React from 'react';
 
 import { Badge } from '@/components/ui/badge';
+import { formatRunway } from '@/lib/format';
 
 import type { RunwaySummary } from '@/lib/forecast-summary';
 
@@ -76,7 +77,7 @@ export function RunwayPill({
       <Badge variant="accent">
         <span>
           {horizonMonths !== undefined && horizonMonths > 0
-            ? `${horizonMonths}+ mo`
+            ? formatRunway(horizonMonths, true)
             : 'No breach in horizon'}
         </span>
       </Badge>
@@ -86,7 +87,7 @@ export function RunwayPill({
   const variant = tone === 'crit' ? 'danger' : tone === 'warn' ? 'warning' : 'accent';
   return (
     <Badge variant={variant}>
-      <span>{`${summary.months} mo to ${warnPct}%`}</span>
+      <span>{`${formatRunway(summary.months)} to ${warnPct}%`}</span>
     </Badge>
   );
 }

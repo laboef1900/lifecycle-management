@@ -129,12 +129,22 @@ describe('<ClusterTile>', () => {
     render(
       <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
     );
-    expect(screen.getByText(/ORDER BY 2026-12-28/)).toBeInTheDocument();
+    // "Dec 28", not the raw "2026-12-28" ISO string (#243 Part B copy item 1)
+    // — still uppercased to match the chip's own ALL-CAPS convention.
+    expect(screen.getByText(/ORDER BY DEC 28/)).toBeInTheDocument();
     expect(screen.getByText(/IN /)).toBeInTheDocument();
   });
 
+  it('labels the runway numeral unit in lowercase "mo", matching RunwayPill and the fleet verdict (#243 Part B copy item 2)', () => {
+    render(
+      <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+    );
+    expect(screen.getByText('mo', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText('MO', { exact: true })).toBeNull();
+  });
+
   // Spec §4.4 amendment (2026-07-19, #243 Part B): a healthy tile restated
-  // the all-clear four ways (OK badge, "24+ MO no breach", this chip, and a
+  // the all-clear four ways (OK badge, "24+ mo no breach", this chip, and a
   // baseline chip repeating the same date on every tile) — the one tile that
   // someday reads ORDER BY wouldn't stand out. The order chip now renders
   // only when there is something to say: a real order-by date, or the
@@ -186,7 +196,10 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText('CL-Prod-P1')).toBeInTheDocument();
     const link = screen.getByRole('link');
     expect(link.getAttribute('aria-label')).toContain('CL-Prod-P1');
-    expect(link.getAttribute('aria-label')).toContain('2026-12-28');
+    // "Dec 28", not the raw ISO string (#243 Part B copy item 1) — the
+    // aria-label's own sentence-style casing, unlike the visible chip's caps.
+    expect(link.getAttribute('aria-label')).toContain('Dec 28');
+    expect(link.getAttribute('aria-label')).not.toContain('2026-12-28');
   });
 
   it('renders an "unknown" state for a zero-capacity cluster, never "0.0% used" (#200)', () => {
@@ -237,7 +250,7 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText(/order status unknown/i)).toBeInTheDocument();
     expect(screen.queryByText(/no breach/i)).toBeNull();
     expect(screen.queryByText(/no order needed/i)).toBeNull();
-    expect(link).not.toHaveTextContent(/\d+\+? MO/);
+    expect(link).not.toHaveTextContent(/\d+\+? mo/i);
     // Finding: the verdict named the problem ("runway and breach timing
     // cannot be calculated") but never the fix — the Hosts tab is the only
     // path off this state for a synced cluster with no recorded capacity.
@@ -302,7 +315,7 @@ describe('<ClusterTile>', () => {
     // summary.alreadyBreached is 'warn' (current month already over warn,
     // under crit) but a later in-window month (index 1) crosses crit. Per
     // the spec's recorded amendment, the numeral must keep tracking warn
-    // (the same "{horizon}+ MO" treatment as when crit is never reached) —
+    // (the same "{horizon}+ mo" treatment as when crit is never reached) —
     // crit surfaces only in the sub-line/verdict, never promotes the
     // numeral to a "to crit" countdown. Otherwise the numeral (which reads
     // as a countdown to crit) contradicts the panel's RunwayPill, which
@@ -327,7 +340,7 @@ describe('<ClusterTile>', () => {
     expect(screen.queryByText(/to crit/i)).toBeNull();
   });
 
-  it('renders an em dash instead of a synthetic "0+ MO" for an archived cluster with no forecast (finding 3)', () => {
+  it('renders an em dash instead of a synthetic "0+ mo" for an archived cluster with no forecast (finding 3)', () => {
     render(
       <ClusterTile
         entry={{
@@ -442,7 +455,7 @@ describe('<ClusterTile>', () => {
     // from the default entry() fixture (already past warn) and from the
     // past-warn/past-crit fixtures above — this is computeRunway's final,
     // genuinely-unbreached branch, where `plus` is always true because the
-    // numeral itself is an open-ended "{horizon}+ MO" countdown. The
+    // numeral itself is an open-ended "{horizon}+ mo" countdown. The
     // window-boundary sentence describes a fixed fact (the window is
     // exactly `horizon` months long) and must not inherit that "+".
     const healthyMonths: ForecastMonthPoint[] = [
@@ -469,7 +482,7 @@ describe('<ClusterTile>', () => {
       render(
         <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
       );
-      const chip = screen.getByText(/ORDER BY 2026-12-28/);
+      const chip = screen.getByText(/ORDER BY DEC 28/);
       expect(chip.className).toMatch(/text-\[10px\]/);
       expect(chip.className).not.toMatch(/text-\[9\.5px\]/);
     });

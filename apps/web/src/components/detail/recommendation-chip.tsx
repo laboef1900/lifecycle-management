@@ -6,6 +6,7 @@ import { formatRelativeDays } from '@/components/fleet/order-by-rail';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { HOSTS_TAB_HASH, requestAnchorFocus } from '@/lib/anchors';
 import { daysUntil } from '@/lib/dates';
+import { formatDateShort } from '@/lib/format-month';
 import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 import { cn } from '@/lib/utils';
 
@@ -93,18 +94,25 @@ export function deriveRecommendation(
     message = `Order now — order date unavailable — check forecast · ${leadPhrase}`;
   } else if (kpi.status === 'crit') {
     const days = Math.abs(daysUntil(orderByDate, today));
+    // `daysUntil`/`formatRelativeDays` still take the raw ISO string (their
+    // math needs it); only the human-facing text below routes through
+    // `formatDateShort` (#243 Part B copy item 1 — no more raw ISO dates in
+    // chips/banners next to formatted dates everywhere else).
+    const orderByLabel = formatDateShort(orderByDate);
     tone = 'crit';
     shortText = `Order now — ${days}d overdue`;
-    message = `Order now — last safe order date ${orderByDate} (${days} day${days === 1 ? '' : 's'} overdue) · ${leadPhrase}`;
+    message = `Order now — last safe order date ${orderByLabel} (${days} day${days === 1 ? '' : 's'} overdue) · ${leadPhrase}`;
   } else if (kpi.status === 'warn') {
     const days = daysUntil(orderByDate, today);
+    const orderByLabel = formatDateShort(orderByDate);
     tone = 'crit';
-    shortText = `Order now — by ${orderByDate}`;
-    message = `Order now — last safe order date ${orderByDate} (in ${days} d) · ${leadPhrase}`;
+    shortText = `Order now — by ${orderByLabel}`;
+    message = `Order now — last safe order date ${orderByLabel} (in ${days} d) · ${leadPhrase}`;
   } else {
+    const orderByLabel = formatDateShort(orderByDate);
     tone = 'planned';
-    shortText = `Order by ${orderByDate}`;
-    message = `Order by ${orderByDate} (${formatRelativeDays(orderByDate, today)}) · ${leadPhrase}`;
+    shortText = `Order by ${orderByLabel}`;
+    message = `Order by ${orderByLabel} (${formatRelativeDays(orderByDate, today)}) · ${leadPhrase}`;
   }
 
   return { tone, chipLabel: TONE_CHIP[tone].label, shortText, message };
