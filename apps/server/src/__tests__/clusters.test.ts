@@ -2041,3 +2041,215 @@ describe('PUT /api/clusters/:id — a combined date + values edit', () => {
     expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100]);
   });
 });
+
+describe('PUT /api/clusters/:id — a dateless value edit writes only what it corrects', () => {
+  it('leaves an unchanged synced metric untouched — provenance, period, and forecast (the finding)', async () => {
+    // The DATELESS twin of "does not flip an unchanged synced metric that sits on
+    // the submitted period" above. baseline-edit-form.tsx submits EVERY rendered
+    // metric the moment any one number is dirty and omits `baselineDate` unless the
+    // date input changed, so correcting ONE metric arrives here as a multi-metric,
+    // DATELESS payload carrying the others verbatim. Writing an unchanged metric
+    // anyway upserts its own `vsphere` row at its own period, which flips `source`
+    // to `manual`; `absorbed` in forecast.ts is source-gated and all-or-nothing, so
+    // a pre-anchor `capacityDelta` the measurement already contains stops being
+    // absorbed, capacity inflates, and utilization FALLS — the defer-hardware
+    // direction, on a metric the operator never touched, with no value and no date
+    // submitted. Only a genuinely corrected metric may be written.
+    const memory = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195k' },
+      update: {},
+      create: { key: 'cpu_cores_195k', displayName: 'CPU (test)', unit: 'cores' },
+    });
+    const cpu = await prisma.metricType.findUniqueOrThrow({ where: { key: 'cpu_cores_195k' } });
+    const cluster = await prisma.cluster.create({
+      data: {
+        tenantId: 'default',
+        name: uniqueName('dateless-unchanged-synced'),
+        source: 'vsphere',
+        baselineHistory: {
+          create: [
+            {
+              tenantId: 'default',
+              metricTypeId: memory.id,
+              capturedAt: new Date(Date.UTC(2026, 5, 1)), // memory at June, vSphere
+              source: 'vsphere',
+              baselineConsumption: 1000,
+              baselineCapacity: 0, // Q9a: synced hosts carry the capacity
+            },
+            {
+              tenantId: 'default',
+              metricTypeId: cpu.id,
+              capturedAt: new Date(Date.UTC(2026, 0, 1)), // cpu at January, vSphere
+              source: 'vsphere',
+              baselineConsumption: 10,
+              baselineCapacity: 0,
+            },
+          ],
+        },
+      },
+    });
+    await makeHost(prisma, {
+      clusterId: cluster.id,
+      name: uniqueName('dateless-unchanged-host'),
+      commissionedAt: new Date(Date.UTC(2026, 0, 1)),
+      initialCapacity: [{ effectiveFrom: new Date(Date.UTC(2026, 0, 1)), amount: 2000 }],
+    });
+    await makeEvent(prisma, {
+      clusterId: cluster.id,
+      title: uniqueName('dateless-pre-anchor-capacity'),
+      effectiveDate: new Date(Date.UTC(2026, 2, 1)), // March: before June, absorbed
+      consumptionDelta: null,
+      capacityDelta: 500,
+    });
+
+    const before = clusterResponseSchema.parse(
+      (await server.inject({ method: 'GET', url: `/api/clusters/${cluster.id}` })).json(),
+    );
+    const beforeMemory = before.metrics.find((m) => m.metricTypeKey === 'memory_gb');
+    expect(beforeMemory?.currentCapacity).toBe(2000); // March's +500 absorbed into June
+    expect(beforeMemory?.utilization).toBe(0.5); // 1000 / 2000
+
+    // Operator corrects cpu 10 -> 20 only. NO date. memory rides along verbatim —
+    // the exact payload baseline-edit-form.tsx builds for a one-number change.
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 1000, baselineCapacity: 0 },
+          { metricTypeKey: 'cpu_cores_195k', baselineConsumption: 20, baselineCapacity: 0 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // memory's row is untouched: still June, still vSphere, still 1000/0 — the
+    // payload said nothing new about it.
+    const memoryRow = await prisma.clusterBaselineHistory.findFirstOrThrow({
+      where: { clusterId: cluster.id, metricTypeId: memory.id },
+      orderBy: { capturedAt: 'desc' },
+    });
+    expect(memoryRow.capturedAt.toISOString().slice(0, 10)).toBe('2026-06-01');
+    expect(memoryRow.source).toBe('vsphere');
+    expect(memoryRow.baselineConsumption.toNumber()).toBe(1000);
+    expect(memoryRow.baselineCapacity.toNumber()).toBe(0);
+
+    // cpu — the metric actually corrected — is written in place at its own period
+    // and flips to manual. Proves the edit landed; it simply did not touch memory.
+    const cpuRow = await prisma.clusterBaselineHistory.findFirstOrThrow({
+      where: { clusterId: cluster.id, metricTypeId: cpu.id },
+      orderBy: { capturedAt: 'desc' },
+    });
+    expect(cpuRow.capturedAt.toISOString().slice(0, 10)).toBe('2026-01-01');
+    expect(cpuRow.source).toBe('manual');
+    expect(cpuRow.baselineConsumption.toNumber()).toBe(20);
+
+    // memory's forecast is unchanged: March stays absorbed, capacity holds at 2000,
+    // utilization does not drop. Under the finding it read 2500 / 0.4.
+    const after = clusterResponseSchema.parse(
+      (await server.inject({ method: 'GET', url: `/api/clusters/${cluster.id}` })).json(),
+    );
+    const afterMemory = after.metrics.find((m) => m.metricTypeKey === 'memory_gb');
+    expect(afterMemory?.currentCapacity).toBe(2000);
+    expect(afterMemory?.utilization).toBe(0.5);
+  });
+
+  it('flips a genuinely-corrected synced metric to manual and applies the value', async () => {
+    // The legitimate half: a dateless edit that DOES change a value is a human
+    // override, so it must write and `absorbed`'s source gate must then see
+    // `manual`. Guards against an over-correction that skips the write entirely.
+    const memory = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    const cluster = await prisma.cluster.create({
+      data: {
+        tenantId: 'default',
+        name: uniqueName('dateless-corrected-synced'),
+        source: 'vsphere',
+        baselineHistory: {
+          create: {
+            tenantId: 'default',
+            metricTypeId: memory.id,
+            capturedAt: new Date(Date.UTC(2026, 5, 1)), // June, vSphere
+            source: 'vsphere',
+            baselineConsumption: 1000,
+            baselineCapacity: 0,
+          },
+        },
+      },
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselines: [{ metricTypeKey: 'memory_gb', baselineConsumption: 1200, baselineCapacity: 0 }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // In place on its own period (June), value corrected, provenance now manual.
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-06-01');
+    expect(rows[0]?.source).toBe('manual');
+    expect(rows[0]?.baselineConsumption.toNumber()).toBe(1200);
+  });
+
+  it('opens a brand-new metric’s first baseline at the current month', async () => {
+    // A metric with no stored row has nothing to repeat, so a dateless payload
+    // naming it for the first time is new information and must still write — at the
+    // opening period (the current month), since there is no prior period to
+    // correct. Pins the no-stored-row branch of the write-period derivation, which
+    // now reads `stored` rather than a separate per-metric MAX query.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195l' },
+      update: {},
+      create: { key: 'cpu_cores_195l', displayName: 'CPU (test)', unit: 'cores' },
+    });
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('dateless-new-metric'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)), // memory at May, 100/1000
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+    });
+
+    // memory rides along UNCHANGED; cpu is brand new (no stored row).
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+          { metricTypeKey: 'cpu_cores_195l', baselineConsumption: 8, baselineCapacity: 64 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const now = new Date();
+    const currentMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+      .toISOString()
+      .slice(0, 10);
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      include: { metricType: { select: { key: true } } },
+      orderBy: [{ metricType: { key: 'asc' } }, { capturedAt: 'asc' }],
+    });
+    expect(
+      rows.map((r) => [
+        r.metricType.key,
+        r.capturedAt.toISOString().slice(0, 10),
+        r.baselineConsumption.toNumber(),
+      ]),
+    ).toEqual([
+      ['cpu_cores_195l', currentMonth, 8], // first baseline opens at the current month
+      ['memory_gb', '2026-05-01', 100], // unchanged: untouched at its own period
+    ]);
+    // The new metric is manual — a human entered it.
+    const cpuRow = rows.find((r) => r.metricType.key === 'cpu_cores_195l');
+    expect(cpuRow?.source).toBe('manual');
+  });
+});

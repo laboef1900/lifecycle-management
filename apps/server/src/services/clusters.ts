@@ -274,12 +274,19 @@ export class ClustersService {
       // depends on what the payload is about to record for each metric.
       const rows = input.baselines === undefined ? [] : await this.resolveBaselineRows(input);
 
-      // The stored newest row per metric, read once and used for two decisions
-      // below: which rows the re-anchor may move, and which submitted values say
-      // anything new. Only a DATED request needs it — a dateless payload lands
-      // each value on that metric's own period and compares nothing.
+      // The stored newest row per metric, read once and used for THREE decisions
+      // below, on BOTH the dated and the dateless path: which rows the re-anchor
+      // may move (dated only), which submitted values actually correct their stored
+      // newest, and — for a recorded row — the period it lands in (each row carries
+      // its own `capturedAt`). A dateless payload must COMPARE too, precisely so an
+      // unchanged metric the form dragged along is not rewritten (and a `vsphere`
+      // row not flipped to `manual`) merely for being present: that asymmetry —
+      // dated compared, dateless wrote everything — was the root of a run of
+      // purchasing-critical edge cases, so the two paths are unified here. Loaded
+      // whenever the request carries values (`rows`) or a date (`target`); a
+      // name/description-only edit needs neither and skips the query.
       const stored =
-        target === undefined
+        rows.length === 0 && target === undefined
           ? new Map<string, NewestBaselineRow>()
           : new Map(
               ((await this.loadNewestBaselines(tenantId, [id])).get(id) ?? []).map((row) => [
@@ -391,36 +398,48 @@ export class ClustersService {
         ),
       ];
 
-      // @ai-warning The write side of "presence is not a correction", and it is
-      // load-bearing rather than tidy. Restricting only the MOVE above would leave
-      // the upsert writing every NAMED metric at the target regardless — so an
-      // unchanged metric still lands there, and when the target holds (or is
-      // before) that metric's own row the two collide: a same-period write flips a
-      // `vsphere` row to `manual` and re-runs `absorbed` against a hand-picked date
-      // (the MAJOR A failure, reached a second way), and a before-period write
-      // drops the metric's fresher numbers onto an older recorded period. Both
-      // touch a metric the operator did not, on data that buys hardware.
+      // THE UNIFORM INVARIANT, now identical on both paths: only a metric whose
+      // submitted values differ from its stored newest is written — at the dated
+      // target, or (dateless) at its own newest period — and only such a write
+      // flips source to manual; a pure re-date moves a row's period without
+      // touching its source or values.
       //
-      // So when a date is submitted, an unchanged metric is treated EXACTLY like an
-      // omitted one — not written at all. #181's principle, verbatim, extended from
-      // "the payload never mentioned it" to "the payload mentioned it but changed
-      // nothing". The corrected metrics still write at the target, which is what
-      // lands the submitted date on the response's MIN so the form does not reset
-      // it. A dateless request keeps writing every row: each lands on its own newest
-      // period (never a shared target), so there is nothing to collide with and the
-      // per-metric in-place correction is the whole point of that path.
-      const recording =
-        target === undefined
-          ? rows
-          : rows.filter((row) => correcting?.has(row.metricTypeId) ?? false);
+      // @ai-warning The write side of "presence is not a correction", load-bearing
+      // rather than tidy, and SYMMETRIC across dated and dateless — the earlier
+      // `target === undefined ? rows : filtered` split wrote every named metric on
+      // the dateless path and was the root of a run of purchasing-critical edge
+      // cases. baseline-edit-form.tsx submits every rendered metric the moment any
+      // one number is dirty, so presence in `rows` is not evidence the operator
+      // touched that metric. Writing an unchanged one anyway is destructive in two
+      // directions, and BOTH are reachable dateless as well as dated:
+      //   - a same-period write onto that metric's own `vsphere` row flips `source`
+      //     to `manual`, and `absorbed` in forecast.ts is SOURCE-gated and
+      //     all-or-nothing, so a pre-anchor `capacityDelta` the measurement already
+      //     contains stops being absorbed: capacity inflates, utilization FALLS,
+      //     nothing measured and no value submitted — the defer-hardware direction
+      //     the re-anchor guard exists to prevent; and
+      //   - a before-period write drops the metric's fresher numbers onto an older
+      //     recorded period.
+      // So an unchanged metric is treated EXACTLY like an omitted one (#181),
+      // whether or not a date was submitted — not written at all. A corrected
+      // metric still writes: at the target (landing the submitted date on the
+      // response's MIN so the form does not reset it) or, dateless, in place on the
+      // period it corrects. A metric with no stored row has nothing to repeat, so
+      // its first baseline is new information and still writes (at the current
+      // month, below). `correcting` is undefined only when `rows` is empty, where
+      // this filter is over nothing.
+      const recording = rows.filter((row) => correcting?.has(row.metricTypeId) ?? false);
 
       if (recording.length > 0) {
         // The period a manual entry lands in: the supplied baselineDate when the
-        // caller changed it, otherwise THAT METRIC's own newest recorded period.
-        // Snapped to the first of the month so manual and vSphere baselines share
-        // one period key (recorded decision Q6) — without which a manual row at
-        // Aug-15 and a snapshot at Aug-01 would coexist and "the newest baseline"
-        // would be decided by accident of date.
+        // caller changed it, otherwise THAT METRIC's own newest recorded period —
+        // read straight off `stored`, the newest-per-metric map already loaded
+        // above, whose row carries that period in `capturedAt`. Snapped to the
+        // first of the month so manual and vSphere baselines share one period key
+        // (recorded decision Q6) — without which a manual row at Aug-15 and a
+        // snapshot at Aug-01 would coexist and "the newest baseline" would be
+        // decided by accident of date; the snap is defensive, since every stored
+        // `capturedAt` is already a first-of-month anchor.
         //
         // That fallback read `clusters.baseline_date` until #195 dropped it, and a
         // cluster-wide MAX is the wrong replacement even though it is the obvious
@@ -432,20 +451,13 @@ export class ClustersService {
         // drags every lagging metric onto the freshest metric's period: it appends
         // a measurement nobody took, strands the real one behind it still carrying
         // the stale numbers, and silently clears the staleness that
-        // `deriveBaselineDate`'s MIN exists to report. Per metric, each correction
-        // lands on the period it is actually correcting and the upsert updates in
-        // place.
+        // `deriveBaselineDate`'s MIN exists to report. Per metric — off `stored` —
+        // each correction lands on the period it is actually correcting and the
+        // upsert updates in place. (`stored` subsumes the old per-metric-MAX query,
+        // whose result was a strict subset of what it already carries.)
         //
-        // A metric with no history at all has no period to correct, so the current
+        // A metric with no stored row has no period to correct, so the current
         // month opens its first one.
-        const newestPeriods =
-          target === undefined
-            ? await this.loadNewestPeriodsByMetric(
-                tenantId,
-                id,
-                recording.map((row) => row.metricTypeId),
-              )
-            : new Map<string, Date>();
         const openingPeriod = firstOfCurrentMonth();
 
         // @ai-warning: upsert per (clusterId, metricTypeId) — never delete-then-recreate.
@@ -460,7 +472,11 @@ export class ClustersService {
           // flips `source` back to manual, since a human has overridden whatever
           // the sync captured.
           ...recording.map((row) => {
-            const capturedAt = target ?? newestPeriods.get(row.metricTypeId) ?? openingPeriod;
+            // dated -> the target; dateless -> this metric's own newest period, or
+            // the opening month if it has no stored row (its first baseline).
+            const storedRow = stored.get(row.metricTypeId);
+            const capturedAt =
+              target ?? (storedRow ? startOfUtcMonth(storedRow.capturedAt) : openingPeriod);
             return this.prisma.clusterBaselineHistory.upsert({
               where: {
                 clusterId_metricTypeId_capturedAt: {
@@ -731,40 +747,6 @@ export class ClustersService {
     }
 
     return moving.map((row) => ({ id: row.id, capturedAt: target }));
-  }
-
-  /**
-   * MAX(captured_at) per metric on ONE cluster, for the metrics a write names.
-   *
-   * The period a dateless correction belongs in: the one it is correcting. A
-   * metric absent from the result has no history at all and so has no period to
-   * correct — the caller opens its first one at the current month.
-   *
-   * @ai-warning PER METRIC, never a cluster-wide `_max`. The unique key is
-   * (cluster, metric, period), so "the cluster's newest period" is not a period
-   * the lagging metrics were ever measured at; writing them there appends a
-   * fabricated measurement and leaves the real one behind, stale. See the call
-   * site for the full argument.
-   *
-   * Grouped in Postgres and bounded by the payload's metrics — never by months of
-   * accumulated history, which this runs alongside on every baseline save.
-   */
-  private async loadNewestPeriodsByMetric(
-    tenantId: string,
-    clusterId: string,
-    metricTypeIds: readonly string[],
-  ): Promise<Map<string, Date>> {
-    if (metricTypeIds.length === 0) return new Map();
-    const groups = await this.prisma.clusterBaselineHistory.groupBy({
-      by: ['metricTypeId'],
-      where: { clusterId, tenantId, metricTypeId: { in: [...metricTypeIds] } },
-      _max: { capturedAt: true },
-    });
-    return new Map(
-      groups.flatMap((g): Array<[string, Date]> =>
-        g._max.capturedAt === null ? [] : [[g.metricTypeId, startOfUtcMonth(g._max.capturedAt)]],
-      ),
-    );
   }
 
   /**
