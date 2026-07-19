@@ -174,6 +174,53 @@ test.describe('scenario pane as a modal sheet below lg', () => {
   });
 });
 
+/**
+ * Scenario forecast fetch failure (#243 Part B item 1). Forces the failure
+ * deterministically via `page.route` rather than relying on seeded data ever
+ * producing one, since the unit suite already covers the logic — what only a
+ * real browser proves is that a failed POST doesn't leave the header
+ * indicator and the chart telling two different stories.
+ */
+test.describe('scenario forecast fetch failure', () => {
+  test.use({ viewport: SUB_LG });
+
+  test('clears the header indicator, surfaces a retryable inline error over the baseline chart, and corrects the announcement', async ({
+    page,
+  }) => {
+    await openFirstCluster(page);
+    await openScenarioPane(page, SUB_LG.width);
+
+    await page.route(/\/api\/clusters\/[^/]+\/forecast\/scenario/, (route) =>
+      route.fulfill({ status: 500, json: { message: 'boom' } }),
+    );
+    await page.getByRole('button', { name: 'Apply' }).click();
+
+    // Sub-lg: Apply still dismisses the covering sheet on any submit (the
+    // dismissal doesn't wait on the query), so the user lands squarely on the
+    // surface the error must be visible on.
+    await expect(page.getByTestId('scenario-pane-body')).toHaveCount(0);
+
+    // The header no longer claims a hypothetical forecast is on screen…
+    await expect(page.getByTestId('scenario-active-indicator')).toHaveCount(0);
+    await expect(page.getByTestId('scenario-button')).toHaveAccessibleName('Scenario');
+    // …the correction is announced instead of "Scenario active: …"…
+    await expect(page.getByTestId('panel-live-region')).toHaveText(
+      'Scenario could not be computed — showing baseline.',
+    );
+    // …and an inline, retryable error sits over the still-baseline chart.
+    const retry = page.getByRole('button', { name: 'Retry' });
+    await expect(page.getByText(/scenario could not be computed/i).last()).toBeVisible();
+    await expect(retry).toBeVisible();
+
+    // Retrying with the route now unmocked (falls through to the real API)
+    // succeeds, clears the error, and restores the header indicator.
+    await page.unroute(/\/api\/clusters\/[^/]+\/forecast\/scenario/);
+    await retry.click();
+    await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
+    await expect(page.getByTestId('scenario-active-indicator')).toBeVisible();
+  });
+});
+
 test.describe('scenario pane beside the content column at lg and up', () => {
   test.use({ viewport: SIDE_BY_SIDE });
 

@@ -91,15 +91,19 @@ export function ForecastThresholdsForm(): React.JSX.Element {
   const parseInput = (raw: string): NumInput => (raw === '' ? '' : Number(raw));
 
   return (
-    <Card className="p-4">
+    <Card className="max-w-2xl p-4">
       <header className="mb-4">
-        <h2 className="text-base font-semibold">Forecast thresholds</h2>
+        <h3 className="text-base font-semibold">Forecast thresholds</h3>
         <p className="text-sm text-fg-muted">
-          Default warn/crit bands. Per-cluster overrides apply on the cluster's Settings tab.
+          Default warn/crit bands. Per-cluster overrides apply on each cluster&rsquo;s Cluster
+          settings tab.
         </p>
       </header>
       <form onSubmit={handleSubmit} className="space-y-3" noValidate>
-        <div className="grid grid-cols-2 gap-3">
+        {/* flex, not grid-cols-2: a percentage is 1-3 digits, so the fields hug
+            their own w-24 input instead of each stretching across half the
+            (now width-capped) card. */}
+        <div className="flex flex-wrap gap-4">
           <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
               Warn %
@@ -111,7 +115,7 @@ export function ForecastThresholdsForm(): React.JSX.Element {
               aria-label="Warn %"
               value={warnPct}
               onChange={(e) => setWarnEdit(parseInput(e.target.value))}
-              className="mt-1"
+              className="mt-1 w-24"
             />
           </label>
           <label className="block">
@@ -125,7 +129,7 @@ export function ForecastThresholdsForm(): React.JSX.Element {
               aria-label="Crit %"
               value={critPct}
               onChange={(e) => setCritEdit(parseInput(e.target.value))}
-              className="mt-1"
+              className="mt-1 w-24"
             />
           </label>
         </div>
@@ -141,10 +145,11 @@ export function ForecastThresholdsForm(): React.JSX.Element {
             aria-label="Procurement lead time (weeks)"
             value={leadWeeks}
             onChange={(e) => setLeadEdit(parseInput(e.target.value))}
-            className="mt-1"
+            className="mt-1 w-24"
           />
-          <span className="mt-1 block text-[11px] text-fg-subtle">
-            How long from PO to racked + in-service. Set to 0 to hide the lead-time KPI.
+          <span className="mt-1 block max-w-md text-[11px] text-fg-subtle">
+            How long from PO to racked + in-service. Set to 0 to hide the lead-time zone on the
+            fleet timeline.
           </span>
         </label>
         {validationError ? (
@@ -154,7 +159,7 @@ export function ForecastThresholdsForm(): React.JSX.Element {
         ) : null}
         <div className="flex items-center justify-between">
           <span className="text-[11px] text-fg-subtle">
-            {settingsQuery.data ? 'Source: Saved tenant settings' : 'Source: System defaults'}
+            {settingsQuery.data ? 'Source: Saved settings' : 'Source: System defaults'}
           </span>
           <Button type="submit" variant="accent" size="sm" disabled={!dirty || mutation.isPending}>
             {mutation.isPending ? 'Saving…' : 'Save'}

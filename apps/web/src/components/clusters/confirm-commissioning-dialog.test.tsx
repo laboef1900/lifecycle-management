@@ -130,4 +130,18 @@ describe('<ConfirmCommissioningDialog>', () => {
     expect(toast.error).not.toHaveBeenCalled();
     expect(api.hosts.confirmCommissioning).not.toHaveBeenCalled();
   });
+
+  it('moves focus to the invalid row on a blocked submit', async () => {
+    renderDialog([makeHost({ id: 'a', name: 'esx-01' }), makeHost({ id: 'b', name: 'esx-02' })]);
+
+    const input = screen.getByLabelText('esx-02');
+    input.removeAttribute('required');
+    fireEvent.change(input, { target: { value: '' } });
+    screen.getByRole('button', { name: 'Confirm 2 dates' }).focus();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Confirm 2 dates' }));
+
+    await waitFor(() => expect(input).toHaveFocus());
+  });
 });

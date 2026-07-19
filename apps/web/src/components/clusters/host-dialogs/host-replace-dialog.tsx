@@ -1,10 +1,10 @@
 import { hostReplacementCreateInputSchema } from '@lcm/shared';
 import type { HostResponse } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -66,6 +66,8 @@ export function HostReplaceDialog({
     swappedAt?: string;
     reason?: string;
   }>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const mutation = useMutation({
     mutationFn: (payload: HostReplacementCreateInputWire) => api.hostReplacements.create(payload),
@@ -135,13 +137,17 @@ export function HostReplaceDialog({
             </DialogFooter>
           </div>
         ) : (
-          <form onSubmit={onSubmit} className="space-y-4">
+          <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label htmlFor="replace-new-host" className="text-sm font-medium">
                 Replacement host
               </label>
               <Select value={newHostId} onValueChange={(value) => setNewHostId(value)}>
-                <SelectTrigger id="replace-new-host">
+                <SelectTrigger
+                  id="replace-new-host"
+                  aria-invalid={errors.newHostId ? 'true' : undefined}
+                  aria-describedby={errors.newHostId ? 'replace-new-host-error' : undefined}
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -153,7 +159,9 @@ export function HostReplaceDialog({
                 </SelectContent>
               </Select>
               {errors.newHostId ? (
-                <p className="text-xs text-destructive">{errors.newHostId}</p>
+                <p id="replace-new-host-error" className="text-xs text-destructive">
+                  {errors.newHostId}
+                </p>
               ) : null}
             </div>
             <Field
@@ -177,8 +185,13 @@ export function HostReplaceDialog({
                 placeholder="Optional context (e.g. RMA, capacity upgrade)"
                 className="flex w-full rounded-[var(--radius)] border border-input bg-background px-2.5 py-1.5 text-sm placeholder:text-fg-subtle disabled:cursor-not-allowed disabled:opacity-50"
                 aria-invalid={errors.reason ? 'true' : undefined}
+                aria-describedby={errors.reason ? 'replace-reason-error' : undefined}
               />
-              {errors.reason ? <p className="text-xs text-destructive">{errors.reason}</p> : null}
+              {errors.reason ? (
+                <p id="replace-reason-error" className="text-xs text-destructive">
+                  {errors.reason}
+                </p>
+              ) : null}
             </div>
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>

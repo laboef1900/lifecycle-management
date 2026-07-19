@@ -13,6 +13,32 @@ import { useCallback, useSyncExternalStore } from 'react';
 export const ADD_CLUSTER_HASH = 'add-cluster';
 
 /**
+ * Cluster panel → Hosts tab (`apps/web/src/components/detail/cluster-panel.tsx`).
+ *
+ * Unlike `ADD_CLUSTER_HASH`, this anchor never appears in the URL: the
+ * requester (the unknown-capacity `RecommendationChip`) and the target (the
+ * panel's own Tabs) are already mounted together on the same page, so there is
+ * no navigation for a location hash to survive. The request counter alone is
+ * the whole signal — see `useAnchorFocusRequest`.
+ */
+export const HOSTS_TAB_HASH = 'hosts-tab';
+
+/**
+ * Settings page section anchors (#243 Part B — Medium: "Settings page is one
+ * flat scroll"). Unlike `ADD_CLUSTER_HASH` above, these do NOT need the
+ * `requestAnchorFocus`/`useAnchorFocusRequest` counter: they are plain
+ * in-page table-of-contents links, not a repeatable action a linking surface
+ * can re-invoke while already on the destination — clicking a `#section-*`
+ * link a second time while already there is a no-op both in the browser (no
+ * new history entry, no hashchange) and in the UI it targets (there is
+ * nothing to re-run). TanStack Router's default hash scroll-into-view is
+ * enough on its own.
+ */
+export const FORECASTING_SECTION_HASH = 'section-forecasting';
+export const INVENTORY_SECTION_HASH = 'section-inventory';
+export const ACCESS_SECTION_HASH = 'section-access';
+
+/**
  * How many focus requests each anchor has received. Per anchor, and
  * monotonically increasing.
  *

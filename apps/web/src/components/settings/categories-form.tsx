@@ -66,24 +66,27 @@ export function CategoriesForm(): React.JSX.Element {
   const categories = categoriesQuery.data ?? [];
 
   return (
-    <Card className="p-4">
+    <Card className="max-w-2xl p-4">
       <header className="mb-4">
-        <h2 className="text-base font-semibold">Categories</h2>
+        <h3 className="text-base font-semibold">Categories</h3>
         <p className="text-sm text-fg-muted">
           Labels for applications and events. Add or remove the options that appear in the item
           category dropdown.
         </p>
       </header>
 
+      {/* max-w-sm on the list and the add-row: a category name plus its
+          delete button in one eye-span, not spread across the full
+          (already width-capped) card. */}
       {categoriesQuery.isPending ? (
-        <div className="mb-4 space-y-2">
+        <div className="mb-4 max-w-sm space-y-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
         </div>
       ) : categories.length === 0 ? (
         <p className="text-sm text-fg-subtle">No categories yet. Add one below.</p>
       ) : (
-        <ul className="mb-4 divide-y divide-border rounded-[var(--radius)] border border-border">
+        <ul className="mb-4 max-w-sm divide-y divide-border rounded-[var(--radius)] border border-border">
           {categories.map((category) => (
             <li key={category.id} className="px-3 py-2">
               <div className="flex items-center justify-between gap-3">
@@ -95,7 +98,7 @@ export function CategoriesForm(): React.JSX.Element {
                   title={`Remove ${category.name}`}
                   aria-label={`Remove ${category.name}`}
                   className={cn(
-                    'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
+                    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors',
                     'text-muted-foreground hover:bg-destructive/10 hover:text-destructive',
                     'disabled:pointer-events-none disabled:opacity-50',
                   )}
@@ -113,7 +116,7 @@ export function CategoriesForm(): React.JSX.Element {
         </ul>
       )}
 
-      <form onSubmit={handleAdd} className="flex items-end gap-2">
+      <form onSubmit={handleAdd} className="flex max-w-sm items-end gap-2">
         <label className="block flex-1">
           <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
             New category

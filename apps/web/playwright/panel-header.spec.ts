@@ -185,3 +185,70 @@ test('recommendation chip: role=status wrapper in the title row; no eyebrow; cla
     expect(descBox!.height).toBeLessThanOrEqual(lineHeight * 1.5);
   }
 });
+
+test('forecast heading: no "FORECAST" eyebrow above it (#243 Part B item 8)', async ({ page }) => {
+  await openFirstCluster(page);
+
+  const headingVisible = await page
+    .getByTestId('kpi-strip')
+    .waitFor({ state: 'visible', timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false);
+  test.skip(!headingVisible, 'requires a cluster with a metric baseline');
+
+  // The eyebrow's DOM text was "Forecast" (title case) — the `uppercase` CSS
+  // class only changed how it *rendered*, not the text node — so this checks
+  // the exact node text a real browser exposes, not a substring of the h2's
+  // "Forecast — …" heading (which never matches exactly).
+  await expect(page.locator('.cluster-panel').getByText('Forecast', { exact: true })).toHaveCount(
+    0,
+  );
+});
+
+test('unknown-capacity recommendation chip jumps focus to the Hosts tab (#243 Part B item 4)', async ({
+  page,
+  request,
+}) => {
+  // Route-mocked rather than relying on a seeded unknown-capacity cluster:
+  // deterministic regardless of what the dev DB happens to contain.
+  const clustersRes = await request.get('/api/clusters');
+  const { items: clusters } = (await clustersRes.json()) as {
+    items: Array<{ id: string; metrics: Array<Record<string, unknown>> }>;
+  };
+  test.skip(clusters.length === 0, 'requires seeded clusters');
+  const cluster = clusters[0]!;
+  const clusterRes = await request.get(`/api/clusters/${cluster.id}`);
+  const clusterBody = (await clusterRes.json()) as {
+    metrics: Array<Record<string, unknown>>;
+  };
+  const unknownCapacityBody = {
+    ...clusterBody,
+    metrics: clusterBody.metrics.map((m) => ({
+      ...m,
+      currentCapacity: 0,
+      baselineCapacity: 0,
+      utilization: null,
+    })),
+  };
+
+  // Anchored to the end so this never also catches the forecast/settings
+  // sub-paths under the same cluster id (golden-path.spec.ts's own route
+  // convention).
+  await page.route(new RegExp(`/api/clusters/${cluster.id}$`), (route) =>
+    route.fulfill({ json: unknownCapacityBody }),
+  );
+  await page.goto(`/clusters/${cluster.id}`);
+  await expect(page.getByRole('dialog')).toBeVisible();
+
+  const chip = page.getByTestId('recommendation-chip-trigger');
+  await expect(chip).toHaveText(/capacity unknown/i);
+  // Start on a different tab so the click below is provably what moves it.
+  await page.getByRole('tab', { name: /apps/i }).click();
+  await expect(page.getByRole('tab', { name: /apps/i })).toHaveAttribute('aria-selected', 'true');
+
+  await chip.click();
+
+  const hostsTab = page.getByRole('tab', { name: 'Hosts' });
+  await expect(hostsTab).toHaveAttribute('aria-selected', 'true');
+  await expect(hostsTab).toBeFocused();
+});

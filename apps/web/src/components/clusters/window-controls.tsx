@@ -27,7 +27,7 @@ export function WindowControls({ value, onChange }: WindowControlsProps): React.
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            'rounded px-3 py-1 transition-colors',
+            'whitespace-nowrap rounded px-3 py-1 transition-colors',
             value === option.value
               ? 'bg-accent text-accent-foreground'
               : 'text-muted-foreground hover:text-foreground',
