@@ -680,7 +680,23 @@ treating this as a low-severity incident.
   decrypt failure on a row that never needed the secret, which degraded the
   deployment to an open API. The same applies to first-boot seeding — supplying
   `OIDC_*` env vars while `AUTH_MODE` is unset or `disabled` seeds a disabled
-  row and does not retain the client secret.
+  row and does not retain the client secret (logged as
+  `auth_config.seeded_client_secret_discarded`; boot never fails over it).
+
+  Because the deletion is irreversible — and specifically **not** undone by
+  restoring `CONFIG_ENCRYPTION_KEY`, which is the recovery every other failure
+  in this section relies on — **Settings → Authentication** asks for
+  confirmation before sending a save that switches away from `oidc`, naming
+  exactly what is deleted. The alert shown during a decrypt-degraded boot says
+  the same thing: its "the encrypted secrets are intact and are never wiped"
+  guarantee describes the **degrade**, not a save made from that screen.
+
+  Submitting a client secret **alongside** a non-oidc mode is refused with
+  `422 CLIENT_SECRET_NOT_APPLICABLE` rather than accepted and discarded — the
+  save would have thrown the value away, and answering `200` would have hidden
+  that until enabling OIDC later failed. Clear the field (or omit
+  `clientSecret`) and the save proceeds; clearing needs no encryption key, so
+  this never blocks a keyless deployment from leaving a broken OIDC config.
 
   Note this affects **explicit saves only**. A degraded boot still writes
   nothing at all, so the "fix the key and restart, with nothing to re-enter"

@@ -493,23 +493,56 @@ describe('AuthConfigService.update', () => {
     expect(cfg.signingSecret).toBeNull();
   });
 
-  it('discards a client secret submitted alongside a non-oidc mode, without skipping the key check (#241)', async () => {
-    // Block ORDER is load-bearing: the nulling runs AFTER the tri-state
-    // clientSecret branch, so a secret submitted with no key configured still
-    // fails 422 ENCRYPTION_KEY_REQUIRED instead of being silently accepted.
-    // Nulling first would turn that security error into a success.
+  it('REFUSES a client secret submitted alongside a non-oidc mode instead of discarding it, and writes nothing (#241)', async () => {
+    // A submitted secret cannot be honoured under a non-oidc mode, because the
+    // clearing block nulls both columns. Accepting the write and dropping the
+    // value would answer 200 to a caller whose input was thrown away — "saved"
+    // while the secret it sent is gone. Refusing is the honest answer, and it
+    // is the same shape as `rotateSigningSecret()`'s OIDC_MODE_REQUIRED.
+    const svc = new AuthConfigService(prisma, KEY);
+    await svc.update({ ...baseUpdate, mode: 'oidc', clientId: 'a', clientSecret: 'keep-me' }, null);
+    const before = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+
+    await expect(
+      svc.update({ ...baseUpdate, mode: 'local', clientId: 'a', clientSecret: 'dropped' }, null),
+    ).rejects.toMatchObject({ code: 'CLIENT_SECRET_NOT_APPLICABLE', statusCode: 422 });
+
+    // Refusing is all-or-nothing: the row is exactly as it was, so the caller
+    // can fix the request without a half-applied mode change to undo.
+    const after = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(after!.mode).toBe('oidc');
+    expect(after!.clientSecretEnc).toBe(before!.clientSecretEnc);
+    expect(after!.signingSecretEnc).toBe(before!.signingSecretEnc);
+  });
+
+  it('reports a missing encryption key BEFORE the non-applicable refusal, keeping ENCRYPTION_KEY_REQUIRED first (#241)', async () => {
+    // ORDER is load-bearing, and the constraint lives INSIDE the clientSecret
+    // branch: `requireKey()` runs ahead of the mode refusal. A missing key is
+    // the precondition that holds for every mode, so it is reported first —
+    // the same ordering `rotateSigningSecret()` uses. The route-level canary
+    // ("fails with 422 ENCRYPTION_KEY_REQUIRED (not 500) ... and persists
+    // nothing", settings-auth-routes.test.ts) pins the same property end to end.
     const noKey = new AuthConfigService(prisma, null);
     await expect(
       noKey.update({ ...baseUpdate, mode: 'disabled', clientSecret: 'x' }, null),
     ).rejects.toMatchObject({ code: 'ENCRYPTION_KEY_REQUIRED' });
     expect(await prisma.authConfig.findUnique({ where: { id: 'singleton' } })).toBeNull();
+  });
 
-    // With a key configured the write succeeds, but the secret is not kept:
-    // the stored mode has no use for it.
-    const withKey = new AuthConfigService(prisma, KEY);
-    await withKey.update({ ...baseUpdate, mode: 'disabled', clientSecret: 'x' }, null);
+  it('still accepts an explicit null clientSecret with a non-oidc mode and no key configured (#241)', async () => {
+    // The escape hatch the refusal must not close: CLEARING needs no key and is
+    // not a "submitted secret", so a keyless deployment can always save its way
+    // out of a broken OIDC config. `emptyToNull` in the shared schema turns a
+    // stray '' into exactly this case, and the Settings form omits the field
+    // entirely when it is blank.
+    const noKey = new AuthConfigService(prisma, null);
+
+    await noKey.update({ ...baseUpdate, mode: 'local', clientId: 'a', clientSecret: null }, null);
+
     const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('local');
     expect(row!.clientSecretEnc).toBeNull();
+    expect(row!.signingSecretEnc).toBeNull();
   });
 
   it('still stores and generates secrets on an oidc save — the #241 nulling must not touch the oidc path', async () => {

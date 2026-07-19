@@ -127,32 +127,83 @@ describe('/api/settings/auth', () => {
 
   describe('GET /settings/auth', () => {
     it('returns the sanitized shape and never leaks a stored secret value', async () => {
-      const server = await buildDisabledServer();
-
-      const put = await server.inject({
-        method: 'PUT',
-        url: '/api/settings/auth',
-        payload: { mode: 'disabled', clientSecret: DISTINCTIVE_SECRET },
+      // The ciphertext is written straight into the row BEFORE boot: a non-oidc
+      // save refuses a submitted secret (#241), and the response is built from
+      // the config loaded at boot, so this is the only way to put a real stored
+      // secret in front of the GET. It is also a real state — any row written
+      // by a pre-#241 build still carries one.
+      await prisma.authConfig.create({
+        data: {
+          id: 'singleton',
+          mode: 'disabled',
+          clientSecretEnc: encrypt(DISTINCTIVE_SECRET, loadKey(CONFIG_ENCRYPTION_KEY)),
+        },
       });
-      expect(put.statusCode).toBe(200);
+      const server = await buildDisabledServer();
 
       const get = await server.inject({ method: 'GET', url: '/api/settings/auth' });
       expect(get.statusCode).toBe(200);
       const body = get.json();
 
-      // `clientSecretSet` is false because saving a non-oidc mode CLEARS both
-      // secret columns (#241) — a disabled deployment has no use for either, so
-      // keeping them only accumulates ciphertext a later key rotation could
-      // turn into a spurious decrypt failure. Kept on `disabled` deliberately
-      // so the never-leak assertion below also covers the nulling path.
+      // `clientSecretSet` reports whether a secret is IN EFFECT, not whether
+      // the column is populated: decryption is gated on the stored mode (#241),
+      // so a `disabled` row reads false even while holding decryptable
+      // ciphertext under the CURRENT key.
       expect(body).toMatchObject({
         mode: 'disabled',
         clientSecretSet: false,
         discoveryStatus: 'disabled',
       });
       expect(JSON.stringify(body)).not.toContain(DISTINCTIVE_SECRET);
+      // The column really does still hold the secret, so the never-leak
+      // assertion above is about redaction rather than about an empty row.
       const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
-      expect(row!.clientSecretEnc).toBeNull();
+      expect(row!.clientSecretEnc).not.toBeNull();
+    });
+
+    it('reports clientSecretSet/signingSecretSet as "in effect", not "column populated" (#241)', async () => {
+      // The shared contract these two booleans carry (documented on
+      // `AuthConfigResponse` in @lcm/shared). Their meaning changed with #241:
+      // they derive from the decrypted effective config, and decryption is now
+      // gated on the stored mode, so a `local` row reads false for BOTH even
+      // though both columns are populated and both decrypt cleanly under the
+      // configured key. Consumers must not read them as "there is nothing
+      // stored to lose" — the Settings form's delete-confirmation deliberately
+      // does not gate on them for exactly this reason.
+      await prisma.authConfig.create({
+        data: {
+          id: 'singleton',
+          mode: 'local',
+          clientSecretEnc: encrypt(DISTINCTIVE_SECRET, loadKey(CONFIG_ENCRYPTION_KEY)),
+          signingSecretEnc: encrypt('leftover-signing-secret', loadKey(CONFIG_ENCRYPTION_KEY)),
+        },
+      });
+      const server = await buildServer({
+        env: makeTestEnv({ CONFIG_ENCRYPTION_KEY }),
+        prisma,
+      });
+      created.push(server);
+      // Enforcing `local`, so reading the settings needs an admin session.
+      const adminToken = await createUserSession('ADMIN');
+      expect(server.authConfig.current.mode).toBe('local');
+
+      const get = await server.inject({
+        method: 'GET',
+        url: '/api/settings/auth',
+        cookies: { [SESSION_COOKIE]: adminToken },
+      });
+
+      expect(get.statusCode).toBe(200);
+      expect(get.json()).toMatchObject({
+        mode: 'local',
+        clientSecretSet: false,
+        signingSecretSet: false,
+      });
+      expect(JSON.stringify(get.json())).not.toContain(DISTINCTIVE_SECRET);
+      // Both columns survive untouched — nothing was read, nothing was cleared.
+      const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+      expect(row!.clientSecretEnc).not.toBeNull();
+      expect(row!.signingSecretEnc).not.toBeNull();
     });
   });
 
@@ -253,14 +304,15 @@ describe('/api/settings/auth', () => {
       expect(get.json().mode).toBe('disabled');
     });
 
-    it('does NOT store a client secret while switching to (or staying in) disabled mode (#241)', async () => {
-      // The exact capability #241 removes, and a deliberate reversal of the
-      // #222/#126 "nothing to re-enter" promise for MODE CHANGES. A non-oidc
-      // row has no use for either secret, and the leftover ciphertext was what
-      // made the fail-open reachable: a later key rotation turned it into a
-      // decrypt failure that degraded the deployment to an open API. The
-      // preservation guarantee now applies only to the mode that owns the
-      // secret (oidc), where a degraded boot still leaves the columns intact.
+    it('REFUSES 422 CLIENT_SECRET_NOT_APPLICABLE for a client secret submitted with a non-oidc mode (#241)', async () => {
+      // #241 removes the ability to STORE a secret under a non-oidc mode (a
+      // deliberate reversal of the #222/#126 "nothing to re-enter" promise for
+      // MODE CHANGES — that leftover ciphertext was what a later key rotation
+      // turned into a decrypt failure that degraded the deployment to an open
+      // API). Removing the capability must not turn into a silent discard:
+      // answering 200 would tell the operator the save succeeded while the
+      // secret they typed was thrown away, and they would only find out when
+      // enabling OIDC later failed with INCOMPLETE_OIDC_CONFIG.
       const server = await buildDisabledServer();
 
       const response = await server.inject({
@@ -268,8 +320,13 @@ describe('/api/settings/auth', () => {
         url: '/api/settings/auth',
         payload: { mode: 'disabled', clientSecret: 'x' },
       });
-      expect(response.statusCode).toBe(200);
 
+      expect(response.statusCode).toBe(422);
+      expect(response.json().error.code).toBe('CLIENT_SECRET_NOT_APPLICABLE');
+      // The refusal must not echo the rejected secret back to the caller.
+      expect(JSON.stringify(response.json())).not.toContain('"x"');
+
+      // Nothing persisted — the refusal is all-or-nothing.
       const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
       expect(row?.clientSecretEnc).toBeNull();
       expect(row?.signingSecretEnc).toBeNull();
@@ -279,6 +336,33 @@ describe('/api/settings/auth', () => {
       expect(body.clientSecretSet).toBe(false);
       expect(body.signingSecretSet).toBe(false);
       expect(JSON.stringify(body)).not.toContain('"x"');
+    });
+
+    it('accepts a non-oidc save that omits the client secret, clearing both stored columns (#241)', async () => {
+      // The sibling of the refusal above and the path the Settings form
+      // actually takes: a blank secret field is OMITTED, never sent as '' or
+      // null, so switching away from OIDC is a clean 200 that clears both
+      // columns. This is what keeps the refusal from stranding anyone.
+      const server = await buildDisabledServer();
+      await prisma.authConfig.update({
+        where: { id: 'singleton' },
+        data: {
+          clientSecretEnc: encrypt(DISTINCTIVE_SECRET, loadKey(CONFIG_ENCRYPTION_KEY)),
+          signingSecretEnc: encrypt('leftover-signing-secret', loadKey(CONFIG_ENCRYPTION_KEY)),
+        },
+      });
+
+      const response = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/auth',
+        payload: { mode: 'disabled', clientId: 'lcm-test' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+      expect(row!.mode).toBe('disabled');
+      expect(row!.clientSecretEnc).toBeNull();
+      expect(row!.signingSecretEnc).toBeNull();
     });
 
     it('fails with 422 ENCRYPTION_KEY_REQUIRED (not 500) when writing a client secret with no encryption key configured, and persists nothing', async () => {
