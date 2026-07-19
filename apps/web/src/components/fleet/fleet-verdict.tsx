@@ -4,7 +4,7 @@ import { Link } from '@tanstack/react-router';
 import type { FleetSummary } from '@/lib/aggregate-fleet';
 import { fleetRunwayToWarn, type RunwaySummary } from '@/lib/forecast-summary';
 import { formatGb } from '@/lib/format';
-import { formatDateShort, formatMonthLong } from '@/lib/format-month';
+import { formatDateShort } from '@/lib/format-month';
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 import { cn } from '@/lib/utils';
 
@@ -26,7 +26,16 @@ export interface FleetVerdictProps {
   hostCount: number | null;
 }
 
+/** Underline treatment reserved for the headline's one real link — the cluster name. */
 const HL = 'underline decoration-[3px] underline-offset-[3px]';
+/**
+ * Non-link emphasis in the headline (a numeral, date, or "healthy"/"unknown")
+ * used to share {@link HL} with the cluster-name `<Link>`, so plain text read
+ * as an identically-styled dead link (finding: "healthy" and the horizon date
+ * looked exactly as clickable as the urgent branch's actual `<Link>`). Weight
+ * + color carry the emphasis instead; underline is link-exclusive.
+ */
+const EMPHASIS = 'font-bold';
 
 /**
  * Fleet verdict panel (spec §4.3): a display-font headline computed from
@@ -46,7 +55,6 @@ export function FleetVerdict({
     summary.perClusterSeries.map((s) => s.months),
     thresholds,
   );
-  const horizonMonth = summary.fleetMonths.at(-1)?.month;
   const utilizationKnown = summary.utilization !== null;
   const headroom = utilizationKnown
     ? Math.max(0, summary.totalCapacity - summary.totalConsumption)
@@ -62,8 +70,7 @@ export function FleetVerdict({
       <h1 className="max-w-[56ch] text-balance font-display text-[clamp(22px,2.2vw,28px)] font-semibold leading-[1.18] tracking-[-0.02em]">
         {!utilizationKnown ? (
           <>
-            Fleet capacity is{' '}
-            <strong className={cn('text-fg-muted', HL, 'decoration-border-strong')}>unknown</strong>{' '}
+            Fleet capacity is <strong className={cn(EMPHASIS, 'text-fg-muted')}>unknown</strong>{' '}
             {'—'}{' '}
             {earliest ? (
               <>
@@ -79,7 +86,7 @@ export function FleetVerdict({
                   {earliest.cluster.name}
                 </Link>{' '}
                 still needs an order by{' '}
-                <strong className={cn('text-fg-muted', HL, 'decoration-border-strong')}>
+                <strong className={cn(EMPHASIS, 'text-fg-muted')}>
                   {earliest.procurement.orderByDate
                     ? formatDateShort(earliest.procurement.orderByDate)
                     : '—'}
@@ -93,7 +100,7 @@ export function FleetVerdict({
         ) : earliest ? (
           <>
             Fleet runway is{' '}
-            <strong className={cn('text-accent', HL, 'decoration-accent')}>
+            <strong className={cn(EMPHASIS, 'text-accent')}>
               {runwayMonths(runway, summary.fleetMonths.length)} mo
             </strong>{' '}
             {'—'}{' '}
@@ -109,7 +116,7 @@ export function FleetVerdict({
               {earliest.cluster.name}
             </Link>{' '}
             needs an order by{' '}
-            <strong className={cn('text-accent', HL, 'decoration-accent')}>
+            <strong className={cn(EMPHASIS, 'text-accent')}>
               {earliest.procurement.orderByDate
                 ? formatDateShort(earliest.procurement.orderByDate)
                 : '—'}
@@ -118,18 +125,23 @@ export function FleetVerdict({
           </>
         ) : (
           <>
-            Fleet is{' '}
-            <strong className={cn('text-success', HL, 'decoration-success')}>healthy</strong> {'—'}{' '}
-            no orders due before{' '}
-            <strong className={cn('text-success', HL, 'decoration-success')}>
-              {horizonMonth ? formatMonthLong(horizonMonth) : 'the forecast horizon'}
-            </strong>
-            .
+            Fleet is <strong className={cn(EMPHASIS, 'text-success')}>healthy</strong> {'—'} no
+            orders due in the {summary.fleetMonths.length}-month forecast window.
           </>
         )}
       </h1>
 
-      <div className="flex flex-wrap items-end gap-6">
+      {/*
+        Dividers are drawn structurally (border-l on every instrument but the
+        first, sm+ only — matching the old Separator's own `hidden sm:block`)
+        rather than as standalone <Separator /> flex items. A standalone
+        separator is its own independent flex child, so wrapping at 768px
+        could strand it at the end of a line with nothing after it (finding:
+        a dangling rule trailing "FLEET 4 CLUSTERS · 8 HOSTS"). Attaching the
+        rule to each instrument means it always travels with its own content
+        instead of floating disconnected.
+      */}
+      <div className="flex flex-wrap items-end gap-6 sm:[&>*+*]:border-l sm:[&>*+*]:border-border sm:[&>*+*]:pl-6">
         <Instrument label="Utilization">
           {utilPct === null ? (
             <span className="font-mono text-base font-bold text-fg-muted">UNKNOWN</span>
@@ -148,13 +160,11 @@ export function FleetVerdict({
             </>
           )}
         </Instrument>
-        <Separator />
         <Instrument label="Headroom">
           <span className="font-mono text-base font-bold tabular-nums text-accent">
             {headroom === null ? 'UNKNOWN' : formatGb(headroom)}
           </span>
         </Instrument>
-        <Separator />
         <Instrument label="Fleet">
           <span className="font-mono text-base font-bold tabular-nums">
             {hostCount != null
@@ -162,7 +172,6 @@ export function FleetVerdict({
               : summary.clusterCount}
           </span>
         </Instrument>
-        <Separator />
         <Instrument label="Open orders">
           <span className="font-mono text-base font-bold tabular-nums">
             {openOrderCount > 0
@@ -172,7 +181,6 @@ export function FleetVerdict({
                 : 'status unknown'}
           </span>
         </Instrument>
-        <Separator />
         <Instrument label="Baselines" {...(staleCount > 0 ? { className: 'text-warning' } : {})}>
           <span className="font-mono text-base font-bold tabular-nums">
             {staleCount > 0 ? `⚠ ${staleCount} stale` : '✓ all fresh'}
@@ -217,8 +225,4 @@ function Instrument({
       {children}
     </div>
   );
-}
-
-function Separator(): React.JSX.Element {
-  return <span aria-hidden className="hidden h-8 w-px self-stretch bg-border sm:block" />;
 }
