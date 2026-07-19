@@ -88,9 +88,12 @@ test('create cluster, add host + application, chart reflects updates', async ({
     await expect(page.getByRole('cell', { name: '2,000 GB' })).toBeVisible();
 
     // Add an application via the "Apps & Events" tab (a single "Add item"
-    // dialog hosts both item kinds, defaulting to the application form).
+    // dialog hosts both item kinds, defaulting to the application form; only
+    // the header/empty-state button was renamed to "Add app or event" —
+    // #243 Part B — the dialog's own title is untouched, out of this batch's
+    // scope).
     await panel.getByRole('tab', { name: 'Apps & Events' }).click();
-    await panel.getByRole('button', { name: 'Add item' }).click();
+    await panel.getByRole('button', { name: 'Add app or event' }).click();
     const appDialog = page.getByRole('dialog', { name: 'Add item' });
     await appDialog.getByRole('textbox', { name: 'Name' }).fill('app-e2e');
     await appDialog.getByLabel('Category').fill('OpenShift');
@@ -102,8 +105,9 @@ test('create cluster, add host + application, chart reflects updates', async ({
 
     // The panel's forecast-chart legend stays present after each mutation
     // invalidates the forecast query; that's our marker that the chart
-    // re-rendered cleanly.
-    await expect(page.getByText('Consumption', { exact: true })).toBeVisible();
+    // re-rendered cleanly. #243 Part B split the single "Consumption" entry
+    // into "Actual —" / "Forecast ⌁" so the solid/dashed convention reads.
+    await expect(page.getByText('Actual —', { exact: true })).toBeVisible();
     await expect(page.getByText('Capacity ceiling')).toBeVisible();
 
     // Theme toggle round-trip: cycle system → light → dark → system.

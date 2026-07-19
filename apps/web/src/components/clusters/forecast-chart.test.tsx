@@ -1,6 +1,6 @@
 import type { ForecastResponse } from '@lcm/shared';
 import { render, screen, within } from '@testing-library/react';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ThemeProvider } from '@/components/theme/theme-provider';
 import { todayIso } from '@/lib/format';
@@ -85,14 +85,20 @@ vi.mock('recharts', async () => {
     YAxis: ({
       tick,
       label,
+      domain,
+      ticks,
     }: {
       tick?: { fill?: string };
       label?: { style?: { fill?: string } };
+      domain?: [number | string, number | string];
+      ticks?: number[];
     }): React.JSX.Element => (
       <div
         data-testid="y-axis"
         data-tick-fill={tick?.fill ?? ''}
         data-label-fill={label?.style?.fill ?? ''}
+        data-domain={JSON.stringify(domain ?? null)}
+        data-ticks={JSON.stringify(ticks ?? null)}
       />
     ),
     Tooltip: () => null,
@@ -136,11 +142,21 @@ vi.mock('recharts', async () => {
     ReferenceLine: ({
       x,
       label,
+      stroke,
+      strokeDasharray,
     }: {
       x?: string;
       label?: { value?: string };
+      stroke?: string;
+      strokeDasharray?: string;
     }): React.JSX.Element => (
-      <div data-testid="reference-line" data-x={x} data-label={label?.value ?? ''} />
+      <div
+        data-testid="reference-line"
+        data-x={x}
+        data-label={label?.value ?? ''}
+        data-stroke={stroke ?? ''}
+        data-dash={strokeDasharray ?? ''}
+      />
     ),
   };
 });
@@ -275,71 +291,37 @@ describe('ForecastChart props mapping', () => {
     ]);
   });
 
-  it('renders an EOL reference line at the month of the earliest projected host decommission', () => {
+  it('rounds the y-axis domain top and ticks to a uniform step instead of the raw padded ceiling', () => {
+    // maxCeiling 7,680 * 1.05 = 8,064 — the exact odd value from the audit
+    // finding ("0, 2,500, 5,000, 8,064"). Recharts always appends the literal
+    // domain max as an extra tick, so the fix must round the domain top
+    // itself (not just pad it) and pass explicit, evenly-spaced ticks.
     const forecast = makeForecast({
-      months: [
-        { month: '2026-05-01', consumption: 100, capacity: 1000, utilization: 0.1 },
-        { month: '2026-06-01', consumption: 150, capacity: 1000, utilization: 0.15 },
-        { month: '2026-07-01', consumption: 200, capacity: 1000, utilization: 0.2 },
-      ],
-      hosts: [
-        {
-          id: 'h1',
-          name: 'host-late',
-          projectedDecommissionAt: '2026-12-20',
-          contributions: [],
-        },
-        {
-          id: 'h2',
-          name: 'host-early',
-          projectedDecommissionAt: '2026-06-15',
-          contributions: [],
-        },
-        {
-          id: 'h3',
-          name: 'host-no-eol',
-          projectedDecommissionAt: null,
-          contributions: [],
-        },
-      ],
+      months: [{ month: '2026-05-01', consumption: 3378, capacity: 7680, utilization: 0.44 }],
     });
     renderChart(forecast);
 
-    const lines = screen.getAllByTestId('reference-line');
-    expect(lines).toHaveLength(1);
-    // Earliest EOL is 2026-06-15, snapped to month-start 2026-06-01 (which is
-    // inside the visible window).
-    expect(lines[0]?.dataset.x).toBe('2026-06-01');
-    expect(lines[0]?.dataset.label).toBe('EOL: host-early');
+    const yAxis = screen.getByTestId('y-axis');
+    const domain = JSON.parse(yAxis.dataset.domain ?? 'null') as [number, number];
+    const ticks = JSON.parse(yAxis.dataset.ticks ?? 'null') as number[];
+
+    expect(domain[1]).not.toBe(8064);
+    expect(ticks[ticks.length - 1]).toBe(domain[1]);
+    expect(ticks.length).toBeGreaterThanOrEqual(3);
+    // Every interval between consecutive ticks must be identical.
+    const steps = new Set(ticks.slice(1).map((t, i) => t - (ticks[i] ?? 0)));
+    expect(steps.size).toBe(1);
   });
 
-  it('does not render an EOL line when no host has a projected decommission date', () => {
+  it('falls back to an auto domain when there is no capacity data', () => {
     const forecast = makeForecast({
-      hosts: [
-        { id: 'h1', name: 'h1', projectedDecommissionAt: null, contributions: [] },
-        { id: 'h2', name: 'h2', contributions: [] },
-      ],
+      months: [{ month: '2026-05-01', consumption: 0, capacity: 0, utilization: 0 }],
     });
     renderChart(forecast);
 
-    expect(screen.queryByTestId('reference-line')).not.toBeInTheDocument();
-  });
-
-  it('does not render an EOL line when the earliest EOL falls outside the visible window', () => {
-    const forecast = makeForecast({
-      // visible window is May–July 2026
-      hosts: [
-        {
-          id: 'h1',
-          name: 'future-host',
-          projectedDecommissionAt: '2027-04-01',
-          contributions: [],
-        },
-      ],
-    });
-    renderChart(forecast);
-
-    expect(screen.queryByTestId('reference-line')).not.toBeInTheDocument();
+    const yAxis = screen.getByTestId('y-axis');
+    expect(yAxis.dataset.domain).toBe('["auto","auto"]');
+    expect(yAxis.dataset.ticks).toBe('null');
   });
 
   it('shows category legend chips for the event categories present', () => {
@@ -358,16 +340,30 @@ describe('ForecastChart props mapping', () => {
     });
     renderChart(forecast);
 
-    expect(screen.getByText('Consumption')).toBeInTheDocument();
+    expect(screen.getByText('Actual —')).toBeInTheDocument();
     expect(screen.getByText('Capacity ceiling')).toBeInTheDocument();
     expect(screen.getByText('OpenShift')).toBeInTheDocument();
   });
 
-  it('exposes the chart as a labelled image', () => {
-    const forecast = makeForecast();
-    renderChart(forecast);
+  it('explains the actual/forecast split, swatches Headroom as a filled area, and lists the measured baseline', () => {
+    renderChart(makeForecast());
 
-    expect(screen.getByRole('img', { name: 'Capacity forecast chart' })).toBeInTheDocument();
+    // The solid/dashed convention gets its own two entries instead of one
+    // ambiguous "Consumption" swatch.
+    expect(screen.getByText('Actual —')).toBeInTheDocument();
+    expect(screen.getByText('Forecast ⌁')).toBeInTheDocument();
+    // The dotted measured-baseline series (rendered whenever there's history)
+    // had no legend entry at all before.
+    expect(screen.getByText('Measured baseline')).toBeInTheDocument();
+
+    // Headroom is a filled band on the chart, not a line — its swatch must be
+    // a filled square, not the dashed-line swatch it wrongly borrowed before.
+    const headroomSwatch = screen.getByTestId('legend-swatch-headroom');
+    expect(headroomSwatch.className).toContain('rounded-sm');
+    // Capacity ceiling stays a genuine dashed line swatch, proving the area
+    // swatch is specific to Headroom, not a blanket change.
+    const capacitySwatch = screen.getByTestId('legend-swatch-capacity');
+    expect(capacitySwatch.className).not.toContain('rounded-sm');
   });
 
   it('debounces container resize past the LONGEST pane transition so it settles in one window', () => {
@@ -573,6 +569,120 @@ describe('ForecastChart props mapping', () => {
   });
 });
 
+describe('ForecastChart host EOL reference line', () => {
+  // These fixtures use fixed 2026-05..07 months and December/June host dates
+  // unrelated to "today" — pin the clock outside that range so the NOW marker
+  // (todayIso()-driven, see the 'ForecastChart NOW marker' describe below)
+  // doesn't add a second reference-line and break the exact-count assertions
+  // here, which are about EOL, not NOW.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-15T00:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('renders an EOL reference line at the month of the earliest projected host decommission', () => {
+    const forecast = makeForecast({
+      months: [
+        { month: '2026-05-01', consumption: 100, capacity: 1000, utilization: 0.1 },
+        { month: '2026-06-01', consumption: 150, capacity: 1000, utilization: 0.15 },
+        { month: '2026-07-01', consumption: 200, capacity: 1000, utilization: 0.2 },
+      ],
+      hosts: [
+        {
+          id: 'h1',
+          name: 'host-late',
+          projectedDecommissionAt: '2026-12-20',
+          contributions: [],
+        },
+        {
+          id: 'h2',
+          name: 'host-early',
+          projectedDecommissionAt: '2026-06-15',
+          contributions: [],
+        },
+        {
+          id: 'h3',
+          name: 'host-no-eol',
+          projectedDecommissionAt: null,
+          contributions: [],
+        },
+      ],
+    });
+    renderChart(forecast);
+
+    const lines = screen.getAllByTestId('reference-line');
+    expect(lines).toHaveLength(1);
+    // Earliest EOL is 2026-06-15, snapped to month-start 2026-06-01 (which is
+    // inside the visible window).
+    expect(lines[0]?.dataset.x).toBe('2026-06-01');
+    expect(lines[0]?.dataset.label).toBe('EOL: host-early');
+  });
+
+  it('does not render an EOL line when no host has a projected decommission date', () => {
+    const forecast = makeForecast({
+      hosts: [
+        { id: 'h1', name: 'h1', projectedDecommissionAt: null, contributions: [] },
+        { id: 'h2', name: 'h2', contributions: [] },
+      ],
+    });
+    renderChart(forecast);
+
+    expect(screen.queryByTestId('reference-line')).not.toBeInTheDocument();
+  });
+
+  it('does not render an EOL line when the earliest EOL falls outside the visible window', () => {
+    const forecast = makeForecast({
+      // visible window is May–July 2026
+      hosts: [
+        {
+          id: 'h1',
+          name: 'future-host',
+          projectedDecommissionAt: '2027-04-01',
+          contributions: [],
+        },
+      ],
+    });
+    renderChart(forecast);
+
+    expect(screen.queryByTestId('reference-line')).not.toBeInTheDocument();
+  });
+});
+
+describe('ForecastChart accessible label (#243 Part B)', () => {
+  it('exposes a rich aria-label with window length, breach month, thresholds, and ceiling', () => {
+    const forecast = makeForecast({
+      months: [
+        { month: '2026-05-01', consumption: 700, capacity: 1000, utilization: 0.7 },
+        { month: '2026-06-01', consumption: 750, capacity: 1000, utilization: 0.75 },
+        { month: '2026-07-01', consumption: 800, capacity: 1000, utilization: 0.8 },
+      ],
+      effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'tenant' },
+    });
+    renderChart(forecast);
+
+    const label = screen.getByRole('img').getAttribute('aria-label') ?? '';
+    expect(label).toContain('3-month capacity forecast chart');
+    expect(label).toContain('Warn breach about May 26');
+    expect(label).toContain('Warn threshold 70 percent');
+    expect(label).toContain('Critical threshold 90 percent');
+    expect(label).toContain('Capacity ceiling 1,000 GB');
+  });
+
+  it('reports no breach in the aria-label when no month reaches warn', () => {
+    const forecast = makeForecast({
+      months: [{ month: '2026-05-01', consumption: 100, capacity: 1000, utilization: 0.1 }],
+    });
+    renderChart(forecast);
+
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain(
+      'No breach within the window',
+    );
+  });
+});
+
 describe('ForecastChart actual/forecast split', () => {
   it('splits consumption into a solid actual line and a dashed forecast line anchored at the current month', () => {
     const forecast = makeForecast({
@@ -599,6 +709,51 @@ describe('ForecastChart actual/forecast split', () => {
       actual: null,
       forecast: 600,
     });
+  });
+});
+
+describe('ForecastChart NOW marker', () => {
+  it('renders a labeled steel NOW reference line at the current month when it is not the first plotted point', () => {
+    const forecast = makeForecast({
+      months: [
+        { month: shiftMonth(currentMonth, -1), consumption: 400, capacity: 1000, utilization: 0.4 },
+        { month: currentMonth, consumption: 500, capacity: 1000, utilization: 0.5 },
+        { month: shiftMonth(currentMonth, 1), consumption: 600, capacity: 1000, utilization: 0.6 },
+      ],
+    });
+    renderChart(forecast);
+
+    const nowLine = screen
+      .getAllByTestId('reference-line')
+      .find((el) => el.dataset.x === currentMonth);
+    expect(nowLine).toBeDefined();
+    expect(nowLine?.dataset.label).toBe('NOW');
+    expect(nowLine?.dataset.stroke).toBe('var(--steel)');
+    expect(nowLine?.dataset.dash).not.toBe('');
+  });
+
+  it('omits the marker when the window opens at the current month (it would sit on the y-axis)', () => {
+    const forecast = makeForecast({
+      months: [
+        { month: currentMonth, consumption: 500, capacity: 1000, utilization: 0.5 },
+        { month: shiftMonth(currentMonth, 1), consumption: 600, capacity: 1000, utilization: 0.6 },
+      ],
+    });
+    renderChart(forecast);
+
+    expect(screen.queryByTestId('reference-line')).not.toBeInTheDocument();
+  });
+
+  it('omits the marker when the current month falls outside the visible window', () => {
+    const forecast = makeForecast({
+      months: [
+        { month: shiftMonth(currentMonth, 6), consumption: 500, capacity: 1000, utilization: 0.5 },
+        { month: shiftMonth(currentMonth, 7), consumption: 600, capacity: 1000, utilization: 0.6 },
+      ],
+    });
+    renderChart(forecast);
+
+    expect(screen.queryByTestId('reference-line')).not.toBeInTheDocument();
   });
 });
 
@@ -681,6 +836,28 @@ describe('ForecastChart scenario ghost', () => {
     renderChart(makeForecast());
 
     expect(screen.queryByTestId('scenario-delta-label')).not.toBeInTheDocument();
+  });
+
+  it('notes an active what-if scenario in the aria-label', () => {
+    const { baseline, scenario } = baselineAndScenario();
+    render(
+      <ThemeProvider>
+        <ForecastChart
+          forecast={baseline}
+          scenario={{ label: 'Lose 1 host', forecast: scenario }}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain(
+      'A what-if scenario is active',
+    );
+  });
+
+  it('does not mention a scenario in the aria-label when none is active', () => {
+    renderChart(makeForecast());
+
+    expect(screen.getByRole('img').getAttribute('aria-label')).not.toContain('what-if scenario');
   });
 });
 

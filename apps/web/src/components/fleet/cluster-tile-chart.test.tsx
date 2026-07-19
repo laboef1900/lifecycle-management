@@ -1,6 +1,6 @@
 import type { ForecastMonthPoint } from '@lcm/shared';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { todayIso } from '@/lib/format';
 
@@ -68,7 +68,6 @@ vi.mock('recharts', () => {
         {children}
       </div>
     ),
-    CartesianGrid: () => <div data-testid="grid" />,
     XAxis: ({
       dataKey,
       tickFormatter,
@@ -120,7 +119,10 @@ vi.mock('recharts', () => {
         })}
       </div>
     ),
-    Line: ({ dataKey }: { dataKey: string }) => <div data-testid={`line-${dataKey}`} />,
+    Area: ({ dataKey }: { dataKey: string }) => <div data-testid={`area-${dataKey}`} />,
+    Line: ({ dataKey, strokeDasharray }: { dataKey: string; strokeDasharray?: string }) => (
+      <div data-testid={`line-${dataKey}`} data-dash={strokeDasharray ?? ''} />
+    ),
     // `data-y`, `data-stroke` and `data-dash` are surfaced alongside the testid
     // so a test can identify a hairline by its role (stroke) and assert both
     // where it sits and whether it is marked off-scale — including when two of
@@ -157,6 +159,27 @@ const months: ForecastMonthPoint[] = [
 ];
 
 describe('<ClusterTileChart>', () => {
+  // jsdom doesn't recognise SVG namespace elements like <linearGradient> (used
+  // for the area-fill gradient below) and warns about casing; the warnings
+  // don't affect the assertions — same suppression as forecast-chart.test.tsx.
+  let originalError: typeof console.error;
+  beforeAll(() => {
+    originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      const first = args[0];
+      if (
+        typeof first === 'string' &&
+        (first.includes('unrecognized in this browser') || first.includes('incorrect casing'))
+      ) {
+        return;
+      }
+      originalError(...args);
+    };
+  });
+  afterAll(() => {
+    console.error = originalError;
+  });
+
   it('renders nothing when there are no months', () => {
     const { container } = render(
       <ClusterTileChart months={[]} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
@@ -224,8 +247,81 @@ describe('<ClusterTileChart>', () => {
     // "actual" series is the single anchor point and everything (including
     // that same anchor) is also part of the dashed "forecast" series. All these
     // values are within [40,125] so the plotted line equals the true util.
-    expect(rows[0]).toEqual({ month: '2026-07-01', util: 70, actual: 70, forecast: 70 });
-    expect(rows[1]).toEqual({ month: '2026-08-01', util: 80, actual: null, forecast: 80 });
+    expect(rows[0]).toEqual({
+      month: '2026-07-01',
+      util: 70,
+      actual: 70,
+      forecast: 70,
+      offScale: null,
+    });
+    expect(rows[1]).toEqual({
+      month: '2026-08-01',
+      util: 80,
+      actual: null,
+      forecast: 80,
+      offScale: null,
+    });
+  });
+
+  it('keeps the actual segment solid (no dash) and the forecast segment dashed', () => {
+    render(
+      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+    );
+    expect(screen.getByTestId('line-actual').dataset.dash).toBe('');
+    expect(screen.getByTestId('line-forecast').dataset.dash).not.toBe('');
+  });
+
+  it('fills a low-opacity area under both the actual and forecast segments', () => {
+    render(
+      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+    );
+    expect(screen.getByTestId('area-actual')).toBeInTheDocument();
+    expect(screen.getByTestId('area-forecast')).toBeInTheDocument();
+  });
+
+  it('drops the horizontal CartesianGrid so warn/crit/capacity are the only reference lines', () => {
+    render(
+      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+    );
+    expect(screen.queryByTestId('grid')).not.toBeInTheDocument();
+  });
+
+  it('marks below-floor rows in the off-scale dash so a pinned 40% run cannot be mistaken for genuine 40% utilization', () => {
+    // 38.2% is below the 40% floor and clamps to it — the exact case from the
+    // audit finding (CL-Prod-P2-Oracle reading "38.2% used" but plotting flat
+    // at the 40% edge, indistinguishable from a true 40% cluster).
+    const lowMonths: ForecastMonthPoint[] = [
+      { month: CURRENT_MONTH, consumption: 382, capacity: 1000, utilization: 0.382 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 700, capacity: 1000, utilization: 0.7 },
+    ];
+    render(
+      <ClusterTileChart
+        months={lowMonths}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
+    );
+    const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+      month: string;
+      util: number;
+      offScale: number | null;
+    }>;
+    expect(rows[0]).toMatchObject({ util: 38.2, offScale: 40 });
+    expect(rows[1]).toMatchObject({ util: 70, offScale: null });
+
+    // Reuses OFF_SCALE_DASH ('1 2') — the same constant the hairlines use for
+    // their own off-scale cue — rather than inventing a second pattern.
+    expect(screen.getByTestId('line-offScale').dataset.dash).toBe('1 2');
+  });
+
+  it('does not mark on-scale rows as off-scale', () => {
+    render(
+      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+    );
+    const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+      offScale: number | null;
+    }>;
+    expect(rows.every((r) => r.offScale === null)).toBe(true);
   });
 
   it('clamps below-floor utilization to the window edge while keeping the true value for the tooltip', () => {
@@ -248,9 +344,23 @@ describe('<ClusterTileChart>', () => {
       util: number;
       actual: number | null;
       forecast: number | null;
+      offScale: number | null;
     }>;
-    expect(rows[0]).toEqual({ month: '2026-07-01', util: 10, actual: 40, forecast: 40 });
-    expect(rows[1]).toEqual({ month: '2026-08-01', util: 0, actual: null, forecast: 40 });
+    // Both months are below the 40% floor, so both also carry the off-scale cue.
+    expect(rows[0]).toEqual({
+      month: '2026-07-01',
+      util: 10,
+      actual: 40,
+      forecast: 40,
+      offScale: 40,
+    });
+    expect(rows[1]).toEqual({
+      month: '2026-08-01',
+      util: 0,
+      actual: null,
+      forecast: 40,
+      offScale: 40,
+    });
   });
 
   it('clamps above-ceiling utilization to the window top so it cannot stretch the shared scale', () => {
@@ -275,14 +385,23 @@ describe('<ClusterTileChart>', () => {
       util: number;
       actual: number | null;
       forecast: number | null;
+      offScale: number | null;
     }>;
     // True util is preserved for the tooltip; only the plotted values clamp.
-    expect(rows[0]).toEqual({ month: CURRENT_MONTH, util: 140, actual: 125, forecast: 125 });
+    // Above-ceiling is not off-scale-LOW, so offScale stays null here.
+    expect(rows[0]).toEqual({
+      month: CURRENT_MONTH,
+      util: 140,
+      actual: 125,
+      forecast: 125,
+      offScale: null,
+    });
     expect(rows[1]).toEqual({
       month: shiftMonth(CURRENT_MONTH, 1),
       util: 160,
       actual: null,
       forecast: 125,
+      offScale: null,
     });
     // The breach dot rides the same clamp — at util 140 it must sit at 125.
     expect(screen.getByTestId('breach-dot').dataset.y).toBe('125');
@@ -393,20 +512,103 @@ describe('<ClusterTileChart>', () => {
   });
 
   it('draws an order-by marker when the order-by month falls in range', () => {
+    // Anchored to CURRENT_MONTH (rather than the shared `months` fixture,
+    // whose hardcoded '2026-09-01' would collide with the NOW marker's own
+    // testid in the one real month where that literally is the current
+    // month). The NOW marker renders here too (foundIndex 0), at a different
+    // x than the order-by month, so it doesn't interfere with this lookup.
+    const monthsFromNow: ForecastMonthPoint[] = [
+      { month: CURRENT_MONTH, consumption: 700, capacity: 1000, utilization: 0.7 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 800, capacity: 1000, utilization: 0.8 },
+      { month: shiftMonth(CURRENT_MONTH, 2), consumption: 920, capacity: 1000, utilization: 0.92 },
+    ];
+    const orderByMonth = shiftMonth(CURRENT_MONTH, 2);
     render(
       <ClusterTileChart
-        months={months}
+        months={monthsFromNow}
         thresholds={{ warn: 0.7, crit: 0.9 }}
-        orderByDate="2026-09-14"
+        orderByDate={`${orderByMonth.slice(0, 8)}14`}
       />,
     );
-    expect(screen.getByTestId('refline-x-2026-09-01')).toBeInTheDocument();
+    expect(screen.getByTestId(`refline-x-${orderByMonth}`)).toBeInTheDocument();
   });
 
-  it('omits the order-by marker when there is no order-by date', () => {
+  it('omits the order-by marker when there is no order-by date, though the NOW marker still renders', () => {
+    // #243 Part B review: a real tile's `months` always opens at the current
+    // month (unlike ForecastChart, it never gets leading baseline-history
+    // rows), so `foundIndex` is 0 on every production tile — the NOW marker
+    // is expected here too. Only the order-by marker, which would sit at a
+    // DIFFERENT month, must be absent.
+    const monthsFromNow: ForecastMonthPoint[] = [
+      { month: CURRENT_MONTH, consumption: 700, capacity: 1000, utilization: 0.7 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 800, capacity: 1000, utilization: 0.8 },
+    ];
     render(
-      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+      <ClusterTileChart
+        months={monthsFromNow}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
     );
-    expect(screen.queryByTestId(/refline-x-/)).toBeNull();
+    const xLines = screen.queryAllByTestId(/^refline-x-/);
+    expect(xLines).toHaveLength(1);
+    expect(xLines[0]?.dataset.stroke).toBe('var(--steel)');
+    // The NOW dash ('2 3'), not the order-by marker's ('5 4') — proves this
+    // is the NOW line, not a stray order-by marker.
+    expect(xLines[0]?.dataset.dash).toBe('2 3');
+  });
+
+  it('renders an unlabeled steel NOW reference line at the current month in the production-shaped case (series starts at CURRENT_MONTH)', () => {
+    // This IS the real shape: `forecast.months` always opens at "now" for a
+    // fleet tile (buildClusterForecastEntries never prepends baseline
+    // history the way ForecastChart's `preWindow` rows do), so foundIndex is
+    // 0 on every real tile — this fixture is not a contrived edge case.
+    const monthsFromNow: ForecastMonthPoint[] = [
+      { month: CURRENT_MONTH, consumption: 700, capacity: 1000, utilization: 0.7 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 800, capacity: 1000, utilization: 0.8 },
+    ];
+    render(
+      <ClusterTileChart
+        months={monthsFromNow}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
+    );
+    const nowLine = screen.getByTestId(`refline-x-${CURRENT_MONTH}`);
+    expect(nowLine).toBeInTheDocument();
+    expect(nowLine.dataset.stroke).toBe('var(--steel)');
+  });
+
+  it('also renders the NOW marker when the current month is mid-series', () => {
+    const monthsWithHistory: ForecastMonthPoint[] = [
+      { month: shiftMonth(CURRENT_MONTH, -1), consumption: 600, capacity: 1000, utilization: 0.6 },
+      { month: CURRENT_MONTH, consumption: 700, capacity: 1000, utilization: 0.7 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 800, capacity: 1000, utilization: 0.8 },
+    ];
+    render(
+      <ClusterTileChart
+        months={monthsWithHistory}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
+    );
+    const nowLine = screen.getByTestId(`refline-x-${CURRENT_MONTH}`);
+    expect(nowLine).toBeInTheDocument();
+    expect(nowLine.dataset.stroke).toBe('var(--steel)');
+  });
+
+  it('omits the NOW marker when the current month falls outside the visible window', () => {
+    const monthsWithoutNow: ForecastMonthPoint[] = [
+      { month: shiftMonth(CURRENT_MONTH, 6), consumption: 700, capacity: 1000, utilization: 0.7 },
+      { month: shiftMonth(CURRENT_MONTH, 7), consumption: 800, capacity: 1000, utilization: 0.8 },
+    ];
+    render(
+      <ClusterTileChart
+        months={monthsWithoutNow}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
+    );
+    expect(screen.queryByTestId(/^refline-x-/)).not.toBeInTheDocument();
   });
 });

@@ -516,7 +516,10 @@ describe('<ClusterPanel>', () => {
     await waitFor(() => expect(screen.getByTestId('panel-back-link')).toHaveFocus());
     await screen.findByText('esx-01');
 
-    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    // Delete now lives behind the row's overflow menu (#243 Part B) — only
+    // Edit and Transition stay as top-level icon buttons.
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(await screen.findByRole('menuitem', { name: /Delete/ }));
     const nestedDialog = await screen.findByRole('dialog', { name: /delete esx-01/i });
     const cancelButton = screen.getByRole('button', { name: 'Cancel' });
     cancelButton.focus();

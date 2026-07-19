@@ -69,6 +69,7 @@ vi.mock('recharts', () => {
     XAxis: () => null,
     YAxis: () => null,
     Tooltip: () => null,
+    Area: () => null,
     Line: () => null,
     ReferenceLine: () => null,
     ReferenceDot: () => null,
