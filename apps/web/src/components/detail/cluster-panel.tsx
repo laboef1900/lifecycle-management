@@ -692,8 +692,12 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                     below 390px there isn't room for the heading text plus
                     WindowControls on one row, so the control drops to its own
                     line instead of being compressed into internally-wrapping
-                    segment labels. */}
-                <h2 className="text-base font-semibold">
+                    segment labels. font-display/text-h2 (#243 Part B, type
+                    scale): was plain Inter text-base — the same arbitrary,
+                    unshared sizing the verdict h1/panel title/Settings h1
+                    each carried, now the shared section-heading token
+                    (matching Settings' own section h2s). */}
+                <h2 className="font-display text-h2">
                   {activeForecast
                     ? forecastHeading(activeForecast.procurement, activeCapacityKnown)
                     : 'Capacity forecast'}
@@ -1010,9 +1014,7 @@ function PanelTitle({
   const ageDays = baselineAgeDays(cluster.baselineDate);
   return (
     <>
-      <h1 className="min-w-0 font-display text-[21px] font-semibold leading-[1.1] tracking-[-0.01em] [overflow-wrap:anywhere]">
-        {cluster.name}
-      </h1>
+      <h1 className="min-w-0 font-display text-h1 [overflow-wrap:anywhere]">{cluster.name}</h1>
       <div className="flex flex-wrap items-center gap-1.5">
         {procurement ? (
           <RecommendationChip procurement={procurement} capacityKnown={capacityKnown} />

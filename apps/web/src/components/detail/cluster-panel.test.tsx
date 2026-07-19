@@ -416,6 +416,32 @@ describe('<ClusterPanel>', () => {
     expect(heading.tagName).toBe('H2');
   });
 
+  // Finding: "Type-scale tokens defined but unused; Settings h1 drops the
+  // display font" — the panel title's half. Three sibling top-level
+  // headings (verdict, Settings, panel) each carried an arbitrary size
+  // instead of the shared --text-h1/--text-display tokens.
+  it('adopts the shared text-h1 token for the panel title instead of its own arbitrary size', async () => {
+    render(<Harness show />);
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Prod-East' });
+    expect(heading).toHaveClass('font-display', 'text-h1');
+    expect(heading.className).not.toMatch(/text-\[21px\]/);
+    expect(heading.className).not.toMatch(/leading-\[1\.1\]/);
+    expect(heading.className).not.toMatch(/tracking-\[-0\.01em\]/);
+  });
+
+  // Same finding, the "Forecast" section heading's half: it was plain Inter
+  // (text-base font-semibold, no font-display) — the section-title
+  // inconsistency the audit's "three sibling screens, two typefaces" note
+  // named. The chrome-less Scenario pane heading is deliberately NOT
+  // touched (spec §5) — it is an 11px mono micro-label by design, not a
+  // page-hierarchy section title.
+  it('adopts font-display + text-h2 for the Forecast section heading', async () => {
+    render(<Harness show />);
+    const heading = await screen.findByRole('heading', { name: /no breach in window/i });
+    expect(heading).toHaveClass('font-display', 'text-h2');
+    expect(heading.className).not.toMatch(/text-base/);
+  });
+
   it('lets the Forecast heading row wrap so WindowControls drops to its own line at narrow widths (#243 Part B item 6)', async () => {
     render(<Harness show />);
     const heading = await screen.findByRole('heading', { name: /no breach in window/i });
