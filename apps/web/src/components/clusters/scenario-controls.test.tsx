@@ -36,10 +36,19 @@ describe('describeScenario', () => {
 });
 
 describe('<ScenarioControls>', () => {
+  it('labels the lose_hosts field "Hosts lost", matching the "Lose hosts" scenario type (#243 Part B copy item 2)', () => {
+    // Was "Hosts to drop" beside the "Lose hosts" type option — a verb
+    // mismatch (drop vs lose) for the same field.
+    render(<ScenarioControls active={null} onChange={() => {}} />);
+    expect(screen.getByText('Hosts lost')).toBeInTheDocument();
+    expect(screen.queryByText('Hosts to drop')).toBeNull();
+    expect(screen.getByLabelText('Hosts lost')).toBeInTheDocument();
+  });
+
   it('emits a lose_hosts scenario with the typed count when Apply is clicked', async () => {
     const onChange = vi.fn();
     render(<ScenarioControls active={null} onChange={onChange} />);
-    const countInput = screen.getByLabelText(/hosts to drop/i);
+    const countInput = screen.getByLabelText(/hosts lost/i);
     await userEvent.clear(countInput);
     await userEvent.type(countInput, '2');
     await userEvent.click(screen.getByRole('button', { name: /apply/i }));
@@ -49,7 +58,7 @@ describe('<ScenarioControls>', () => {
   it('rejects a count below 1 with an inline alert (no onChange)', async () => {
     const onChange = vi.fn();
     render(<ScenarioControls active={null} onChange={onChange} />);
-    const countInput = screen.getByLabelText(/hosts to drop/i);
+    const countInput = screen.getByLabelText(/hosts lost/i);
     await userEvent.clear(countInput);
     await userEvent.type(countInput, '0');
     await userEvent.click(screen.getByRole('button', { name: /apply/i }));
@@ -83,7 +92,7 @@ describe('<ScenarioControls>', () => {
     );
 
     expect(screen.getByLabelText(/delay \(months\)/i)).toHaveValue(6);
-    expect(screen.queryByLabelText(/hosts to drop/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/hosts lost/i)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /apply/i }));
     expect(onChange).toHaveBeenLastCalledWith({ kind: 'delay_procurement', months: 6 });
@@ -99,7 +108,7 @@ describe('<ScenarioControls>', () => {
 
   it('falls back to the defaults when no scenario is active', () => {
     render(<ScenarioControls active={null} onChange={() => {}} />);
-    expect(screen.getByLabelText(/hosts to drop/i)).toHaveValue(1);
+    expect(screen.getByLabelText(/hosts lost/i)).toHaveValue(1);
   });
 
   it('stacks the fields instead of using the viewport-wide 12-column row', () => {

@@ -144,14 +144,17 @@ export function ScenarioControls({ active, onChange }: ScenarioControlsProps): R
 
         {draft.kind === 'lose_hosts' ? (
           <label className="block">
+            {/* "Hosts lost" (#243 Part B copy item 2), not "Hosts to drop" —
+                aligned with the "Lose hosts" scenario type above rather than
+                a near-synonym verb for the same field. */}
             <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-              Hosts to drop
+              Hosts lost
             </span>
             <Input
               type="number"
               min={1}
               step={1}
-              aria-label="Hosts to drop"
+              aria-label="Hosts lost"
               value={draft.loseCount}
               onChange={(e) => updateDraft({ loseCount: e.target.value })}
               className="mt-1"
