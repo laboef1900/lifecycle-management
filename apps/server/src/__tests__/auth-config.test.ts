@@ -48,7 +48,8 @@ describe('AuthConfigService.load', () => {
     // so the encrypted-at-rest assertion below is deterministic — a plain-word
     // marker like 'shh' can appear in random base64 ciphertext by chance.
     const plaintextSecret = 'shh*plaintext*marker';
-    const svc = new AuthConfigService(prisma, KEY);
+    const warn = vi.fn();
+    const svc = new AuthConfigService(prisma, KEY, { warn });
     const cfg = await svc.load(
       makeOidcTestEnv({
         OIDC_ISSUER_URL: 'https://idp',
@@ -68,6 +69,10 @@ describe('AuthConfigService.load', () => {
     expect(row!.clientSecretEnc).not.toBeNull();
     expect(row!.clientSecretEnc).not.toContain(plaintextSecret); // encrypted at rest
     expect(row!.signingSecretEnc).not.toBeNull();
+    // Negative control for the discard warning below: an oidc seed KEEPS the
+    // secret, so nothing may warn here. Pins the discard log to the case it
+    // describes instead of firing on every seed.
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('seeds as disabled (never crashing) when the key is null even though env has OIDC vars and a client secret', async () => {
@@ -168,7 +173,8 @@ describe('AuthConfigService.load', () => {
     // secret used to be stored (encrypted) against a later switch to oidc;
     // saving a non-oidc mode now clears both columns, so it is dropped and the
     // operator re-enters it in Settings when they enable OIDC.
-    const svc = new AuthConfigService(prisma, KEY);
+    const warn = vi.fn();
+    const svc = new AuthConfigService(prisma, KEY, { warn });
 
     const cfg = await svc.load(
       makeOidcTestEnv({ AUTH_MODE: 'disabled', OIDC_CLIENT_SECRET: 'seeded-secret' }),
@@ -182,6 +188,14 @@ describe('AuthConfigService.load', () => {
     expect(row!.signingSecretEnc).toBeNull();
     // The non-secret fields still seed normally.
     expect(row!.clientId).toBe('lcm-test');
+    // Dropping an operator-supplied secret must be OBSERVABLE, not silent:
+    // without a log line the only symptom is OIDC quietly not working later.
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'auth_config.seeded_client_secret_discarded' }),
+      expect.stringContaining('AUTH_MODE'),
+    );
+    // ...and the warning itself must never carry the secret it just dropped.
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('seeded-secret');
   });
 });
 

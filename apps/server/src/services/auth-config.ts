@@ -167,6 +167,22 @@ export class AuthConfigService {
           const { clientSecret: _clientSecret, ...withoutSecret } = seed;
           await this.update({ ...withoutSecret, mode: 'disabled' }, null);
         } else {
+          // A key IS configured, so `update()` will encrypt the seeded secret —
+          // and then null it again, because only oidc keeps one (#241). Say so:
+          // an operator who set OIDC_CLIENT_SECRET but left AUTH_MODE at its
+          // `disabled` default would otherwise get no signal at all, and would
+          // discover the secret was never stored only when enabling OIDC later
+          // fails with INCOMPLETE_OIDC_CONFIG. Not logged in the no-key branch
+          // above — `auth_config.seeded_disabled_no_key` already reports that
+          // discard, with its own (different) remedy.
+          if (seed.mode !== 'oidc' && (seed.clientSecret ?? null) !== null) {
+            this.logger?.warn(
+              { event: 'auth_config.seeded_client_secret_discarded', seededMode: seed.mode },
+              'OIDC_CLIENT_SECRET was supplied but AUTH_MODE is not `oidc` — the secret was NOT ' +
+                'stored: only oidc mode uses it. Seed with AUTH_MODE=oidc (first boot only), or ' +
+                'enter the secret in Settings → Authentication when you enable OIDC.',
+            );
+          }
           await this.update(seed, null);
         }
       } else {
@@ -277,6 +293,20 @@ export class AuthConfigService {
     // CONFIG_ENCRYPTION_KEY configured" from 422 ENCRYPTION_KEY_REQUIRED into a
     // silent 200. The `settings-auth-routes.test.ts` test named "fails with 422
     // ENCRYPTION_KEY_REQUIRED (not 500) ... and persists nothing" is the canary.
+    //
+    // That 422 does NOT strand a keyless deployment on its stored mode (#241
+    // review, traced end to end). `requireKey()` runs only for a non-null
+    // clientSecret STRING: an omitted one skips the branch entirely, and the
+    // shared schema's `emptyToNull` turns a stray '' into `null`, which clears
+    // without needing a key. The Settings form omits the field whenever it is
+    // blank (`authentication-form.tsx` handleSubmit), and on a keyless
+    // deployment nothing ever reads as stored — `clientSecretSet` is always
+    // false, so the form renders an empty input with no value to echo back.
+    // Switching to local/disabled therefore never reaches `requireKey()`; only
+    // deliberately TYPING a secret while saving a non-oidc mode does, which is
+    // exactly the input the canary pins as a correct 422. Regression cover for
+    // the web half is "omits clientSecret when switching away from oidc" in
+    // `authentication-form.test.tsx`.
     if (input.mode !== 'oidc') {
       data.clientSecretEnc = null;
       data.signingSecretEnc = null;
