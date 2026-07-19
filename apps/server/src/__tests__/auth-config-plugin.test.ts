@@ -2,7 +2,11 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { encrypt, generateSecret, loadKey } from '../crypto/secret-box.js';
-import { authConfigPlugin, AuthConfigStrictBootError } from '../plugins/auth-config.js';
+import {
+  authConfigPlugin,
+  AuthConfigStrictBootError,
+  degradeWouldWidenAccess,
+} from '../plugins/auth-config.js';
 import { prismaPlugin } from '../plugins/prisma.js';
 import { AuthConfigService, AuthSecretDecryptError } from '../services/auth-config.js';
 import { prisma } from './setup.js';
@@ -829,5 +833,47 @@ describe('auth-config plugin — AUTH_STRICT_BOOT', () => {
     created.push(server);
 
     expect(server.authConfig.current.mode).toBe('oidc');
+  });
+});
+
+/**
+ * The strict-boot guard's predicate, asserted directly.
+ *
+ * It carries an `@ai-warning` forbidding a re-narrowing to `=== 'oidc'`, and
+ * since #241 that warning is no longer covered by ANY integration test above:
+ * `toEffective()` gates decryption on the stored mode, so only a stored `oidc`
+ * row can raise `AuthSecretDecryptError`, and only `oidc` can therefore reach
+ * the guard at all. The `local` arm is unreachable-but-load-bearing — it is
+ * what keeps the guard correct for a future mode that stores decryptable
+ * secrets, which is precisely the shape of the #222 fail-open (an `=== 'oidc'`
+ * guard let a stored `local` row degrade into an open, anonymous-ADMIN API
+ * under the flag whose whole purpose is to refuse that).
+ *
+ * Reachability and correctness are separate properties, so they get separate
+ * tests: the boots/refuses cases above pin the reachable wiring, and these pin
+ * the predicate itself. `=== 'oidc'` passes every integration test in this file
+ * and fails the first case below — which is exactly the gap this closes.
+ */
+describe('degradeWouldWidenAccess — the strict-boot predicate (#222/#241)', () => {
+  it('is TRUE for a stored `local` row — the arm no integration test can reach', () => {
+    expect(degradeWouldWidenAccess('local')).toBe(true);
+  });
+
+  it('is TRUE for a stored `oidc` row', () => {
+    expect(degradeWouldWidenAccess('oidc')).toBe(true);
+  });
+
+  it('is FALSE for a stored `disabled` row — degrading it is not a downgrade (#136 F1)', () => {
+    expect(degradeWouldWidenAccess('disabled')).toBe(false);
+  });
+
+  it('is FALSE for an unrecognised stored mode, matching the closed-by-default normalization', () => {
+    // `mode` is a plain String column. An unrecognised value is ENFORCED as
+    // `disabled` (normalizeStoredMode / toEffective), so degrading it to
+    // `disabled` widens nothing and must not refuse boot — the predicate has to
+    // agree with enforcement, not with the raw column text.
+    expect(degradeWouldWidenAccess('OIDC')).toBe(false);
+    expect(degradeWouldWidenAccess('Local')).toBe(false);
+    expect(degradeWouldWidenAccess('')).toBe(false);
   });
 });
