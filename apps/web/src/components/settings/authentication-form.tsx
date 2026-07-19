@@ -9,6 +9,7 @@ import { ChevronRight, Copy, ShieldAlert } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { ConfirmDialog } from '@/components/form/confirm-dialog';
 import { Badge, type BadgeProps } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -101,11 +102,28 @@ const FORCE_DISABLED_COPY: Record<
         rotated.
       </>
     ),
+    // @ai-warning The "never wiped" guarantee is a property of the DEGRADE, not
+    // of the deployment, and must stay scoped to it. Since #241 an explicit
+    // save of a non-oidc mode DELETES both stored secret columns — and this
+    // panel is exactly where an operator staring at a force-disabled OIDC
+    // deployment is most likely to try switching mode as a way out. Stating the
+    // guarantee unscoped told them their secret was safe while offering them
+    // the one button that destroys it. The `AuthenticationForm` confirmation
+    // covers the action itself; this covers the decision.
     recovery: (
       <>
-        The encrypted secrets are intact and are never wiped. Restore or roll back{' '}
-        <code className="font-mono text-xs">CONFIG_ENCRYPTION_KEY</code> to the value the secrets
-        were encrypted with and restart the server; changes saved here take effect only after that.
+        <span className="block">
+          The degrade itself writes nothing — the encrypted secrets are intact and are never wiped
+          by it. Restore or roll back{' '}
+          <code className="font-mono text-xs">CONFIG_ENCRYPTION_KEY</code> to the value the secrets
+          were encrypted with and restart the server; changes saved here take effect only after
+          that.
+        </span>
+        <span className="mt-1 block font-medium text-foreground">
+          Do not use this screen as the way out: saving “Disabled” or “Local accounts” permanently
+          deletes the stored OIDC client secret, and restoring the key will not bring it back — you
+          would have to re-enter it from your identity provider.
+        </span>
       </>
     ),
   },
@@ -138,6 +156,13 @@ export function AuthenticationForm(): React.JSX.Element {
     null,
   );
   const [validationError, setValidationError] = React.useState<string | null>(null);
+  // A validated update held back pending confirmation of the secret deletion it
+  // would cause — see the guard in `handleSubmit`. Holding the parsed payload
+  // (rather than a boolean) keeps the confirmed save byte-identical to the one
+  // that was described in the dialog.
+  const [pendingSecretDeletion, setPendingSecretDeletion] = React.useState<AuthConfigUpdate | null>(
+    null,
+  );
 
   const computed = {
     mode: edits.mode ?? data?.mode ?? 'disabled',
@@ -204,6 +229,7 @@ export function AuthenticationForm(): React.JSX.Element {
       setEdits({});
       setSecretInputValue('');
       setSecretReplacing(false);
+      setPendingSecretDeletion(null);
       toast.success('Authentication settings saved');
     },
     onError: (err) => toast.error(describeApiError(err, 'Could not save authentication settings')),
@@ -285,6 +311,25 @@ export function AuthenticationForm(): React.JSX.Element {
         setValidationError('App base URL is required to enable OIDC.');
         return;
       }
+    }
+
+    // Saving a non-oidc mode CLEARS both stored secret columns server-side
+    // (#241). That deletion is irreversible and, unlike every other failure
+    // this panel describes, is specifically NOT undone by restoring
+    // CONFIG_ENCRYPTION_KEY — so it takes a confirmation step rather than
+    // happening on a single click.
+    //
+    // @ai-note Gated on the STORED mode, deliberately not on
+    // `data.clientSecretSet`. That flag reports whether a secret is currently
+    // IN EFFECT (see its contract in @lcm/shared), so it reads false in exactly
+    // the two states where the stored ciphertext is most at risk and most
+    // recoverable: a decrypt-degraded boot, and a row still carrying leftover
+    // ciphertext from an earlier configuration. Keying off the stored mode can
+    // only over-ask; keying off the flag would skip the warning precisely when
+    // it matters most.
+    if (data?.mode === 'oidc' && parsed.data.mode !== 'oidc') {
+      setPendingSecretDeletion(parsed.data);
+      return;
     }
 
     updateMutation.mutate(parsed.data);
@@ -677,6 +722,28 @@ export function AuthenticationForm(): React.JSX.Element {
           </form>
         ) : null}
       </Card>
+
+      <ConfirmDialog
+        open={pendingSecretDeletion !== null}
+        onOpenChange={(open) => {
+          // Cancel/dismiss drops the held update but keeps the pending edits, so
+          // the operator lands back on the form exactly where they were.
+          if (!open) setPendingSecretDeletion(null);
+        }}
+        title="Delete the stored OIDC client secret?"
+        description={
+          `Saving ${MODE_LABELS[pendingSecretDeletion?.mode ?? 'disabled']} deletes the stored ` +
+          'OIDC client secret and login-state signing secret from the database. This cannot be ' +
+          'undone: restoring CONFIG_ENCRYPTION_KEY will not bring them back, and you must ' +
+          're-enter the client secret from your identity provider to turn OIDC back on.'
+        }
+        confirmLabel="Delete secret and save"
+        destructive
+        pending={updateMutation.isPending}
+        onConfirm={() => {
+          if (pendingSecretDeletion !== null) updateMutation.mutate(pendingSecretDeletion);
+        }}
+      />
 
       {computed.mode === 'local' ? <LocalAccountsPanel /> : null}
 
