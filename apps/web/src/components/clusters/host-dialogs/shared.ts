@@ -76,6 +76,12 @@ export const ALLOWED_TRANSITIONS: Record<HostState, HostState[]> = {
   disposed: [],
 };
 
+// Deliberately sentence-case, not ALL-CAPS like HostStateBadge (#243 Part B
+// copy item 2): every call site renders this as running prose ("Currently
+// **In service**...") or history-log text (host-history-dialog.tsx) or a
+// <Select> option label — never a status-class badge, where ALL-CAPS would
+// be genuinely wrong for all three contexts. Not the same drift; don't align
+// it with the badge casing.
 export const STATE_LABELS: Record<HostState, string> = {
   ordered: 'Ordered',
   racked: 'Racked',
