@@ -4,6 +4,7 @@ import * as React from 'react';
 
 import { formatRelativeDays } from '@/components/fleet/order-by-rail';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { HOSTS_TAB_HASH, requestAnchorFocus } from '@/lib/anchors';
 import { daysUntil } from '@/lib/dates';
 import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 import { cn } from '@/lib/utils';
@@ -70,7 +71,11 @@ export function deriveRecommendation(
   if (kpi.status === 'unknown') {
     tone = 'unknown';
     shortText = 'Capacity unknown';
-    message = 'Capacity unknown — record capacity before relying on procurement timing.';
+    // Names the fix location, not just the problem (#243 Part B item 4) — the
+    // Hosts tab is the only place capacity can be recorded, and vSphere sync
+    // writes no host capacity (#198), so this is the normal first-run state
+    // for a synced cluster on the surface that drives purchasing.
+    message = 'Capacity unknown — record host capacity on the Hosts tab to enable forecasting.';
   } else if (kpi.status === 'ok' && orderByDate === null) {
     tone = 'none';
     shortText = 'No order needed';
@@ -133,27 +138,102 @@ export function RecommendationChip({
 }: RecommendationChipProps): React.JSX.Element {
   const rec = deriveRecommendation(procurement, today, capacityKnown);
   const Icon = TONE_ICON[rec.tone];
+  const triggerClassName = cn(
+    'inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-1 font-mono text-[9.5px] font-bold tracking-[0.08em]',
+    TONE_CHIP[rec.tone].className,
+  );
+  const chipContent = (
+    <>
+      <Icon className="h-3 w-3 shrink-0" aria-hidden />
+      {rec.chipLabel}
+      <span className="font-sans text-[11px] font-medium normal-case tracking-normal">
+        {rec.shortText}
+      </span>
+    </>
+  );
+
+  // Unknown is the one tone with a fix to offer (#243 Part B item 4), so it
+  // alone gets the interactive trigger below; every other tone keeps the
+  // original non-interactive span this file's docs already explain.
+  if (rec.tone === 'unknown') {
+    return (
+      <span role="status" data-testid="recommendation-chip" data-tone={rec.tone}>
+        <UnknownCapacityTrigger className={triggerClassName} message={rec.message}>
+          {chipContent}
+        </UnknownCapacityTrigger>
+      </span>
+    );
+  }
+
   return (
     <span role="status" data-testid="recommendation-chip" data-tone={rec.tone}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span
-            data-testid="recommendation-chip-trigger"
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-1 font-mono text-[9.5px] font-bold tracking-[0.08em]',
-              TONE_CHIP[rec.tone].className,
-            )}
-          >
-            <Icon className="h-3 w-3 shrink-0" aria-hidden />
-            {rec.chipLabel}
-            <span className="font-sans text-[11px] font-medium normal-case tracking-normal">
-              {rec.shortText}
-            </span>
+          <span data-testid="recommendation-chip-trigger" className={triggerClassName}>
+            {chipContent}
             <span className="sr-only">{rec.message}</span>
           </span>
         </TooltipTrigger>
         <TooltipContent className="max-w-xs">{rec.message}</TooltipContent>
       </Tooltip>
     </span>
+  );
+}
+
+/**
+ * Unknown-capacity chip trigger (#243 Part B item 4). Unlike every other
+ * tone's non-interactive span above, this one has an action to offer —
+ * record capacity on the Hosts tab — so it is a real, focusable `<button>`
+ * whose click jumps the panel to its Hosts tab via the shared anchor-focus
+ * mechanism (`src/lib/anchors.ts`).
+ *
+ * The tooltip is forced HOVER-ONLY here, the same fix `BackLink` applies to
+ * its own tooltip (`ui/back-link.tsx`) and for the same reason: Radix's
+ * uncontrolled `Trigger` opens on focus as well as hover, and a focus-opened
+ * tooltip dismisses itself on Escape and marks the event consumed — which the
+ * panel's Esc-chain guard respects, silently costing a keyboard user a second
+ * press to close the panel. Every other tone's trigger is a non-focusable
+ * span that could never trip this, which is why only this one needs the
+ * controlled gating.
+ */
+function UnknownCapacityTrigger({
+  className,
+  message,
+  children,
+}: {
+  className: string;
+  message: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const [tooltipOpen, setTooltipOpen] = React.useState(false);
+  const hoverRef = React.useRef(false);
+  return (
+    <Tooltip
+      open={tooltipOpen}
+      onOpenChange={(next) => {
+        // Radix requests open for both hover and focus; admit hover only
+        // (closes are always honored).
+        if (!next || hoverRef.current) setTooltipOpen(next);
+      }}
+    >
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          data-testid="recommendation-chip-trigger"
+          className={className}
+          onClick={() => requestAnchorFocus(HOSTS_TAB_HASH)}
+          onPointerEnter={() => {
+            hoverRef.current = true;
+          }}
+          onPointerLeave={() => {
+            hoverRef.current = false;
+          }}
+        >
+          {children}
+          <span className="sr-only">{message} Go to the Hosts tab.</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{message}</TooltipContent>
+    </Tooltip>
   );
 }

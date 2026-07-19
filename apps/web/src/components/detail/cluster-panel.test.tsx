@@ -495,7 +495,50 @@ describe('<ClusterPanel>', () => {
     expect(screen.getByTestId('recommendation-chip')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Hosts' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /apps/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Settings' })).toBeInTheDocument();
+    // "Cluster settings", not the bare "Settings" the topbar/⌘K global page
+    // also uses (#243 Part B item 5) — the two cross-reference each other by
+    // name elsewhere in the app, so the panel's own tab needs its own label.
+    expect(screen.getByRole('tab', { name: 'Cluster settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
+  });
+
+  it('clicking the unknown-capacity recommendation chip switches to and focuses the Hosts tab (#243 Part B item 4)', async () => {
+    vi.spyOn(api.clusters, 'get').mockResolvedValue(
+      cluster({
+        metrics: [
+          {
+            metricTypeKey: 'memory_gb',
+            metricTypeDisplayName: 'Memory',
+            unit: 'GB',
+            baselineConsumption: 500,
+            baselineCapacity: 0,
+            currentConsumption: 500,
+            currentCapacity: 0,
+            utilization: null,
+          },
+        ],
+      }),
+    );
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({
+        months: [{ month: '2026-07-01', consumption: 500, capacity: 0, utilization: null }],
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    // Starts on the Hosts tab's sibling by default in this suite (defaultValue
+    // 'hosts'), so switch to a different tab first to prove the click below
+    // is what moves it back, not the initial default.
+    await user.click(screen.getByRole('tab', { name: /apps/i }));
+    expect(screen.getByRole('tab', { name: /apps/i })).toHaveAttribute('aria-selected', 'true');
+
+    await user.click(screen.getByTestId('recommendation-chip-trigger'));
+
+    const hostsTab = screen.getByRole('tab', { name: 'Hosts' });
+    await waitFor(() => expect(hostsTab).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(hostsTab).toHaveFocus());
   });
 
   it('announces scenario activation and clearing via the live region (IMPORTANT #4)', async () => {

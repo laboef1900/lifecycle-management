@@ -1,9 +1,10 @@
 import type { ProcurementInfo } from '@lcm/shared';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { HOSTS_TAB_HASH, requestAnchorFocus } from '@/lib/anchors';
 import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 
 import { RecommendationChip, deriveRecommendation } from './recommendation-chip';
@@ -12,6 +13,17 @@ vi.mock('@/lib/procurement-kpi', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/procurement-kpi')>();
   return { ...actual, deriveProcurementKpi: vi.fn(actual.deriveProcurementKpi) };
 });
+
+vi.mock('@/lib/anchors', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/anchors')>();
+  return { ...actual, requestAnchorFocus: vi.fn() };
+});
+
+/** Lets a (wrongly) focus-triggered Radix tooltip open land — see back-link.tsx's
+ *  identical helper; one macrotask is comfortably enough. */
+function flushOpenWindow(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 50));
+}
 
 const TODAY = new Date('2026-07-16T00:00:00Z');
 
@@ -32,6 +44,13 @@ function renderChip(props: Partial<React.ComponentProps<typeof RecommendationChi
     </TooltipProvider>,
   );
 }
+
+afterEach(() => {
+  // `requestAnchorFocus` (mocked above) is a module-level fn shared across
+  // every test in this file — clear its call history so one test's click
+  // can't leak into the next test's assertions.
+  vi.clearAllMocks();
+});
 
 describe('deriveRecommendation', () => {
   it('derives a crit "order now" with days overdue when the order-by date has passed', () => {
@@ -67,7 +86,7 @@ describe('deriveRecommendation', () => {
     expect(rec.message).toBe('No order needed in this forecast window.');
   });
 
-  it('derives unknown instead of "no order needed" when capacity is missing', () => {
+  it('derives unknown instead of "no order needed" when capacity is missing, and names the fix location (#243 Part B item 4)', () => {
     const rec = deriveRecommendation(
       procurement({ orderByDate: null, breachMonth: null }),
       TODAY,
@@ -77,6 +96,11 @@ describe('deriveRecommendation', () => {
     expect(rec.chipLabel).toBe('UNKNOWN');
     expect(rec.shortText).toBe('Capacity unknown');
     expect(rec.message).not.toMatch(/no order needed/i);
+    // The old copy named the problem but never the fix: record capacity
+    // *where* (the Hosts tab), not just that it's missing.
+    expect(rec.message).toBe(
+      'Capacity unknown — record host capacity on the Hosts tab to enable forecasting.',
+    );
   });
 
   it('derives the urgent tone, not "No order needed", when status is crit/warn but orderByDate is unexpectedly null (MINOR #8)', () => {
@@ -157,5 +181,61 @@ describe('<RecommendationChip>', () => {
     expect(chip.querySelector('svg')).not.toBeNull();
     expect(chip).toHaveTextContent('OK');
     expect(chip).toHaveTextContent('No order needed');
+  });
+});
+
+describe('<RecommendationChip> unknown-capacity fix action (#243 Part B item 4)', () => {
+  function renderUnknownChip(capacityKnown = false): void {
+    renderChip({
+      procurement: procurement({ orderByDate: null, breachMonth: null }),
+      capacityKnown,
+    });
+  }
+
+  it('becomes a real button — unlike every other tone — because it now has an action', () => {
+    renderUnknownChip();
+
+    // Unlike the non-interactive-span assertion above (which covers every
+    // OTHER tone, all still with nothing to do when clicked), the unknown
+    // tone's trigger IS a real, focusable control: it is the only tone with a
+    // fix to offer, so the #243 review's "dead tab stop" rationale for the
+    // non-interactive span no longer applies to it.
+    const trigger = screen.getByTestId('recommendation-chip-trigger');
+    expect(trigger.tagName).toBe('BUTTON');
+    expect(within(screen.getByRole('status')).getByRole('button')).toBe(trigger);
+  });
+
+  it('requests focus on the Hosts tab via the shared anchor mechanism when clicked', async () => {
+    const user = userEvent.setup();
+    renderUnknownChip();
+
+    await user.click(screen.getByTestId('recommendation-chip-trigger'));
+
+    expect(requestAnchorFocus).toHaveBeenCalledWith(HOSTS_TAB_HASH);
+  });
+
+  it("keeps the tooltip hover-only — a focus-opened tooltip would swallow the panel's first Esc, same rationale as BackLink", async () => {
+    const user = userEvent.setup();
+    renderUnknownChip();
+
+    await user.tab();
+    expect(screen.getByTestId('recommendation-chip-trigger')).toHaveFocus();
+    await flushOpenWindow();
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    await user.hover(screen.getByTestId('recommendation-chip-trigger'));
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip).toHaveTextContent(/record host capacity on the hosts tab/i);
+  });
+
+  it('leaves every other tone as the non-interactive span with no anchor request', async () => {
+    const user = userEvent.setup();
+    renderChip({ procurement: procurement({ orderByDate: '2026-07-01' }) }); // crit tone
+
+    const trigger = screen.getByTestId('recommendation-chip-trigger');
+    expect(trigger.tagName).toBe('SPAN');
+    await user.hover(trigger);
+    await screen.findByRole('tooltip');
+    expect(requestAnchorFocus).not.toHaveBeenCalled();
   });
 });

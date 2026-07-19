@@ -85,7 +85,7 @@ test.describe('configurable thresholds', () => {
 
     await page.goto(`/clusters/${clusterId}`);
     const panel = page.locator('.cluster-panel');
-    await panel.getByRole('tab', { name: 'Settings' }).click();
+    await panel.getByRole('tab', { name: 'Cluster settings' }).click();
     await expect(page.getByText(/inherited from tenant defaults/i)).toBeVisible();
 
     await page.getByLabel('Warn %').fill('60');
@@ -109,7 +109,7 @@ test.describe('configurable thresholds', () => {
     await expect(page.getByText('Crit 85%').first()).toBeVisible();
 
     // Reset back to inherited.
-    await page.locator('.cluster-panel').getByRole('tab', { name: 'Settings' }).click();
+    await page.locator('.cluster-panel').getByRole('tab', { name: 'Cluster settings' }).click();
     const resetPromise = page.waitForResponse(
       (r) =>
         r.url().includes(`/api/clusters/${clusterId}/settings`) &&
@@ -140,7 +140,7 @@ test.describe('cluster identity + baseline edit', () => {
       // beneath is inert-hidden while the panel is up).
       await expect(panel.getByRole('heading', { name: originalName, level: 1 })).toBeVisible();
 
-      await panel.getByRole('tab', { name: 'Settings' }).click();
+      await panel.getByRole('tab', { name: 'Cluster settings' }).click();
 
       const nameInput = page.getByLabel('Name');
       await expect(nameInput).toHaveValue(originalName);
@@ -185,7 +185,7 @@ test.describe('cluster identity + baseline edit', () => {
 
     try {
       await page.goto(`/clusters/${cluster.id}`);
-      await page.locator('.cluster-panel').getByRole('tab', { name: 'Settings' }).click();
+      await page.locator('.cluster-panel').getByRole('tab', { name: 'Cluster settings' }).click();
 
       const consumptionInput = page.getByLabel(/memory.*baseline consumption/i);
       await consumptionInput.fill(String(newConsumption));
@@ -253,7 +253,7 @@ test.describe('cluster lifecycle', () => {
       // Archive via UI (the panel's Settings tab).
       await page.goto(`/clusters/${id}`);
       const panel = page.locator('.cluster-panel');
-      await panel.getByRole('tab', { name: 'Settings' }).click();
+      await panel.getByRole('tab', { name: 'Cluster settings' }).click();
       await page.getByRole('button', { name: /^archive$/i }).click();
       const archiveResponse = page.waitForResponse(
         (r) => r.url().endsWith(`/api/clusters/${id}/archive`) && r.request().method() === 'POST',
@@ -281,7 +281,7 @@ test.describe('cluster lifecycle', () => {
 
       // Unarchive via UI.
       await page.goto(`/clusters/${id}`);
-      await panel.getByRole('tab', { name: 'Settings' }).click();
+      await panel.getByRole('tab', { name: 'Cluster settings' }).click();
       await page.getByRole('button', { name: /^unarchive$/i }).click();
       const unarchiveResponse = page.waitForResponse(
         (r) => r.url().endsWith(`/api/clusters/${id}/unarchive`) && r.request().method() === 'POST',
@@ -315,7 +315,7 @@ test.describe('cluster lifecycle', () => {
 
     await page.goto(`/clusters/${id}`);
     const panel = page.locator('.cluster-panel');
-    await panel.getByRole('tab', { name: 'Settings' }).click();
+    await panel.getByRole('tab', { name: 'Cluster settings' }).click();
     await page.getByRole('button', { name: /^delete$/i }).click();
     const deleteResponse = page.waitForResponse(
       (r) =>

@@ -34,6 +34,7 @@ import { Kbd } from '@/components/ui/kbd';
 import { RunwayPill } from '@/components/ui/runway-pill';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api, type ScenarioWire } from '@/lib/api-client';
+import { HOSTS_TAB_HASH, useAnchorFocusRequest } from '@/lib/anchors';
 import { useIsAdmin } from '@/lib/auth';
 import { runwayToWarn, utilStatus } from '@/lib/forecast-summary';
 import { formatMonthLong, formatMonthShort } from '@/lib/format-month';
@@ -118,6 +119,11 @@ const SCENARIO_ACTIVE_TONE =
  */
 export type PanePresence = { open: boolean; exiting: boolean };
 export type PanePresenceEvent = 'open' | 'close' | 'exit-complete';
+
+/** The panel's own tab set. Controlled (not `Tabs`' uncontrolled `defaultValue`)
+ *  so the unknown-capacity recommendation chip can switch to 'hosts' itself
+ *  (#243 Part B item 4). */
+type PanelTab = 'hosts' | 'items' | 'settings';
 
 export const PANE_CLOSED: PanePresence = { open: false, exiting: false };
 
@@ -219,6 +225,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const paneRef = useRef<HTMLElement>(null);
   const paneCloseRef = useRef<HTMLButtonElement>(null);
   const restorePaneFocusRef = useRef(false);
+  const hostsTabRef = useRef<HTMLButtonElement>(null);
 
   const [pane, dispatchPane] = useReducer(panePresenceReducer, PANE_CLOSED);
   const paneOpen = pane.open;
@@ -228,7 +235,9 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const [announcementOverride, setAnnouncementOverride] = useState<string | null>(null);
   const [windowSelection, setWindowSelection] = useState<ForecastWindow>('24mo');
   const [scenario, setScenario] = useState<ScenarioWire | null>(null);
+  const [activeTab, setActiveTab] = useState<PanelTab>('hosts');
   const isWide = useMediaQuery('(min-width: 640px)');
+  const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
   const paneIsSideBySide = useMediaQuery(PANE_SIDE_BY_SIDE_QUERY);
   const paneLayout = scenarioPaneLayout(paneIsSideBySide);
   // Derived from the pane being *on screen*, not merely open: dropping the
@@ -436,6 +445,34 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       (active instanceof HTMLElement && active.closest('[inert]') !== null);
     if (focusWasLost) paneCloseRef.current?.focus();
   }, [paneOverlaysContent]);
+
+  // Hosts-tab deep link (#243 Part B item 4): the unknown-capacity
+  // recommendation chip requests this anchor when clicked, so the panel
+  // switches to and focuses its own Hosts tab — the only place capacity can
+  // actually be recorded.
+  //
+  // `hostsFocusBaselineRef` snapshots the counter's value at MOUNT, not 0:
+  // `useAnchorFocusRequest`'s count is global module state that only ever
+  // increases and is never reset between tests (see lib/anchors.ts), so a
+  // freshly-mounted panel can see a nonzero leftover count from an earlier
+  // interaction (or an earlier test) that has nothing to do with this
+  // instance. `add-cluster-panel.tsx` guards the same hazard by also
+  // requiring the URL hash to match; this anchor has no hash to check (chip
+  // and tabs are already mounted together on the same page), so the mount-time
+  // snapshot is what stands in for that gate — only a genuine post-mount
+  // increase counts as "new".
+  const hostsFocusRequests = useAnchorFocusRequest(HOSTS_TAB_HASH);
+  const hostsFocusBaselineRef = useRef(hostsFocusRequests);
+  useEffect(() => {
+    if (hostsFocusRequests === hostsFocusBaselineRef.current) return;
+    hostsFocusBaselineRef.current = hostsFocusRequests;
+    setActiveTab('hosts');
+    hostsTabRef.current?.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'nearest',
+    });
+    hostsTabRef.current?.focus({ preventScroll: true });
+  }, [hostsFocusRequests, prefersReducedMotion]);
 
   const baselineDate = clusterQuery.data?.baselineDate;
   const metric = clusterQuery.data?.metrics[0];
@@ -660,11 +697,17 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                 />
               )}
 
-              <Tabs defaultValue="hosts" className="pt-2">
+              <Tabs
+                value={activeTab}
+                onValueChange={(value) => setActiveTab(value as PanelTab)}
+                className="pt-2"
+              >
                 <TabsList>
-                  <TabsTrigger value="hosts">Hosts</TabsTrigger>
+                  <TabsTrigger value="hosts" ref={hostsTabRef}>
+                    Hosts
+                  </TabsTrigger>
                   <TabsTrigger value="items">Apps &amp; Events</TabsTrigger>
-                  <TabsTrigger value="settings">Settings</TabsTrigger>
+                  <TabsTrigger value="settings">Cluster settings</TabsTrigger>
                 </TabsList>
                 <TabsContent value="hosts">
                   <HostsTab clusterId={clusterId} canManage={canManage} />
