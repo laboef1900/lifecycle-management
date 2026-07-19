@@ -185,3 +185,26 @@ describe('HostLifecycleGanttRow bar end date (MINOR #7)', () => {
     expect(screen.getByText('—')).toBeInTheDocument();
   });
 });
+
+describe('label legibility (#243 Part B High-2)', () => {
+  const DOMAIN = { min: new Date('2023-01-01T00:00:00Z'), max: new Date('2030-01-01T00:00:00Z') };
+
+  it('renders the end-date label at >=10 units with a surface halo so it survives the bar', () => {
+    // eolAt past ~82% of the domain → eolFlip → the label paints ON the bar.
+    const host = makeHost({ eolAt: '2029-11-01' });
+    render(<HostLifecycleGanttRow host={host} domain={DOMAIN} today={TODAY} />);
+    const label = screen.getByText('2029-11-01');
+    expect(Number(label.getAttribute('font-size'))).toBeGreaterThanOrEqual(10);
+    expect(label.getAttribute('style')).toContain('paint-order');
+    expect(label.getAttribute('style')).toContain('var(--card)');
+  });
+
+  it('renders WTY EXPIRED at >=10 units with the same halo', () => {
+    const host = makeHost({ warrantyEndsAt: '2020-01-01' });
+    render(<HostLifecycleGanttRow host={host} domain={DOMAIN} today={TODAY} />);
+    const label = screen.getByText('WTY EXPIRED');
+    expect(Number(label.getAttribute('font-size'))).toBeGreaterThanOrEqual(10);
+    expect(label.getAttribute('style')).toContain('paint-order');
+    expect(label.getAttribute('style')).toContain('var(--card)');
+  });
+});

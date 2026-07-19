@@ -14,6 +14,16 @@ const VB_WIDTH = 600;
 const ROW_HEIGHT = 32;
 const AXIS_HEIGHT = 20;
 
+/** Surface halo for SVG text that can cross a painted mark — the same
+ *  paintOrder trick cluster-tile-chart.tsx uses (spec §6): the stroke paints
+ *  UNDER the glyph fill, so the label stays legible on the steel bar
+ *  (#243 Part B: fg-muted straight on the bar computed ~2.5:1 in dark). */
+const LABEL_HALO: React.CSSProperties = {
+  paintOrder: 'stroke',
+  stroke: 'var(--card)',
+  strokeWidth: 3,
+};
+
 function parseUtcDate(dateOnly: string): Date {
   return new Date(`${dateOnly}T00:00:00Z`);
 }
@@ -134,9 +144,10 @@ export function HostLifecycleGanttRow({
           x={warrantyX}
           y={ROW_HEIGHT - 3}
           textAnchor="middle"
-          fontSize={7}
+          fontSize={10}
           fontWeight={600}
           fill="var(--warning)"
+          style={LABEL_HALO}
           className="font-mono"
         >
           WTY EXPIRED
@@ -146,8 +157,9 @@ export function HostLifecycleGanttRow({
         x={endX + (eolFlip ? -4 : 4)}
         y={17}
         textAnchor={eolFlip ? 'end' : 'start'}
-        fontSize={9}
+        fontSize={10}
         fill="var(--fg-muted)"
+        style={LABEL_HALO}
         className="font-mono"
       >
         {barEndDate ?? '—'}
