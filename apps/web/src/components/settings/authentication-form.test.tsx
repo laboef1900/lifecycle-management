@@ -559,6 +559,76 @@ describe('<AuthenticationForm>', () => {
       expect(vi.mocked(api.settings.auth.update).mock.calls[0]![0].mode).toBe('oidc');
     });
 
+    // #241 made saving a non-oidc mode DELETE both stored secret columns
+    // server-side. The recovery copy here predates that and told the operator
+    // the opposite ("intact and never wiped") in the one window where the
+    // deletion is most costly: the ciphertext may still be recoverable by
+    // restoring the key, and this save destroys it. The claim is true of the
+    // DEGRADE (which writes nothing at all), so it stays — scoped, with the
+    // caveat spelled out. The break-glass copy makes no such claim and is
+    // therefore left alone; both causes are covered at the point of action by
+    // the confirmation below.
+    it('scopes "never wiped" to the degrade and warns that saving a non-oidc mode deletes the secret (#241)', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({
+        ...breakGlassOidcConfig,
+        forceDisabledReason: 'secret_decrypt_failure',
+      });
+      renderWithClient(<AuthenticationForm />);
+
+      const alert = await screen.findByRole('alert');
+      // The surviving claim is now attributed to the degrade rather than
+      // stated as an unconditional property of the deployment.
+      expect(within(alert).getByText(/degrade itself writes nothing/i)).toBeInTheDocument();
+      // ...and the destructive path an operator might take from this very
+      // screen is named, with its scope and its irreversibility.
+      expect(
+        within(alert).getByText(/permanently deletes the stored oidc client secret/i),
+      ).toBeInTheDocument();
+      expect(
+        within(alert).getByText(/restoring the key will not bring it back/i),
+      ).toBeInTheDocument();
+      expect(
+        within(alert).getByText(/re-enter it from your identity provider/i),
+      ).toBeInTheDocument();
+    });
+
+    // The copy used to end the decrypt-failure recovery with "changes saved
+    // here take effect only after that" (restoring the key AND restarting).
+    // That is false: `decryptDegraded` is set once in the auth-config plugin's
+    // BOOT catch and is never re-applied, while `reload()` re-derives
+    // `authConfig.current` from the successful write and `plugins/auth.ts`
+    // reads it per request. So a save closes the open API on the spot — the
+    // server's own `settings-auth-routes.test.ts` rotation-recovery case
+    // asserts `authConfig.current.mode === 'oidc'` right after the PUT, with no
+    // restart. An operator who believed the old sentence would leave `/api`
+    // open to an anonymous ADMIN while hunting for the old key.
+    it('tells the operator a save takes effect immediately and names what closes the open API (#241)', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({
+        ...breakGlassOidcConfig,
+        forceDisabledReason: 'secret_decrypt_failure',
+      });
+      renderWithClient(<AuthenticationForm />);
+
+      const alert = await screen.findByRole('alert');
+      // The falsehood must be gone. Scoped to this cause on purpose: the
+      // break-glass arm says the same words and is CORRECT there, because
+      // `enforce()` re-applies that override on every reload.
+      expect(within(alert).queryByText(/take effect only after/i)).not.toBeInTheDocument();
+      expect(
+        within(alert).getByText(/takes effect immediately, with no restart/i),
+      ).toBeInTheDocument();
+      // Both routes that actually close the API are named...
+      expect(within(alert).getByText(/enforcement resumes on the spot/i)).toBeInTheDocument();
+      expect(
+        within(alert).getByText(/switching to local accounts closes the api without needing/i),
+      ).toBeInTheDocument();
+      // ...and the mode that does NOT close it is called out, so "just save
+      // any non-OIDC mode" is never read as a way out of the open API.
+      expect(
+        within(alert).getByText(/saving disabled .*leaves the api open by design/i),
+      ).toBeInTheDocument();
+    });
+
     it('does not coerce the stored mode to disabled when saving during break-glass', async () => {
       vi.mocked(api.settings.auth.get).mockResolvedValue({ ...breakGlassOidcConfig });
       renderWithClient(<AuthenticationForm />);
@@ -577,6 +647,187 @@ describe('<AuthenticationForm>', () => {
       const body = vi.mocked(api.settings.auth.update).mock.calls[0]![0];
       expect(body.mode).toBe('oidc');
       expect(body.mode).not.toBe('disabled');
+    });
+  });
+
+  // Saving a non-oidc mode CLEARS both stored secret columns server-side
+  // (#241) — irreversible, and specifically NOT recoverable by restoring
+  // CONFIG_ENCRYPTION_KEY, which is the recovery every other path here relies
+  // on. CLAUDE.md requires a destructive action to show its scope and take a
+  // confirmation step; this is that step.
+  describe('confirming the secret deletion when switching away from OIDC (#241)', () => {
+    const storedOidcConfig: AuthConfigResponse = {
+      ...baseConfig,
+      mode: 'oidc',
+      issuerUrl: 'https://idp.example.com',
+      clientId: 'client-123',
+      appBaseUrl: 'https://app.example.com',
+      clientSecretSet: true,
+      signingSecretSet: true,
+      discoveryStatus: 'connected',
+    };
+
+    it('opens a confirmation naming the scope instead of saving immediately', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({ ...storedOidcConfig });
+      renderWithClient(<AuthenticationForm />);
+      await screen.findByText(/configured/i);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Local accounts' }));
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog).toHaveAccessibleName(/delete the stored oidc client secret/i);
+      // Scope + irreversibility, not just "are you sure?".
+      expect(within(dialog).getByText(/cannot be undone/i)).toBeInTheDocument();
+      expect(
+        within(dialog).getByText(/restoring .*config_encryption_key.* will not/i),
+      ).toBeInTheDocument();
+      expect(within(dialog).getByText(/re-enter the client secret/i)).toBeInTheDocument();
+      // The whole point: nothing has been sent yet.
+      expect(api.settings.auth.update).not.toHaveBeenCalled();
+    });
+
+    it('does not PUT when the confirmation is cancelled', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({ ...storedOidcConfig });
+      renderWithClient(<AuthenticationForm />);
+      await screen.findByText(/configured/i);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Disabled' }));
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+      expect(api.settings.auth.update).not.toHaveBeenCalled();
+      // The pending edit survives the cancel — the operator is back where they
+      // were, not silently reset to the stored mode.
+      expect(screen.getByRole('button', { name: 'Disabled', pressed: true })).toBeInTheDocument();
+    });
+
+    it('sends the mode change with no clientSecret once confirmed, so a keyless deployment can escape', async () => {
+      // The keyless / rotated-key deployment that most needs to leave OIDC:
+      // nothing decrypts, so the secret field is the empty type-it-yourself
+      // input and the PUT must omit `clientSecret` entirely. Sending '' or null
+      // would be harmless, but sending a VALUE would now be refused server-side
+      // with 422 CLIENT_SECRET_NOT_APPLICABLE.
+      vi.mocked(api.settings.auth.get).mockResolvedValue({
+        ...storedOidcConfig,
+        forceDisabledReason: 'secret_decrypt_failure',
+        clientSecretSet: false,
+        signingSecretSet: false,
+        discoveryStatus: 'disabled',
+      });
+      renderWithClient(<AuthenticationForm />);
+      await screen.findByRole('alert');
+      expect(screen.getByLabelText(/client secret/i)).toHaveAttribute(
+        'placeholder',
+        'Client secret',
+      );
+
+      await userEvent.click(screen.getByRole('button', { name: 'Local accounts' }));
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(
+        within(dialog).getByRole('button', { name: /delete secret and save/i }),
+      );
+
+      await waitFor(() => {
+        expect(api.settings.auth.update).toHaveBeenCalled();
+      });
+      const body = vi.mocked(api.settings.auth.update).mock.calls[0]![0];
+      expect(body.mode).toBe('local');
+      // The key is absent, not null and not ''.
+      expect(body).not.toHaveProperty('clientSecret');
+    });
+
+    // A confirmed destructive action that then deletes nothing: the operator
+    // clicks Replace, types a secret, switches to Local accounts, and confirms
+    // "Delete secret and save" — but the payload still carried the typed
+    // secret, which the server refuses with 422 CLIENT_SECRET_NOT_APPLICABLE.
+    // Nothing saved, nothing deleted, after an irreversible-sounding
+    // confirmation. A non-oidc save must never carry a client secret.
+    it('drops a typed client secret from a non-oidc save so the confirmed deletion cannot 422 (#241)', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({ ...storedOidcConfig });
+      renderWithClient(<AuthenticationForm />);
+      await screen.findByText(/configured/i);
+
+      await userEvent.click(screen.getByRole('button', { name: /replace/i }));
+      await userEvent.type(screen.getByLabelText(/client secret/i), 'typed-then-abandoned');
+      await userEvent.click(screen.getByRole('button', { name: 'Local accounts' }));
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      const dialog = await screen.findByRole('dialog');
+      // The typed value is dropped as the dialog opens, so the form behind it
+      // stops offering to store a secret that this save deletes instead.
+      // Exact label: the dialog's own accessible name ("Delete the stored OIDC
+      // client secret?") matches a loose /client secret/i too.
+      expect(screen.queryByLabelText('Client secret')).not.toBeInTheDocument();
+
+      await userEvent.click(
+        within(dialog).getByRole('button', { name: /delete secret and save/i }),
+      );
+
+      await waitFor(() => {
+        expect(api.settings.auth.update).toHaveBeenCalled();
+      });
+      const body = vi.mocked(api.settings.auth.update).mock.calls[0]![0];
+      expect(body.mode).toBe('local');
+      expect(body).not.toHaveProperty('clientSecret');
+    });
+
+    // The counterpart to the strip above, and the reason it is scoped to the
+    // confirmed path: everywhere else a typed secret is still SENT, so the
+    // server's 422 CLIENT_SECRET_NOT_APPLICABLE tells the operator it was not
+    // stored. Dropping it form-wide would answer 200 and discard it silently —
+    // exactly the silent drop `AuthConfigService.update()` refuses to perform.
+    it('still sends a typed secret with a non-oidc save when no deletion was confirmed', async () => {
+      // baseConfig stores 'disabled', so no confirmation is involved.
+      renderWithClient(<AuthenticationForm />);
+      await waitFor(() => screen.getByLabelText('Client secret'));
+
+      await userEvent.type(screen.getByLabelText('Client secret'), 'typed-on-a-disabled-row');
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => {
+        expect(api.settings.auth.update).toHaveBeenCalled();
+      });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      const body = vi.mocked(api.settings.auth.update).mock.calls[0]![0];
+      expect(body.mode).toBe('disabled');
+      expect(body.clientSecret).toBe('typed-on-a-disabled-row');
+    });
+
+    it('does not confirm when the stored mode is not oidc — there is no stored secret to delete', async () => {
+      // The negative control. `baseConfig` stores `disabled`, so switching to
+      // local clears nothing and must not make the operator confirm a deletion
+      // that is not happening.
+      renderWithClient(<AuthenticationForm />);
+      await waitFor(() => screen.getByLabelText(/issuer url/i));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Local accounts' }));
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => {
+        expect(api.settings.auth.update).toHaveBeenCalled();
+      });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(vi.mocked(api.settings.auth.update).mock.calls[0]![0].mode).toBe('local');
+    });
+
+    it('does not confirm when the save keeps oidc selected', async () => {
+      vi.mocked(api.settings.auth.get).mockResolvedValue({ ...storedOidcConfig });
+      renderWithClient(<AuthenticationForm />);
+      await screen.findByText(/configured/i);
+
+      await userEvent.type(screen.getByLabelText(/role claim/i), 'roles');
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => {
+        expect(api.settings.auth.update).toHaveBeenCalled();
+      });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
   });
 });

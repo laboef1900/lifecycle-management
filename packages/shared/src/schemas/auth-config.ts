@@ -77,7 +77,39 @@ export interface AuthConfigResponse {
   allowedEmails: string | null;
   sessionTtlHours: number;
   allowInsecure: boolean;
+  /**
+   * Whether an OIDC client secret is currently IN EFFECT — **not** whether the
+   * `client_secret_enc` column is populated. Both flags are derived from the
+   * decrypted effective config, and decryption is gated on the STORED mode
+   * (#241): only an `oidc` row reads its encrypted columns. So this is `false`
+   * for every `local`/`disabled` row even when leftover ciphertext from an
+   * earlier OIDC configuration is still stored (saving a non-oidc mode clears
+   * both columns, but rows written by pre-#241 builds still carry them), and
+   * `false` during a `secret_decrypt_failure` boot, where an oidc row's
+   * ciphertext exists but cannot be read under the current key.
+   *
+   * The Settings form uses it for exactly one thing: deciding whether to render
+   * the write-only "Enter new client secret" input (`false`) or the
+   * "•••••••• configured" + Replace control (`true`).
+   *
+   * @ai-warning Do NOT read `false` as "there is nothing stored to lose", and
+   * do not use either flag to decide whether a destructive write is safe. The
+   * two states where it most understates what is stored — a leftover-ciphertext
+   * row and a decrypt-degraded boot — are precisely the ones where saving a
+   * non-oidc mode permanently deletes a secret that restoring
+   * `CONFIG_ENCRYPTION_KEY` would otherwise have recovered. That is why the
+   * form's delete confirmation keys off the stored `mode`, not off this flag.
+   */
   clientSecretSet: boolean;
+  /**
+   * Whether the login-state signing secret is currently IN EFFECT. Same
+   * mode-gated derivation, same caveats, as `clientSecretSet` above — read that
+   * doc comment before relying on either.
+   *
+   * Unlike the client secret this one is app-generated rather than
+   * operator-supplied, so `false` on an oidc row means the next `update()` will
+   * regenerate it, not that anything has to be re-entered.
+   */
   signingSecretSet: boolean;
   redirectUri: string;
   discoveryStatus: 'connected' | 'unavailable' | 'disabled';

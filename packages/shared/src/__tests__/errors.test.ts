@@ -39,6 +39,22 @@ describe('SERVICE_ERROR_CODES', () => {
     expect(SERVICE_ERROR_CODES).toContain('BASELINE_PERIOD_NOT_MEASURED');
   });
 
+  it('carries OIDC_MODE_REQUIRED (signing-secret rotation refused outside oidc mode)', () => {
+    // The login-state signing secret only signs OIDC login-state cookies, and
+    // saving a non-oidc mode clears both secret columns (#241). Rotating one
+    // onto a `disabled`/`local` row would store a secret nothing reads, so the
+    // route refuses with its own code rather than a generic 422.
+    expect(SERVICE_ERROR_CODES).toContain('OIDC_MODE_REQUIRED');
+  });
+
+  it('carries CLIENT_SECRET_NOT_APPLICABLE (a client secret submitted with a non-oidc mode)', () => {
+    // Saving a non-oidc mode clears both secret columns (#241), so a client
+    // secret sent alongside one could only ever be dropped. The write is
+    // refused rather than silently discarded, and the web client branches on
+    // this code to tell the operator to clear the field.
+    expect(SERVICE_ERROR_CODES).toContain('CLIENT_SECRET_NOT_APPLICABLE');
+  });
+
   it('contains no duplicate codes', () => {
     // TS will never catch this. The array is `as const` and NOT sorted, so a
     // second copy of an existing literal is legal TypeScript that the derived
