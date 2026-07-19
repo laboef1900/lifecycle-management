@@ -13,6 +13,11 @@ import { CategoriesForm } from '@/components/settings/categories-form';
 import { ForecastThresholdsForm } from '@/components/settings/forecast-thresholds-form';
 import { VcenterConnectionsPanel } from '@/components/settings/vcenter-connections-panel';
 import { BackButton } from '@/components/ui/back-button';
+import {
+  ACCESS_SECTION_HASH,
+  FORECASTING_SECTION_HASH,
+  INVENTORY_SECTION_HASH,
+} from '@/lib/anchors';
 import { isOverlayOpen, isTypingTarget } from '@/lib/keyboard';
 
 export const Route = createFileRoute('/_app/settings')({
@@ -109,21 +114,80 @@ function SettingsPage(): React.JSX.Element {
   }, [goBack]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <BackButton onClick={goBack} />
       <header>
-        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-          Configuration
-        </p>
-        <h1 className="mt-1 text-[26px] font-semibold leading-[1.1] tracking-[-0.02em]">
-          Settings
-        </h1>
+        {/* The 'Configuration' eyebrow is dropped (#243 Part B) — the h1 below
+            already names the page, and the in-page nav that replaces it below
+            gives the eyebrow's real estate to something the user can act on.
+            font-display + text-display: the existing type-scale tokens
+            (styles.css) were defined but unused here — every sibling screen's
+            top-level heading (fleet verdict, cluster panel title) uses
+            font-display; Settings was the one screen still on the arbitrary
+            Inter fallback. */}
+        <h1 className="font-display text-display">Settings</h1>
       </header>
-      <ForecastThresholdsForm />
-      <CategoriesForm />
-      <VcenterConnectionsPanel />
-      <AddClusterPanel />
-      {canManageAuth ? <AuthenticationForm /> : null}
+      {/* In-page table of contents (#243 Part B — Medium: "Settings page is
+          one flat scroll"): plain fragment anchors are enough here — this is
+          a static jump list, not a repeatable cross-page action, so it does
+          not need the requestAnchorFocus contract lib/anchors.ts defines for
+          that case (see the doc comment on the *_SECTION_HASH constants). */}
+      <nav aria-label="Settings sections" className="flex flex-wrap gap-4 text-sm">
+        <a
+          href={`#${FORECASTING_SECTION_HASH}`}
+          className="text-steel underline-offset-4 hover:underline"
+        >
+          Forecasting
+        </a>
+        <a
+          href={`#${INVENTORY_SECTION_HASH}`}
+          className="text-steel underline-offset-4 hover:underline"
+        >
+          Inventory
+        </a>
+        {canManageAuth ? (
+          <a
+            href={`#${ACCESS_SECTION_HASH}`}
+            className="text-steel underline-offset-4 hover:underline"
+          >
+            Access
+          </a>
+        ) : null}
+      </nav>
+      <section
+        id={FORECASTING_SECTION_HASH}
+        aria-labelledby="settings-section-forecasting-heading"
+        className="scroll-mt-24 space-y-6"
+      >
+        <h2 id="settings-section-forecasting-heading" className="font-display text-h2">
+          Forecasting
+        </h2>
+        <ForecastThresholdsForm />
+        <CategoriesForm />
+      </section>
+      <section
+        id={INVENTORY_SECTION_HASH}
+        aria-labelledby="settings-section-inventory-heading"
+        className="scroll-mt-24 space-y-6"
+      >
+        <h2 id="settings-section-inventory-heading" className="font-display text-h2">
+          Inventory
+        </h2>
+        <VcenterConnectionsPanel />
+        <AddClusterPanel />
+      </section>
+      {canManageAuth ? (
+        <section
+          id={ACCESS_SECTION_HASH}
+          aria-labelledby="settings-section-access-heading"
+          className="scroll-mt-24 space-y-6"
+        >
+          <h2 id="settings-section-access-heading" className="font-display text-h2">
+            Access
+          </h2>
+          <AuthenticationForm />
+        </section>
+      ) : null}
     </div>
   );
 }

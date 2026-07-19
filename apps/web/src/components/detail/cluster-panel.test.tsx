@@ -338,9 +338,13 @@ describe('<ClusterPanel>', () => {
     const strip = await screen.findByTestId('kpi-strip');
     // The 0%-lie must never render on the purchasing-decision KPI strip.
     expect(strip).not.toHaveTextContent('0.0%');
-    // A text-carried "unknown" reason, not color alone.
-    expect(within(strip).getAllByText(/no capacity recorded/i)).toHaveLength(2);
-    expect(within(strip).getByText(/^unknown — no capacity$/i)).toBeInTheDocument();
+    // A text-carried "unknown" reason, not color alone — now three tiles
+    // (Utilization, Headroom, and Runway since #243 Part B item 2, which
+    // moved Runway onto the same KpiTile grammar as its siblings).
+    expect(within(strip).getAllByText(/no capacity recorded/i)).toHaveLength(3);
+    const runwayTile = within(strip).getByText('Runway').closest('div');
+    expect(runwayTile).toHaveTextContent('—');
+    expect(runwayTile).toHaveTextContent(/unknown — no capacity recorded/i);
     expect(
       within(strip).getByText(/capacity required for procurement timing/i),
     ).toBeInTheDocument();
@@ -397,6 +401,28 @@ describe('<ClusterPanel>', () => {
     expect(screen.queryByText('Cluster', { exact: true })).toBeNull();
     const description = screen.getByText('Primary production cluster');
     expect(description).toHaveClass('line-clamp-1');
+  });
+
+  it('drops the one-off "FORECAST" eyebrow above the forecast heading (#243 Part B item 8)', async () => {
+    render(<Harness show />);
+    const heading = await screen.findByRole('heading', { name: /no breach in window/i });
+
+    // The eyebrow's DOM text was "Forecast" (an `uppercase` CSS class made it
+    // *read* as "FORECAST" — the text node itself is title-case, so this must
+    // assert on the actual node text, not the rendered casing). The heading
+    // itself always starts with "Forecast — …", never the bare word, so an
+    // exact match only ever catches a surviving standalone eyebrow.
+    expect(screen.queryByText('Forecast', { exact: true })).toBeNull();
+    expect(heading.tagName).toBe('H2');
+  });
+
+  it('lets the Forecast heading row wrap so WindowControls drops to its own line at narrow widths (#243 Part B item 6)', async () => {
+    render(<Harness show />);
+    const heading = await screen.findByRole('heading', { name: /no breach in window/i });
+
+    const headingRow = heading.closest('div');
+    expect(headingRow).toHaveClass('flex-wrap');
+    expect(headingRow).toContainElement(screen.getByRole('group', { name: 'Forecast window' }));
   });
 
   it('restores focus to the previously-focused element after the panel closes', async () => {
@@ -488,6 +514,42 @@ describe('<ClusterPanel>', () => {
     );
   });
 
+  it('renders Runway through the shared KpiTile — numeral + caption + status accent, not a Card wrapping RunwayPill (#243 Part B item 2)', async () => {
+    render(<Harness show />);
+    const strip = await screen.findByTestId('kpi-strip');
+
+    // Default forecast() fixture never crosses the 70% warn threshold across
+    // its 3-month window, so runway is "no breach in this horizon" — the
+    // numeral carries the horizon length, matching what RunwayPill itself
+    // would have shown ("3+ mo"), just as a KpiTile value instead of a badge.
+    const runwayLabel = within(strip).getByText('Runway');
+    const runwayTile = runwayLabel.closest('div');
+    expect(runwayTile).not.toBeNull();
+    expect(within(runwayTile!).getByText('3+ mo')).toHaveClass('font-mono');
+    expect(runwayTile).toHaveTextContent(/no warn breach in horizon/i);
+    // Healthy runway carries no left-accent border, matching every other
+    // healthy tile in the strip (Headroom, Order by) — RunwayPill's own
+    // amber "accent" Badge doesn't translate 1:1 into the KpiTile grammar,
+    // where "ok" reads as the neutral, no-border state.
+    expect(runwayTile?.className).not.toMatch(/border-l-2/);
+  });
+
+  it('lays the four KPI tiles out 2-up below sm, not four stacked full-width cards (#243 Part B item 3)', async () => {
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const grid = screen.getByTestId('kpi-grid');
+    expect(grid).toHaveClass('grid-cols-2', 'sm:grid-cols-12');
+    // Each tile: col-span-1 on the base 2-col grid (half-width, 2-up) instead
+    // of the old col-span-12 (full-width, stacked) — sm/lg unchanged. Scoped
+    // to the grid itself: "Headroom" also appears in the live-usage section.
+    for (const label of ['Current utilization', 'Headroom', 'Runway', 'Order by']) {
+      const tile = within(grid).getByText(label).closest('div');
+      expect(tile).toHaveClass('col-span-1', 'sm:col-span-6', 'lg:col-span-3');
+      expect(tile?.className).not.toMatch(/\bcol-span-12\b/);
+    }
+  });
+
   it('renders the KPI strip, recommendation chip, and tabs once data loads', async () => {
     render(<Harness show />);
 
@@ -495,7 +557,50 @@ describe('<ClusterPanel>', () => {
     expect(screen.getByTestId('recommendation-chip')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Hosts' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /apps/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Settings' })).toBeInTheDocument();
+    // "Cluster settings", not the bare "Settings" the topbar/⌘K global page
+    // also uses (#243 Part B item 5) — the two cross-reference each other by
+    // name elsewhere in the app, so the panel's own tab needs its own label.
+    expect(screen.getByRole('tab', { name: 'Cluster settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
+  });
+
+  it('clicking the unknown-capacity recommendation chip switches to and focuses the Hosts tab (#243 Part B item 4)', async () => {
+    vi.spyOn(api.clusters, 'get').mockResolvedValue(
+      cluster({
+        metrics: [
+          {
+            metricTypeKey: 'memory_gb',
+            metricTypeDisplayName: 'Memory',
+            unit: 'GB',
+            baselineConsumption: 500,
+            baselineCapacity: 0,
+            currentConsumption: 500,
+            currentCapacity: 0,
+            utilization: null,
+          },
+        ],
+      }),
+    );
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({
+        months: [{ month: '2026-07-01', consumption: 500, capacity: 0, utilization: null }],
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    // Starts on the Hosts tab's sibling by default in this suite (defaultValue
+    // 'hosts'), so switch to a different tab first to prove the click below
+    // is what moves it back, not the initial default.
+    await user.click(screen.getByRole('tab', { name: /apps/i }));
+    expect(screen.getByRole('tab', { name: /apps/i })).toHaveAttribute('aria-selected', 'true');
+
+    await user.click(screen.getByTestId('recommendation-chip-trigger'));
+
+    const hostsTab = screen.getByRole('tab', { name: 'Hosts' });
+    await waitFor(() => expect(hostsTab).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(hostsTab).toHaveFocus());
   });
 
   it('announces scenario activation and clearing via the live region (IMPORTANT #4)', async () => {
@@ -575,6 +680,56 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
     // …and focus back on the toggle that reopens the pane.
     await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
+  });
+
+  it('surfaces an inline error with retry when the scenario forecast fails, and stops claiming an active scenario (#243 Part B item 1)', async () => {
+    vi.spyOn(api.clusters, 'forecastScenario').mockRejectedValue(new Error('boom'));
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    // Sub-lg (the default width here): Apply still dismisses the covering
+    // sheet on ANY submit — closePane() doesn't wait on the query — so the
+    // user is routed straight onto the chart the error must be visible on.
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+
+    // The correction is announced instead of the (never reached) "Scenario
+    // active" text.
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario could not be computed — showing baseline.',
+      ),
+    );
+    // The header no longer claims an active scenario over what is actually
+    // the baseline chart/KPIs.
+    expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
+    expect(screen.getByTestId('scenario-button')).toHaveAccessibleName('Scenario');
+    // No scenario badge on the KPI strip either — it was already correctly
+    // gated on `scenarioQuery.data`, which never arrives here.
+    expect(screen.queryByTestId('scenario-badge')).not.toBeInTheDocument();
+
+    // Inline error above the (still baseline) chart, with a retry affordance.
+    // Scoped to panel-content (not `screen`): the live region above — a
+    // sibling of panel-content, not an ancestor — carries the shorter
+    // "…showing baseline." announcement, which also matches this regex.
+    const content = screen.getByTestId('panel-content');
+    const error = await within(content).findByText(/scenario could not be computed/i);
+    const retry = within(content).getByRole('button', { name: 'Retry' });
+    expect(error).toBeInTheDocument();
+
+    // Retrying with a now-succeeding mock clears the error and restores the
+    // active indicator — proving Retry actually re-fires the query rather
+    // than just being decorative.
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(forecast());
+    await user.click(retry);
+    await waitFor(() =>
+      expect(within(content).queryByText(/scenario could not be computed/i)).toBeNull(),
+    );
+    expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
   });
 
   it('closes the covering sheet after Clear too, announcing the baseline restore (#243 Part B High-4)', async () => {
@@ -719,6 +874,10 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     const indicator = screen.getByTestId('scenario-active-indicator');
     expect(indicator).toBeInTheDocument();
     expect(indicator).toHaveTextContent('Lose 1 host');
+    // Floored at the design system's own --text-label 10px minimum (#243 Part
+    // B item 7) — this was the one sub-10px micro text left in this file.
+    expect(indicator).toHaveClass('text-[10px]');
+    expect(indicator.className).not.toMatch(/text-\[9(\.\d+)?px\]/);
     // A non-colour cue: the summary text is present in the button's accessible name.
     expect(screen.getByTestId('scenario-button')).toHaveAccessibleName(/lose 1 host/i);
     // The colour cue must track the scenario *line*, which is the consumption

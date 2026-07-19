@@ -89,6 +89,64 @@ describe('<OrderByRail>', () => {
     expect(screen.getByText(/no order-by dates in the next 12 months/i)).toBeInTheDocument();
   });
 
+  it('renames the heading to the user-facing "Order deadlines" mental model (finding: rail jargon)', () => {
+    render(<OrderByRail items={[]} />);
+    expect(screen.getByRole('heading', { level: 2, name: /order deadlines/i })).toBeInTheDocument();
+    // The old spec-jargon heading text is gone entirely, not just supplemented.
+    expect(screen.queryByText(/order-by rail/i)).toBeNull();
+  });
+
+  it('keeps the same renamed heading when populated', () => {
+    render(<OrderByRail items={items} />);
+    expect(screen.getByRole('heading', { level: 2, name: /order deadlines/i })).toBeInTheDocument();
+  });
+
+  // Finding: the empty rail spent ~170px restating the verdict below it via a
+  // fixed 86px tick area plus a 12-month axis that encodes nothing at zero
+  // ticks. The empty state must collapse to a compact strip instead.
+  describe('<OrderByRail> empty-state compaction', () => {
+    it('hides the fixed-height tick area and the month axis when there are no ticks', () => {
+      const { container } = render(<OrderByRail items={[]} />);
+      expect(container.querySelector('.h-\\[86px\\]')).not.toBeInTheDocument();
+      // The month axis renders one abbreviated label per month (12 total)
+      // when populated; none should render when the rail is empty. Keyed off
+      // a testid rather than the `translate-x-1` styling utility, which a
+      // restyle would silently turn into a zero-match on BOTH branches —
+      // passing this assertion for the wrong reason.
+      expect(screen.queryAllByTestId('rail-month-label')).toHaveLength(0);
+    });
+
+    it('shows the full tick area and month axis once there is at least one tick', () => {
+      const { container } = render(<OrderByRail items={items} />);
+      expect(container.querySelector('.h-\\[86px\\]')).toBeInTheDocument();
+      expect(screen.getAllByTestId('rail-month-label')).toHaveLength(12);
+    });
+
+    it('renders the heading and the checkmark sentence within the same inline row, not stacked blocks', () => {
+      render(<OrderByRail items={[]} />);
+      const heading = screen.getByRole('heading', { level: 2, name: /order deadlines/i });
+      const sentence = screen.getByText(/no order-by dates in the next 12 months/i);
+      // The old layout stacked a header row above a separately-centered 86px
+      // box; the fix puts both texts in one row so the heading's own parent
+      // contains the sentence too.
+      expect(heading.parentElement).toContainElement(sentence);
+    });
+  });
+
+  describe('<OrderByRail> empty-state hint copy (finding: hint describes invisible chrome)', () => {
+    it('describes what a tick will mean, instead of the old lead-time-zone copy', () => {
+      render(<OrderByRail items={[]} />);
+      expect(screen.getByText(/each mark = a cluster's last safe order date/i)).toBeInTheDocument();
+      expect(screen.queryByText(/the lead-time zone appears/i)).toBeNull();
+    });
+
+    it('keeps the #218-mandated populated hint unchanged', () => {
+      render(<OrderByRail items={items} />);
+      expect(screen.getByText(/shaded = inside 91-day lead time/i)).toBeInTheDocument();
+      expect(screen.queryByText(/each mark = a cluster's last safe order date/i)).toBeNull();
+    });
+  });
+
   it('calls onTickHover with the cluster id on hover and null on leave', () => {
     const onTickHover = vi.fn();
     render(<OrderByRail items={items} onTickHover={onTickHover} />);

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -6,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { FORECASTING_SECTION_HASH } from '@/lib/anchors';
 import { api, describeApiError } from '@/lib/api-client';
 
 interface ThresholdOverridesFormProps {
@@ -72,7 +74,7 @@ export function ThresholdOverridesForm({
     (typeof warnPct === 'number' || typeof critPct === 'number') && !saveMutation.isPending;
 
   const effective = settingsQuery.data?.effective;
-  const sourceLabel = isCurrentlyOverridden ? 'Cluster override' : 'Inherited from tenant defaults';
+  const sourceLabel = isCurrentlyOverridden ? 'Cluster override' : 'Inherited from global defaults';
 
   const handleSubmit = (e: React.FormEvent): void => {
     e.preventDefault();
@@ -94,18 +96,27 @@ export function ThresholdOverridesForm({
   };
 
   return (
-    <Card className="p-4">
+    <Card className="max-w-2xl p-4">
       <header className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold">Thresholds</h2>
           <p className="text-sm text-fg-muted">
-            Override tenant defaults for this cluster, or inherit them.
+            Override{' '}
+            <Link
+              to="/settings"
+              hash={FORECASTING_SECTION_HASH}
+              className="text-steel underline underline-offset-2 hover:text-foreground"
+            >
+              global defaults
+            </Link>{' '}
+            for this cluster, or inherit them.
           </p>
         </div>
         <Badge variant={isCurrentlyOverridden ? 'accent' : 'default'}>{sourceLabel}</Badge>
       </header>
       <form onSubmit={handleSubmit} className="space-y-3" noValidate>
-        <div className="grid grid-cols-2 gap-3">
+        {/* flex, not grid-cols-2 — see the sibling ForecastThresholdsForm. */}
+        <div className="flex flex-wrap gap-4">
           <label className="block">
             <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
               Warn %
@@ -118,7 +129,7 @@ export function ThresholdOverridesForm({
               value={warnPct}
               placeholder={effective ? String(Math.round(effective.warn * 100)) : ''}
               onChange={(e) => setWarnEdit(parseInput(e.target.value))}
-              className="mt-1"
+              className="mt-1 w-24"
             />
           </label>
           <label className="block">
@@ -133,7 +144,7 @@ export function ThresholdOverridesForm({
               value={critPct}
               placeholder={effective ? String(Math.round(effective.crit * 100)) : ''}
               onChange={(e) => setCritEdit(parseInput(e.target.value))}
-              className="mt-1"
+              className="mt-1 w-24"
             />
           </label>
         </div>

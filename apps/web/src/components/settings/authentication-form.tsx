@@ -298,7 +298,7 @@ export function AuthenticationForm(): React.JSX.Element {
       <Card className="p-4">
         <header className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold">Authentication</h2>
+            <h3 className="text-base font-semibold">Authentication</h3>
             <p className="text-sm text-fg-muted">
               Choose how users sign in — open access, local username/password accounts, or single
               sign-on via OIDC. Test the connection before enabling OIDC.

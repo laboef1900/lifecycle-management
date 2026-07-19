@@ -79,6 +79,20 @@ describe('<EditItemDialog> validation', () => {
     expect(await screen.findByText(/too small/i)).toBeInTheDocument();
     expect(api.items.update).not.toHaveBeenCalled();
   });
+
+  it('moves focus to the Name field on a failed submit', async () => {
+    const user = userEvent.setup();
+    renderEditDialog();
+
+    const nameInput = screen.getByRole('textbox', { name: 'Name' });
+    nameInput.removeAttribute('required');
+    await user.clear(nameInput);
+    screen.getByRole('button', { name: 'Save' }).focus();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(nameInput).toHaveFocus());
+  });
 });
 
 describe('<CreateItemDialog> invalidation', () => {

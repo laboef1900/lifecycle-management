@@ -1,9 +1,9 @@
 import { capacityRowInputSchema } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -29,6 +29,8 @@ export function ResizeHostDialog({
   const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
   const [amount, setAmount] = useState(String(latest?.amount ?? 0));
   const [errors, setErrors] = useState<{ effectiveFrom?: string; amount?: string }>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const mutation = useMutation({
     mutationFn: (payload: CapacityAppendInputWire) => api.hosts.appendCapacity(host.id, payload),
@@ -81,7 +83,7 @@ export function ResizeHostDialog({
               : null}
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
           <Field
             label="Effective from"
             type="date"

@@ -87,51 +87,77 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
   const showLeadZone = leadDays > 0;
 
   // The zone and its label are decorative; this hint is where the meaning
-  // reaches assistive tech, so it carries the lead time in words.
+  // reaches assistive tech, so it carries the lead time in words. Only
+  // reachable when the rail has ticks — the empty state has its own copy
+  // (below), since there is no zone or tick to describe yet.
+  // Both of these feed the populated branch only — the compact empty state
+  // renders neither the header-row hint nor the month axis — so the healthy
+  // fleet console (the common case this compaction exists for) shouldn't pay
+  // for 12 Date constructions and 12 Intl format calls it then discards.
+  const populated = ticks.length > 0;
+
   const hint = showLeadZone
     ? `shaded = inside ${leadDays}-day lead time · tick = last safe order date`
-    : ticks.length > 0
-      ? 'tick = last safe order date'
-      : 'the lead-time zone appears once a cluster has an order-by date in this window';
+    : 'tick = last safe order date';
 
-  const monthTicks = Array.from({ length: 12 }, (_, i) => {
-    const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + i + 1, 1));
-    const pct = (daysUntil(d.toISOString().slice(0, 10), today) / RAIL_WINDOW_DAYS) * 100;
-    return {
-      key: d.toISOString().slice(0, 7),
-      label: d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase(),
-      pct,
-    };
-  });
+  const monthTicks = populated
+    ? Array.from({ length: 12 }, (_, i) => {
+        const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + i + 1, 1));
+        const pct = (daysUntil(d.toISOString().slice(0, 10), today) / RAIL_WINDOW_DAYS) * 100;
+        return {
+          key: d.toISOString().slice(0, 7),
+          label: d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase(),
+          pct,
+        };
+      })
+    : [];
+
+  const heading = (
+    <h2 className="text-[10px] font-semibold uppercase tracking-[0.16em] text-fg-muted">
+      Order deadlines — next 12 months
+    </h2>
+  );
 
   return (
     <section
       className="rounded-[var(--radius-card)] border border-border p-4"
       style={{ background: 'var(--surface-card)' }}
-      aria-label="Order-by rail: procurement timeline for the next 12 months"
+      aria-label="Order deadlines: procurement timeline for the next 12 months"
     >
-      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-[10px] font-semibold uppercase tracking-[0.16em] text-fg-muted">
-          Order-by rail — next 12 months
-        </h2>
-        <span className="text-[9px] font-semibold uppercase tracking-[0.1em] text-fg-subtle">
-          {hint}
-        </span>
-      </div>
-
-      <div className="relative h-[86px] border-b border-border-strong">
-        {ticks.length === 0 ? (
-          <div className="absolute inset-0 flex items-center justify-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-fg-muted">
+      {ticks.length === 0 ? (
+        // Compact single-row strip: no order-bys means nothing for the
+        // 86px tick area or month axis to plot, so both are hidden rather
+        // than restating the all-clear verdict a second time below it.
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          {heading}
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span
               aria-hidden
-              className="flex h-5 w-5 items-center justify-center rounded-full border border-success/50 text-success"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-success/50 text-success"
             >
               ✓
             </span>
-            No order-by dates in the next 12 months
+            <span className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-fg-muted">
+              No order-by dates in the next 12 months
+            </span>
+            {/* 10px, not the 9px the populated hint still uses: this span is
+                new copy, and the design system's own --text-label floor is
+                10px (#243 Part B micro-text finding). */}
+            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-fg-subtle">
+              · each mark = a cluster's last safe order date
+            </span>
+          </span>
+        </div>
+      ) : (
+        <>
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-3">
+            {heading}
+            <span className="text-[9px] font-semibold uppercase tracking-[0.1em] text-fg-subtle">
+              {hint}
+            </span>
           </div>
-        ) : (
-          <>
+
+          <div className="relative h-[86px] border-b border-border-strong">
             {showLeadZone ? (
               <span
                 aria-hidden
@@ -218,20 +244,21 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
                 </button>
               );
             })}
-          </>
-        )}
-      </div>
-      <div className="relative mt-1 h-4">
-        {monthTicks.map((m) => (
-          <span
-            key={m.key}
-            className="absolute translate-x-1 font-mono text-[9px] font-medium tracking-[0.08em] text-fg-subtle"
-            style={{ left: `${m.pct}%` }}
-          >
-            {m.label}
-          </span>
-        ))}
-      </div>
+          </div>
+          <div className="relative mt-1 h-4">
+            {monthTicks.map((m) => (
+              <span
+                key={m.key}
+                data-testid="rail-month-label"
+                className="absolute translate-x-1 font-mono text-[9px] font-medium tracking-[0.08em] text-fg-subtle"
+                style={{ left: `${m.pct}%` }}
+              >
+                {m.label}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
     </section>
   );
 }

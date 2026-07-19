@@ -1,10 +1,10 @@
 import { hostTransitionInputSchema } from '@lcm/shared';
 import type { HostState } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -53,6 +53,8 @@ export function HostTransitionDialog({
   const [errors, setErrors] = useState<{ toState?: string; occurredAt?: string; note?: string }>(
     {},
   );
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const mutation = useMutation({
     mutationFn: (payload: HostTransitionInputWire) => api.hosts.transition(host.id, payload),
@@ -109,13 +111,17 @@ export function HostTransitionDialog({
             </DialogFooter>
           </div>
         ) : (
-          <form onSubmit={onSubmit} className="space-y-4">
+          <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label htmlFor="transition-to-state" className="text-sm font-medium">
                 Target state
               </label>
               <Select value={toState} onValueChange={(value) => setToState(value as HostState)}>
-                <SelectTrigger id="transition-to-state">
+                <SelectTrigger
+                  id="transition-to-state"
+                  aria-invalid={errors.toState ? 'true' : undefined}
+                  aria-describedby={errors.toState ? 'transition-to-state-error' : undefined}
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -126,7 +132,11 @@ export function HostTransitionDialog({
                   ))}
                 </SelectContent>
               </Select>
-              {errors.toState ? <p className="text-xs text-destructive">{errors.toState}</p> : null}
+              {errors.toState ? (
+                <p id="transition-to-state-error" className="text-xs text-destructive">
+                  {errors.toState}
+                </p>
+              ) : null}
             </div>
             <Field
               label="Occurred at"
@@ -149,8 +159,13 @@ export function HostTransitionDialog({
                 placeholder="Optional context for the audit trail"
                 className="flex w-full rounded-[var(--radius)] border border-input bg-background px-2.5 py-1.5 text-sm placeholder:text-fg-subtle disabled:cursor-not-allowed disabled:opacity-50"
                 aria-invalid={errors.note ? 'true' : undefined}
+                aria-describedby={errors.note ? 'transition-note-error' : undefined}
               />
-              {errors.note ? <p className="text-xs text-destructive">{errors.note}</p> : null}
+              {errors.note ? (
+                <p id="transition-note-error" className="text-xs text-destructive">
+                  {errors.note}
+                </p>
+              ) : null}
             </div>
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>

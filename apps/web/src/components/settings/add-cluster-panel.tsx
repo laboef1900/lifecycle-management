@@ -77,7 +77,7 @@ function AddClusterCard(): React.JSX.Element {
   return (
     <Card ref={cardRef} id={ADD_CLUSTER_HASH} className="scroll-mt-24 p-6">
       <header className="mb-4">
-        <h2 className="font-display text-lg">Add cluster</h2>
+        <h3 className="font-display text-lg">Add cluster</h3>
         <p className="text-muted-foreground mt-1 text-sm">
           Manually track a vSphere cluster that isn&rsquo;t synced from a vCenter connection. You
           provide the memory baseline; the forecast builds from there.
