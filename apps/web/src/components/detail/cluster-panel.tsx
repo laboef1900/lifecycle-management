@@ -333,13 +333,6 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     void navigate({ to: '/' });
   }, [navigate]);
 
-  const handleScenarioChange = useCallback((next: ScenarioWire | null): void => {
-    setScenario(next);
-    setAnnouncementOverride(
-      next ? `Scenario active: ${describeScenario(next)}.` : 'Baseline forecast restored.',
-    );
-  }, []);
-
   // Scenario pane (#226): the header button toggles it; Esc and the pane's own
   // close control return focus to the button. Closing the pane never clears an
   // active scenario — the header button keeps that visible. Pane open/close is
@@ -379,6 +372,24 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     }
     openPane();
   }, [paneOpen, closePane, openPane]);
+
+  // Below `lg` the Scenario sheet covers the very chart a scenario edits
+  // (#243 Part B): a successful Apply/Clear closes the sheet so the user
+  // lands on the updated forecast with the header indicator visible. At
+  // `lg`+ the chart updates live beside the pane, so it stays open. Guarded
+  // on `paneOpen` so a change landing mid-exit cannot re-dispatch 'close'.
+  // (Declared after `closePane` — it participates in the pane lifecycle.)
+  const paneCoversContent = paneLayout.coversContent;
+  const handleScenarioChange = useCallback(
+    (next: ScenarioWire | null): void => {
+      setScenario(next);
+      setAnnouncementOverride(
+        next ? `Scenario active: ${describeScenario(next)}.` : 'Baseline forecast restored.',
+      );
+      if (paneCoversContent && paneOpen) closePane();
+    },
+    [paneCoversContent, paneOpen, closePane],
+  );
 
   useEffect(() => {
     if (paneOpen) {

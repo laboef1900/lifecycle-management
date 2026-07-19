@@ -134,6 +134,24 @@ test.describe('scenario pane as a modal sheet below lg', () => {
     await expect(close.locator('kbd')).toBeVisible();
     await expect(close.locator('kbd')).toHaveText('Esc');
   });
+
+  test('Apply closes the sheet and lands on the chart with the scenario indicator visible', async ({
+    page,
+  }) => {
+    await openFirstCluster(page);
+    await openScenarioPane(page, SUB_LG.width);
+
+    await page.getByRole('button', { name: 'Apply' }).click();
+
+    // The sheet dismisses itself (#243 Part B High-4): the chart the scenario
+    // edits is now on screen, the column is interactive again…
+    await expect(page.getByTestId('scenario-pane-body')).toHaveCount(0);
+    await expect(page.getByTestId('panel-content')).not.toHaveAttribute('inert', '');
+    // …the header indicator carries the "hypothetical forecast" cue…
+    await expect(page.getByTestId('scenario-active-indicator')).toBeVisible();
+    // …and focus is back on the toggle that reopens the pane.
+    await expect(page.getByTestId('scenario-button')).toBeFocused();
+  });
 });
 
 test.describe('scenario pane beside the content column at lg and up', () => {
@@ -171,6 +189,18 @@ test.describe('scenario pane beside the content column at lg and up', () => {
     expect(cardBox).not.toBeNull();
     expect(Math.round(cardBox!.width)).toBe(348);
     expect(Math.round(sheetBox!.x) - Math.round(cardBox!.x)).toBe(24);
+  });
+
+  test('Apply keeps the pane open beside the live-updating chart', async ({ page }) => {
+    await openFirstCluster(page);
+    await openScenarioPane(page, 340);
+
+    await page.getByRole('button', { name: 'Apply' }).click();
+
+    // Nothing is covered at lg+ — the chart updates live beside the pane, so
+    // auto-dismissing here would just throw away the user's editing context.
+    await expect(page.getByTestId('scenario-pane-body')).toBeVisible();
+    await expect(page.getByTestId('scenario-summary')).toHaveText(/^Active:/);
   });
 });
 

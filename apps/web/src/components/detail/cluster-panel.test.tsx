@@ -500,6 +500,9 @@ describe('<ClusterPanel>', () => {
 
   it('announces scenario activation and clearing via the live region (IMPORTANT #4)', async () => {
     vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(forecast());
+    // Side-by-side width: the pane stays open across Apply → Clear (below lg
+    // a successful change now dismisses the covering sheet, #243 Part B).
+    stubViewportWidth(1280);
     const user = userEvent.setup();
     render(<Harness show />);
 
@@ -554,6 +557,45 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(await screen.findByTestId('scenario-controls')).toBeInTheDocument();
   });
 
+  it('closes the covering sheet after Apply so the chart is visible (#243 Part B High-4)', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    // The sheet dismisses itself — the user lands on the updated forecast…
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    // …with the change announced and the header indicator as the visible cue…
+    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+      'Scenario active: Lose 1 host.',
+    );
+    expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
+    // …and focus back on the toggle that reopens the pane.
+    await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
+  });
+
+  it('keeps the side-by-side pane open after Apply at lg+ — the chart updates live beside it', async () => {
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Lose 1 host.',
+      ),
+    );
+    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
+    expect(screen.getByTestId('scenario-summary')).toHaveTextContent('Active: Lose 1 host');
+  });
+
   it('opening the pane moves focus into it; closing returns focus to the Scenario button', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
@@ -605,8 +647,8 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
       ),
     );
 
-    // Close the pane; the applied scenario must survive and stay visible.
-    await user.keyboard('{Escape}');
+    // Applying from the covering sheet dismisses it (#243 Part B High-4); the
+    // applied scenario must survive and stay visible on the header button.
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
 
     const indicator = screen.getByTestId('scenario-active-indicator');
