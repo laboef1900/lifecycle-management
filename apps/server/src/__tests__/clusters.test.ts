@@ -163,6 +163,44 @@ describe('POST /api/clusters', () => {
     const body = second.json() as { error: { code: string } };
     expect(body.error.code).toBe('CLUSTER_NAME_TAKEN');
   });
+
+  it('reports a metric listed twice as such, never as a name conflict', async () => {
+    // `clusterCreateInputSchema` bounds `baselines` by length alone, so naming one
+    // metric twice is a legal payload — and it writes two nested history rows at
+    // the same (cluster, metric, period), violating
+    // `cluster_baseline_history_period_unique` rather than the cluster-name index.
+    // Two unique indexes are reachable from this one statement, so mapping every
+    // P2002 to CLUSTER_NAME_TAKEN answers a question the operator did not ask:
+    // it reports a name collision that does not exist, and no rename ever
+    // resolves it, so the only available response is to retry with new names
+    // forever.
+    const name = uniqueName('dup-metric');
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name,
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+          { metricTypeKey: 'memory_gb', baselineConsumption: 200, baselineCapacity: 2000 },
+        ],
+      },
+    });
+
+    const body = res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).not.toBe('CLUSTER_NAME_TAKEN');
+    expect(res.statusCode).toBe(422);
+    expect(body.error.code).toBe('BASELINE_PERIOD_OCCUPIED');
+    // Names the metric, because with up to 50 baselines in a payload "one of them
+    // is duplicated" is not something the operator can act on.
+    expect(body.error.message).toContain('memory_gb');
+
+    // ...and the name really was free the whole time — the nested create is one
+    // statement, so the refusal left nothing behind. This is what makes the old
+    // answer a lie rather than merely an imprecise one.
+    expect(await prisma.cluster.count({ where: { name } })).toBe(0);
+  });
 });
 
 describe('GET /api/clusters', () => {

@@ -65,6 +65,47 @@ describe('uniqueConstraintModel', () => {
     expect(uniqueConstraintModel(err)).not.toBe(Prisma.ModelName.ClusterBaselineHistory);
   });
 
+  it('names the INVOCATION model on a nested write, not the table it breached', async () => {
+    // The limitation that makes this helper unusable in a nested-write catch
+    // block, pinned rather than described: Prisma reports the model the call was
+    // made on. Here the violated index is
+    // `cluster_baseline_history_period_unique`, and the answer is still `Cluster`
+    // — the same answer a duplicate cluster name gives — so a caller branching on
+    // it would report CLUSTER_NAME_TAKEN for a payload that named one metric
+    // twice. `ClustersService.create` therefore refuses that payload BEFORE the
+    // write. If a Prisma upgrade starts reporting the nested model, this fails and
+    // the pre-check can be reconsidered.
+    seq += 1;
+    const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    const row = {
+      tenantId: 'default',
+      metricTypeId: metric.id,
+      capturedAt: new Date(Date.UTC(2026, 4, 1)),
+      source: 'manual',
+      baselineConsumption: new Prisma.Decimal(1),
+      baselineCapacity: new Prisma.Decimal(2),
+    };
+
+    const err = await captureP2002(() =>
+      prisma.cluster.create({
+        data: {
+          tenantId: 'default',
+          name: `p2002-nested-${seq}`,
+          baselineHistory: { create: [row, row] },
+        },
+      }),
+    );
+
+    expect((err as Prisma.PrismaClientKnownRequestError).code).toBe('P2002');
+    expect(uniqueConstraintModel(err)).toBe(Prisma.ModelName.Cluster);
+    expect(uniqueConstraintModel(err)).not.toBe(Prisma.ModelName.ClusterBaselineHistory);
+    // The information does exist further down the driver error — it is just not
+    // where `modelName` is. Asserted so the claim above is evidenced, not assumed.
+    expect(JSON.stringify((err as Prisma.PrismaClientKnownRequestError).meta)).toContain(
+      'cluster_baseline_history_period_unique',
+    );
+  });
+
   it('returns undefined for anything that is not a unique-constraint violation', async () => {
     const notFound = await captureP2002(() =>
       prisma.cluster.update({ where: { id: 'no-such-cluster' }, data: { name: 'x' } }),

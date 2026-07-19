@@ -27,6 +27,17 @@ function clusterNameTaken(name: string): UniqueConstraintMapping {
   };
 }
 
+/** Metric keys a `baselines` payload names more than once — normally none. */
+function duplicateMetricKeys(baselines: readonly { metricTypeKey: string }[]): string[] {
+  const seen = new Set<string>();
+  const duplicated = new Set<string>();
+  for (const baseline of baselines) {
+    if (seen.has(baseline.metricTypeKey)) duplicated.add(baseline.metricTypeKey);
+    else seen.add(baseline.metricTypeKey);
+  }
+  return [...duplicated];
+}
+
 const clusterInclude = {
   hosts: {
     include: {
@@ -124,6 +135,30 @@ export class ClustersService {
   }
 
   async create(tenantId: string, input: ClusterCreateInput): Promise<ClusterResponse> {
+    // Refused BEFORE the write rather than mapped from the P2002 it would raise.
+    // `clusterCreateInputSchema` bounds `baselines` by length alone, so a payload
+    // naming one metric twice is legal here and would write two nested rows at one
+    // (clusterId, metricTypeId, capturedAt) — a
+    // `cluster_baseline_history_period_unique` violation, not a name collision.
+    //
+    // @ai-warning Recovering that distinction from the error is NOT available on
+    // this path: for a NESTED create, Prisma 7 reports `meta.modelName` as the
+    // TOP-LEVEL model ("Cluster"), so `uniqueConstraintModel` cannot tell this
+    // violation from a duplicate cluster name and the catch below would answer
+    // CLUSTER_NAME_TAKEN — a conflict that does not exist, which no rename ever
+    // resolves. That behaviour is pinned in `prisma-errors.test.ts`. Checking the
+    // payload is exact, and it is the right layer anyway: the request contradicts
+    // itself, and silently keeping one of the two values would discard a number
+    // the operator supplied.
+    const duplicated = duplicateMetricKeys(input.baselines);
+    if (duplicated.length > 0) {
+      throw new UnprocessableError(
+        'BASELINE_PERIOD_OCCUPIED',
+        `This request records ${duplicated.join(', ')} more than once. ` +
+          'A cluster holds one baseline per metric per period.',
+      );
+    }
+
     const metricTypes = await this.resolveMetricTypes(input.baselines.map((b) => b.metricTypeKey));
 
     try {
@@ -157,6 +192,12 @@ export class ClustersService {
       const newest = (await this.loadNewestBaselines(tenantId, [created.id])).get(created.id) ?? [];
       return this.toResponse(created, newest);
     } catch (err) {
+      // Unconditional, and only because the duplicate-metric guard above closed
+      // the other unique index this statement can reach. `clusters_tenant_name_unique`
+      // is what is left: `clusters_connection_external_unique` is (connectionId,
+      // externalId), both null on every manually created cluster and therefore
+      // distinct in Postgres. Re-open a path to a nested history row here and this
+      // mapping starts lying again.
       translatePrismaError(err, { uniqueConstraint: clusterNameTaken(input.name) });
       throw err;
     }
