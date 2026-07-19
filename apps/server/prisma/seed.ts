@@ -131,27 +131,6 @@ async function main(): Promise<void> {
       },
     });
 
-    await prisma.clusterMetricBaseline.upsert({
-      where: {
-        clusterId_metricTypeId: {
-          clusterId: cluster.id,
-          metricTypeId: memoryMetric.id,
-        },
-      },
-      update: {
-        baselineConsumption: new Prisma.Decimal(reference.baselineConsumptionGb),
-        baselineCapacity: new Prisma.Decimal(reference.baselineCapacityGb),
-      },
-      create: {
-        clusterId: cluster.id,
-        metricTypeId: memoryMetric.id,
-        tenantId: tenant.id,
-        baselineConsumption: new Prisma.Decimal(reference.baselineConsumptionGb),
-        baselineCapacity: new Prisma.Decimal(reference.baselineCapacityGb),
-      },
-    });
-
-    // Dual-write (#177): cluster_baseline_history is the read side, and
     // `capturedAt` is the PERIOD anchor rather than an instant — hence
     // startOfUtcMonth. Idempotent on re-seed via the period unique key, matching
     // the surrounding upserts.
@@ -226,7 +205,7 @@ async function main(): Promise<void> {
   }
 
   const clusterCount = await prisma.cluster.count();
-  const baselineCount = await prisma.clusterMetricBaseline.count();
+  const baselineCount = await prisma.clusterBaselineHistory.count();
   const hostCount = await prisma.host.count();
   const categoryCount = await prisma.category.count();
   console.log(

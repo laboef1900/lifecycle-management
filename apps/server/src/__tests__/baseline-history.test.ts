@@ -52,17 +52,13 @@ async function createCluster(
 }
 
 describe('baseline history — append semantics', () => {
-  it('creating a cluster writes both the history row and the legacy row (dual-write)', async () => {
+  it('creating a cluster writes the history row', async () => {
     const id = await createCluster(uniqueName('create'), '2026-05-01');
 
     const history = await prisma.clusterBaselineHistory.findMany({ where: { clusterId: id } });
     expect(history).toHaveLength(1);
     expect(history[0]?.source).toBe('manual');
     expect(history[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-05-01');
-
-    // The legacy table is still written so an image rollback finds its data.
-    const legacy = await prisma.clusterMetricBaseline.findMany({ where: { clusterId: id } });
-    expect(legacy).toHaveLength(1);
   });
 
   it('a baseline in a NEW month APPENDS rather than overwriting the previous one', async () => {

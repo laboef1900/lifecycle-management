@@ -241,19 +241,6 @@ describe('GET /api/clusters/:id/forecast', () => {
       create: { key: 'cpu_cores', displayName: 'CPU', unit: 'cores' },
     });
     try {
-      await prisma.clusterMetricBaseline.create({
-        data: {
-          tenantId: 'default',
-          clusterId,
-          metricTypeId: cpu.id,
-          baselineConsumption: new Prisma.Decimal(100),
-          baselineCapacity: new Prisma.Decimal(400),
-        },
-      });
-      // Mirrors ClustersService's dual-write (#177). The forecast reads
-      // cluster_baseline_history; cluster_metric_baselines is the legacy table
-      // retained for rollback safety. A fixture writing only the legacy table
-      // produces a metric the forecast reports as untracked.
       await prisma.clusterBaselineHistory.create({
         data: {
           tenantId: 'default',

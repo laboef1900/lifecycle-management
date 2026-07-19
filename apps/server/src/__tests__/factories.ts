@@ -107,18 +107,9 @@ export async function makeCluster(
       ...(options.externalId !== undefined ? { externalId: options.externalId } : {}),
       ...(options.externalName !== undefined ? { externalName: options.externalName } : {}),
       ...(options.lastSyncedAt !== undefined ? { lastSyncedAt: options.lastSyncedAt } : {}),
-      baselines: {
-        create: {
-          tenantId,
-          metricTypeId,
-          baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
-          baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
-        },
-      },
-      // Mirrors ClustersService's dual-write (#177): `cluster_baseline_history`
-      // is what the forecast reads, `cluster_metric_baselines` is the legacy
-      // table kept for rollback safety. A fixture that writes only the legacy
-      // table produces a cluster the forecast reports as METRIC_NOT_TRACKED.
+      // `cluster_baseline_history` is the only baseline store (#195): the
+      // forecast anchors on it, and `ClusterResponse.metrics`/`baselineDate` are
+      // both derived from it. `baselineDate` names the PERIOD this row lands in.
       baselineHistory: {
         create: [
           {

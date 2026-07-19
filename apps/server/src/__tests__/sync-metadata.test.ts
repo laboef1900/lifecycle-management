@@ -10,10 +10,10 @@ import { prisma } from './setup.js';
  * Sync metadata and the connection FK (#176, epic #172).
  *
  * The cascade test below is the one that matters. It is not defensive
- * programming: `cluster_metric_baselines` and `cluster_baseline_history` BOTH
- * cascade from `clusters`, so had this FK been declared Cascade — the obvious
- * choice — deleting a vCenter connection in Settings would have silently deleted
- * every baseline the epic exists to accumulate.
+ * programming: `cluster_baseline_history` cascades from `clusters`, so had this
+ * FK been declared Cascade — the obvious choice — deleting a vCenter connection
+ * in Settings would have silently deleted every baseline the epic exists to
+ * accumulate.
  */
 const service = new VsphereConnectionsService(prisma, randomBytes(32));
 

@@ -23,6 +23,35 @@ const uniqueName = (suffix: string): string => {
   return `cluster-${suffix}-${sequence}`;
 };
 
+/**
+ * The newest baseline-history row per metric — the same reduction the API
+ * performs, re-derived here rather than assumed.
+ *
+ * Asserting on a raw row count instead would be unsound against this table: its
+ * unique key includes `capturedAt`, so the count is metrics x periods, and an
+ * appended period reads exactly like an updated one. (The legacy table these
+ * assertions used to target was keyed on (cluster, metric) alone, which is what
+ * made a bare count meaningful there and meaningless here.)
+ */
+async function newestBaselinesByMetric(
+  clusterId: string,
+): Promise<Map<string, { baselineConsumption: number; baselineCapacity: number }>> {
+  const rows = await prisma.clusterBaselineHistory.findMany({
+    where: { clusterId },
+    include: { metricType: { select: { key: true } } },
+    orderBy: { capturedAt: 'asc' },
+  });
+  const newest = new Map<string, { baselineConsumption: number; baselineCapacity: number }>();
+  for (const row of rows) {
+    // Ascending, so the last write per metric is that metric's newest.
+    newest.set(row.metricType.key, {
+      baselineConsumption: row.baselineConsumption.toNumber(),
+      baselineCapacity: row.baselineCapacity.toNumber(),
+    });
+  }
+  return newest;
+}
+
 describe('POST /api/clusters', () => {
   it('creates a cluster with baselines and returns 201', async () => {
     const name = uniqueName('create');
@@ -261,19 +290,15 @@ describe('PUT /api/clusters/:id', () => {
     });
     expect(response.statusCode).toBe(200);
 
-    const rows = await prisma.clusterMetricBaseline.findMany({
-      where: { clusterId: id },
-      include: { metricType: { select: { key: true } } },
-    });
-    const byKey = new Map(rows.map((r) => [r.metricType.key, r]));
+    const byKey = await newestBaselinesByMetric(id);
 
     // The omitted metric survives, unchanged.
     expect(byKey.get('cpu_cores_181')).toBeDefined();
-    expect(byKey.get('cpu_cores_181')?.baselineConsumption.toNumber()).toBe(8);
-    expect(byKey.get('cpu_cores_181')?.baselineCapacity.toNumber()).toBe(64);
+    expect(byKey.get('cpu_cores_181')?.baselineConsumption).toBe(8);
+    expect(byKey.get('cpu_cores_181')?.baselineCapacity).toBe(64);
 
     // The supplied metric is updated.
-    expect(byKey.get('memory_gb')?.baselineConsumption.toNumber()).toBe(150);
+    expect(byKey.get('memory_gb')?.baselineConsumption).toBe(150);
   });
 
   it('updates every supplied metric when baselines covers them all', async () => {
@@ -310,16 +335,16 @@ describe('PUT /api/clusters/:id', () => {
     });
     expect(response.statusCode).toBe(200);
 
-    const rows = await prisma.clusterMetricBaseline.findMany({
-      where: { clusterId: id },
-      include: { metricType: { select: { key: true } } },
-    });
-    expect(rows).toHaveLength(2);
-    const byKey = new Map(rows.map((r) => [r.metricType.key, r]));
-    expect(byKey.get('memory_gb')?.baselineConsumption.toNumber()).toBe(150);
-    expect(byKey.get('memory_gb')?.baselineCapacity.toNumber()).toBe(1200);
-    expect(byKey.get('cpu_cores_181')?.baselineConsumption.toNumber()).toBe(16);
-    expect(byKey.get('cpu_cores_181')?.baselineCapacity.toNumber()).toBe(96);
+    const byKey = await newestBaselinesByMetric(id);
+    expect([...byKey.keys()].sort()).toEqual(['cpu_cores_181', 'memory_gb']);
+    expect(byKey.get('memory_gb')?.baselineConsumption).toBe(150);
+    expect(byKey.get('memory_gb')?.baselineCapacity).toBe(1200);
+    expect(byKey.get('cpu_cores_181')?.baselineConsumption).toBe(16);
+    expect(byKey.get('cpu_cores_181')?.baselineCapacity).toBe(96);
+
+    // A payload naming no date corrects the period it is correcting: both rows
+    // were updated in place, so no second period was appended.
+    expect(await prisma.clusterBaselineHistory.count({ where: { clusterId: id } })).toBe(2);
   });
 
   it('returns 404 for unknown id', async () => {
@@ -379,7 +404,7 @@ describe('DELETE /api/clusters/:id', () => {
     const followup = await server.inject({ method: 'GET', url: `/api/clusters/${id}` });
     expect(followup.statusCode).toBe(404);
 
-    const remainingBaselines = await prisma.clusterMetricBaseline.count({
+    const remainingBaselines = await prisma.clusterBaselineHistory.count({
       where: { clusterId: id },
     });
     expect(remainingBaselines).toBe(0);

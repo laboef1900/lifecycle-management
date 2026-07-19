@@ -122,24 +122,9 @@ export class ClustersService {
           name: input.name,
           description: input.description ?? null,
           baselineDate: input.baselineDate,
-          baselines: {
-            create: input.baselines.map((b) => {
-              const metricType = metricTypes.get(b.metricTypeKey);
-              if (!metricType) {
-                throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${b.metricTypeKey}`);
-              }
-              return {
-                tenantId,
-                metricTypeId: metricType.id,
-                baselineConsumption: new Prisma.Decimal(b.baselineConsumption),
-                baselineCapacity: new Prisma.Decimal(b.baselineCapacity),
-              };
-            }),
-          },
-          // DUAL-WRITE (#177). `cluster_baseline_history` is the read side; the
-          // `baselines` relation above is the legacy table, retained and written
-          // for one release purely so an image rollback stays safe. See the
-          // @ai-warning on `writeBaselineHistory`.
+          // `input.baselineDate` is no longer stored as a cluster-level scalar
+          // (#195); it survives on the create contract purely as the PERIOD ANCHOR
+          // for the first history row, snapped to the first of the month below.
           baselineHistory: {
             create: input.baselines.map((b) => {
               const metricType = metricTypes.get(b.metricTypeKey);
@@ -233,29 +218,6 @@ export class ClustersService {
 
         await this.prisma.$transaction([
           this.prisma.cluster.update({ where: { id }, data }),
-          // @ai-warning DUAL-WRITE, deliberate and temporary (#177, decision Q4).
-          // `cluster_baseline_history` is the ONLY read side; `cluster_metric_baselines`
-          // is written and never read by this code. It exists so that rolling
-          // LCM_IMAGE_TAG back to the previous image still finds the data it
-          // expects — the rollback window never closes. Do NOT "simplify" by
-          // deleting this write until the CONTRACT migration drops the table;
-          // doing so silently strands any rollback on stale data.
-          //
-          // The legacy table mirrors the NEWEST baseline only. A manual edit that
-          // backfills an OLDER period must append to history WITHOUT touching it,
-          // or the rollback target would show an old value as current.
-          ...rows.map((row) =>
-            this.prisma.clusterMetricBaseline.upsert({
-              where: {
-                clusterId_metricTypeId: { clusterId: id, metricTypeId: row.metricTypeId },
-              },
-              create: { clusterId: id, tenantId, ...row },
-              update: {
-                baselineConsumption: row.baselineConsumption,
-                baselineCapacity: row.baselineCapacity,
-              },
-            }),
-          ),
           // Append-only history. Re-entering a period the admin already recorded
           // is an explicit correction, so it upserts rather than erroring — and
           // flips `source` back to manual, since a human has overridden whatever
