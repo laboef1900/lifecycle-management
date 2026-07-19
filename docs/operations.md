@@ -225,19 +225,151 @@ code would pair an _arbitrary_ baseline value with a _fresh_ date — a years-ol
 capacity number displayed as current, tripping no staleness check, on the number that
 drives hardware purchasing. That window is now deliberately closed.
 
-**If the migration itself fails, it fails safe with no action required.** Prisma runs
-each migration in a transaction, so a failure rolls the whole thing back; the drop is
-guarded by an orphan count that RAISEs if any legacy baseline lacks a
-`cluster_baseline_history` row (an incomplete backfill), and the container's
-`prisma migrate deploy` then exits non-zero, so **Fastify never starts**. The service
-serves nothing rather than serving wrong numbers. Fix forward — complete the backfill
-— and redeploy.
+**If the migration itself fails, it fails safe — but it does not fix itself.** Prisma
+runs each migration in a transaction, so a failure rolls the whole thing back: no
+table is dropped, no `captured_at` is rewritten, and the database is left exactly as
+the previous release left it. `prisma migrate deploy` then exits non-zero and
+**Fastify never starts**, so the service serves nothing rather than serving wrong
+numbers. This is a **blocked deploy, not corruption** — the pre-drop image still
+boots against that database.
+
+Two guards can stop it, and they call for different responses. Read the RAISE message
+in `docker compose logs server` to tell them apart.
+
+#### Guard 1 — orphaned legacy baselines
+
+> `Refusing to drop cluster_metric_baselines: N baseline(s) have no cluster_baseline_history row. Backfill is incomplete.`
+
+The #177 expand migration did not copy every legacy row. It asserts its own row
+counts, so reaching this state means that assertion was bypassed (a hand-applied
+migration, or a restore that mixed schema versions). **Remedy: complete the backfill**
+— re-run the expand migration's `INSERT ... SELECT` for the missing pairs — then
+resume at "Clearing the failed-migration record" below.
+
+#### Guard 2 — a `captured_at` collision
+
+> `Refusing to normalise cluster_baseline_history.captured_at: N (cluster, metric, month) group(s) hold more than one row, so snapping to the first of the month would destroy a measurement. Reconcile them by hand first.`
+
+**This is the one you are likely to actually hit, and "complete the backfill" is a
+dead end for it — the backfill is already complete.** It arises from ordinary use of
+the previous release:
+
+1. A pre-#177 cluster carries `baseline_date = 2026-01-15`. Nothing forbade the day:
+   `dateOnly` in `@lcm/shared` is a bare `YYYY-MM-DD` regex with no first-of-month
+   refinement, and the create dialog is a free `<input type="date">`.
+2. The expand migration backfilled `captured_at = 2026-01-15` **verbatim**.
+3. During the dual-write release an operator edited a baseline **value** without
+   touching the date. That path snapped through `startOfUtcMonth` and appended
+   `2026-01-01`, while `clusters.baseline_date` stayed `2026-01-15`.
+
+Both rows now sit in January, so snapping the first onto the second would silently
+destroy one. The guard refuses instead.
+
+It is **deterministically resolvable at this point**, and that is precisely why the
+guard runs BEFORE the `DROP TABLE`: `cluster_metric_baselines` is still present, and
+it holds exactly the values clients were being served. The row matching it is the
+correction; the other is the stale backfill. Structurally the two are also easy to
+recognise — every application writer snaps, so the mid-month row can only have come
+from the backfill.
+
+```bash
+# 1. Look at every colliding group, with what clients were being served alongside.
+docker compose exec -T db psql -U lcm -d lcm <<'SQL'
+SELECT c.name AS cluster, mt.key AS metric, h.captured_at, h.source,
+       h.baseline_consumption, h.baseline_capacity,
+       b.baseline_consumption AS served_consumption,
+       b.baseline_capacity    AS served_capacity,
+       ((h.baseline_consumption, h.baseline_capacity)
+        IS NOT DISTINCT FROM (b.baseline_consumption, b.baseline_capacity)) AS was_served
+FROM "cluster_baseline_history" h
+JOIN "clusters" c      ON c.id  = h.cluster_id
+JOIN "metric_types" mt ON mt.id = h.metric_type_id
+LEFT JOIN "cluster_metric_baselines" b
+       ON b.cluster_id = h.cluster_id AND b.metric_type_id = h.metric_type_id
+WHERE (h.cluster_id, h.metric_type_id, date_trunc('month', h.captured_at)) IN (
+        SELECT cluster_id, metric_type_id, date_trunc('month', captured_at)
+        FROM "cluster_baseline_history"
+        GROUP BY 1, 2, 3
+        HAVING COUNT(*) > 1)
+ORDER BY c.name, mt.key, h.captured_at;
+SQL
+```
+
+```bash
+# 2. Drop the stale backfill row in every group where exactly ONE row is the one
+#    clients were served. Runs in an explicit transaction and reports what is left;
+#    COMMIT only when `remaining_collisions` is 0, otherwise ROLLBACK and resolve
+#    the rest by hand using the table above.
+docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+WITH collisions AS (
+    SELECT cluster_id, metric_type_id, date_trunc('month', captured_at) AS period
+    FROM "cluster_baseline_history"
+    GROUP BY 1, 2, 3
+    HAVING COUNT(*) > 1
+),
+scored AS (
+    SELECT h.id, h.cluster_id, h.metric_type_id,
+           date_trunc('month', h.captured_at) AS period,
+           ((h.baseline_consumption, h.baseline_capacity)
+            IS NOT DISTINCT FROM (b.baseline_consumption, b.baseline_capacity)) AS was_served
+    FROM "cluster_baseline_history" h
+    JOIN collisions k
+      ON k.cluster_id     = h.cluster_id
+     AND k.metric_type_id = h.metric_type_id
+     AND k.period         = date_trunc('month', h.captured_at)
+    LEFT JOIN "cluster_metric_baselines" b
+      ON b.cluster_id = h.cluster_id AND b.metric_type_id = h.metric_type_id
+),
+resolvable AS (
+    SELECT cluster_id, metric_type_id, period
+    FROM scored
+    GROUP BY 1, 2, 3
+    HAVING COUNT(*) FILTER (WHERE was_served) = 1
+)
+DELETE FROM "cluster_baseline_history" h
+USING scored s, resolvable r
+WHERE s.id = h.id
+  AND r.cluster_id     = s.cluster_id
+  AND r.metric_type_id = s.metric_type_id
+  AND r.period         = s.period
+  AND NOT s.was_served;
+
+SELECT COUNT(*) AS remaining_collisions FROM (
+  SELECT 1 FROM "cluster_baseline_history"
+  GROUP BY cluster_id, metric_type_id, date_trunc('month', captured_at)
+  HAVING COUNT(*) > 1) t;
+COMMIT;
+SQL
+```
+
+The `resolvable` filter is the safety property: a group is touched only when exactly
+one of its rows matches what was served, so the statement **cannot empty a group**.
+Groups where neither row matches (a #178 vSphere snapshot competing with a manual
+backfill) or where both match are deliberately left for a human, and reappear in the
+count. Deciding those means choosing which measurement January actually has —
+`source` matters as much as the numbers, because it changes whether tracked deltas
+are treated as already absorbed (Q9b).
+
+#### Clearing the failed-migration record
+
+Fixing the data is not enough on its own. Prisma recorded the failed attempt, so the
+next `deploy` refuses with **P3009** (`migrate found failed migrations in the target
+database`) instead of retrying. Clear the record, then redeploy:
+
+```bash
+docker compose run --rm server node_modules/prisma/build/index.js migrate resolve \
+  --rolled-back 20260719120000_drop_legacy_cluster_baselines
+docker compose up -d
+```
 
 > **`prisma migrate resolve --rolled-back` does NOT undo any DDL.** It only edits
 > the `_prisma_migrations` bookkeeping table so a failed migration stops blocking
 > the next `deploy`. Reading the flag name as "undo" leaves a database whose actual
 > shape and whose recorded history disagree — worse than either problem alone.
-> Prisma's documented recovery is roll **forward**.
+> Prisma's documented recovery is roll **forward**. It is honest _here_ only because
+> Postgres genuinely did roll the whole migration back inside its transaction, so
+> the recorded history and the actual schema already agree.
 
 **Prerequisite record.** A `pg_dump` taken and verified per the row-count procedure
 above is a hard prerequisite for deploying this migration, because it is the only
