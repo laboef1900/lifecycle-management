@@ -50,9 +50,22 @@
     var(--accent),
     color-mix(in oklab, var(--accent) 65%, black)
   );
-  --success: #1e7f4f;
+  /* @ai-note spec §3's #1E7F4F measures 4.377:1 as `Badge`'s success variant
+     actually renders it — text-success on bg-success/10 composited over the
+     white --card, not bare white (the ~4.4:1 finding, docs/uiux-audit-2026-07.md)
+     — short of the 4.5:1 SC 1.4.3 floor. Darkened within the same green hue
+     family (150.3°→152.9°) to #176B45 (5.620:1). Dark theme's #3DD68C is
+     unaffected (~5.9:1, already clears AA) and untouched. */
+  --success: #176b45;
   --success-foreground: #ffffff;
-  --warning: #95610c;
+  /* @ai-note same pass, same composited-background methodology: spec §3's
+     #95610C measures 4.603:1 — technically clears AA but with almost no
+     margin (the audit's "no headroom" note), close enough to the floor that
+     ordinary rendering/anti-aliasing variance could tip it under 4.5:1.
+     Darkened one step within the same amber hue family (37.2°→39.3°) to
+     #865C0C (5.147:1) for real headroom. Dark theme's #FFC53D is unaffected
+     (shared with --accent by deliberate design, see CLAUDE.md) and untouched. */
+  --warning: #865c0c;
   --warning-foreground: #ffffff;
   --destructive: #c0343c;
   --destructive-foreground: #ffffff;
