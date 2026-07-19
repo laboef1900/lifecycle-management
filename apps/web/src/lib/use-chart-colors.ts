@@ -50,9 +50,9 @@ export const FALLBACK_LIGHT: ChartFallback = {
   grid: '#e3e8f2', // --chart-grid
   axis: '#8a94ac', // --chart-axis
   utilizationOk: '#5a6478', // --fg-muted
-  utilizationWarn: '#95610c', // --warning
+  utilizationWarn: '#865c0c', // --warning
   utilizationCrit: '#c0343c', // --destructive
-  palette: ['#171c2c', '#5a6478', '#66708c', '#a8b0c4', '#8f6400', '#95610c', '#0f766e'],
+  palette: ['#171c2c', '#5a6478', '#66708c', '#a8b0c4', '#8f6400', '#865c0c', '#0f766e'],
 };
 
 export const FALLBACK_DARK: ChartFallback = {
