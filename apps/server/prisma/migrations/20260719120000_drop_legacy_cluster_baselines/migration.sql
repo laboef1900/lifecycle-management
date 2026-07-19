@@ -58,10 +58,24 @@ END $$;
 -- MAX(captured_at) — and a stale 2026-01-15 backfill row outranks the 2026-01-01
 -- correction the application wrote beside it during the dual-write release. The
 -- legacy table held only the correction, which is what clients actually saw, so
--- without this step the drop silently swaps in pre-correction numbers on the
--- fleet console, the cluster panel and the forecast, with no error raised and no
--- way to reach the correct row through the API. The #177 orphan guard above does
--- not catch it: a history row for that (cluster, metric) does exist.
+-- for a correction landing in THAT SAME MONTH the drop would otherwise swap in
+-- pre-correction numbers on the fleet console, the cluster panel and the
+-- forecast, with no error raised and no way to reach the correct row through the
+-- API. The #177 orphan guard above does not catch it: a history row for that
+-- (cluster, metric) does exist.
+--
+-- SCOPE — what this step does NOT cover. It only closes the same-month case,
+-- where snapping makes the correction and the backfill collide (the guard) or
+-- coincide. A correction that re-anchored to a DIFFERENT month is untouched by
+-- normalisation and still changes displayed values: an operator who re-dated a
+-- baseline to a period OLDER than the backfilled `baseline_date` left the stale
+-- backfill row holding MAX(captured_at), so it becomes the served row while the
+-- legacy table was serving the correction. Both guards pass — the (cluster,
+-- metric) history row exists and the two rows are in different months — and
+-- nothing here can tell the two apart, because after the legacy table is gone
+-- there is no record of which row was being served. This is a deliberate,
+-- documented value change rather than a defect to detect: see "After this
+-- migration: what changed for operators" in docs/operations.md.
 --
 -- The guard runs first so a database where snapping would COLLAPSE two rows into
 -- one period fails the deploy for operator-reviewed cleanup, rather than having

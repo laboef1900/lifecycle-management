@@ -322,6 +322,11 @@ WHERE h."captured_at" <> date_trunc('month', h."captured_at")::date
         WHERE o."cluster_id"     = h."cluster_id"
           AND o."metric_type_id" = h."metric_type_id"
           AND o."id"            <> h."id"
+          -- The surviving sibling must be the SNAPPED row. Without this line a
+          -- group of two MID-month rows satisfies the EXISTS in both directions
+          -- and loses both, leaving no collision for the guard below to catch —
+          -- so the transaction commits an emptied group.
+          AND o."captured_at"    = date_trunc('month', o."captured_at")::date
           AND date_trunc('month', o."captured_at")
               = date_trunc('month', h."captured_at"));
 
@@ -346,17 +351,32 @@ COMMIT;
 SQL
 ```
 
-The `EXISTS` clause is the safety property: a mid-month row is dropped **only** when
-another row shares its `(cluster, metric, month)`. An isolated mid-month row is a
-legitimate lone measurement, and the normalisation `UPDATE` in the migration snaps it
-without losing anything — so this statement cannot empty a group, and it touches
-nothing outside the groups the guard named.
+The `EXISTS` clause is the safety property, and **both** of its conditions carry
+weight: a mid-month row is dropped only when a row that is already snapped to the
+first of the month shares its `(cluster, metric, month)`. Requiring the survivor to
+be the snapped one is what makes "this statement cannot empty a group" true. Matching
+merely "some other row in the same month" reads equivalent — the documented shape is
+always one backfill row plus one snapped row — but on a group of **two mid-month
+rows** each is the other's sibling, both are deleted, and the final `RAISE` then finds
+no collision to complain about and commits the emptied group. An isolated mid-month
+row is a legitimate lone measurement, which the migration's normalisation `UPDATE`
+snaps without losing anything, so it is left alone either way.
 
 If the final `RAISE` fires, the transaction is rolled back and nothing was changed.
-That means two _snapped_ rows share a month, which the
-`cluster_baseline_history_period_unique` index makes impossible — so it indicates
-corruption or a hand-edited database rather than the dual-write history this
-procedure covers. Stop and investigate; do not delete rows to make the guard pass.
+Two cases reach it, and neither is resolved by deleting more rows:
+
+- **Two mid-month rows in one group.** The `EXISTS` deliberately leaves them, because
+  there is no structural rule saying which one to keep — the day-of-month
+  discriminator only tells a backfill row from an application row, and here both look
+  like backfill rows. The expand migration wrote at most one row per
+  `(cluster, metric)`, so this should not arise from the dual-write history; treat it
+  as a hand-edited or partially restored database and reconcile the two values with
+  whoever recorded them.
+- **Two _snapped_ rows sharing a month**, which the
+  `cluster_baseline_history_period_unique` index makes impossible — so it likewise
+  indicates corruption rather than the dual-write history this procedure covers.
+
+Stop and investigate; do not delete rows to make the guard pass.
 
 #### Clearing the failed-migration record
 
@@ -394,6 +414,23 @@ in the dump being checked and not in the schema afterwards.
   on the fleet console, because metrics came from a table the sync never wrote.
 - **Synced clusters report utilization as unknown** where their baseline capacity is
   0 and their hosts carry the capacity — the documented Q9d/#200 intent, now visible.
+- **Baseline VALUES may change on a cluster that was re-dated during the dual-write
+  release**, specifically where that edit anchored the baseline to a period _older_
+  than the backfilled `baseline_date`. `ClusterResponse.metrics` now follows the
+  newest period rather than the last write, so the older correction stops outranking
+  the stale backfill row and the displayed numbers revert to the backfill's. Neither
+  migration guard catches this — the two rows are in different months, so nothing
+  collides — and once `cluster_metric_baselines` is dropped there is no record of
+  which row was previously served. **Spot-check any cluster whose baseline date was
+  corrected backwards in that window** and re-enter the value if it reads wrong;
+  saving it appends a correction at the newest period, which then wins outright.
+- **A date-only baseline edit can now be refused.** Changing only the date re-dates
+  an existing measurement, so it can move a baseline _backwards_ only. Submitting a
+  later date alone returns 422 `BASELINE_PERIOD_NOT_MEASURED`, because there is no
+  measurement for that period to move onto it and inventing one would absorb real
+  consumption, shadow the month's vCenter snapshot, and clear the staleness flag
+  without measuring anything. To record a baseline for a later period, submit its
+  values — that appends a new measurement.
 
 ## vCenter connections
 
