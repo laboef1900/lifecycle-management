@@ -621,7 +621,6 @@ describe('ClusterResponse.metrics is derived from baseline history', () => {
         name: uniqueName('synced-history-only'),
         source: 'vsphere',
         lastSyncedAt: new Date(),
-        baselineDate: new Date(Date.UTC(2026, 4, 1)),
         baselineHistory: {
           create: {
             tenantId: 'default',
@@ -664,7 +663,6 @@ describe('ClusterResponse.metrics is derived from baseline history', () => {
         tenantId: 'default',
         name: uniqueName('no-history'),
         source: 'vsphere',
-        baselineDate: new Date(Date.UTC(2026, 4, 1)),
       },
     });
     await prisma.cluster.update({
@@ -695,7 +693,6 @@ describe('ClusterResponse.metrics is derived from baseline history', () => {
         tenantId: 'default',
         name: uniqueName('vsphere-absorb'),
         source: 'vsphere',
-        baselineDate: new Date(Date.UTC(2026, 4, 1)),
         baselineHistory: {
           create: {
             tenantId: 'default',
@@ -827,7 +824,6 @@ describe('PUT /api/clusters/:id — a date-only edit re-anchors baseline history
         tenantId: 'default',
         name: uniqueName('reanchor-empty'),
         source: 'vsphere',
-        baselineDate: new Date(Date.UTC(2026, 4, 1)),
       },
     });
 

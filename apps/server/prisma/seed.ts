@@ -121,13 +121,11 @@ async function main(): Promise<void> {
       },
       update: {
         description: reference.description,
-        baselineDate: BASELINE_DATE,
       },
       create: {
         tenantId: tenant.id,
         name: reference.name,
         description: reference.description,
-        baselineDate: BASELINE_DATE,
       },
     });
 

@@ -121,7 +121,6 @@ export class ClustersService {
           tenantId,
           name: input.name,
           description: input.description ?? null,
-          baselineDate: input.baselineDate,
           // `input.baselineDate` is no longer stored as a cluster-level scalar
           // (#195); it survives on the create contract purely as the PERIOD ANCHOR
           // for the first history row, snapped to the first of the month below.

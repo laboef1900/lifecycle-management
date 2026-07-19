@@ -33,6 +33,13 @@ export interface MakeClusterOptions {
   id?: string;
   name?: string;
   description?: string | null;
+  /**
+   * The PERIOD the cluster's first baseline-history row lands in, snapped to the
+   * first of the month. Since #195 there is no cluster-level baseline date column
+   * behind this — `ClusterResponse.baselineDate` is derived from history — but the
+   * option name is kept because ~8 call sites pass it and several feed the
+   * forecast characterization snapshot.
+   */
   baselineDate?: Date;
   metricKey?: string;
   baselineConsumption?: number;
@@ -101,7 +108,6 @@ export async function makeCluster(
       tenantId,
       name,
       description: options.description ?? null,
-      baselineDate: options.baselineDate ?? DEFAULT_BASELINE_DATE,
       ...(options.source !== undefined ? { source: options.source } : {}),
       ...(options.connectionId !== undefined ? { connectionId: options.connectionId } : {}),
       ...(options.externalId !== undefined ? { externalId: options.externalId } : {}),
