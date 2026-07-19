@@ -1,6 +1,7 @@
 import type { ForecastMonthPoint } from '@lcm/shared';
+import { useId } from 'react';
 import {
-  CartesianGrid,
+  Area,
   ComposedChart,
   Line,
   ReferenceDot,
@@ -95,6 +96,12 @@ export function ClusterTileChart({
   orderByDate,
 }: ClusterTileChartProps): React.JSX.Element | null {
   const colors = useChartColors();
+  // A tile-instance-unique gradient id: the fleet grid renders many tiles at
+  // once, each its own <svg> root, and a shared literal id would duplicate
+  // across the document (invalid HTML, and `url(#id)` resolution across
+  // duplicates is undefined). Colons stripped since `url(#id)` fragment refs
+  // are safest as plain tokens.
+  const gradientId = `tile-consumption-${useId().replace(/:/g, '')}`;
   if (months.length === 0) return null;
 
   const currentMonth = todayIso();
@@ -148,7 +155,17 @@ export function ClusterTileChart({
     >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
+          <defs>
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={colors.consumption} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={colors.consumption} stopOpacity={0.05} />
+            </linearGradient>
+          </defs>
+          {/* No CartesianGrid here (#243 Part B): the y-axis's 50/75/100 tick
+              labels already carry the reference, and the warn/crit/capacity
+              hairlines below are the only lines that should read as a
+              reference — a horizontal grid competed with them for attention
+              on an already-small tile. */}
           <XAxis
             dataKey="month"
             height={X_AXIS_HEIGHT}
@@ -192,6 +209,28 @@ export function ClusterTileChart({
                 </div>
               );
             }}
+          />
+          {/* Low-opacity fill under the line (#243 Part B) — mirrors the big
+              ForecastChart's gradient area device so the consumption series
+              reads as the primary mark rather than just another hairline.
+              Two Areas (not one) so the fill follows the same solid/dashed
+              split as the strokes below; both draw before the hairlines so
+              the thresholds stay crisp on top of the tint. */}
+          <Area
+            type="monotone"
+            dataKey="actual"
+            stroke="none"
+            fill={`url(#${gradientId})`}
+            isAnimationActive={false}
+            connectNulls={false}
+          />
+          <Area
+            type="monotone"
+            dataKey="forecast"
+            stroke="none"
+            fill={`url(#${gradientId})`}
+            isAnimationActive={false}
+            connectNulls={false}
           />
           {/* Clamp the hairlines into the window. Recharts' ReferenceLine
               defaults to ifOverflow="discard", so a threshold configured below

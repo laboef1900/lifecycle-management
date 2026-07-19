@@ -1,6 +1,6 @@
 import type { ForecastMonthPoint } from '@lcm/shared';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { todayIso } from '@/lib/format';
 
@@ -68,7 +68,6 @@ vi.mock('recharts', () => {
         {children}
       </div>
     ),
-    CartesianGrid: () => <div data-testid="grid" />,
     XAxis: ({
       dataKey,
       tickFormatter,
@@ -120,7 +119,10 @@ vi.mock('recharts', () => {
         })}
       </div>
     ),
-    Line: ({ dataKey }: { dataKey: string }) => <div data-testid={`line-${dataKey}`} />,
+    Area: ({ dataKey }: { dataKey: string }) => <div data-testid={`area-${dataKey}`} />,
+    Line: ({ dataKey, strokeDasharray }: { dataKey: string; strokeDasharray?: string }) => (
+      <div data-testid={`line-${dataKey}`} data-dash={strokeDasharray ?? ''} />
+    ),
     // `data-y`, `data-stroke` and `data-dash` are surfaced alongside the testid
     // so a test can identify a hairline by its role (stroke) and assert both
     // where it sits and whether it is marked off-scale — including when two of
@@ -157,6 +159,27 @@ const months: ForecastMonthPoint[] = [
 ];
 
 describe('<ClusterTileChart>', () => {
+  // jsdom doesn't recognise SVG namespace elements like <linearGradient> (used
+  // for the area-fill gradient below) and warns about casing; the warnings
+  // don't affect the assertions — same suppression as forecast-chart.test.tsx.
+  let originalError: typeof console.error;
+  beforeAll(() => {
+    originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      const first = args[0];
+      if (
+        typeof first === 'string' &&
+        (first.includes('unrecognized in this browser') || first.includes('incorrect casing'))
+      ) {
+        return;
+      }
+      originalError(...args);
+    };
+  });
+  afterAll(() => {
+    console.error = originalError;
+  });
+
   it('renders nothing when there are no months', () => {
     const { container } = render(
       <ClusterTileChart months={[]} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
@@ -226,6 +249,29 @@ describe('<ClusterTileChart>', () => {
     // values are within [40,125] so the plotted line equals the true util.
     expect(rows[0]).toEqual({ month: '2026-07-01', util: 70, actual: 70, forecast: 70 });
     expect(rows[1]).toEqual({ month: '2026-08-01', util: 80, actual: null, forecast: 80 });
+  });
+
+  it('keeps the actual segment solid (no dash) and the forecast segment dashed', () => {
+    render(
+      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+    );
+    expect(screen.getByTestId('line-actual').dataset.dash).toBe('');
+    expect(screen.getByTestId('line-forecast').dataset.dash).not.toBe('');
+  });
+
+  it('fills a low-opacity area under both the actual and forecast segments', () => {
+    render(
+      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+    );
+    expect(screen.getByTestId('area-actual')).toBeInTheDocument();
+    expect(screen.getByTestId('area-forecast')).toBeInTheDocument();
+  });
+
+  it('drops the horizontal CartesianGrid so warn/crit/capacity are the only reference lines', () => {
+    render(
+      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+    );
+    expect(screen.queryByTestId('grid')).not.toBeInTheDocument();
   });
 
   it('clamps below-floor utilization to the window edge while keeping the true value for the tooltip', () => {
