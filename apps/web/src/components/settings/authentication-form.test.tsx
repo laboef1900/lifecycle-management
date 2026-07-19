@@ -77,28 +77,48 @@ describe('<AuthenticationForm>', () => {
     expect(screen.getByText(/connected/i)).toBeInTheDocument();
   });
 
-  it('shows a bare "Client secret" input instead of "configured" + Replace when a non-oidc mode reports clientSecretSet false (#241)', async () => {
-    // Saving a non-oidc mode now CLEARS the stored client secret server-side,
-    // so a stored `local` (or `disabled`) config reports clientSecretSet:
-    // false. Losing the "•••••••• configured" + Replace affordance is the
-    // intended signal that re-enabling OIDC needs the secret typed again — the
-    // server refuses the switch with 422 INCOMPLETE_OIDC_CONFIG otherwise.
+  // #241 pairs two server-side rules: `update()` clears both secret columns
+  // whenever a non-oidc mode is saved, and it still runs `requireKey()` on a
+  // SUBMITTED client secret first (the deliberate ENCRYPTION_KEY_REQUIRED
+  // ordering pinned by settings-auth-routes.test.ts). A submitted, non-empty
+  // secret therefore still 422s on a deployment with no CONFIG_ENCRYPTION_KEY —
+  // harmless only because this form omits `clientSecret` entirely when the
+  // field is blank. If it ever sent a value there instead, the keyless
+  // deployment that most needs to escape an undecryptable OIDC config would
+  // take a 422 on a save that stores no secret at all.
+  it('omits clientSecret when switching away from oidc, so a keyless deployment can escape (#241)', async () => {
     vi.mocked(api.settings.auth.get).mockResolvedValue({
       ...baseConfig,
-      mode: 'local',
+      mode: 'oidc',
+      // What a keyless (or rotated-key) deployment actually reports: the stored
+      // ciphertext can't be decrypted, so the effective mode is force-disabled
+      // and nothing reads as "set". Spelled out rather than inherited from
+      // baseConfig — it is the state this test is about.
+      forceDisabledReason: 'secret_decrypt_failure',
+      clientSecretSet: false,
       issuerUrl: 'https://idp.example.com',
       clientId: 'client-123',
       appBaseUrl: 'https://app.example.com',
-      clientSecretSet: false,
     });
     renderWithClient(<AuthenticationForm />);
+    await screen.findByRole('alert');
 
-    const secretInput = await screen.findByLabelText(/client secret/i);
-    // The "not yet set" placeholder, not the "Enter new client secret" one
-    // shown while replacing a stored secret.
-    expect(secretInput).toHaveAttribute('placeholder', 'Client secret');
-    expect(screen.queryByText(/configured/i)).not.toBeInTheDocument();
+    // Precondition: nothing stored to "Replace", so the field is the empty
+    // type-it-yourself input — leaving it untouched is exactly what an operator
+    // switching modes does, and it is what keeps the PUT secret-free below.
+    expect(screen.getByLabelText(/client secret/i)).toHaveAttribute('placeholder', 'Client secret');
     expect(screen.queryByRole('button', { name: /replace/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Local accounts' }));
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(api.settings.auth.update).toHaveBeenCalled();
+    });
+    const body = vi.mocked(api.settings.auth.update).mock.calls[0]![0];
+    expect(body.mode).toBe('local');
+    // The load-bearing assertion: the key is absent, not null and not ''.
+    expect(body).not.toHaveProperty('clientSecret');
   });
 
   it('leaves clientSecret unchanged (omitted) when the secret field is left blank on save', async () => {
