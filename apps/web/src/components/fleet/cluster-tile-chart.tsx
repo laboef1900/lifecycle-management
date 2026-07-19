@@ -115,11 +115,17 @@ export function ClusterTileChart({
   const currentMonth = todayIso();
   const foundIndex = months.findIndex((m) => m.month === currentMonth);
   const currentIndex = foundIndex === -1 ? 0 : foundIndex;
-  // Same call as the big ForecastChart: past the first plotted point only —
-  // at index 0 the line would sit exactly on the Y-axis, with no signal
-  // gained over the axis boundary that's already there. Unlabeled here (the
-  // big chart carries the "NOW" text); the tile is too small for a label.
-  const showNowMarker = foundIndex > 0;
+  // Unlike ForecastChart (which gets leading `preWindow` rows from baseline
+  // history so "now" can land mid-series), a tile's `months` is always the
+  // raw forecast window, which always opens at the current month — so
+  // `foundIndex` is 0 on every real tile. #243 Part B review: the earlier
+  // `foundIndex > 0` guard, copied from ForecastChart's genuine index-0 edge
+  // case, was therefore dead code in production — it suppressed the marker
+  // unconditionally. The house precedent this item cites (`order-by-rail.tsx`,
+  // spec §4.2) draws NOW at the left edge of its window as the normal case,
+  // not an edge case to hide, and this marker is unlabeled so there's no
+  // label-clipping concern either. Render whenever "now" is in the series.
+  const showNowMarker = foundIndex >= 0;
 
   const utilPct = (m: ForecastMonthPoint): number =>
     m.capacity > 0 ? (m.consumption / m.capacity) * 100 : 0;
