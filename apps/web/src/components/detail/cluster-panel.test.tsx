@@ -512,6 +512,22 @@ describe('<ClusterPanel>', () => {
     expect(runwayTile?.className).not.toMatch(/border-l-2/);
   });
 
+  it('lays the four KPI tiles out 2-up below sm, not four stacked full-width cards (#243 Part B item 3)', async () => {
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const grid = screen.getByTestId('kpi-grid');
+    expect(grid).toHaveClass('grid-cols-2', 'sm:grid-cols-12');
+    // Each tile: col-span-1 on the base 2-col grid (half-width, 2-up) instead
+    // of the old col-span-12 (full-width, stacked) — sm/lg unchanged. Scoped
+    // to the grid itself: "Headroom" also appears in the live-usage section.
+    for (const label of ['Current utilization', 'Headroom', 'Runway', 'Order by']) {
+      const tile = within(grid).getByText(label).closest('div');
+      expect(tile).toHaveClass('col-span-1', 'sm:col-span-6', 'lg:col-span-3');
+      expect(tile?.className).not.toMatch(/\bcol-span-12\b/);
+    }
+  });
+
   it('renders the KPI strip, recommendation chip, and tabs once data loads', async () => {
     render(<Harness show />);
 

@@ -1074,8 +1074,8 @@ function ClusterDetailKpiStrip({
           Scenario active — KPIs reflect the hypothetical forecast
         </Badge>
       ) : null}
-      <div className="grid grid-cols-12 gap-2">
-        <Card className="col-span-12 flex flex-col justify-center gap-1.5 p-3.5 sm:col-span-6 lg:col-span-3">
+      <div data-testid="kpi-grid" className="grid grid-cols-2 gap-2 sm:grid-cols-12">
+        <Card className="col-span-1 flex flex-col justify-center gap-1.5 p-3.5 sm:col-span-6 lg:col-span-3">
           <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
             Current utilization
           </p>
@@ -1108,7 +1108,7 @@ function ClusterDetailKpiStrip({
           </p>
         </Card>
         <KpiTile
-          className="col-span-12 sm:col-span-6 lg:col-span-3"
+          className="col-span-1 sm:col-span-6 lg:col-span-3"
           label="Headroom"
           value={capacityKnown ? `${numberFormat.format(Math.round(headroom))} GB` : '—'}
           caption={
@@ -1119,14 +1119,14 @@ function ClusterDetailKpiStrip({
           status={utilStatus(metric.utilization, forecast.effectiveThresholds)}
         />
         <KpiTile
-          className="col-span-12 sm:col-span-6 lg:col-span-3"
+          className="col-span-1 sm:col-span-6 lg:col-span-3"
           label="Runway"
           value={runwayKpi.value}
           caption={runwayKpi.caption}
           status={runwayKpi.status}
         />
         <KpiTile
-          className="col-span-12 sm:col-span-6 lg:col-span-3"
+          className="col-span-1 sm:col-span-6 lg:col-span-3"
           label="Order by"
           value={procurementKpi.value}
           caption={procurementKpi.caption}
