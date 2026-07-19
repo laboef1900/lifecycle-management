@@ -41,7 +41,11 @@ interface AuthConfigWriteData {
   issuerUrl?: string | null;
   clientId?: string | null;
   clientSecretEnc?: string | null;
-  signingSecretEnc?: string;
+  /**
+   * Nullable since #241: saving a non-oidc mode CLEARS the signing secret.
+   * Before that, `update()` could only ever set or keep one, never remove it.
+   */
+  signingSecretEnc?: string | null;
   appBaseUrl?: string | null;
   scopes: string;
   roleClaim?: string | null;
@@ -74,6 +78,16 @@ export interface EffectiveAuthConfig {
   allowedEmails: string | null;
   sessionTtlHours: number;
   allowInsecure: boolean;
+}
+
+/**
+ * `AuthConfig.mode` is a plain String column, not the union — a stray or
+ * legacy value must read as the closed-by-default `disabled` rather than being
+ * trusted. Shared by `toEffective()` and `rotateSigningSecret()` so the two can
+ * never disagree about what a row's stored mode is.
+ */
+function normalizeMode(mode: string): EffectiveAuthConfig['mode'] {
+  return mode === 'oidc' ? 'oidc' : mode === 'local' ? 'local' : 'disabled';
 }
 
 /**
@@ -192,7 +206,9 @@ export class AuthConfigService {
   /**
    * Applies a partial update to the singleton row (creating it if absent).
    * `clientSecret` is tri-state: `undefined` leaves the stored value
-   * untouched, `null` clears it, a string encrypts and stores it. A signing
+   * untouched, `null` clears it, a string encrypts and stores it — but only
+   * while the mode being saved is `oidc`. Saving any other mode clears BOTH
+   * secret columns outright (#241, see the block at the end of the body). A signing
    * secret is (re)generated whenever oidc mode is being enabled and the
    * existing one is unusable — either absent (first time enabling oidc) or
    * present but undecryptable under the *current* key. The latter is the
@@ -242,6 +258,30 @@ export class AuthConfigService {
       data.signingSecretEnc = encrypt(generateSecret(), this.requireKey());
     }
 
+    // A non-oidc mode has no use for either secret, so an explicit operator
+    // SAVE clears both columns. This deliberately REVERSES the #222/#126
+    // preservation contract for MODE CHANGES: switching oidc -> local/disabled
+    // used to keep the ciphertext so that restoring a rotated key recovered the
+    // configuration "with nothing to re-enter". That leftover ciphertext is
+    // precisely what made the fail-open reachable — a later key rotation turned
+    // it into a decrypt failure on a row that never needed the secret (#241).
+    // Preservation now applies only to the mode that OWNS the secret: an oidc
+    // row's columns are still never touched, and no degrade writes anything at
+    // all. Operator consequence: switching back to oidc requires re-entering
+    // the client secret, enforced by settings-auth.ts's 422
+    // INCOMPLETE_OIDC_CONFIG rather than silently enabling oidc without one.
+    //
+    // @ai-warning Position is load-bearing — this MUST stay after the
+    // `input.clientSecret !== undefined` branch above. Moving it earlier would
+    // skip `requireKey()`, turning "submitted a secret with no
+    // CONFIG_ENCRYPTION_KEY configured" from 422 ENCRYPTION_KEY_REQUIRED into a
+    // silent 200. The `settings-auth-routes.test.ts` test named "fails with 422
+    // ENCRYPTION_KEY_REQUIRED (not 500) ... and persists nothing" is the canary.
+    if (input.mode !== 'oidc') {
+      data.clientSecretEnc = null;
+      data.signingSecretEnc = null;
+    }
+
     await this.prisma.authConfig.upsert({
       where: { id: SINGLETON_ID },
       create: { id: SINGLETON_ID, ...data },
@@ -256,12 +296,38 @@ export class AuthConfigService {
    * (422) `UnprocessableError` rather than a raw `Error` so the route layer
    * doesn't need special-case handling to turn a missing key into a clean
    * HTTP response.
+   *
+   * Refused unless the STORED mode is `oidc`: the signing secret only signs
+   * OIDC login-state cookies, and `update()` clears both secret columns
+   * whenever a non-oidc mode is saved (#241). Without this guard, this method —
+   * which bypasses `update()` entirely — could write a secret onto a
+   * `disabled`/`local` row that nothing reads and the very next Settings save
+   * would null again, leaving "a non-oidc row holds no secrets" merely
+   * eventually true instead of invariant.
+   *
+   * The missing-key check runs FIRST, ahead of the mode guard: it is the
+   * precondition that holds for every mode, and ordering it first keeps the
+   * pre-existing ENCRYPTION_KEY_REQUIRED behaviour (and its test) unchanged.
+   *
+   * @ai-warning The mode guard reads the ROW, never `authConfig.current.mode`.
+   * During a break-glass boot the ENFORCED mode is `disabled` while the row
+   * still says `oidc`, and rotating the signing secret is one of the documented
+   * recovery steps available in that window — keying this off the enforced mode
+   * would break break-glass recovery.
    */
   async rotateSigningSecret(): Promise<void> {
     if (!this.key) {
       throw new UnprocessableError(
         'ENCRYPTION_KEY_REQUIRED',
         'CONFIG_ENCRYPTION_KEY is not configured; cannot rotate the signing secret.',
+      );
+    }
+    const existing = await this.prisma.authConfig.findUnique({ where: { id: SINGLETON_ID } });
+    if (existing === null || normalizeMode(existing.mode) !== 'oidc') {
+      throw new UnprocessableError(
+        'OIDC_MODE_REQUIRED',
+        'The login-state signing secret is only used by OIDC authentication; enable OIDC ' +
+          'before rotating it.',
       );
     }
     const signingSecretEnc = encrypt(generateSecret(), this.key);
@@ -272,14 +338,36 @@ export class AuthConfigService {
     });
   }
 
-  /** Maps a raw `AuthConfig` row to the decrypted, in-memory effective shape. */
+  /**
+   * Maps a raw `AuthConfig` row to the decrypted, in-memory effective shape.
+   *
+   * Decryption is MODE-GATED (#241): `clientSecretEnc`/`signingSecretEnc` are
+   * read only when the stored mode is `oidc`, the one mode that uses them.
+   * Every consumer already honours the resulting invariant — the secrets are
+   * non-null only in oidc mode — because each reads them behind its own mode
+   * gate (`routes/auth.ts`, `plugins/oidc.ts`) or an explicit null check
+   * (`routes/settings-auth.ts`).
+   *
+   * @ai-warning Do NOT decrypt these columns unconditionally "for
+   * completeness". A `local` or `disabled` row may still carry ciphertext from
+   * an earlier OIDC configuration. Decrypting it meant an unreadable
+   * `CONFIG_ENCRYPTION_KEY` raised `AuthSecretDecryptError` for a mode with no
+   * use for the secret, which the auth-config plugin's boot guard then degraded
+   * to `mode=disabled` — turning a deployment explicitly configured as `local`
+   * into an open, anonymous-ADMIN API. The leftover ciphertext is still
+   * RETAINED (only an explicit Settings save clears it) but never read, so a
+   * key failure can no longer degrade a mode that does not depend on the key.
+   */
   toEffective(row: AuthConfig): EffectiveAuthConfig {
+    const mode = normalizeMode(row.mode);
     return {
-      mode: row.mode === 'oidc' ? 'oidc' : row.mode === 'local' ? 'local' : 'disabled',
+      mode,
       issuerUrl: row.issuerUrl,
       clientId: row.clientId,
-      clientSecret: this.decryptColumn(row.clientSecretEnc, 'client secret'),
-      signingSecret: this.decryptColumn(row.signingSecretEnc, 'signing secret'),
+      clientSecret:
+        mode === 'oidc' ? this.decryptColumn(row.clientSecretEnc, 'client secret') : null,
+      signingSecret:
+        mode === 'oidc' ? this.decryptColumn(row.signingSecretEnc, 'signing secret') : null,
       appBaseUrl: row.appBaseUrl,
       scopes: row.scopes,
       roleClaim: row.roleClaim,
