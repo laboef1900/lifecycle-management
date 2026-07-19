@@ -319,9 +319,6 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     }
   }, []);
 
-  const liveMessage =
-    announcementOverride ?? (clusterName ? `Cluster ${clusterName} detail opened.` : '');
-
   // The dialog names itself rather than pointing `aria-labelledby` at the
   // cluster heading: that heading lives in the content column, which is `inert`
   // whenever the Scenario sheet covers it below `lg`, and inert subtrees are
@@ -514,6 +511,28 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     scenario && forecastQuery.data && scenarioQuery.data
       ? computeScenarioDeltaLabel(forecastQuery.data, scenarioQuery.data)
       : undefined;
+  // A scenario is set but its forecast fetch failed (#243 Part B item 1).
+  // `activeForecast`, the KPI strip's `isScenario` flag, and the chart's own
+  // `scenario` prop below are already correctly gated on `scenarioQuery.data`
+  // — none of them silently claim scenario data that never arrived. What
+  // was NOT gated is the header button's active tint/indicator (keyed on
+  // `scenario` alone), which is why it kept announcing a hypothetical
+  // forecast over what the rest of the panel had already, correctly, fallen
+  // back to showing: the baseline.
+  const scenarioFailed = Boolean(scenario && scenarioQuery.isError);
+  // Derived on every render, not set from an effect: the correction must
+  // track `scenarioFailed` live (an unchanged failed-retry re-render must
+  // keep showing it, and a Clear must drop it the instant `scenario` goes
+  // null), and a value an effect merely mirrors back into state is exactly
+  // the "you might not need an effect" case — plus setState-in-effect is an
+  // ESLint error here (react-hooks/set-state-in-effect). The `aria-live`
+  // region only re-announces on an actual text change, so this never repeats
+  // itself while the same failure persists, and a differing announcement in
+  // between (e.g. a subsequent "Scenario active: …" for a new attempt) is
+  // what makes a *second* failure's identical text register as new again.
+  const liveMessage = scenarioFailed
+    ? 'Scenario could not be computed — showing baseline.'
+    : (announcementOverride ?? (clusterName ? `Cluster ${clusterName} detail opened.` : ''));
 
   return (
     <div
@@ -631,7 +650,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                 {clusterQuery.data && metric ? (
                   <ScenarioButton
                     ref={scenarioButtonRef}
-                    active={scenario}
+                    active={scenarioFailed ? null : scenario}
                     open={paneOpen}
                     controlsId={paneId}
                     onClick={togglePane}
@@ -681,6 +700,22 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                 </h2>
                 <WindowControls value={windowSelection} onChange={setWindowSelection} />
               </div>
+
+              {/* #243 Part B item 1: a failed scenario fetch must not leave
+                  the chart below silently showing the baseline with nothing
+                  said about it — the header indicator above is already
+                  cleared (`scenarioFailed` gate), so this is the other half
+                  of the correction: an inline, retryable error where the
+                  user's eyes actually land, sub-`lg` where Apply just routed
+                  them here. It renders alongside the chart, not instead of
+                  it — the chart keeps showing the real (baseline) forecast
+                  underneath, per the "showing baseline" wording below. */}
+              {scenarioFailed ? (
+                <ErrorCard
+                  message="Scenario could not be computed — showing baseline forecast below."
+                  onRetry={() => void scenarioQuery.refetch()}
+                />
+              ) : null}
 
               {forecastQuery.isPending ? (
                 <ChartSkeleton />
@@ -1156,11 +1191,26 @@ function ChartSkeleton(): React.JSX.Element {
   );
 }
 
-function ErrorCard({ message }: { message: string }): React.JSX.Element {
+/** `onRetry` is optional (#243 Part B item 1) — only the scenario-fetch-error
+ *  card above needs a retry affordance; the cluster/forecast-load error
+ *  branches that already used this component keep their plain read-only
+ *  form. */
+function ErrorCard({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry?: () => void;
+}): React.JSX.Element {
   return (
     <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive shadow-none">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-      <span>{message}</span>
+      <span className="flex-1">{message}</span>
+      {onRetry ? (
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      ) : null}
     </Card>
   );
 }

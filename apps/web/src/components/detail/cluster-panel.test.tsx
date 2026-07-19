@@ -682,6 +682,56 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
   });
 
+  it('surfaces an inline error with retry when the scenario forecast fails, and stops claiming an active scenario (#243 Part B item 1)', async () => {
+    vi.spyOn(api.clusters, 'forecastScenario').mockRejectedValue(new Error('boom'));
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    // Sub-lg (the default width here): Apply still dismisses the covering
+    // sheet on ANY submit — closePane() doesn't wait on the query — so the
+    // user is routed straight onto the chart the error must be visible on.
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+
+    // The correction is announced instead of the (never reached) "Scenario
+    // active" text.
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario could not be computed — showing baseline.',
+      ),
+    );
+    // The header no longer claims an active scenario over what is actually
+    // the baseline chart/KPIs.
+    expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
+    expect(screen.getByTestId('scenario-button')).toHaveAccessibleName('Scenario');
+    // No scenario badge on the KPI strip either — it was already correctly
+    // gated on `scenarioQuery.data`, which never arrives here.
+    expect(screen.queryByTestId('scenario-badge')).not.toBeInTheDocument();
+
+    // Inline error above the (still baseline) chart, with a retry affordance.
+    // Scoped to panel-content (not `screen`): the live region above — a
+    // sibling of panel-content, not an ancestor — carries the shorter
+    // "…showing baseline." announcement, which also matches this regex.
+    const content = screen.getByTestId('panel-content');
+    const error = await within(content).findByText(/scenario could not be computed/i);
+    const retry = within(content).getByRole('button', { name: 'Retry' });
+    expect(error).toBeInTheDocument();
+
+    // Retrying with a now-succeeding mock clears the error and restores the
+    // active indicator — proving Retry actually re-fires the query rather
+    // than just being decorative.
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(forecast());
+    await user.click(retry);
+    await waitFor(() =>
+      expect(within(content).queryByText(/scenario could not be computed/i)).toBeNull(),
+    );
+    expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
+  });
+
   it('closes the covering sheet after Clear too, announcing the baseline restore (#243 Part B High-4)', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
