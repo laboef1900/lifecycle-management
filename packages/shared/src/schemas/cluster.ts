@@ -84,6 +84,28 @@ export interface ClusterResponse {
   id: string;
   name: string;
   description: string | null;
+  /**
+   * `YYYY-MM-DD`, always the first of a month, and **derived** — not an
+   * operator-declared scalar.
+   *
+   * @ai-warning The name and type did not change when #195 dropped
+   * `clusters.baseline_date`, so nothing forces a consumer to notice that the
+   * MEANING did. The server computes it as MIN over the newest `capturedAt` per
+   * metric — the cluster's STALEST tracked metric — because that is what a
+   * staleness indicator has to react to; a cluster whose memory anchor advances
+   * monthly while its cpu anchor sits frozen for a year is not fresh. Reading it
+   * as "when the operator last edited the baseline" is now wrong.
+   *
+   * Always first-of-month because every writer snaps `capturedAt` via
+   * `startOfUtcMonth` — the period key IS the monthly idempotency guarantee. A
+   * derived value can therefore read up to 30 days earlier than the old column,
+   * which stored whatever day was typed.
+   *
+   * Falls back to the cluster's `createdAt` when there is no history at all (a
+   * synced cluster before its first snapshot). NEVER today's date: that would
+   * render a never-measured cluster as maximally fresh and trip no staleness
+   * check — the same fail-open as the forbidden `utilization ?? 0`.
+   */
   baselineDate: string;
   createdAt: string;
   updatedAt: string;
