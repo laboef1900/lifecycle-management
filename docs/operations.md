@@ -265,12 +265,24 @@ the previous release:
 Both rows now sit in January, so snapping the first onto the second would silently
 destroy one. The guard refuses instead.
 
-It is **deterministically resolvable at this point**, and that is precisely why the
-guard runs BEFORE the `DROP TABLE`: `cluster_metric_baselines` is still present, and
-it holds exactly the values clients were being served. The row matching it is the
-correction; the other is the stale backfill. Structurally the two are also easy to
-recognise — every application writer snaps, so the mid-month row can only have come
-from the backfill.
+It is **deterministically resolvable**, and the discriminator is structural rather
+than value-based: **the mid-month row is always the stale backfill.**
+
+Every application writer snaps to the first of the month —
+`ClustersService.create` and `update` through `startOfUtcMonth`,
+`VsphereSnapshotService` through `startOfUtcMonth(measuredAt)`, and `seed.ts`
+likewise. The expand migration's `SELECT c."baseline_date"` is the only writer that
+ever stored a mid-month `captured_at`, and it wrote at most **one** row per
+`(cluster, metric)` because that was the legacy table's primary key. So a colliding
+group is always exactly one backfill row plus one snapped row written by the app, and
+the row to drop is the one whose day is not `01`.
+
+> Do **not** resolve this by matching the two rows against
+> `cluster_metric_baselines` to see which one "was being served". That table is
+> last-write-wins across **all** periods — `clusterMetricBaseline.upsert` is
+> unconditional — so if the metric's most recent edit targeted a different month, the
+> row it matches is the stale backfill and the value-based rule deletes the
+> operator's correction. The day-of-month rule has no such failure mode.
 
 ```bash
 # 1. Look at every colliding group, with what clients were being served alongside.
@@ -296,60 +308,55 @@ SQL
 ```
 
 ```bash
-# 2. Drop the stale backfill row in every group where exactly ONE row is the one
-#    clients were served. Runs in an explicit transaction and reports what is left;
-#    COMMIT only when `remaining_collisions` is 0, otherwise ROLLBACK and resolve
-#    the rest by hand using the table above.
+# 2. Drop the mid-month backfill row in every colliding group. Self-verifying: the
+#    guard at the end RAISEs if any collision survives, which rolls the whole
+#    transaction back — there is no "remember to ROLLBACK" step to get wrong.
 docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
 BEGIN;
-WITH collisions AS (
-    SELECT cluster_id, metric_type_id, date_trunc('month', captured_at) AS period
-    FROM "cluster_baseline_history"
-    GROUP BY 1, 2, 3
-    HAVING COUNT(*) > 1
-),
-scored AS (
-    SELECT h.id, h.cluster_id, h.metric_type_id,
-           date_trunc('month', h.captured_at) AS period,
-           ((h.baseline_consumption, h.baseline_capacity)
-            IS NOT DISTINCT FROM (b.baseline_consumption, b.baseline_capacity)) AS was_served
-    FROM "cluster_baseline_history" h
-    JOIN collisions k
-      ON k.cluster_id     = h.cluster_id
-     AND k.metric_type_id = h.metric_type_id
-     AND k.period         = date_trunc('month', h.captured_at)
-    LEFT JOIN "cluster_metric_baselines" b
-      ON b.cluster_id = h.cluster_id AND b.metric_type_id = h.metric_type_id
-),
-resolvable AS (
-    SELECT cluster_id, metric_type_id, period
-    FROM scored
-    GROUP BY 1, 2, 3
-    HAVING COUNT(*) FILTER (WHERE was_served) = 1
-)
-DELETE FROM "cluster_baseline_history" h
-USING scored s, resolvable r
-WHERE s.id = h.id
-  AND r.cluster_id     = s.cluster_id
-  AND r.metric_type_id = s.metric_type_id
-  AND r.period         = s.period
-  AND NOT s.was_served;
 
-SELECT COUNT(*) AS remaining_collisions FROM (
-  SELECT 1 FROM "cluster_baseline_history"
-  GROUP BY cluster_id, metric_type_id, date_trunc('month', captured_at)
-  HAVING COUNT(*) > 1) t;
+DELETE FROM "cluster_baseline_history" h
+WHERE h."captured_at" <> date_trunc('month', h."captured_at")::date
+  AND EXISTS (
+        SELECT 1
+        FROM "cluster_baseline_history" o
+        WHERE o."cluster_id"     = h."cluster_id"
+          AND o."metric_type_id" = h."metric_type_id"
+          AND o."id"            <> h."id"
+          AND date_trunc('month', o."captured_at")
+              = date_trunc('month', h."captured_at"));
+
+-- Refuse to commit unless every group is now single-rowed, so an unanticipated
+-- shape aborts instead of half-resolving.
+DO $$
+DECLARE
+    remaining BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO remaining FROM (
+        SELECT 1 FROM "cluster_baseline_history"
+        GROUP BY "cluster_id", "metric_type_id", date_trunc('month', "captured_at")
+        HAVING COUNT(*) > 1) t;
+    IF remaining <> 0 THEN
+        RAISE EXCEPTION
+            'Rolled back: % group(s) still collide after dropping mid-month rows. Two snapped rows cannot occur in one month (the period unique index forbids it) — stop and inspect before touching anything.',
+            remaining;
+    END IF;
+END $$;
+
 COMMIT;
 SQL
 ```
 
-The `resolvable` filter is the safety property: a group is touched only when exactly
-one of its rows matches what was served, so the statement **cannot empty a group**.
-Groups where neither row matches (a #178 vSphere snapshot competing with a manual
-backfill) or where both match are deliberately left for a human, and reappear in the
-count. Deciding those means choosing which measurement January actually has —
-`source` matters as much as the numbers, because it changes whether tracked deltas
-are treated as already absorbed (Q9b).
+The `EXISTS` clause is the safety property: a mid-month row is dropped **only** when
+another row shares its `(cluster, metric, month)`. An isolated mid-month row is a
+legitimate lone measurement, and the normalisation `UPDATE` in the migration snaps it
+without losing anything — so this statement cannot empty a group, and it touches
+nothing outside the groups the guard named.
+
+If the final `RAISE` fires, the transaction is rolled back and nothing was changed.
+That means two _snapped_ rows share a month, which the
+`cluster_baseline_history_period_unique` index makes impossible — so it indicates
+corruption or a hand-edited database rather than the dual-write history this
+procedure covers. Stop and investigate; do not delete rows to make the guard pass.
 
 #### Clearing the failed-migration record
 
