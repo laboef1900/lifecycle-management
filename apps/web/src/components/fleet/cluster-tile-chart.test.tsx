@@ -393,20 +393,73 @@ describe('<ClusterTileChart>', () => {
   });
 
   it('draws an order-by marker when the order-by month falls in range', () => {
+    // Anchored to CURRENT_MONTH (index 0, so the NOW marker below stays
+    // suppressed) rather than the shared `months` fixture, whose hardcoded
+    // '2026-09-01' would collide with the NOW marker's own testid in the one
+    // real month where that literally is the current month.
+    const monthsFromNow: ForecastMonthPoint[] = [
+      { month: CURRENT_MONTH, consumption: 700, capacity: 1000, utilization: 0.7 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 800, capacity: 1000, utilization: 0.8 },
+      { month: shiftMonth(CURRENT_MONTH, 2), consumption: 920, capacity: 1000, utilization: 0.92 },
+    ];
+    const orderByMonth = shiftMonth(CURRENT_MONTH, 2);
     render(
       <ClusterTileChart
-        months={months}
+        months={monthsFromNow}
         thresholds={{ warn: 0.7, crit: 0.9 }}
-        orderByDate="2026-09-14"
+        orderByDate={`${orderByMonth.slice(0, 8)}14`}
       />,
     );
-    expect(screen.getByTestId('refline-x-2026-09-01')).toBeInTheDocument();
+    expect(screen.getByTestId(`refline-x-${orderByMonth}`)).toBeInTheDocument();
   });
 
   it('omits the order-by marker when there is no order-by date', () => {
+    // CURRENT_MONTH at index 0 keeps the NOW marker suppressed too, so this
+    // stays a clean check that nothing renders on the x-axis at all.
+    const monthsFromNow: ForecastMonthPoint[] = [
+      { month: CURRENT_MONTH, consumption: 700, capacity: 1000, utilization: 0.7 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 800, capacity: 1000, utilization: 0.8 },
+    ];
     render(
-      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+      <ClusterTileChart
+        months={monthsFromNow}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
     );
     expect(screen.queryByTestId(/refline-x-/)).toBeNull();
+  });
+
+  it('renders an unlabeled steel NOW reference line at the current month when it is not the first plotted point', () => {
+    const monthsWithHistory: ForecastMonthPoint[] = [
+      { month: shiftMonth(CURRENT_MONTH, -1), consumption: 600, capacity: 1000, utilization: 0.6 },
+      { month: CURRENT_MONTH, consumption: 700, capacity: 1000, utilization: 0.7 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 800, capacity: 1000, utilization: 0.8 },
+    ];
+    render(
+      <ClusterTileChart
+        months={monthsWithHistory}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
+    );
+    const nowLine = screen.getByTestId(`refline-x-${CURRENT_MONTH}`);
+    expect(nowLine).toBeInTheDocument();
+    expect(nowLine.dataset.stroke).toBe('var(--steel)');
+  });
+
+  it('omits the NOW marker when the window opens at the current month (it would sit on the y-axis)', () => {
+    const monthsStartingNow: ForecastMonthPoint[] = [
+      { month: CURRENT_MONTH, consumption: 700, capacity: 1000, utilization: 0.7 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 800, capacity: 1000, utilization: 0.8 },
+    ];
+    render(
+      <ClusterTileChart
+        months={monthsStartingNow}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
+    );
+    expect(screen.queryByTestId(`refline-x-${CURRENT_MONTH}`)).not.toBeInTheDocument();
   });
 });

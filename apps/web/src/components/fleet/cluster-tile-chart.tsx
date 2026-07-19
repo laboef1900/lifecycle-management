@@ -100,6 +100,11 @@ export function ClusterTileChart({
   const currentMonth = todayIso();
   const foundIndex = months.findIndex((m) => m.month === currentMonth);
   const currentIndex = foundIndex === -1 ? 0 : foundIndex;
+  // Same call as the big ForecastChart: past the first plotted point only —
+  // at index 0 the line would sit exactly on the Y-axis, with no signal
+  // gained over the axis boundary that's already there. Unlabeled here (the
+  // big chart carries the "NOW" text); the tile is too small for a label.
+  const showNowMarker = foundIndex > 0;
 
   const utilPct = (m: ForecastMonthPoint): number =>
     m.capacity > 0 ? (m.consumption / m.capacity) * 100 : 0;
@@ -211,6 +216,9 @@ export function ClusterTileChart({
             strokeDasharray={critLine.offScale ? OFF_SCALE_DASH : HAIRLINE_DASH}
           />
           <ReferenceLine y={100} stroke={colors.capacity} strokeDasharray="2 3" />
+          {showNowMarker ? (
+            <ReferenceLine x={currentMonth} stroke="var(--steel)" strokeDasharray="2 3" />
+          ) : null}
           {orderByInRange && orderByMonthKey ? (
             <ReferenceLine
               x={orderByMonthKey}
