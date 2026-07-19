@@ -264,7 +264,11 @@ export const ClusterTile = memo(function ClusterTile({
     isArchived
       ? 'archived — no forecast'
       : runwayUnknown
-        ? 'runway unknown — capacity required to calculate breach timing'
+        ? // Names the destination for the a11y path too, matching the visible
+          // verdict above: the screen-reader user is the one who can least
+          // afford this dead end, and aria-label overrides the tile's visible
+          // content, so leaving it at "capacity required" hid the only fix.
+          'runway unknown — add host capacity to calculate breach timing'
         : `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,
     orderByDate
       ? `order by ${orderByDate} (${formatRelativeDays(orderByDate)})`

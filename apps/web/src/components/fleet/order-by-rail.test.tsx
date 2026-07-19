@@ -109,14 +109,17 @@ describe('<OrderByRail>', () => {
       const { container } = render(<OrderByRail items={[]} />);
       expect(container.querySelector('.h-\\[86px\\]')).not.toBeInTheDocument();
       // The month axis renders one abbreviated label per month (12 total)
-      // when populated; none should render when the rail is empty.
-      expect(container.querySelectorAll('.translate-x-1')).toHaveLength(0);
+      // when populated; none should render when the rail is empty. Keyed off
+      // a testid rather than the `translate-x-1` styling utility, which a
+      // restyle would silently turn into a zero-match on BOTH branches —
+      // passing this assertion for the wrong reason.
+      expect(screen.queryAllByTestId('rail-month-label')).toHaveLength(0);
     });
 
     it('shows the full tick area and month axis once there is at least one tick', () => {
       const { container } = render(<OrderByRail items={items} />);
       expect(container.querySelector('.h-\\[86px\\]')).toBeInTheDocument();
-      expect(container.querySelectorAll('.translate-x-1')).toHaveLength(12);
+      expect(screen.getAllByTestId('rail-month-label')).toHaveLength(12);
     });
 
     it('renders the heading and the checkmark sentence within the same inline row, not stacked blocks', () => {

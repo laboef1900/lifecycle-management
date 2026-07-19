@@ -382,9 +382,38 @@ describe('<FleetVerdict>', () => {
     // The old standalone divider was a fixed-height hairline span
     // (`h-8 w-px`); none should remain as independent flex items.
     expect(container.querySelectorAll('.w-px')).toHaveLength(0);
-    // The row container itself carries the sibling-border rule so a
-    // divider always travels with its instrument, never orphaned mid-wrap.
     const row = screen.getByText('Utilization').closest('div')?.parentElement;
-    expect(row?.className).toMatch(/border-l/);
+    expect(row).not.toBeNull();
+    // The rule goes on EVERY instrument, and the row is offset inside an
+    // overflow-hidden wrapper so whichever instrument starts a visual row
+    // has its leading rule clipped. Assert the offset and the wrapper, not
+    // merely that "border-l" appears somewhere: jsdom never evaluates an
+    // arbitrary variant, so a bare substring match would pass just as
+    // happily for the `*+*` form, which orphans a rule at the start of
+    // every wrapped row instead of the end of the one before it.
+    expect(row?.className).toContain('sm:[&>*]:border-l');
+    expect(row?.className).toContain('-mx-6');
+    expect(row?.className).not.toContain('[&>*+*]:');
+    expect(row?.parentElement?.className).toContain('overflow-hidden');
+    expect(row?.children).toHaveLength(5);
+  });
+
+  it('falls back to an unnumbered window phrase when no forecast series has loaded', () => {
+    // Reachable whenever clusters carry recorded capacity but every forecast
+    // lookup misses (aggregate-fleet falls back to `?? []` per cluster): the
+    // healthy branch still renders, and interpolating the raw series length
+    // would print "no orders due in the 0-month forecast window."
+    render(
+      <FleetVerdict
+        summary={{ ...summary(), fleetMonths: [] }}
+        earliest={null}
+        staleCount={0}
+        openOrderCount={0}
+        hostCount={null}
+      />,
+    );
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading).toHaveTextContent(/no orders due in the forecast window/i);
+    expect(heading).not.toHaveTextContent(/0-month/);
   });
 });

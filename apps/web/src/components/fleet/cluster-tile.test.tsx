@@ -242,6 +242,11 @@ describe('<ClusterTile>', () => {
     // cannot be calculated") but never the fix — the Hosts tab is the only
     // path off this state for a synced cluster with no recorded capacity.
     expect(screen.getByText(/add host capacity to calculate runway/i)).toBeInTheDocument();
+    // The a11y path names the same fix. aria-label overrides the tile's
+    // visible content, so a screen-reader user who only heard "capacity
+    // required" would be left in exactly the dead end this item removes.
+    expect(link.getAttribute('aria-label')).toMatch(/add host capacity/i);
+    expect(link.getAttribute('aria-label')).not.toMatch(/capacity required to calculate/i);
   });
 
   it('reflects an already-past-warn breach in the runway sub-line, badge, and verdict when crit is never reached in-window (finding 1)', () => {
