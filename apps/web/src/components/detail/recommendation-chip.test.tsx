@@ -1,5 +1,6 @@
 import type { ProcurementInfo } from '@lcm/shared';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -25,7 +26,8 @@ function procurement(overrides: Partial<ProcurementInfo> = {}): ProcurementInfo 
 
 function renderChip(props: Partial<React.ComponentProps<typeof RecommendationChip>> = {}): void {
   render(
-    <TooltipProvider>
+    // delayDuration 0 so the hover-open test needs no timer choreography.
+    <TooltipProvider delayDuration={0}>
       <RecommendationChip procurement={procurement()} today={TODAY} {...props} />
     </TooltipProvider>,
   );
@@ -116,8 +118,36 @@ describe('<RecommendationChip>', () => {
 
     const status = screen.getByRole('status');
     expect(status).toBe(screen.getByTestId('recommendation-chip'));
-    // role="status" wraps the button rather than replacing its role.
-    expect(status).toContainElement(screen.getByRole('button'));
+  });
+
+  it('is NOT a tab stop: the tooltip trigger is a non-interactive span (#243 review)', () => {
+    renderChip();
+
+    // The chip has no action, so a focusable <button> here was a dead tab
+    // stop inside the panel's tab trap that announced itself as operable
+    // (WCAG 4.1.2) and read as tappable on touch, where Radix tooltips never
+    // open. AT gets the full sentence from the status region's own content.
+    const status = screen.getByRole('status');
+    expect(within(status).queryByRole('button')).toBeNull();
+    const trigger = screen.getByTestId('recommendation-chip-trigger');
+    expect(trigger.tagName).toBe('SPAN');
+    expect(trigger).not.toHaveAttribute('tabindex');
+  });
+
+  it('opens the full-guidance tooltip on hover, portalled OUT of the live region', async () => {
+    const user = userEvent.setup();
+    renderChip({ procurement: procurement({ orderByDate: '2026-07-01' }) });
+
+    await user.hover(screen.getByTestId('recommendation-chip-trigger'));
+
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip).toHaveTextContent(
+      'Order now — last safe order date 2026-07-01 (15 days overdue) · 6-wk lead',
+    );
+    // The portal in ui/tooltip.tsx is load-bearing: tooltip content mounted
+    // inside this role="status" wrapper would make AT re-announce the full
+    // sentence on every hover-in.
+    expect(screen.getByRole('status')).not.toContainElement(tooltip);
   });
 
   it('never signals by color alone: every tone carries an icon plus its text label', () => {

@@ -1,4 +1,5 @@
 import { Funnel } from 'lucide-react';
+import { useId } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -39,6 +40,10 @@ export function FleetFilter({
   onOpenChange: (next: boolean) => void;
 }): React.JSX.Element {
   const activeCount = showArchived ? 1 : 0;
+  // Radix PopoverContent renders role="dialog" and moves focus into it; a
+  // dialog takes no name from its content, so wire the visible "Filters"
+  // micro-label as its accessible name or SR users enter an unnamed dialog.
+  const headingId = useId();
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
@@ -58,8 +63,11 @@ export function FleetFilter({
           ) : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-56 p-3">
-        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+      <PopoverContent align="end" className="w-56 p-3" aria-labelledby={headingId}>
+        <p
+          id={headingId}
+          className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle"
+        >
           Filters
         </p>
         <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-foreground">

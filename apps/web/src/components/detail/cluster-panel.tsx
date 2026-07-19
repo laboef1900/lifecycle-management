@@ -546,7 +546,8 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
             line 1 is one flex row — icon-only back link hard left, h1 name,
             inline status chips, flexible spacer, action group right — and
             line 2 is the description, clamped so long text never pushes the
-            KPI strip. The back link is a single, stable element outside the
+            KPI strip (pl-11 = the 32px back link + 12px gap-x-3, aligning it
+            under the h1). The back link is a single, stable element outside the
             loading-state branching below (deliberately never swapped for a
             different element instance) — the skeleton/error/loaded header
             content around it reflows freely without ever unmounting it, so
@@ -583,7 +584,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
               </div>
             </div>
             {clusterQuery.data?.description ? (
-              <p className="line-clamp-1 pl-10 text-sm text-fg-muted [overflow-wrap:anywhere]">
+              <p className="line-clamp-1 pl-11 text-sm text-fg-muted [overflow-wrap:anywhere]">
                 {clusterQuery.data.description}
               </p>
             ) : null}
@@ -611,11 +612,14 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Forecast
                   </p>
-                  <h3 className="text-base font-semibold">
+                  {/* h2: the h1 is the cluster name (#243), and this section
+                      heading is a structural sibling of the tab panels' h2s —
+                      h3 here skipped a level in the exposed outline. */}
+                  <h2 className="text-base font-semibold">
                     {activeForecast
                       ? forecastHeading(activeForecast.procurement, activeCapacityKnown)
                       : 'Capacity forecast'}
-                  </h3>
+                  </h2>
                 </div>
                 <WindowControls value={windowSelection} onChange={setWindowSelection} />
               </div>
@@ -802,7 +806,12 @@ function ScenarioButton({
  * with a 16px inset, auto height, and its own opacity/x enter/exit (never the
  * blur radius); at `lg`+ it is 348px wide — the 340px gutter minus the 16px
  * right inset plus a 24px overlap under the content column's 24px right
- * padding, so real content peeks through the blur. Because the card hangs off
+ * padding, so real content peeks through the blur. (Recorded residual, #243
+ * review: on classic-scrollbar platforms — Windows/Linux, macOS "always
+ * show" — the column's vertical scrollbar renders inside that overlapped
+ * strip, so the card blocks direct thumb drags along its own height while
+ * the pane is open; wheel/trackpad/keyboard scrolling and the exposed track
+ * below the card still work.) Because the card hangs off
  * the aside's fixed right edge, the aside's width animation never moves or
  * reflows it. Below `lg` it is a full-width sheet body (16px insets) over the
  * aside's scrim. Focus-into-pane on open is owned by the parent's `paneOpen`
@@ -837,12 +846,15 @@ function ScenarioPaneBody({
       transition={ENTER_TRANSITION}
     >
       <div className="mb-3 flex items-center justify-between gap-2">
-        <h3
+        {/* h2 like the other panel sections (#243 review — the outline under
+            the cluster-name h1 must not skip a level); still labels the
+            aside via aria-labelledby, which is level-agnostic. */}
+        <h2
           id={headingId}
           className="font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-fg-muted"
         >
           Scenario
-        </h3>
+        </h2>
         {/* Icon + "Close" + Esc keycap, built from the shared primitives (the
             `chip` Button + the `xs` Kbd) rather than hand-rolled classes.
             (The panel header's labeled BackButton this used to visually

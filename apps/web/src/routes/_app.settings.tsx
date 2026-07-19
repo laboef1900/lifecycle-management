@@ -33,8 +33,11 @@ function SettingsPage(): React.JSX.Element {
   // back to the fleet console — a deep link/refresh onto /settings has no prior
   // entry (useCanGoBack tracks `__TSR_index !== 0`), so it lands on `/`.
   //
-  // @ai-warning Re-entrancy latch, mirroring the cluster panel's `isClosing`
-  // guard — but keyed to the location it fired from, NOT a one-shot boolean.
+  // @ai-warning Re-entrancy latch, keyed to the location it fired from — NOT
+  // a one-shot boolean. (The cluster panel used to carry a sibling `isClosing`
+  // guard; #243's instant close removed it — the panel's close is a bare
+  // synchronous navigate that double-activation can't compound, so this latch
+  // is now the only one of its kind and must justify itself alone.)
   // `router.history.back()` is `window.history.back()`: the traversal is queued
   // and only lands on a later task (popstate → router transition → unmount), so
   // this page — and its document keydown listener — outlives its own navigation

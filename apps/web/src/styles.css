@@ -178,6 +178,23 @@ html.dark {
 }
 
 @theme {
+  /* Breakpoints pinned to their px defaults (#243 review). Tailwind v4's
+     defaults are rem-based (--breakpoint-lg: 64rem …), and rem in a media
+     query resolves against the user's BROWSER default font size — while the
+     app's JS layout queries (PANE_SIDE_BY_SIDE_QUERY '(min-width: 1024px)'
+     and isWide '(min-width: 640px)' in cluster-panel.tsx) and the
+     .scenario-card AA fallback below are fixed px. At e.g. a 20px browser
+     font, `lg:` would fire at 1280px, opening a 1024–1280px band where JS
+     declared the scenario pane side-by-side (content column NOT inert) while
+     CSS still rendered the sheet layout — a near-viewport-wide glass card
+     over live, tabbable content. Pinning every breakpoint keeps utilities
+     and matchMedia in lockstep at any font size; new JS media queries MUST
+     use the same px values. */
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -348,9 +365,15 @@ body {
    body uses the near-opaque fallback there (4.68:1). Dark theme passes under
    its scrim (≈5:1+) and light at `lg`+ has no scrim (≈4.8:1), so both keep
    full glass. The 1024px breakpoint MUST stay in lockstep with
-   PANE_SIDE_BY_SIDE_QUERY / the `lg:` utilities in cluster-panel.tsx. */
+   PANE_SIDE_BY_SIDE_QUERY / the `lg:` utilities in cluster-panel.tsx —
+   guaranteed since the @theme block pins --breakpoint-lg to the same literal
+   1024px. */
 @media (max-width: 1023.98px) {
   html:not(.dark) .scenario-card {
     background: var(--glass-fallback);
+    /* Match the prefers-reduced-transparency rule above: with a 94%-opaque
+       fill there is no reason to keep a 14px blur compositing underneath. */
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }

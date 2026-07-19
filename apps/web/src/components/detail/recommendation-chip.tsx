@@ -107,20 +107,24 @@ export function deriveRecommendation(
  * — replaces the full-width `RecommendationBanner`; proximity binds status to
  * the entity it describes, like GitHub's "Archived" badge beside the repo
  * name). Icon + mono tone label + verb-first short text; the full guidance
- * sentence rides along sr-only (so the accessible name carries everything
- * without interaction) and in a hover/focus tooltip for sighted users.
+ * sentence rides along sr-only (so the status region carries everything
+ * without interaction) and in a hover-only tooltip for sighted pointer users.
  *
- * `role="status"` sits on the wrapper, not the button — a role on the button
- * itself would replace its button role — so tone/text changes (a scenario
- * flipping the forecast) are announced politely. Chip text keeps the same
- * tone-on-tint pairings the banner used (AA-checked per theme in spec §3).
+ * `role="status"` sits on the wrapper, not the trigger, so tone/text changes
+ * (a scenario flipping the forecast) are announced politely. Chip text keeps
+ * the same tone-on-tint pairings the banner used (AA-checked per theme in
+ * spec §3).
  *
- * The tooltip is HOVER-ONLY (controlled), for the same reason as `BackLink`:
- * a focus-triggered Radix tooltip dismisses itself on Escape and marks the
- * event consumed, which the panel's nested-overlay Esc guard respects — a
- * keyboard user who Tabs onto the chip would silently pay an extra Esc to
- * leave the panel. Focus users lose nothing: the full guidance sentence is
- * already inside the accessible name via the sr-only span.
+ * The trigger is a NON-INTERACTIVE `<span>`, deliberately not a button (#243
+ * review): it has no action, so a focusable button here was a dead tab stop
+ * inside the panel's tab trap that announced itself as operable (WCAG 4.1.2
+ * role fidelity) and read as tappable on touch, where Radix tooltips never
+ * open. Nothing is lost: AT reads the full sentence from the status region's
+ * content, and sighted keyboard users see the verb-first short text. The
+ * non-focusable trigger also makes the tooltip structurally HOVER-ONLY —
+ * Radix's focus-open path can never fire — which `BackLink` needs controlled
+ * state to achieve (it must stay focusable; a focus-opened tooltip would
+ * swallow the panel's first Escape via the consumed-event guard).
  */
 export function RecommendationChip({
   procurement,
@@ -129,25 +133,12 @@ export function RecommendationChip({
 }: RecommendationChipProps): React.JSX.Element {
   const rec = deriveRecommendation(procurement, today, capacityKnown);
   const Icon = TONE_ICON[rec.tone];
-  const [tooltipOpen, setTooltipOpen] = React.useState(false);
-  const hoverRef = React.useRef(false);
   return (
     <span role="status" data-testid="recommendation-chip" data-tone={rec.tone}>
-      <Tooltip
-        open={tooltipOpen}
-        onOpenChange={(next) => {
-          if (!next || hoverRef.current) setTooltipOpen(next);
-        }}
-      >
+      <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onPointerEnter={() => {
-              hoverRef.current = true;
-            }}
-            onPointerLeave={() => {
-              hoverRef.current = false;
-            }}
+          <span
+            data-testid="recommendation-chip-trigger"
             className={cn(
               'inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-1 font-mono text-[9.5px] font-bold tracking-[0.08em]',
               TONE_CHIP[rec.tone].className,
@@ -159,7 +150,7 @@ export function RecommendationChip({
               {rec.shortText}
             </span>
             <span className="sr-only">{rec.message}</span>
-          </button>
+          </span>
         </TooltipTrigger>
         <TooltipContent className="max-w-xs">{rec.message}</TooltipContent>
       </Tooltip>

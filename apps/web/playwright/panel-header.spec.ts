@@ -72,12 +72,45 @@ test('panel entrance is instant: no transform on the dialog, ever', async ({ pag
     .then(() => true)
     .catch(() => false);
   test.skip(!hasTiles, 'requires seeded clusters');
-  await tiles.first().click();
 
-  // Sampled immediately after the route renders the dialog: the retired
-  // slide-in would report an in-flight translateX matrix here.
-  const transform = await page.getByRole('dialog').evaluate((el) => getComputedStyle(el).transform);
-  expect(transform).toBe('none');
+  // Deterministic tripwire (#243 review): a single computed-style sample
+  // taken after the click could race a reintroduced 280ms slide-in — motion
+  // resets the inline transform to `none` at rest, so a late sample passes.
+  // Instead, install an observer BEFORE the dialog can mount that samples the
+  // dialog's computed transform every animation frame from the instant it
+  // appears; any enter animation must show a non-`none` matrix in the first
+  // frames, no matter how slow the test runner round-trips.
+  await page.evaluate(() => {
+    const w = window as unknown as { __panelTransforms?: string[] };
+    w.__panelTransforms = [];
+    const sample = (el: Element): void => {
+      w.__panelTransforms?.push(getComputedStyle(el).transform);
+      // ~30 frames ≈ 500ms at 60Hz — comfortably spans the retired 280ms.
+      if ((w.__panelTransforms?.length ?? 0) < 30) requestAnimationFrame(() => sample(el));
+    };
+    const observer = new MutationObserver(() => {
+      const dialog = document.querySelector('[role="dialog"].cluster-panel');
+      if (dialog) {
+        observer.disconnect();
+        sample(dialog);
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+
+  await tiles.first().click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.waitForFunction(
+    () =>
+      ((window as unknown as { __panelTransforms?: string[] }).__panelTransforms?.length ?? 0) >=
+      30,
+  );
+
+  const transforms = await page.evaluate(
+    () => (window as unknown as { __panelTransforms?: string[] }).__panelTransforms ?? [],
+  );
+  expect(transforms.length).toBeGreaterThanOrEqual(30);
+  expect(transforms.every((t) => t === 'none')).toBe(true);
 });
 
 test('closing the panel returns focus to the trigger tile, immediately', async ({ page }) => {
