@@ -1,4 +1,5 @@
 import { clusterResponseSchema } from '@lcm/shared';
+import { Prisma } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -675,7 +676,13 @@ describe('ClusterResponse.metrics is derived from baseline history', () => {
     const body = clusterResponseSchema.parse(res.json());
 
     expect(body.metrics).toEqual([]);
-    expect(body.baselineDate).toBe('2025-11-20');
+    // The 20th snapped to the 1st: `ClusterResponse.baselineDate` is documented
+    // as ALWAYS first-of-month, and `createdAt` is a full timestamp. Emitting the
+    // raw day here makes the fallback the one value in the contract that breaks
+    // it, and it is the only branch a consumer parsing `YYYY-MM` can hit. Snapping
+    // also errs old, never fresh — the safe direction for a staleness signal.
+    expect(body.baselineDate).toBe('2025-11-01');
+    expect(body.baselineDate.endsWith('-01')).toBe(true);
     expect(body.baselineDate).not.toBe(new Date().toISOString().slice(0, 10));
   });
 
@@ -803,6 +810,58 @@ describe('PUT /api/clusters/:id — a date-only edit re-anchors baseline history
       payload: { baselineDate: '2026-05-01' },
     });
     expect(res.statusCode).toBe(422);
+    const body = res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('BASELINE_PERIOD_OCCUPIED');
+    // Refused by the CHECK, which can name the metric and the period to edit
+    // instead. Without the check the write still fails — the unique index sees to
+    // that — but only as a P2002 mapped to the same code with an "in flight,
+    // reload and retry" message, which is a lie about a deterministic conflict
+    // that no amount of retrying resolves. This is what pins `capturedAt >= target`
+    // as the guard's comparison rather than `>`.
+    expect(body.error.message).toContain('memory_gb');
+    expect(body.error.message).toContain('2026-05');
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(rows.map((r) => r.capturedAt.toISOString().slice(0, 10))).toEqual([
+      '2026-05-01',
+      '2026-07-01',
+    ]);
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 300]);
+  });
+
+  it('refuses a re-date that would land BEFORE an older row for the same metric', async () => {
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('reorder-backwards'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)), // May, 100
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'memory_gb',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)), // July, 300 — the newest
+          baselineConsumption: 300,
+          baselineCapacity: 1000,
+        },
+      ],
+    });
+
+    // April is UNOCCUPIED, so a refusal phrased as "is the target period taken?"
+    // waves this through and re-dates July's 300 to April. History then reads
+    // Apr=300, May=100: the July measurement plotted at April, and a fabricated
+    // 300 -> 100 drop on the chart that no measurement ever recorded. The
+    // response contradicts the request too — baselineDate is MIN over
+    // newest-per-metric, so it would answer 2026-05-01 to a submitted
+    // 2026-04-01, and baseline-edit-form.tsx resets its input from the response
+    // onto a third date the operator never typed.
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { baselineDate: '2026-04-01' },
+    });
+    expect(res.statusCode).toBe(422);
     expect((res.json() as { error: { code: string } }).error.code).toBe('BASELINE_PERIOD_OCCUPIED');
 
     const rows = await prisma.clusterBaselineHistory.findMany({
@@ -812,6 +871,46 @@ describe('PUT /api/clusters/:id — a date-only edit re-anchors baseline history
     expect(rows.map((r) => r.capturedAt.toISOString().slice(0, 10))).toEqual([
       '2026-05-01',
       '2026-07-01',
+    ]);
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 300]);
+  });
+
+  it('allows a re-date onto a period later than every other row for that metric', async () => {
+    // The other half of the ordering guard. Moving the newest row FORWARD past
+    // nothing keeps history in order, so it must still succeed — a guard that
+    // refused whenever the metric held more than one row would break the ordinary
+    // "the last capture was actually taken in August" correction.
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('reorder-forwards'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'memory_gb',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)),
+          baselineConsumption: 300,
+          baselineCapacity: 1000,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { baselineDate: '2026-08-01' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(clusterResponseSchema.parse(res.json()).baselineDate).toBe('2026-08-01');
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    // Re-dated, not appended: still two rows, the older one untouched.
+    expect(rows.map((r) => r.capturedAt.toISOString().slice(0, 10))).toEqual([
+      '2026-05-01',
+      '2026-08-01',
     ]);
     expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 300]);
   });
@@ -893,5 +992,314 @@ describe('PUT /api/clusters/:id — a date-only edit re-anchors baseline history
     const body = clusterResponseSchema.parse(res.json());
     expect(body.name).toBe(renamed);
     expect(body.baselineDate).toBe('2026-06-01');
+  });
+
+  it('maps a period collision the pre-check could not see to 422, not 500', async () => {
+    // `planBaselineReanchor` reads occupancy OUTSIDE the transaction that writes,
+    // so a row can appear at the target period in between. The Postgres unique
+    // index is the real guard and nothing corrupts — but the operator should get
+    // the same typed refusal as the checked path rather than a sanitized 500 with
+    // no indication of which period to edit instead.
+    //
+    // The state is materialized deterministically rather than raced: the
+    // pre-check is tenant-scoped while `cluster_baseline_history_period_unique`
+    // is (cluster, metric, period) only, so a history row carrying a different
+    // tenant is invisible to the check and still collides at write time — the
+    // same DB state a concurrent writer produces between the check and the write.
+    await prisma.tenant.upsert({
+      where: { id: 'toctou-tenant' },
+      update: {},
+      create: { id: 'toctou-tenant', name: 'Other tenant' },
+    });
+    const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('toctou'),
+      baselineDate: new Date(Date.UTC(2026, 5, 1)), // June
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+    });
+    await prisma.clusterBaselineHistory.create({
+      data: {
+        clusterId: cluster.id,
+        tenantId: 'toctou-tenant',
+        metricTypeId: metric.id,
+        capturedAt: new Date(Date.UTC(2026, 4, 1)), // May — unseen by the check
+        source: 'manual',
+        baselineConsumption: new Prisma.Decimal(1),
+        baselineCapacity: new Prisma.Decimal(2),
+      },
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { baselineDate: '2026-05-01' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: { code: string } }).error.code).toBe('BASELINE_PERIOD_OCCUPIED');
+  });
+});
+
+describe('PUT /api/clusters/:id — a combined date + values edit', () => {
+  /**
+   * The PRIMARY path out of baseline-edit-form.tsx: `handleConfirm` sets
+   * `baselineDate` under `if (dateChanged)` and `baselines` under
+   * `if (baselinesChanged)` from two independent dirty checks, so correcting the
+   * date and a number in one save sends both fields.
+   *
+   * Locked semantics: the re-anchor runs FIRST (ordering guard included), then
+   * the submitted values are applied at the target period. A combined edit is a
+   * CORRECTION of the newest measurement — one row ends up at the submitted
+   * period carrying the submitted values, and the response echoes both.
+   */
+  it('moves the row to the submitted period AND applies the values, echoing both', async () => {
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('combined'),
+      baselineDate: new Date(Date.UTC(2026, 5, 1)), // June, 100
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 150, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // The response echoes BOTH edits. Neither may silently revert: the form
+    // resets its inputs from this body, so a stale echo is the operator watching
+    // a confirmed, successful save undo itself.
+    const body = clusterResponseSchema.parse(res.json());
+    expect(body.baselineDate).toBe('2026-05-01');
+    expect(body.metrics[0]?.baselineConsumption).toBe(150);
+    expect(body.metrics[0]?.baselineCapacity).toBe(1000);
+
+    // ONE row — the June row moved, not a second row appended beside it. A
+    // leftover June row would both keep the stale 100 as newest-per-metric and
+    // draw a measurement nobody took onto the history chart.
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-05-01');
+    expect(rows[0]?.baselineConsumption.toNumber()).toBe(150);
+  });
+
+  it('refuses with 422 when the combined edit would reorder history', async () => {
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('combined-reorder'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'memory_gb',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)),
+          baselineConsumption: 300,
+          baselineCapacity: 1000,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselineDate: '2026-04-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 150, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: { code: string } }).error.code).toBe('BASELINE_PERIOD_OCCUPIED');
+
+    // Refused means nothing was written — not the values either.
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(rows.map((r) => r.capturedAt.toISOString().slice(0, 10))).toEqual([
+      '2026-05-01',
+      '2026-07-01',
+    ]);
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 300]);
+  });
+
+  it('refuses with 422 when the combined edit targets an occupied period', async () => {
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('combined-occupied'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'memory_gb',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)),
+          baselineConsumption: 300,
+          baselineCapacity: 1000,
+        },
+      ],
+    });
+
+    // May holds a recorded measurement. Landing July's row on it would overwrite
+    // that measurement with July's numbers — silently, on data that buys
+    // hardware — so the whole request is refused rather than merged.
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 150, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('BASELINE_PERIOD_OCCUPIED');
+    // Refused by the check, naming the metric and period — see the date-only
+    // occupancy test for why the message, not just the code, is asserted.
+    expect(body.error.message).toContain('memory_gb');
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 300]);
+  });
+
+  it('appends rather than re-dating when the submitted period is later', async () => {
+    // The other direction, and the reason the re-anchor cannot simply run for
+    // every metric on every dated request: a value at a LATER period is an
+    // ordinary new monthly measurement. Appending it keeps the older one, which is
+    // the accumulation epic #172 exists for; re-dating instead would delete a
+    // measurement on every forward-dated save.
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('combined-forward'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselineDate: '2026-06-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 150, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(clusterResponseSchema.parse(res.json()).baselineDate).toBe('2026-06-01');
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(rows.map((r) => r.capturedAt.toISOString().slice(0, 10))).toEqual([
+      '2026-05-01',
+      '2026-06-01',
+    ]);
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 150]);
+  });
+
+  it('leaves a metric the payload omitted untouched while re-dating the named one', async () => {
+    // #181's rule — an omitted metric must be untouched — applies to the re-date
+    // as much as to the values. Re-anchoring every metric on the cluster would
+    // silently move a row the payload never described, which is the same silent
+    // edit that rule exists to prevent.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195f' },
+      update: {},
+      create: { key: 'cpu_cores_195f', displayName: 'CPU (test)', unit: 'cores' },
+    });
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('combined-omitted'),
+      baselineDate: new Date(Date.UTC(2026, 5, 1)), // memory at June
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'cpu_cores_195f',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)), // cpu at July
+          baselineConsumption: 32,
+          baselineCapacity: 128,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 150, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      include: { metricType: { select: { key: true } } },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(rows.map((r) => [r.metricType.key, r.capturedAt.toISOString().slice(0, 10)])).toEqual([
+      ['memory_gb', '2026-05-01'],
+      ['cpu_cores_195f', '2026-07-01'],
+    ]);
+    // cpu keeps both its period and its numbers.
+    expect(rows[1]?.baselineConsumption.toNumber()).toBe(32);
+  });
+
+  it('still lands a values-only edit on the newest recorded period', async () => {
+    // The un-combined path, pinned so restructuring the branch cannot quietly
+    // change it: no date submitted means the correction lands on the period it is
+    // correcting, updating in place rather than appending a competing row.
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('values-only'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'memory_gb',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)),
+          baselineConsumption: 300,
+          baselineCapacity: 1000,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 350, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(rows.map((r) => r.capturedAt.toISOString().slice(0, 10))).toEqual([
+      '2026-05-01',
+      '2026-07-01',
+    ]);
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 350]);
   });
 });

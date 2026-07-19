@@ -13,7 +13,11 @@ import { formatDate } from '../lib/dates.js';
 import { NotFoundError, UnprocessableError } from './errors.js';
 import { computeForecast } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
-import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
+import {
+  translatePrismaError,
+  uniqueConstraintModel,
+  type UniqueConstraintMapping,
+} from './prisma-errors.js';
 import { assertClusterDeletable, assertSyncedBaselineCapacityZero } from './sync-ownership.js';
 
 function clusterNameTaken(name: string): UniqueConstraintMapping {
@@ -61,13 +65,20 @@ type NewestBaselineRow = Prisma.ClusterBaselineHistoryGetPayload<{
  * would render a never-measured cluster as "baselined today": maximally fresh,
  * tripping no staleness check. Same fail-open class as the forbidden
  * `utilization ?? 0`.
+ *
+ * The fallback is SNAPPED because `createdAt` is a full timestamp while every
+ * `capturedAt` is already a first-of-month period anchor. Unsnapped, the one
+ * branch that emits a mid-month `ClusterResponse.baselineDate` would be the one
+ * that contradicts the field's own contract, and a consumer slicing `YYYY-MM`
+ * off it would read the wrong month. Snapping also errs OLD, never fresh — the
+ * safe direction for a value a staleness check reads.
  */
 function deriveBaselineDate(newest: readonly NewestBaselineRow[], fallback: Date): Date {
   let min: Date | null = null;
   for (const row of newest) {
     if (min === null || row.capturedAt < min) min = row.capturedAt;
   }
-  return min ?? fallback;
+  return min ?? startOfUtcMonth(fallback);
 }
 
 export class ClustersService {
@@ -173,27 +184,58 @@ export class ClustersService {
     if (input.description !== undefined) data.description = input.description ?? null;
 
     try {
-      if (input.baselines) {
-        const metricTypes = await this.resolveMetricTypes(
-          input.baselines.map((b) => b.metricTypeKey),
-        );
-        const rows = input.baselines.map((b) => {
-          const metricType = metricTypes.get(b.metricTypeKey);
-          if (!metricType) {
-            throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${b.metricTypeKey}`);
-          }
-          return {
-            metricTypeId: metricType.id,
-            baselineConsumption: new Prisma.Decimal(b.baselineConsumption),
-            baselineCapacity: new Prisma.Decimal(b.baselineCapacity),
-          };
-        });
-        // @ai-warning: upsert per (clusterId, metricTypeId) — never delete-then-recreate.
-        // `baselines` is a partial array by contract (`.min(1)`, not "all of them"), so a
-        // delete scoped to clusterId destroys the baselines of every metric the caller
-        // simply didn't mention. Baselines drive hardware purchasing and this update path
-        // is the only writer, so an omitted metric must be untouched, not re-created from
-        // a payload that never described it. See #181.
+      const target =
+        input.baselineDate === undefined ? undefined : startOfUtcMonth(input.baselineDate);
+
+      // Resolved BEFORE the re-anchor is planned, because which rows may move
+      // depends on which metrics the payload is about to record a value for.
+      const rows = input.baselines === undefined ? [] : await this.resolveBaselineRows(input);
+
+      // @ai-warning A submitted baselineDate is considered on EVERY path,
+      // including alongside `baselines`. Branching on `baselines` first is the
+      // trap, and it is the primary UI path: baseline-edit-form.tsx builds
+      // `baselineDate` and `baselines` from two independent dirty checks, so
+      // correcting the date and a number in one save sends both. Skipping the
+      // re-anchor for those requests upserts a row at the target while the old row
+      // survives carrying the old numbers — and when the target is EARLIER,
+      // newest-per-metric still resolves to the old row, so the response echoes
+      // neither edit, the form resets both away, and a point nobody measured is
+      // left on the chart.
+      //
+      // Which metrics may move is not "all of them", though — see
+      // `planBaselineReanchor`. `undefined` here means the request writes no
+      // values at all, which is the only case where re-dating every metric is
+      // right; a request that does carry values re-dates only what it names, and
+      // only when appending cannot express the edit.
+      //
+      // Keyed on `rows`, not on `input.baselines !== undefined`, so an empty array
+      // degrades to the date-only re-anchor rather than to silence. The schema's
+      // `.min(1)` makes that unreachable today, and this is not the place to find
+      // out if it is ever relaxed: the silent branch would revert the operator's
+      // date edit with a 200, which is the exact failure this method exists to
+      // prevent.
+      const writingMetricIds =
+        rows.length === 0 ? undefined : new Set(rows.map((row) => row.metricTypeId));
+      const moves =
+        target === undefined
+          ? []
+          : await this.planBaselineReanchor(tenantId, id, target, writingMetricIds);
+
+      const writes: Prisma.PrismaPromise<unknown>[] = [
+        // Runs even when `data` is empty, so a date-only edit still bumps
+        // `updatedAt` exactly as it did when baselineDate was a column here.
+        this.prisma.cluster.update({ where: { id }, data }),
+        // Ordered before the value upserts below so those address a moved row at
+        // its NEW period and correct it in place rather than duplicating it.
+        ...moves.map((move) =>
+          this.prisma.clusterBaselineHistory.update({
+            where: { id: move.id },
+            data: { capturedAt: move.capturedAt },
+          }),
+        ),
+      ];
+
+      if (rows.length > 0) {
         // The period a manual entry lands in: the supplied baselineDate when the
         // caller changed it, otherwise the cluster's newest recorded period.
         // Snapped to the first of the month so manual and vSphere baselines share
@@ -207,16 +249,23 @@ export class ClustersService {
         // upsert updates in place rather than appending a competing row. A cluster
         // with no history yet has no period to correct, so the current month opens
         // the first one.
-        const latest = await this.prisma.clusterBaselineHistory.aggregate({
-          where: { clusterId: id, tenantId },
-          _max: { capturedAt: true },
-        });
-        const capturedAt = startOfUtcMonth(
-          input.baselineDate ?? latest._max.capturedAt ?? new Date(),
-        );
+        let period = target;
+        if (period === undefined) {
+          const latest = await this.prisma.clusterBaselineHistory.aggregate({
+            where: { clusterId: id, tenantId },
+            _max: { capturedAt: true },
+          });
+          period = startOfUtcMonth(latest._max.capturedAt ?? new Date());
+        }
+        const capturedAt = period;
 
-        await this.prisma.$transaction([
-          this.prisma.cluster.update({ where: { id }, data }),
+        // @ai-warning: upsert per (clusterId, metricTypeId) — never delete-then-recreate.
+        // `baselines` is a partial array by contract (`.min(1)`, not "all of them"), so a
+        // delete scoped to clusterId destroys the baselines of every metric the caller
+        // simply didn't mention. Baselines drive hardware purchasing and this update path
+        // is the only writer, so an omitted metric must be untouched, not re-created from
+        // a payload that never described it. See #181.
+        writes.push(
           // Append-only history. Re-entering a period the admin already recorded
           // is an explicit correction, so it upserts rather than erroring — and
           // flips `source` back to manual, since a human has overridden whatever
@@ -246,36 +295,29 @@ export class ClustersService {
               },
             }),
           ),
-        ]);
-      } else {
-        // A baselineDate with no baselines RE-ANCHORS: each metric's newest row
-        // moves to the submitted period. The alternatives all lose. Rejecting it
-        // contradicts the recorded Q9a ruling that baselineDate corrections stay
-        // open on a synced cluster. Accepting it as a no-op is worse than an
-        // error: baseline-edit-form.tsx marks the edit dirty, shows its
-        // destructive confirmation, reports success, then resets its input from
-        // the response — the operator watches the edit silently revert. Appending
-        // a row at the new period fabricates a measurement nobody took, which then
-        // renders as a real point on the history chart and moves the forecast
-        // anchor.
-        const moves =
-          input.baselineDate === undefined
-            ? []
-            : await this.planBaselineReanchor(tenantId, id, startOfUtcMonth(input.baselineDate));
-
-        await this.prisma.$transaction([
-          // Runs even when `data` is empty, so a date-only edit still bumps
-          // `updatedAt` exactly as it did when baselineDate was a column here.
-          this.prisma.cluster.update({ where: { id }, data }),
-          ...moves.map((move) =>
-            this.prisma.clusterBaselineHistory.update({
-              where: { id: move.id },
-              data: { capturedAt: move.capturedAt },
-            }),
-          ),
-        ]);
+        );
       }
+
+      await this.prisma.$transaction(writes);
     } catch (err) {
+      // `planBaselineReanchor` reads occupancy OUTSIDE the transaction that
+      // writes, so a concurrent edit can take the target period in between.
+      // `cluster_baseline_history_period_unique` is the real guard and nothing
+      // corrupts — this only maps the resulting P2002 onto the SAME typed refusal
+      // the checked path returns, so the race degrades to a 422 naming the problem
+      // rather than a sanitized 500.
+      //
+      // @ai-note Deliberately NOT closed with locking. Serializing every baseline
+      // edit, or taking `SELECT ... FOR UPDATE` over a period range, buys nothing
+      // the unique index does not already guarantee — the race's only consequence
+      // is which error code the loser sees, and that is what this maps.
+      if (uniqueConstraintModel(err) === Prisma.ModelName.ClusterBaselineHistory) {
+        throw new UnprocessableError(
+          'BASELINE_PERIOD_OCCUPIED',
+          'A baseline was recorded for that period while this edit was in flight. ' +
+            'Reload the cluster and retry.',
+        );
+      }
       // Only map P2002 to a name conflict when a rename was actually requested.
       // The unique indexes reachable from here also include the history period
       // key, and reporting that as `A cluster named "" already exists` sends the
@@ -338,44 +380,110 @@ export class ClustersService {
     return this.getById(tenantId, id);
   }
 
+  /** Validates a `baselines` payload into writable rows, resolving metric keys to ids. */
+  private async resolveBaselineRows(input: ClusterUpdateInput): Promise<
+    Array<{
+      metricTypeId: string;
+      baselineConsumption: Prisma.Decimal;
+      baselineCapacity: Prisma.Decimal;
+    }>
+  > {
+    const baselines = input.baselines ?? [];
+    const metricTypes = await this.resolveMetricTypes(baselines.map((b) => b.metricTypeKey));
+    return baselines.map((b) => {
+      const metricType = metricTypes.get(b.metricTypeKey);
+      if (!metricType) {
+        throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${b.metricTypeKey}`);
+      }
+      return {
+        metricTypeId: metricType.id,
+        baselineConsumption: new Prisma.Decimal(b.baselineConsumption),
+        baselineCapacity: new Prisma.Decimal(b.baselineCapacity),
+      };
+    });
+  }
+
   /**
-   * Plans a date-only baseline edit: move each metric's NEWEST history row onto
-   * `target`, or refuse if that would overwrite a recorded period.
+   * Plans a baseline re-date: which metrics' NEWEST history rows must move onto
+   * `target`, refusing if a move would disturb what is already recorded.
    *
-   * @ai-warning This is the one place the append-only history is mutated rather
-   * than appended to, so the refusal is what keeps it honest. A conflict can only
-   * arise when the target is EARLIER than a metric's newest row — nothing sits
-   * after the newest — i.e. exactly when an operator corrects a date backwards
-   * onto a month that was already measured. Merging the two rows would destroy a
-   * measurement; overwriting would present one month's numbers as another's. Both
-   * are silent, and both feed hardware purchasing, so the request is refused and
-   * the operator is told which period to edit instead.
+   * @ai-warning This is the one place the append-only history is MUTATED rather
+   * than appended to, so both the exclusions and the refusal are load-bearing.
+   *
+   * A row is moved only when there is no honest alternative, so `writing` decides
+   * far more than it looks:
+   *
+   * - `undefined` — the request carries NO values. There is nothing to append, so
+   *   re-dating each metric's newest row is the only way to honour the date
+   *   without fabricating a measurement nobody took.
+   * - a set — the request carries values, and only the metrics it NAMES may move.
+   *   An omitted metric must be untouched (#181, same rule the upsert follows):
+   *   re-dating a row the payload never described is exactly the silent edit that
+   *   principle exists to prevent. Of the named metrics, one whose target is LATER
+   *   than its newest row is recording an ordinary new monthly measurement — the
+   *   upsert appends it and the older rows stay, which is what epic #172 exists to
+   *   accumulate, so moving instead would delete a measurement on every
+   *   forward-dated save. That leaves the genuine case: a target EARLIER than the
+   *   metric's newest row, where appending would leave the OLD row newest, so the
+   *   response would echo neither the submitted date nor the submitted values and
+   *   the form would reset both away.
+   *
+   * The refusal has to be phrased as "would this reorder?", not "is the target
+   * period taken?". The narrow version reads plausible — the moving row is a
+   * metric's newest, so nothing sits after it — and is wrong for every target
+   * earlier than some OTHER recorded row: re-dating July's 300 onto a free April,
+   * behind an existing May of 100, leaves history reading Apr=300, May=100 — the
+   * July measurement plotted at April and a 300 -> 100 drop nobody measured, on a
+   * chart that feeds hardware purchasing. Refusing on `capturedAt >= target`
+   * subsumes the exact-period check (`==` is the occupied case, `>` the
+   * reordering one), leaving one invariant: a moved row stays the newest row for
+   * its metric.
+   *
+   * The scope is PER METRIC, because the unique key is (cluster, metric, period).
+   * A cluster-wide check would refuse the legitimate edit where one metric
+   * already sits on the target and another is moving onto it.
    */
   private async planBaselineReanchor(
     tenantId: string,
     clusterId: string,
     target: Date,
+    writing: ReadonlySet<string> | undefined,
   ): Promise<Array<{ id: string; capturedAt: Date }>> {
     const newest = (await this.loadNewestBaselines(tenantId, [clusterId])).get(clusterId) ?? [];
-    const moving = newest.filter((row) => row.capturedAt.getTime() !== target.getTime());
-    // Nothing to move covers two cases, and both are no-ops rather than writes: a
+    const moving = newest.filter((row) => {
+      if (row.capturedAt.getTime() === target.getTime()) return false;
+      if (writing === undefined) return true;
+      return writing.has(row.metricTypeId) && row.capturedAt.getTime() > target.getTime();
+    });
+    // Nothing to move covers four cases, and all are no-ops rather than writes: a
     // synced cluster between import and its first snapshot has no row to re-date
-    // (creating one would invent a measurement nobody took), and a cluster already
-    // anchored on the submitted period is simply unchanged.
+    // (creating one would invent a measurement nobody took), a cluster already
+    // anchored on the submitted period is simply unchanged, a metric the payload
+    // omitted stays untouched, and a named metric recording a later period is
+    // appended rather than re-dated.
     if (moving.length === 0) return [];
 
-    const occupied = await this.prisma.clusterBaselineHistory.findMany({
-      where: { clusterId, tenantId, capturedAt: target },
+    // The moving rows themselves are excluded: a backwards move starts from a
+    // period later than the target, so it would otherwise block itself.
+    const blocking = await this.prisma.clusterBaselineHistory.findMany({
+      where: {
+        clusterId,
+        tenantId,
+        metricTypeId: { in: moving.map((row) => row.metricTypeId) },
+        capturedAt: { gte: target },
+        id: { notIn: moving.map((row) => row.id) },
+      },
       select: { metricTypeId: true },
     });
-    const occupiedMetrics = new Set(occupied.map((row) => row.metricTypeId));
+    const blockedMetrics = new Set(blocking.map((row) => row.metricTypeId));
 
     for (const row of moving) {
-      if (occupiedMetrics.has(row.metricTypeId)) {
+      if (blockedMetrics.has(row.metricTypeId)) {
         throw new UnprocessableError(
           'BASELINE_PERIOD_OCCUPIED',
-          `A baseline is already recorded for ${formatDate(target).slice(0, 7)} on metric ` +
-            `${row.metricType.key}; edit that period directly instead of re-dating this one.`,
+          `A ${row.metricType.key} baseline is already recorded at or after ` +
+            `${formatDate(target).slice(0, 7)}; re-dating onto it would overwrite or reorder a ` +
+            'recorded measurement. Edit that period directly instead.',
         );
       }
     }
