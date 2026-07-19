@@ -1302,4 +1302,71 @@ describe('PUT /api/clusters/:id — a combined date + values edit', () => {
     ]);
     expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 350]);
   });
+
+  it('lands a values-only edit on EACH metric’s own newest period, never a cluster-wide one', async () => {
+    // The test above holds ONE metric, under which "this metric's newest period"
+    // and "the cluster's newest period" are the same date — so it cannot tell the
+    // two apart. Here they have DIVERGED, which is the normal state rather than a
+    // contrived one: the vSphere snapshot job writes memory_gb only, so any
+    // second metric falls behind the moment the job runs.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195g' },
+      update: {},
+      create: { key: 'cpu_cores_195g', displayName: 'CPU (test)', unit: 'cores' },
+    });
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('values-only-diverged'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)), // memory at May, 150
+      baselineConsumption: 150,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'cpu_cores_195g',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)), // cpu at July, 32
+          baselineConsumption: 32,
+          baselineCapacity: 128,
+        },
+      ],
+    });
+
+    // The exact payload baseline-edit-form.tsx builds when an operator changes
+    // memory 150 -> 160 and nothing else: `baselines` carries EVERY metric the
+    // form renders (one dirty check for all of them), and `baselineDate` is
+    // omitted because the date input was never touched.
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 160, baselineCapacity: 1000 },
+          { metricTypeKey: 'cpu_cores_195g', baselineConsumption: 32, baselineCapacity: 128 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Two rows, each corrected IN PLACE at its own period. A cluster-wide MAX
+    // lands memory at July as a THIRD row — a memory measurement nobody took —
+    // and leaves May behind still carrying the stale 150.
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      include: { metricType: { select: { key: true } } },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(
+      rows.map((r) => [
+        r.metricType.key,
+        r.capturedAt.toISOString().slice(0, 10),
+        r.baselineConsumption.toNumber(),
+      ]),
+    ).toEqual([
+      ['memory_gb', '2026-05-01', 160],
+      ['cpu_cores_195g', '2026-07-01', 32],
+    ]);
+
+    // ...and the cpu staleness that `deriveBaselineDate`'s MIN exists to surface
+    // survives. A cluster-wide period clears it to July, and the form then resets
+    // its date input from this field onto a month the operator never typed.
+    expect(clusterResponseSchema.parse(res.json()).baselineDate).toBe('2026-05-01');
+  });
 });

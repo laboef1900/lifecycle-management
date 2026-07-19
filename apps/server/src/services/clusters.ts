@@ -237,27 +237,37 @@ export class ClustersService {
 
       if (rows.length > 0) {
         // The period a manual entry lands in: the supplied baselineDate when the
-        // caller changed it, otherwise the cluster's newest recorded period.
+        // caller changed it, otherwise THAT METRIC's own newest recorded period.
         // Snapped to the first of the month so manual and vSphere baselines share
         // one period key (recorded decision Q6) — without which a manual row at
         // Aug-15 and a snapshot at Aug-01 would coexist and "the newest baseline"
         // would be decided by accident of date.
         //
-        // That fallback read `clusters.baseline_date` until #195 dropped it. The
-        // cluster-level MAX preserves the same one-period-per-update semantics: a
-        // correction naming no date lands on the period it is correcting, so the
-        // upsert updates in place rather than appending a competing row. A cluster
-        // with no history yet has no period to correct, so the current month opens
-        // the first one.
-        let period = target;
-        if (period === undefined) {
-          const latest = await this.prisma.clusterBaselineHistory.aggregate({
-            where: { clusterId: id, tenantId },
-            _max: { capturedAt: true },
-          });
-          period = startOfUtcMonth(latest._max.capturedAt ?? new Date());
-        }
-        const capturedAt = period;
+        // That fallback read `clusters.baseline_date` until #195 dropped it, and a
+        // cluster-wide MAX is the wrong replacement even though it is the obvious
+        // one. baseline-edit-form.tsx submits EVERY metric it renders whenever any
+        // one number is dirty, and omits `baselineDate` unless the date input
+        // itself changed — so a one-number correction arrives here as a
+        // multi-metric, DATELESS payload. Metrics drift apart routinely (the
+        // vSphere snapshot job writes memory_gb only), and a cluster-wide MAX then
+        // drags every lagging metric onto the freshest metric's period: it appends
+        // a measurement nobody took, strands the real one behind it still carrying
+        // the stale numbers, and silently clears the staleness that
+        // `deriveBaselineDate`'s MIN exists to report. Per metric, each correction
+        // lands on the period it is actually correcting and the upsert updates in
+        // place.
+        //
+        // A metric with no history at all has no period to correct, so the current
+        // month opens its first one.
+        const newestPeriods =
+          target === undefined
+            ? await this.loadNewestPeriodsByMetric(
+                tenantId,
+                id,
+                rows.map((row) => row.metricTypeId),
+              )
+            : new Map<string, Date>();
+        const openingPeriod = firstOfCurrentMonth();
 
         // @ai-warning: upsert per (clusterId, metricTypeId) — never delete-then-recreate.
         // `baselines` is a partial array by contract (`.min(1)`, not "all of them"), so a
@@ -270,8 +280,9 @@ export class ClustersService {
           // is an explicit correction, so it upserts rather than erroring — and
           // flips `source` back to manual, since a human has overridden whatever
           // the sync captured.
-          ...rows.map((row) =>
-            this.prisma.clusterBaselineHistory.upsert({
+          ...rows.map((row) => {
+            const capturedAt = target ?? newestPeriods.get(row.metricTypeId) ?? openingPeriod;
+            return this.prisma.clusterBaselineHistory.upsert({
               where: {
                 clusterId_metricTypeId_capturedAt: {
                   clusterId: id,
@@ -293,8 +304,8 @@ export class ClustersService {
                 baselineConsumption: row.baselineConsumption,
                 baselineCapacity: row.baselineCapacity,
               },
-            }),
-          ),
+            });
+          }),
         );
       }
 
@@ -489,6 +500,40 @@ export class ClustersService {
     }
 
     return moving.map((row) => ({ id: row.id, capturedAt: target }));
+  }
+
+  /**
+   * MAX(captured_at) per metric on ONE cluster, for the metrics a write names.
+   *
+   * The period a dateless correction belongs in: the one it is correcting. A
+   * metric absent from the result has no history at all and so has no period to
+   * correct — the caller opens its first one at the current month.
+   *
+   * @ai-warning PER METRIC, never a cluster-wide `_max`. The unique key is
+   * (cluster, metric, period), so "the cluster's newest period" is not a period
+   * the lagging metrics were ever measured at; writing them there appends a
+   * fabricated measurement and leaves the real one behind, stale. See the call
+   * site for the full argument.
+   *
+   * Grouped in Postgres and bounded by the payload's metrics — never by months of
+   * accumulated history, which this runs alongside on every baseline save.
+   */
+  private async loadNewestPeriodsByMetric(
+    tenantId: string,
+    clusterId: string,
+    metricTypeIds: readonly string[],
+  ): Promise<Map<string, Date>> {
+    if (metricTypeIds.length === 0) return new Map();
+    const groups = await this.prisma.clusterBaselineHistory.groupBy({
+      by: ['metricTypeId'],
+      where: { clusterId, tenantId, metricTypeId: { in: [...metricTypeIds] } },
+      _max: { capturedAt: true },
+    });
+    return new Map(
+      groups.flatMap((g): Array<[string, Date]> =>
+        g._max.capturedAt === null ? [] : [[g.metricTypeId, startOfUtcMonth(g._max.capturedAt)]],
+      ),
+    );
   }
 
   /**
