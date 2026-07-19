@@ -31,12 +31,12 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Kbd } from '@/components/ui/kbd';
-import { RunwayPill } from '@/components/ui/runway-pill';
+import { deriveRunwayTone } from '@/components/ui/runway-pill';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api, type ScenarioWire } from '@/lib/api-client';
 import { HOSTS_TAB_HASH, useAnchorFocusRequest } from '@/lib/anchors';
 import { useIsAdmin } from '@/lib/auth';
-import { runwayToWarn, utilStatus } from '@/lib/forecast-summary';
+import { runwayToWarn, utilStatus, type RunwaySummary } from '@/lib/forecast-summary';
 import { formatMonthLong, formatMonthShort } from '@/lib/format-month';
 import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 import { useMediaQuery } from '@/lib/use-media-query';
@@ -1012,6 +1012,44 @@ function FlagChip({
   );
 }
 
+/**
+ * Runway's `KpiTile` value/caption text (#243 Part B item 2). The tone
+ * decision itself is `deriveRunwayTone` (`ui/runway-pill.tsx`), shared with
+ * `RunwayPill`'s Badge variant; only the two-line numeral-plus-caption text
+ * this tile needs — as opposed to `RunwayPill`'s single-line badge text — is
+ * local to this KPI strip.
+ */
+function deriveRunwayKpiCopy(
+  forecast: ForecastResponse,
+  summary: RunwaySummary,
+  unknown: boolean,
+): { value: string; caption: string; status: ReturnType<typeof deriveRunwayTone> } {
+  const status = deriveRunwayTone(summary, unknown);
+  const warnPct = Math.round(forecast.effectiveThresholds.warn * 100);
+  const critPct = Math.round(forecast.effectiveThresholds.crit * 100);
+
+  if (unknown) {
+    return { value: '—', caption: 'unknown — no capacity recorded', status };
+  }
+  if (summary.alreadyBreached === 'crit') {
+    return { value: `Over ${critPct}%`, caption: 'already over threshold', status };
+  }
+  if (summary.alreadyBreached === 'warn') {
+    return { value: `Over ${warnPct}%`, caption: 'already over threshold', status };
+  }
+  if (summary.months === null) {
+    const horizon = forecast.months.length;
+    return {
+      value: horizon > 0 ? `${horizon}+ mo` : 'No breach',
+      caption: 'no warn breach in horizon',
+      status,
+    };
+  }
+  const breachMonth = forecast.months[summary.months]?.month;
+  const monthApprox = breachMonth ? ` ≈ ${formatMonthShort(breachMonth)}` : '';
+  return { value: `${summary.months} mo`, caption: `to ${warnPct}%${monthApprox}`, status };
+}
+
 function ClusterDetailKpiStrip({
   forecast,
   metric,
@@ -1028,6 +1066,7 @@ function ClusterDetailKpiStrip({
   const runwayUnknown =
     !capacityKnown && summary.months === null && summary.alreadyBreached === false;
   const procurementKpi = deriveProcurementKpi(forecast.procurement, new Date(), capacityKnown);
+  const runwayKpi = deriveRunwayKpiCopy(forecast, summary, runwayUnknown);
   return (
     <div data-testid="kpi-strip" className="space-y-2">
       {isScenario ? (
@@ -1079,19 +1118,13 @@ function ClusterDetailKpiStrip({
           }
           status={utilStatus(metric.utilization, forecast.effectiveThresholds)}
         />
-        <Card className="col-span-12 flex flex-col justify-between p-3.5 sm:col-span-6 lg:col-span-3">
-          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            Runway
-          </p>
-          <div className="mt-1.5">
-            <RunwayPill
-              summary={summary}
-              unknown={runwayUnknown}
-              horizonMonths={forecast.months.length}
-              thresholds={forecast.effectiveThresholds}
-            />
-          </div>
-        </Card>
+        <KpiTile
+          className="col-span-12 sm:col-span-6 lg:col-span-3"
+          label="Runway"
+          value={runwayKpi.value}
+          caption={runwayKpi.caption}
+          status={runwayKpi.status}
+        />
         <KpiTile
           className="col-span-12 sm:col-span-6 lg:col-span-3"
           label="Order by"

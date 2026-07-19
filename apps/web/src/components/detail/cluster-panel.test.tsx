@@ -338,9 +338,13 @@ describe('<ClusterPanel>', () => {
     const strip = await screen.findByTestId('kpi-strip');
     // The 0%-lie must never render on the purchasing-decision KPI strip.
     expect(strip).not.toHaveTextContent('0.0%');
-    // A text-carried "unknown" reason, not color alone.
-    expect(within(strip).getAllByText(/no capacity recorded/i)).toHaveLength(2);
-    expect(within(strip).getByText(/^unknown — no capacity$/i)).toBeInTheDocument();
+    // A text-carried "unknown" reason, not color alone — now three tiles
+    // (Utilization, Headroom, and Runway since #243 Part B item 2, which
+    // moved Runway onto the same KpiTile grammar as its siblings).
+    expect(within(strip).getAllByText(/no capacity recorded/i)).toHaveLength(3);
+    const runwayTile = within(strip).getByText('Runway').closest('div');
+    expect(runwayTile).toHaveTextContent('—');
+    expect(runwayTile).toHaveTextContent(/unknown — no capacity recorded/i);
     expect(
       within(strip).getByText(/capacity required for procurement timing/i),
     ).toBeInTheDocument();
@@ -486,6 +490,26 @@ describe('<ClusterPanel>', () => {
         'Cluster Prod-East detail opened.',
       ),
     );
+  });
+
+  it('renders Runway through the shared KpiTile — numeral + caption + status accent, not a Card wrapping RunwayPill (#243 Part B item 2)', async () => {
+    render(<Harness show />);
+    const strip = await screen.findByTestId('kpi-strip');
+
+    // Default forecast() fixture never crosses the 70% warn threshold across
+    // its 3-month window, so runway is "no breach in this horizon" — the
+    // numeral carries the horizon length, matching what RunwayPill itself
+    // would have shown ("3+ mo"), just as a KpiTile value instead of a badge.
+    const runwayLabel = within(strip).getByText('Runway');
+    const runwayTile = runwayLabel.closest('div');
+    expect(runwayTile).not.toBeNull();
+    expect(within(runwayTile!).getByText('3+ mo')).toHaveClass('font-mono');
+    expect(runwayTile).toHaveTextContent(/no warn breach in horizon/i);
+    // Healthy runway carries no left-accent border, matching every other
+    // healthy tile in the strip (Headroom, Order by) — RunwayPill's own
+    // amber "accent" Badge doesn't translate 1:1 into the KpiTile grammar,
+    // where "ok" reads as the neutral, no-border state.
+    expect(runwayTile?.className).not.toMatch(/border-l-2/);
   });
 
   it('renders the KPI strip, recommendation chip, and tabs once data loads', async () => {
