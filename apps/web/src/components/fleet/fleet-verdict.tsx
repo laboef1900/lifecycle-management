@@ -77,7 +77,7 @@ export function FleetVerdict({
       style={{ background: 'var(--surface-card)' }}
       aria-label="Fleet verdict"
     >
-      <h1 className="max-w-[56ch] text-balance font-display text-[clamp(22px,2.2vw,28px)] font-semibold leading-[1.18] tracking-[-0.02em]">
+      <h1 className="max-w-[56ch] text-balance font-display text-display">
         {!utilizationKnown ? (
           <>
             Fleet capacity is <strong className={cn(EMPHASIS, 'text-fg-muted')}>unknown</strong>{' '}

@@ -242,7 +242,17 @@ html.dark {
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-  --text-display: 28px;
+  /* @ai-note fluid, not flat 28px (#243 Part B): the fleet verdict h1 is
+     long, cluster-name-dependent prose, not a short page title — a flat
+     28px cost measurably more wrapped lines/vertical space on narrow
+     viewports than the clamp() the headline was already tuned with
+     pre-token-adoption. Kept that exact formula here so every text-display
+     consumer (verdict h1, Settings h1, cluster panel title via text-h1)
+     shares one canonical, viewport-aware ceiling instead of a per-component
+     arbitrary value. Settings' single-word h1 is unaffected in practice: it
+     converges to the same 28px above ~1273px and only tapers down (never
+     wraps differently) below ~1000px. */
+  --text-display: clamp(22px, 2.2vw, 28px);
   --text-display--line-height: 1.1;
   --text-display--letter-spacing: -0.025em;
   --text-display--font-weight: 600;

@@ -416,4 +416,25 @@ describe('<FleetVerdict>', () => {
     expect(heading).toHaveTextContent(/no orders due in the forecast window/i);
     expect(heading).not.toHaveTextContent(/0-month/);
   });
+
+  // Finding: "Type-scale tokens defined but unused; Settings h1 drops the
+  // display font" — three sibling top-level headings (verdict, Settings,
+  // panel title) each carried their own arbitrary size instead of the
+  // shared --text-display/--text-h1 tokens. This is the verdict h1's half.
+  it('adopts the shared text-display token instead of its own arbitrary clamp/leading/tracking', () => {
+    render(
+      <FleetVerdict
+        summary={summary()}
+        earliest={null}
+        staleCount={0}
+        openOrderCount={0}
+        hostCount={null}
+      />,
+    );
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading).toHaveClass('font-display', 'text-display');
+    expect(heading.className).not.toMatch(/text-\[clamp/);
+    expect(heading.className).not.toMatch(/leading-\[1\.18\]/);
+    expect(heading.className).not.toMatch(/tracking-\[-0\.02em\]/);
+  });
 });
