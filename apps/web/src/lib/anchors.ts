@@ -13,6 +13,17 @@ import { useCallback, useSyncExternalStore } from 'react';
 export const ADD_CLUSTER_HASH = 'add-cluster';
 
 /**
+ * Cluster panel → Hosts tab (`apps/web/src/components/detail/cluster-panel.tsx`).
+ *
+ * Unlike `ADD_CLUSTER_HASH`, this anchor never appears in the URL: the
+ * requester (the unknown-capacity `RecommendationChip`) and the target (the
+ * panel's own Tabs) are already mounted together on the same page, so there is
+ * no navigation for a location hash to survive. The request counter alone is
+ * the whole signal — see `useAnchorFocusRequest`.
+ */
+export const HOSTS_TAB_HASH = 'hosts-tab';
+
+/**
  * Settings page section anchors (#243 Part B — Medium: "Settings page is one
  * flat scroll"). Unlike `ADD_CLUSTER_HASH` above, these do NOT need the
  * `requestAnchorFocus`/`useAnchorFocusRequest` counter: they are plain
