@@ -1,10 +1,10 @@
 import { itemCreateInputSchema } from '@lcm/shared';
 import type { ItemKind } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -88,6 +88,8 @@ export function CreateItemDialog({
   const categories = useCategories();
   const [form, setForm] = useState<CreateFormState>(blankCreateForm());
   const [errors, setErrors] = useState<CreateErrors>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const reset = (): void => {
     setForm(blankCreateForm());
@@ -172,7 +174,7 @@ export function CreateItemDialog({
             one-off capacity/consumption delta.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
           <KindToggle value={form.kind} onChange={(kind) => setForm({ ...form, kind })} />
           <Field
             label={isApp ? 'Name' : 'Title'}

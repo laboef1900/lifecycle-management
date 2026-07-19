@@ -1,9 +1,9 @@
 import { hostCreateInputSchema } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -61,6 +61,8 @@ export function CreateHostDialog({
   const { invalidate } = useHostMutations(clusterId);
   const [form, setForm] = useState<HostFormState>(blankHostForm());
   const [errors, setErrors] = useState<Partial<Record<keyof HostFormState, string>>>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const mutation = useMutation({
     mutationFn: (payload: HostCreateInputWire) => api.hosts.create(clusterId, payload),
@@ -131,7 +133,7 @@ export function CreateHostDialog({
             Capacity provider for this cluster. Initial memory capacity required.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
           <Field
             label="Name"
             value={form.name}
