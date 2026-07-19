@@ -107,15 +107,17 @@ test('create cluster, add host + application, chart reflects updates', async ({
     await expect(page.getByText('Capacity ceiling')).toBeVisible();
 
     // Theme toggle round-trip: cycle system → light → dark → system.
-    const toggle = page.getByRole('button', { name: /Theme:/ });
+    // #243 Part B copy item 3: the button names the action plus the state
+    // ("Switch theme (current: …)"), not just the state alone.
+    const toggle = page.getByRole('button', { name: /Switch theme/ });
     await toggle.click();
     await expect(page.locator('html')).not.toHaveClass(/dark/);
     await toggle.click();
     await expect(page.locator('html')).toHaveClass(/dark/);
     await toggle.click();
     // Back to system — html class state depends on the host OS preference,
-    // so just assert the aria-label is back to "System".
-    await expect(toggle).toHaveAccessibleName(/Theme: System/);
+    // so just assert the accessible name is back to "system".
+    await expect(toggle).toHaveAccessibleName(/current: system/);
 
     // Capture the cluster id for cleanup via the panel URL.
     const url = page.url();
