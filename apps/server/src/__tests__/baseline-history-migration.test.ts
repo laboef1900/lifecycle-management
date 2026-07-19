@@ -70,14 +70,16 @@ afterAll(async () => {
 });
 
 async function clusterWithHistory(
-  rows: readonly { capturedAt: Date; consumption: number }[],
+  rows: readonly { capturedAt: Date; consumption: number; metricKey?: string }[],
 ): Promise<string> {
   seq += 1;
-  const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
   const cluster = await prisma.cluster.create({
     data: { tenantId: 'default', name: `migration-${Date.now()}-${seq}` },
   });
   for (const row of rows) {
+    const metric = await prisma.metricType.findUniqueOrThrow({
+      where: { key: row.metricKey ?? 'memory_gb' },
+    });
     // Raw SQL, not the Prisma factory: every application writer snaps the period
     // through `startOfUtcMonth`, so the mid-month state under test is one only the
     // backfill can produce.
@@ -180,6 +182,45 @@ describe('contract migration — captured_at normalisation', () => {
       '2026-05-01',
     ]);
     expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 200]);
+  });
+
+  it('groups by (cluster, metric, month) — not by month alone', async () => {
+    // Nothing else in this suite constrains the guard's GROUP BY. Every other
+    // collision fixture is one cluster and one metric, so a guard grouping on
+    // `date_trunc('month', captured_at)` ALONE — or on (cluster, month) — passes
+    // the whole file while refusing to deploy against any real database, where
+    // dozens of clusters share every month by construction. That failure mode is
+    // a blocked upgrade with a RAISE naming groups the operator cannot reconcile,
+    // because there is nothing wrong with them.
+    //
+    // Two dimensions, both needed: two CLUSTERS colliding in one month pins
+    // `cluster_id`, and two METRICS on one cluster in that same month pins
+    // `metric_type_id`.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195m' },
+      update: {},
+      create: { key: 'cpu_cores_195m', displayName: 'CPU (migration test)', unit: 'cores' },
+    });
+    const first = await clusterWithHistory([
+      { capturedAt: new Date(Date.UTC(2026, 8, 14)), consumption: 100 },
+      { capturedAt: new Date(Date.UTC(2026, 8, 21)), consumption: 16, metricKey: 'cpu_cores_195m' },
+    ]);
+    const second = await clusterWithHistory([
+      { capturedAt: new Date(Date.UTC(2026, 8, 9)), consumption: 200 },
+    ]);
+
+    // Three rows, all in September 2026, all mid-month — and not one group holds
+    // more than one row, so nothing is at risk and the guard must stay silent.
+    await expect(normaliseCapturedAt()).resolves.toBeUndefined();
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: { in: [first, second] } },
+      orderBy: { baselineConsumption: 'asc' },
+    });
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.capturedAt.toISOString().slice(0, 10) === '2026-09-01')).toBe(true);
+    // Each row keeps its own number: snapping re-anchors, it never merges.
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([16, 100, 200]);
   });
 
   it('runs before the legacy table is dropped', async () => {
