@@ -812,7 +812,7 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    const count = screen.getByLabelText(/hosts to drop/i);
+    const count = screen.getByLabelText(/hosts lost/i);
     await user.clear(count);
     await user.type(count, '0');
     await user.click(screen.getByRole('button', { name: 'Apply' }));
@@ -1154,7 +1154,7 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
-    const countInput = await screen.findByLabelText(/hosts to drop/i);
+    const countInput = await screen.findByLabelText(/hosts lost/i);
     countInput.focus();
 
     resizeTo(1280);
@@ -1194,7 +1194,7 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
-    const countInput = await screen.findByLabelText(/hosts to drop/i);
+    const countInput = await screen.findByLabelText(/hosts lost/i);
     await user.clear(countInput);
     await user.type(countInput, '3');
     await user.click(screen.getByRole('button', { name: 'Apply' }));
@@ -1213,7 +1213,7 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await screen.findByTestId('scenario-controls');
     // Not the DEFAULT_DRAFT "1": a stray Apply must not silently replace the
     // applied scenario with the defaults.
-    expect(screen.getByLabelText(/hosts to drop/i)).toHaveValue(3);
+    expect(screen.getByLabelText(/hosts lost/i)).toHaveValue(3);
   });
 
   it('recovers cleanly when the pane is reopened mid-exit and closed again', async () => {

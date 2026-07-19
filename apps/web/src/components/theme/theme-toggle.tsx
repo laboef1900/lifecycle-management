@@ -11,15 +11,13 @@ function nextTheme(current: Theme): Theme {
   return ORDER[(idx + 1) % ORDER.length] ?? 'system';
 }
 
+// Names the action plus the state (#243 Part B copy item 3) — the old
+// "Theme: System" told a screen-reader user only what IS set, not what
+// pressing the button does, and the announced name changed silently on the
+// still-focused button right after activation with no separate cue that
+// anything happened.
 function labelFor(theme: Theme): string {
-  switch (theme) {
-    case 'system':
-      return 'Theme: System';
-    case 'light':
-      return 'Theme: Light';
-    case 'dark':
-      return 'Theme: Dark';
-  }
+  return `Switch theme (current: ${theme})`;
 }
 
 export function ThemeToggle(): React.JSX.Element {

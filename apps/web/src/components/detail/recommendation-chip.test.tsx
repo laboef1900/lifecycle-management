@@ -59,23 +59,23 @@ describe('deriveRecommendation', () => {
     expect(rec.chipLabel).toBe('ORDER NOW');
     expect(rec.shortText).toBe('Order now — 15d overdue');
     expect(rec.message).toBe(
-      'Order now — last safe order date 2026-07-01 (15 days overdue) · 6-wk lead',
+      'Order now — last safe order date Jul 1 (15 days overdue) · 6-wk lead',
     );
   });
 
   it('derives a crit "order now" counting down when the order-by date is within 28 days', () => {
     const rec = deriveRecommendation(procurement({ orderByDate: '2026-07-30' }), TODAY);
     expect(rec.tone).toBe('crit');
-    expect(rec.shortText).toBe('Order now — by 2026-07-30');
-    expect(rec.message).toBe('Order now — last safe order date 2026-07-30 (in 14 d) · 6-wk lead');
+    expect(rec.shortText).toBe('Order now — by Jul 30');
+    expect(rec.message).toBe('Order now — last safe order date Jul 30 (in 14 d) · 6-wk lead');
   });
 
   it('derives planned when the order-by date is comfortably in the future', () => {
     const rec = deriveRecommendation(procurement({ orderByDate: '2026-12-28' }), TODAY);
     expect(rec.tone).toBe('planned');
     expect(rec.chipLabel).toBe('PLANNED');
-    expect(rec.shortText).toBe('Order by 2026-12-28');
-    expect(rec.message).toMatch(/Order by 2026-12-28 \(in \d+ mo\) · 6-wk lead/);
+    expect(rec.shortText).toBe('Order by Dec 28');
+    expect(rec.message).toMatch(/Order by Dec 28 \(in \d+ mo\) · 6-wk lead/);
   });
 
   it('derives a muted "no order needed" — never omitted — when there is no projected breach', () => {
@@ -135,7 +135,7 @@ describe('<RecommendationChip>', () => {
     // The full sentence is present for AT without any interaction: it rides
     // sr-only inside the chip, so the accessible name carries everything.
     expect(chip).toHaveTextContent(
-      'Order now — last safe order date 2026-07-01 (15 days overdue) · 6-wk lead',
+      'Order now — last safe order date Jul 1 (15 days overdue) · 6-wk lead',
     );
   });
 
@@ -168,7 +168,7 @@ describe('<RecommendationChip>', () => {
 
     const tooltip = await screen.findByRole('tooltip');
     expect(tooltip).toHaveTextContent(
-      'Order now — last safe order date 2026-07-01 (15 days overdue) · 6-wk lead',
+      'Order now — last safe order date Jul 1 (15 days overdue) · 6-wk lead',
     );
     // The portal in ui/tooltip.tsx is load-bearing: tooltip content mounted
     // inside this role="status" wrapper would make AT re-announce the full
