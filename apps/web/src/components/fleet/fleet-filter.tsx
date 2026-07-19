@@ -1,4 +1,4 @@
-import { ListFilter } from 'lucide-react';
+import { Funnel } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -49,7 +49,7 @@ export function FleetFilter({
           data-testid="fleet-filter-button"
           className={cn(activeCount > 0 && 'border-steel/60 text-steel hover:border-steel')}
         >
-          <ListFilter className="h-3.5 w-3.5" aria-hidden />
+          <Funnel className="h-3.5 w-3.5" aria-hidden />
           Filter
           {activeCount > 0 ? (
             <span data-testid="fleet-filter-count" aria-label={`${activeCount} filter active`}>

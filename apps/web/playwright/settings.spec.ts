@@ -136,8 +136,8 @@ test.describe('cluster identity + baseline edit', () => {
     try {
       await page.goto(`/clusters/${cluster.id}`);
       const panel = page.locator('.cluster-panel');
-      // The panel header name is an h2 (spec §5.1) — the page's only h1 is
-      // the fleet verdict headline computed on the console beneath.
+      // The panel header name is the h1 since #243 (the console's verdict h1
+      // beneath is inert-hidden while the panel is up).
       await expect(panel.getByRole('heading', { name: originalName, level: 1 })).toBeVisible();
 
       await panel.getByRole('tab', { name: 'Settings' }).click();
@@ -272,6 +272,11 @@ test.describe('cluster lifecycle', () => {
       // check the "Show archived (N)" item to reveal the cluster's tile.
       await page.getByTestId('fleet-filter-button').click();
       await page.getByRole('checkbox', { name: /show archived/i }).check();
+      // The issue #243 verification list: the toggle announces the resulting
+      // mixed view in words on the console's polite status region.
+      await expect(page.getByTestId('fleet-filter-announcement')).toHaveText(
+        /including \d+ archived/,
+      );
       await expect(page.getByRole('link', { name: new RegExp(name) })).toBeVisible();
 
       // Unarchive via UI.

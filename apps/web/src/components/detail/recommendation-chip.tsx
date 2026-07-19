@@ -1,5 +1,6 @@
 import type { ProcurementInfo } from '@lcm/shared';
 import { CalendarClock, Check, CircleHelp, TriangleAlert } from 'lucide-react';
+import * as React from 'react';
 
 import { formatRelativeDays } from '@/components/fleet/order-by-rail';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -113,6 +114,13 @@ export function deriveRecommendation(
  * itself would replace its button role — so tone/text changes (a scenario
  * flipping the forecast) are announced politely. Chip text keeps the same
  * tone-on-tint pairings the banner used (AA-checked per theme in spec §3).
+ *
+ * The tooltip is HOVER-ONLY (controlled), for the same reason as `BackLink`:
+ * a focus-triggered Radix tooltip dismisses itself on Escape and marks the
+ * event consumed, which the panel's nested-overlay Esc guard respects — a
+ * keyboard user who Tabs onto the chip would silently pay an extra Esc to
+ * leave the panel. Focus users lose nothing: the full guidance sentence is
+ * already inside the accessible name via the sr-only span.
  */
 export function RecommendationChip({
   procurement,
@@ -121,12 +129,25 @@ export function RecommendationChip({
 }: RecommendationChipProps): React.JSX.Element {
   const rec = deriveRecommendation(procurement, today, capacityKnown);
   const Icon = TONE_ICON[rec.tone];
+  const [tooltipOpen, setTooltipOpen] = React.useState(false);
+  const hoverRef = React.useRef(false);
   return (
     <span role="status" data-testid="recommendation-chip" data-tone={rec.tone}>
-      <Tooltip>
+      <Tooltip
+        open={tooltipOpen}
+        onOpenChange={(next) => {
+          if (!next || hoverRef.current) setTooltipOpen(next);
+        }}
+      >
         <TooltipTrigger asChild>
           <button
             type="button"
+            onPointerEnter={() => {
+              hoverRef.current = true;
+            }}
+            onPointerLeave={() => {
+              hoverRef.current = false;
+            }}
             className={cn(
               'inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-1 font-mono text-[9.5px] font-bold tracking-[0.08em]',
               TONE_CHIP[rec.tone].className,

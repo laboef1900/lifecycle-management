@@ -282,7 +282,9 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       // why the unit suite can't see it). Fall back to the tile that opens
       // this cluster — the trigger in every pointer/keyboard path through
       // the console, and still the best landing spot after a ⌘K jump.
-      document.querySelector<HTMLElement>(`a[data-cluster-id="${clusterId}"]`)?.focus();
+      // CSS.escape: clusterId is raw (percent-decoded) URL text — a crafted
+      // /clusters/x%22y would otherwise make this selector throw mid-unmount.
+      document.querySelector<HTMLElement>(`a[data-cluster-id="${CSS.escape(clusterId)}"]`)?.focus();
     };
   }, [clusterId]);
 
@@ -841,15 +843,17 @@ function ScenarioPaneBody({
         >
           Scenario
         </h3>
-        {/* Icon + "Close" + Esc keycap, matching the sibling BackButton in the
-            panel header — the two controls sit a few elements apart and had
-            drifted apart visually. Both now render the same primitives (the
-            `chip` Button + the `xs` Kbd), so they cannot drift again.
-            `aria-hidden` on both the icon and the keycap keeps the accessible
-            name exactly "Close scenario pane", which contains the visible
-            "Close" (WCAG 2.5.3 Label in Name); `aria-keyshortcuts` states the
-            binding machine-readably, since no browser surfaces it visually —
-            that is what the keycap is for. */}
+        {/* Icon + "Close" + Esc keycap, built from the shared primitives (the
+            `chip` Button + the `xs` Kbd) rather than hand-rolled classes.
+            (The panel header's labeled BackButton this used to visually
+            mirror is gone — #243 replaced it with the icon-only BackLink —
+            but the pane keeps its visible keycap: it is the one on-screen
+            Esc hint left in the panel.) `aria-hidden` on both the icon and
+            the keycap keeps the accessible name exactly "Close scenario
+            pane", which contains the visible "Close" (WCAG 2.5.3 Label in
+            Name); `aria-keyshortcuts` states the binding machine-readably,
+            since no browser surfaces it visually — that is what the keycap
+            is for. */}
         <Button
           ref={closeRef}
           type="button"

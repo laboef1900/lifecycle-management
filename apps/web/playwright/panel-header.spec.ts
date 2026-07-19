@@ -50,6 +50,19 @@ test('back control: link semantics, accessible name, first in focus order, focus
   expect(precedesHeading).toBe(true);
 });
 
+test('clicking the back link closes the panel — the primary pointer leave path', async ({
+  page,
+}) => {
+  // The unit suite mocks TanStack Link, so real click->navigate through the
+  // Radix TooltipTrigger asChild wrapper (a genuine prop-merge surface) is
+  // only provable here.
+  await openFirstCluster(page);
+
+  await page.getByTestId('panel-back-link').click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page).toHaveURL('/');
+});
+
 test('panel entrance is instant: no transform on the dialog, ever', async ({ page }) => {
   await page.goto('/');
   const tiles = page.locator('a[href^="/clusters/"]');

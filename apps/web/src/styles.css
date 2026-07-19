@@ -339,3 +339,18 @@ body {
     backdrop-filter: none;
   }
 }
+
+/* Light theme below `lg` only: the card sits on the sheet's black/40 scrim,
+   and the 70% white fill composited over scrim-dimmed light content lands
+   around #e0e0e0 — where the card's 10px `--fg-subtle` labels measure ~3.7:1,
+   under the 4.5:1 AA floor that token was explicitly re-tuned to meet. Per
+   the #243 rule ("fix by raising tint alpha, never by more blur"), the sheet
+   body uses the near-opaque fallback there (4.68:1). Dark theme passes under
+   its scrim (≈5:1+) and light at `lg`+ has no scrim (≈4.8:1), so both keep
+   full glass. The 1024px breakpoint MUST stay in lockstep with
+   PANE_SIDE_BY_SIDE_QUERY / the `lg:` utilities in cluster-panel.tsx. */
+@media (max-width: 1023.98px) {
+  html:not(.dark) .scenario-card {
+    background: var(--glass-fallback);
+  }
+}

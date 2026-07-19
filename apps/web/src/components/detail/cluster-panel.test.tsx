@@ -759,7 +759,10 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     // real-browser visibility half of this requirement is asserted in
     // playwright/scenario-pane.spec.ts ("the close control shows a visible
     // Esc keycap"); this test owns the structural half.
-    expect(keycap).not.toHaveClass('sr-only', 'hidden');
+    // Two separate negations: multi-arg toHaveClass is an ALL-of check, so a
+    // single negated call would only fail when BOTH classes are present.
+    expect(keycap).not.toHaveClass('sr-only');
+    expect(keycap).not.toHaveClass('hidden');
     expect(keycap).toHaveTextContent('Esc');
     expect(keycap).toHaveClass('font-mono', 'border-border');
 
