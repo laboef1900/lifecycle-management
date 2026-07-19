@@ -161,7 +161,7 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                         <button
                           type="button"
                           onClick={() => toggle(host.id)}
-                          className="rounded p-1 hover:bg-card-hover hover:text-foreground"
+                          className="rounded p-1 text-muted-foreground hover:bg-card-hover hover:text-foreground"
                           aria-expanded={isOpen}
                           aria-label={isOpen ? 'Collapse history' : 'Expand history'}
                         >

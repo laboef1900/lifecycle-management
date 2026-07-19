@@ -577,6 +577,31 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
   });
 
+  it('closes the covering sheet after Clear too, announcing the baseline restore (#243 Part B High-4)', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    // Apply from the sheet (closes it), reopen, then Clear — the other
+    // "successful change" path must dismiss the covering sheet the same way.
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId('scenario-clear'));
+
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+      'Baseline forecast restored.',
+    );
+    // The scenario is gone: no active indicator remains on the toggle.
+    expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
+  });
+
   it('keeps the side-by-side pane open after Apply at lg+ — the chart updates live beside it', async () => {
     stubViewportWidth(1280);
     const user = userEvent.setup();
@@ -951,7 +976,9 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
       ),
     );
 
-    await user.keyboard('{Escape}');
+    // At this (default, sub-lg) width the successful Apply itself dismisses
+    // the covering sheet (#243 Part B High-4) — no manual Escape, which would
+    // now hit the panel-close path instead (review finding on this PR).
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
 
     await user.click(screen.getByTestId('scenario-button'));

@@ -24,6 +24,13 @@ const LABEL_HALO: React.CSSProperties = {
   strokeWidth: 3,
 };
 
+/** Half the rendered width of the centered "WTY EXPIRED" label (~11 mono
+ *  chars at fontSize 10 ≈ 66 viewBox units). Its anchor is clamped this far
+ *  off both edges so an edge-hugging — or out-of-domain, since `pctToX`
+ *  clamps positions into [0, VB_WIDTH] — warranty date cannot clip the text
+ *  (#243 Part B review). The warranty tick itself keeps the true position. */
+const WTY_LABEL_HALF_WIDTH = 34;
+
 function parseUtcDate(dateOnly: string): Date {
   return new Date(`${dateOnly}T00:00:00Z`);
 }
@@ -141,7 +148,7 @@ export function HostLifecycleGanttRow({
       ) : null}
       {warrantyExpired && warrantyX !== null ? (
         <text
-          x={warrantyX}
+          x={Math.min(Math.max(warrantyX, WTY_LABEL_HALF_WIDTH), VB_WIDTH - WTY_LABEL_HALF_WIDTH)}
           y={ROW_HEIGHT - 3}
           textAnchor="middle"
           fontSize={10}

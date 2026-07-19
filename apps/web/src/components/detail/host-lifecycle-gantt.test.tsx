@@ -197,6 +197,8 @@ describe('label legibility (#243 Part B High-2)', () => {
     expect(Number(label.getAttribute('font-size'))).toBeGreaterThanOrEqual(10);
     expect(label.getAttribute('style')).toContain('paint-order');
     expect(label.getAttribute('style')).toContain('var(--card)');
+    // An ineffective 0-width halo would satisfy the two checks above.
+    expect(label.getAttribute('style')).toMatch(/stroke-width:\s*3/);
   });
 
   it('renders WTY EXPIRED at >=10 units with the same halo', () => {
@@ -206,5 +208,30 @@ describe('label legibility (#243 Part B High-2)', () => {
     expect(Number(label.getAttribute('font-size'))).toBeGreaterThanOrEqual(10);
     expect(label.getAttribute('style')).toContain('paint-order');
     expect(label.getAttribute('style')).toContain('var(--card)');
+    expect(label.getAttribute('style')).toMatch(/stroke-width:\s*3/);
+  });
+
+  it('clamps the WTY EXPIRED label anchor into the viewBox at both edges (tick keeps the true x)', () => {
+    // Left edge: warranty expired before domain.min → pctToX clamps the tick
+    // to x=0; the centered label must be inset by its half width, not halved.
+    const left = makeHost({ warrantyEndsAt: '2020-01-01' });
+    const { unmount } = render(<HostLifecycleGanttRow host={left} domain={DOMAIN} today={TODAY} />);
+    expect(Number(screen.getByText('WTY EXPIRED').getAttribute('x'))).toBeGreaterThanOrEqual(34);
+    unmount();
+
+    // Right edge: an expired warranty past domain.max (host decommissioned
+    // years ago) → tick clamps to x=600; the label must stay fully visible.
+    const right = makeHost({
+      commissionedAt: '2020-01-01',
+      decommissionedAt: '2023-12-01',
+      eolAt: null,
+      warrantyEndsAt: '2025-06-01',
+    });
+    const pastDomain = {
+      min: new Date('2020-01-01T00:00:00Z'),
+      max: new Date('2024-01-01T00:00:00Z'),
+    };
+    render(<HostLifecycleGanttRow host={right} domain={pastDomain} today={TODAY} />);
+    expect(Number(screen.getByText('WTY EXPIRED').getAttribute('x'))).toBeLessThanOrEqual(600 - 34);
   });
 });

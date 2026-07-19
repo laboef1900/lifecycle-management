@@ -264,6 +264,10 @@ describe('HostsTab', () => {
     // ghost pairing (amber hover computes ~1.33:1 dark — SC 1.4.3).
     for (const btn of screen.getAllByRole('button', { name: 'Expand history' })) {
       expect(btn).toHaveClass('hover:bg-card-hover');
+      // Muted base, foreground on hover: inside a hovered row the row already
+      // paints --card-hover, so the *text* transition is the visible affordance
+      // (review finding — without a muted base both hover halves were no-ops).
+      expect(btn).toHaveClass('text-muted-foreground', 'hover:text-foreground');
     }
     const iconButtons = Array.from(document.querySelectorAll('button.h-7.w-7'));
     expect(iconButtons.length).toBeGreaterThan(0);
