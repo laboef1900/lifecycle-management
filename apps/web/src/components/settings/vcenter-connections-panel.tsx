@@ -120,7 +120,7 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
   return (
     <Card className="p-6">
       <header className="mb-4">
-        <h2 className="font-display text-lg">vCenter connections</h2>
+        <h3 className="font-display text-lg">vCenter connections</h3>
         <p className="text-muted-foreground mt-1 text-sm">
           LCM reads capacity from vCenter and never writes to it.{' '}
           <strong>Use a read-only service account.</strong> Credentials are encrypted at rest and

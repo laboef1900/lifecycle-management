@@ -1,9 +1,9 @@
 import { itemUpdateInputSchema } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -38,6 +38,8 @@ export function EditItemDialog({
     item.capacityDelta === null ? '' : String(item.capacityDelta),
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const mutation = useMutation({
     mutationFn: (payload: ItemUpdateInputWire) => api.items.update(item.id, payload),
@@ -87,7 +89,7 @@ export function EditItemDialog({
             Type is fixed for an existing item: {isApp ? 'Application' : 'Event'}.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
           <Field
             label={isApp ? 'Name' : 'Title'}
             value={name}

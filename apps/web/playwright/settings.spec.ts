@@ -56,7 +56,8 @@ test.describe('configurable thresholds', () => {
     await thresholdsForm.getByRole('button', { name: /^save$/i }).click();
     const putResp = await putPromise;
     expect(putResp.ok()).toBe(true);
-    await expect(page.getByText(/source: saved tenant settings/i)).toBeVisible();
+    // #243 Part B: "Saved tenant settings" dropped the data-model word "tenant".
+    await expect(page.getByText(/source: saved settings/i)).toBeVisible();
 
     // Navigate to the fleet console: each cluster tile's compact forecast
     // chart draws the thresholds as label-less ReferenceLines, so propagation
@@ -86,7 +87,7 @@ test.describe('configurable thresholds', () => {
     await page.goto(`/clusters/${clusterId}`);
     const panel = page.locator('.cluster-panel');
     await panel.getByRole('tab', { name: 'Cluster settings' }).click();
-    await expect(page.getByText(/inherited from tenant defaults/i)).toBeVisible();
+    await expect(page.getByText(/inherited from global defaults/i)).toBeVisible();
 
     await page.getByLabel('Warn %').fill('60');
     await page.getByLabel('Crit %').fill('85');
@@ -118,7 +119,7 @@ test.describe('configurable thresholds', () => {
     await page.getByRole('button', { name: /reset to inherited/i }).click();
     const resetResp = await resetPromise;
     expect(resetResp.ok()).toBe(true);
-    await expect(page.getByText(/inherited from tenant defaults/i)).toBeVisible();
+    await expect(page.getByText(/inherited from global defaults/i)).toBeVisible();
   });
 });
 

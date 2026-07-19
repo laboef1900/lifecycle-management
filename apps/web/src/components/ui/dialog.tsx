@@ -39,7 +39,14 @@ export const DialogContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring">
+      {/* h-8 w-8 gives the close control the same icon hit area as every
+          other icon button (28-32px, SC 2.5.8); the previous h-4 w-4 button
+          was content-sized, ~16px, passing the target-size floor only via its
+          spacing exception. The focus: utilities are gone too — they
+          overrode the global two-layer :focus-visible ring (styles.css) and
+          showed a ring on mouse click; dropping them lets the shared ring
+          apply here like everywhere else. */}
+      <DialogPrimitive.Close className="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-sm opacity-70 transition-opacity hover:opacity-100">
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>

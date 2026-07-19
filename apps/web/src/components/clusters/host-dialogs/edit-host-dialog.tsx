@@ -1,9 +1,9 @@
 import { hostUpdateInputSchema } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -42,6 +42,8 @@ export function EditHostDialog({
     runPastEol: host.runPastEol,
   });
   const [errors, setErrors] = useState<{ name?: string }>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const mutation = useMutation({
     mutationFn: (payload: HostUpdateInputWire) => api.hosts.update(host.id, payload),
@@ -86,7 +88,7 @@ export function EditHostDialog({
         <DialogHeader>
           <DialogTitle>Edit host</DialogTitle>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
           <Field
             label="Name"
             value={name}
