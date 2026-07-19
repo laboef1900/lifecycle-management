@@ -35,4 +35,23 @@ describe('<BulletMeter>', () => {
     expect(screen.getByTestId('bullet-meter-warn-tick').style.left).toBe('70%');
     expect(screen.getByTestId('bullet-meter-crit-tick').style.left).toBe('90%');
   });
+
+  it('keeps threshold ticks visible on any fill: surface halo, no alpha (#243 Part B High-1)', () => {
+    render(<BulletMeter value={85} warn={70} crit={90} />);
+    const warnTick = screen.getByTestId('bullet-meter-warn-tick');
+    const critTick = screen.getByTestId('bullet-meter-crit-tick');
+    // 1px halo in the card surface color — survives the amber fill even where
+    // dark-theme --warning === --accent (the vanishing-tick failure mode).
+    expect(warnTick).toHaveClass('shadow-[0_0_0_1px_var(--card)]');
+    expect(critTick).toHaveClass('shadow-[0_0_0_1px_var(--card)]');
+    // Full opacity: 70% amber over amber was half the vanishing act.
+    expect(warnTick.className).not.toMatch(/bg-warning\/\d/);
+    expect(critTick.className).not.toMatch(/bg-destructive\/\d/);
+  });
+
+  it('differentiates crit from warn by shape — taller tick, not hue alone (WCAG 1.4.1)', () => {
+    render(<BulletMeter value={45} warn={70} crit={90} />);
+    expect(screen.getByTestId('bullet-meter-warn-tick')).toHaveClass('-top-0.5', '-bottom-0.5');
+    expect(screen.getByTestId('bullet-meter-crit-tick')).toHaveClass('-top-1', '-bottom-1');
+  });
 });
