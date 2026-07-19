@@ -95,10 +95,15 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
                 : 'No apps or events yet.'}
             </p>
           </div>
-          {canManage ? (
+          {/* Only shown once the table has rows — with no items yet the
+              EmptyState below carries the one CTA (#243 Part B) so the two
+              controls never coexist with the same accessible name. Renamed
+              from "Add item" — the domain never calls these "items", only
+              apps and events (copy-only; no schema/route/field changes). */}
+          {canManage && items.length > 0 ? (
             <Button size="sm" onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" />
-              Add item
+              Add app or event
             </Button>
           ) : null}
         </header>
@@ -111,7 +116,17 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
         ) : query.isError ? (
           <ErrorRow message={query.error.message} />
         ) : items.length === 0 ? (
-          <EmptyState title="Add an application to track its memory allocation, or an event to annotate the forecast." />
+          <EmptyState
+            title="Add an application to track its memory allocation, or an event to annotate the forecast."
+            action={
+              canManage ? (
+                <Button size="sm" onClick={() => setCreateOpen(true)}>
+                  <Plus className="h-4 w-4" />
+                  Add app or event
+                </Button>
+              ) : undefined
+            }
+          />
         ) : (
           <Table>
             <TableHeader>

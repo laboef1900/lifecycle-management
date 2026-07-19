@@ -49,14 +49,28 @@ export const TableRow = React.forwardRef<
 ));
 TableRow.displayName = 'TableRow';
 
+/**
+ * `sticky` (#243 Part B) pins a column to the right edge of the scroll
+ * container — e.g. an Actions column that would otherwise sit off-canvas at
+ * phone width with no scroll affordance. Opt-in per cell so tables that don't
+ * need it (there's only one column to pin per table, and not every table
+ * needs it) are unaffected. The opaque `bg-card` plus `group-hover:bg-card-hover`
+ * on `TableCell` keep the scrolling columns behind it from showing through in
+ * either theme; pair with `className="group"` on the owning `TableRow`.
+ */
+interface StickyProps {
+  sticky?: boolean;
+}
+
 export const TableHead = React.forwardRef<
   HTMLTableCellElement,
-  React.ThHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => (
+  React.ThHTMLAttributes<HTMLTableCellElement> & StickyProps
+>(({ className, sticky, ...props }, ref) => (
   <th
     ref={ref}
     className={cn(
       'h-9 px-3 text-left align-middle text-xs font-medium text-fg-subtle [&:has([role=checkbox])]:pr-0',
+      sticky && 'sticky right-0 z-10 border-l border-border bg-card',
       className,
     )}
     {...props}
@@ -66,11 +80,15 @@ TableHead.displayName = 'TableHead';
 
 export const TableCell = React.forwardRef<
   HTMLTableCellElement,
-  React.TdHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => (
+  React.TdHTMLAttributes<HTMLTableCellElement> & StickyProps
+>(({ className, sticky, ...props }, ref) => (
   <td
     ref={ref}
-    className={cn('px-3 py-2 align-middle text-sm [&:has([role=checkbox])]:pr-0', className)}
+    className={cn(
+      'px-3 py-2 align-middle text-sm [&:has([role=checkbox])]:pr-0',
+      sticky && 'sticky right-0 z-10 border-l border-border bg-card group-hover:bg-card-hover',
+      className,
+    )}
     {...props}
   />
 ));
