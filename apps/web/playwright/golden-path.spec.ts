@@ -102,8 +102,9 @@ test('create cluster, add host + application, chart reflects updates', async ({
 
     // The panel's forecast-chart legend stays present after each mutation
     // invalidates the forecast query; that's our marker that the chart
-    // re-rendered cleanly.
-    await expect(page.getByText('Consumption', { exact: true })).toBeVisible();
+    // re-rendered cleanly. #243 Part B split the single "Consumption" entry
+    // into "Actual —" / "Forecast ⌁" so the solid/dashed convention reads.
+    await expect(page.getByText('Actual —', { exact: true })).toBeVisible();
     await expect(page.getByText('Capacity ceiling')).toBeVisible();
 
     // Theme toggle round-trip: cycle system → light → dark → system.

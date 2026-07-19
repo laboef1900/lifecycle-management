@@ -149,7 +149,7 @@ export function ForecastChart({
 
   const data = [...preWindow, ...windowData];
   const maxCeiling = data.reduce((max, d) => Math.max(max, d.capacity ?? 0), 0);
-  const ceilingForDomain = maxCeiling > 0 ? maxCeiling * 1.05 : undefined;
+  const { top: axisTop, ticks: axisTicks } = niceAxisTicks(maxCeiling > 0 ? maxCeiling * 1.05 : 0);
   const lastIndex = data.length - 1;
 
   const eventsByMonth = new Map<string, ForecastResponse['events']>();
@@ -161,6 +161,13 @@ export function ForecastChart({
   }
 
   const monthIndexByKey = new Map(data.map((d, index) => [d.month, index]));
+  // The NOW marker only adds value once there's room to draw it: when "now" is
+  // the very first plotted point (a common case — many windows open at the
+  // current month) the line would sit exactly on top of the Y-axis, with
+  // nowhere to put its label and no signal gained over the axis boundary
+  // that's already there.
+  const nowMonthIndex = monthIndexByKey.get(currentMonth);
+  const showNowMarker = nowMonthIndex !== undefined && nowMonthIndex > 0;
   // Events whose month falls inside the visible window — these render a dot
   // and a boxed label on the chart.
   const eventDots = activeForecast.events.flatMap((event) => {
@@ -194,13 +201,12 @@ export function ForecastChart({
 
   return (
     <Card className="p-4">
-      {/* TODO(a11y): fold cluster/metric identity into this label before any multi-chart layout (PR 2 Radix rebuild). */}
       <div
         ref={chartBoxRef}
         className="w-full"
         style={{ height: CHART_HEIGHT }}
         role="img"
-        aria-label="Capacity forecast chart"
+        aria-label={forecastChartAriaLabel(activeForecast, maxCeiling, Boolean(scenario))}
       >
         <ResponsiveContainer
           width="100%"
@@ -222,6 +228,12 @@ export function ForecastChart({
               bottom: CHART_MARGIN.bottom,
               left: CHART_MARGIN.left,
             }}
+            // Stays false: recharts v3's default (accessibilityLayer=true) wraps
+            // the chart in a role="application" region for keyboard nav, which
+            // would nest inside the role="img" div above — an invalid ARIA
+            // pattern (see the recharts v3 bump commit). Revisited for #243 Part
+            // B while replacing the static aria-label below with a real one;
+            // still the right call, so the fix here is the label, not this flag.
             accessibilityLayer={false}
           >
             <defs>
@@ -249,7 +261,8 @@ export function ForecastChart({
               tick={{ fontSize: compact ? 10 : 11, fill: 'var(--fg-subtle)' }}
               stroke={colors.axis}
               tickFormatter={(v: number) => numberFormat.format(v)}
-              domain={ceilingForDomain ? [0, ceilingForDomain] : ['auto', 'auto']}
+              domain={maxCeiling > 0 ? [0, axisTop] : ['auto', 'auto']}
+              {...(maxCeiling > 0 ? { ticks: axisTicks } : {})}
               label={{
                 value: 'GB',
                 angle: -90,
@@ -457,6 +470,20 @@ export function ForecastChart({
                 connectNulls
               />
             ) : null}
+            {showNowMarker ? (
+              <ReferenceLine
+                x={currentMonth}
+                stroke="var(--steel)"
+                strokeDasharray="2 3"
+                label={{
+                  value: 'NOW',
+                  position: 'insideTopRight',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  fill: 'var(--steel)',
+                }}
+              />
+            ) : null}
             {eolMonthInRange && earliestEolHost ? (
               <ReferenceLine
                 x={eolMonthKey ?? undefined}
@@ -600,6 +627,79 @@ function formatDelta(consumption: number | null, capacity: number | null): strin
   return parts.length === 0 ? '—' : parts.join(' · ');
 }
 
+/**
+ * A "nice" round number near `value` (the classic Heckbert graph-labeling
+ * algorithm): `round` picks the nearest nice fraction (for a tick step);
+ * unset rounds UP to the next nice fraction (for a headroom-safe range).
+ */
+function niceNumber(value: number, round: boolean): number {
+  if (value <= 0) return 0;
+  const exponent = Math.floor(Math.log10(value));
+  const fraction = value / 10 ** exponent;
+  let niceFraction: number;
+  if (round) {
+    if (fraction < 1.5) niceFraction = 1;
+    else if (fraction < 3) niceFraction = 2;
+    else if (fraction < 7) niceFraction = 5;
+    else niceFraction = 10;
+  } else {
+    if (fraction <= 1) niceFraction = 1;
+    else if (fraction <= 2) niceFraction = 2;
+    else if (fraction <= 5) niceFraction = 5;
+    else niceFraction = 10;
+  }
+  return niceFraction * 10 ** exponent;
+}
+
+/**
+ * Uniform Y-axis ticks for a padded capacity ceiling (#243 Part B). Recharts
+ * always appends the literal domain max as an extra tick on top of its own
+ * auto-generated ones — an unrounded ceiling read "0, 2,500, 5,000, 8,064",
+ * where the odd top value looked like a data point rather than an axis
+ * interval. Passing explicit ticks sidesteps that: the domain top IS the
+ * last tick, so there is nothing extra left to append.
+ */
+function niceAxisTicks(maxValue: number, targetTickCount = 5): { top: number; ticks: number[] } {
+  if (maxValue <= 0) return { top: 0, ticks: [0] };
+  const roughRange = niceNumber(maxValue, false);
+  const step = niceNumber(roughRange / (targetTickCount - 1), true);
+  const top = Math.ceil(maxValue / step) * step;
+  const ticks: number[] = [];
+  for (let v = 0; v <= top + step / 2; v += step) ticks.push(Math.round(v));
+  return { top, ticks };
+}
+
+/**
+ * Rich aria-label for the forecast chart (#243 Part B): the tile chart already
+ * computes one (window length, breach/no-breach month, thresholds); this
+ * ports the same approach so the primary purchasing chart isn't silent to
+ * assistive tech (WCAG 2.2 SC 1.1.1) while the tile grid narrates everything.
+ */
+function forecastChartAriaLabel(
+  activeForecast: ForecastResponse,
+  maxCeiling: number,
+  scenarioActive: boolean,
+): string {
+  const { warn, crit } = activeForecast.effectiveThresholds;
+  const monthCount = activeForecast.months.length;
+  const breachIndex = activeForecast.months.findIndex(
+    (m) => m.capacity > 0 && m.consumption / m.capacity >= warn,
+  );
+  const parts = [`${monthCount}-month capacity forecast chart.`];
+  parts.push(
+    breachIndex >= 0
+      ? `Warn breach about ${formatMonthShort(activeForecast.months[breachIndex]!.month)}.`
+      : 'No breach within the window.',
+  );
+  parts.push(`Warn threshold ${Math.round(warn * 100)} percent.`);
+  parts.push(`Critical threshold ${Math.round(crit * 100)} percent.`);
+  if (maxCeiling > 0) {
+    parts.push(`Capacity ceiling ${numberFormat.format(Math.round(maxCeiling))} GB.`);
+  }
+  if (scenarioActive) parts.push('A what-if scenario is active.');
+  return parts.join(' ');
+}
+
 interface ChartLegendProps {
   events: ForecastResponse['events'];
   colors: ReturnType<typeof useChartColors>;
@@ -611,9 +711,38 @@ function ChartLegend({ events, colors, showBaselineGhost }: ChartLegendProps): R
   const categories = Array.from(new Set(events.map((e) => e.category)));
   return (
     <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
-      <LegendItem swatch={colors.consumption} label="Consumption" />
-      <LegendItem swatch={colors.capacity} label="Capacity ceiling" dashed />
-      <LegendItem swatch={colors.capacity} label="Headroom" dashed faint />
+      {/* The solid/dashed convention (actual-to-now, then forecast) gets its
+          own two entries instead of one ambiguous "Consumption" swatch. */}
+      <LegendItem swatch={colors.consumption} label="Actual —" testId="legend-swatch-actual" />
+      <LegendItem
+        swatch={colors.consumption}
+        label="Forecast ⌁"
+        dashed
+        testId="legend-swatch-forecast"
+      />
+      {/* The dotted measured-baseline series (rendered whenever there's
+          history) previously had no legend entry at all. */}
+      <LegendItem
+        swatch={colors.consumption}
+        label="Measured baseline"
+        dotted
+        testId="legend-swatch-measured"
+      />
+      <LegendItem
+        swatch={colors.capacity}
+        label="Capacity ceiling"
+        dashed
+        testId="legend-swatch-capacity"
+      />
+      {/* Headroom is a filled band on the chart, not a line — swatch it as a
+          small filled square so it isn't mis-swatched as another dashed line. */}
+      <LegendItem
+        swatch={colors.capacity}
+        label="Headroom"
+        area
+        faint
+        testId="legend-swatch-headroom"
+      />
       {showBaselineGhost ? (
         <LegendItem swatch={colors.utilizationOk} label="was: baseline" dashed />
       ) : null}
@@ -634,25 +763,34 @@ function LegendItem({
   label,
   dot,
   dashed,
+  dotted,
+  area,
   faint,
+  testId,
 }: {
   swatch: string;
   label: string;
   dot?: boolean;
   dashed?: boolean;
+  dotted?: boolean;
+  area?: boolean;
   faint?: boolean;
+  testId?: string;
 }): React.JSX.Element {
   return (
     <span className="flex items-center gap-1.5">
       <span
         aria-hidden
-        className={dot ? 'h-2 w-2 rounded-full' : 'h-0 w-4 border-t-2'}
+        data-testid={testId}
+        className={
+          dot ? 'h-2 w-2 rounded-full' : area ? 'h-2.5 w-2.5 rounded-sm' : 'h-0 w-4 border-t-2'
+        }
         style={
-          dot
+          dot || area
             ? { background: swatch, opacity: faint ? 0.4 : 1 }
             : {
                 borderColor: swatch,
-                borderStyle: dashed ? 'dashed' : 'solid',
+                borderStyle: dotted ? 'dotted' : dashed ? 'dashed' : 'solid',
                 opacity: faint ? 0.4 : 1,
               }
         }
