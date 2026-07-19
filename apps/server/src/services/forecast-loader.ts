@@ -81,7 +81,6 @@ export class ForecastService {
     const cluster = await this.prisma.cluster.findFirst({
       where: { id: clusterId, tenantId },
       include: {
-        baselines: { where: { metricTypeId: metricType.id } },
         baselineHistory: {
           where: { metricTypeId: metricType.id },
           orderBy: { capturedAt: 'asc' },

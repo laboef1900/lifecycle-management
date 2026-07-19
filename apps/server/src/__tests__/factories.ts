@@ -50,6 +50,29 @@ export interface MakeClusterOptions {
   externalId?: string;
   externalName?: string;
   lastSyncedAt?: Date;
+  /**
+   * Extra baseline-history rows, each carrying its own metric and its own period.
+   *
+   * The options above produce exactly ONE row — one metric, one period — which
+   * cannot express the fixture `ClusterResponse.baselineDate` has to be tested
+   * against. That field is MIN over the NEWEST row per metric, and telling it
+   * apart from MAX, and from a naive MIN over every row, needs two metrics whose
+   * newest periods differ plus one metric carrying two periods. Every fixture in
+   * the suite before this one had a single row per metric, under which all three
+   * implementations agree.
+   *
+   * `capturedAt` is snapped to the first of the month exactly as every real
+   * writer snaps it: the period unique key is the monthly idempotency guarantee,
+   * so a fixture holding a mid-month anchor would describe a state the
+   * application cannot produce.
+   */
+  extraBaselines?: readonly {
+    metricKey: string;
+    capturedAt: Date;
+    baselineConsumption?: number;
+    baselineCapacity?: number;
+    source?: 'manual' | 'vsphere';
+  }[];
 }
 
 export async function makeCluster(
@@ -60,6 +83,17 @@ export async function makeCluster(
   const metricTypeId = await resolveMetricId(prisma, metricKey);
   const tenantId = options.tenantId ?? DEFAULT_TENANT;
   const name = options.name ?? `cluster-${nextSuffix()}`;
+
+  const extraBaselines = await Promise.all(
+    (options.extraBaselines ?? []).map(async (extra) => ({
+      tenantId,
+      metricTypeId: await resolveMetricId(prisma, extra.metricKey),
+      capturedAt: startOfUtcMonth(extra.capturedAt),
+      source: extra.source ?? 'manual',
+      baselineConsumption: new Prisma.Decimal(extra.baselineConsumption ?? 0),
+      baselineCapacity: new Prisma.Decimal(extra.baselineCapacity ?? 0),
+    })),
+  );
 
   const cluster = await prisma.cluster.create({
     data: {
@@ -86,14 +120,17 @@ export async function makeCluster(
       // table kept for rollback safety. A fixture that writes only the legacy
       // table produces a cluster the forecast reports as METRIC_NOT_TRACKED.
       baselineHistory: {
-        create: {
-          tenantId,
-          metricTypeId,
-          capturedAt: startOfUtcMonth(options.baselineDate ?? DEFAULT_BASELINE_DATE),
-          source: 'manual',
-          baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
-          baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
-        },
+        create: [
+          {
+            tenantId,
+            metricTypeId,
+            capturedAt: startOfUtcMonth(options.baselineDate ?? DEFAULT_BASELINE_DATE),
+            source: 'manual',
+            baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
+            baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
+          },
+          ...extraBaselines,
+        ],
       },
     },
   });

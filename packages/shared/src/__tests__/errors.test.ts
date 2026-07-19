@@ -18,6 +18,15 @@ describe('SERVICE_ERROR_CODES', () => {
     expect(SERVICE_ERROR_CODES).toContain('CONNECTION_DISABLED');
   });
 
+  it('carries BASELINE_PERIOD_OCCUPIED (a date-only baseline edit onto a taken period)', () => {
+    // A date-only edit re-dates each metric's newest history row (#195). When the
+    // target period already holds a recorded measurement, honouring the edit would
+    // have to destroy an append-only row, so the request is refused instead. The
+    // baseline form needs a distinct code rather than a generic failure, because
+    // the corrective action is specific: edit that period directly.
+    expect(SERVICE_ERROR_CODES).toContain('BASELINE_PERIOD_OCCUPIED');
+  });
+
   it('contains no duplicate codes', () => {
     // TS will never catch this. The array is `as const` and NOT sorted, so a
     // second copy of an existing literal is legal TypeScript that the derived

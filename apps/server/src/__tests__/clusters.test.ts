@@ -1,7 +1,9 @@
+import { clusterResponseSchema } from '@lcm/shared';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildServer } from '../server.js';
+import { makeCluster, makeEvent } from './factories.js';
 import { prisma } from './setup.js';
 import { makeTestEnv } from './test-helpers.js';
 
@@ -575,5 +577,261 @@ describe('GET /api/clusters pagination', () => {
     const secondBody = secondPage.json() as { items: unknown[]; total: number };
     expect(secondBody.items).toHaveLength(1);
     expect(secondBody.total).toBe(3);
+  });
+});
+
+describe('ClusterResponse.metrics is derived from baseline history', () => {
+  it('serves metrics for a synced cluster that has history rows and nothing else', async () => {
+    // THE LIVE BUG #195 FIXES. VsphereSyncService creates a cluster with no
+    // baseline row at all, and VsphereSnapshotService writes ONLY
+    // cluster_baseline_history — so while `metrics` was built from the legacy
+    // cluster_metric_baselines table, every vSphere-synced cluster served
+    // `metrics: []` on list and detail (rendered as "No metric configured" on the
+    // fleet console) while its /forecast endpoint worked fine. Nothing caught it
+    // because the makeCluster factory wrote both tables.
+    const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    const cluster = await prisma.cluster.create({
+      data: {
+        tenantId: 'default',
+        name: uniqueName('synced-history-only'),
+        source: 'vsphere',
+        lastSyncedAt: new Date(),
+        baselineDate: new Date(Date.UTC(2026, 4, 1)),
+        baselineHistory: {
+          create: {
+            tenantId: 'default',
+            metricTypeId: metric.id,
+            capturedAt: new Date(Date.UTC(2026, 4, 1)),
+            source: 'vsphere',
+            baselineConsumption: 4000,
+            // VsphereSnapshotService writes 0 deliberately: capacity comes from
+            // the synced host inventory, so a non-zero baseline double-counts it.
+            baselineCapacity: 0,
+          },
+        },
+      },
+    });
+
+    const res = await server.inject({ method: 'GET', url: `/api/clusters/${cluster.id}` });
+    expect(res.statusCode).toBe(200);
+    const body = clusterResponseSchema.parse(res.json());
+
+    expect(body.metrics).toHaveLength(1);
+    expect(body.metrics[0]?.metricTypeKey).toBe('memory_gb');
+    expect(body.metrics[0]?.baselineConsumption).toBe(4000);
+    expect(body.source).toBe('vsphere');
+
+    // ...and the list endpoint agrees, since it is the same derivation.
+    const list = await server.inject({ method: 'GET', url: '/api/clusters?limit=100' });
+    const listed = (list.json() as { items: Array<{ id: string; metrics: unknown[] }> }).items.find(
+      (c) => c.id === cluster.id,
+    );
+    expect(listed?.metrics).toHaveLength(1);
+  });
+
+  it('falls back to createdAt — never today — when a cluster has no history at all', async () => {
+    // A synced cluster between import and its first monthly snapshot. Reporting
+    // today here would render a never-measured cluster as "baselined today":
+    // maximally fresh, tripping no staleness check, on a cluster nobody has
+    // measured. Same fail-open class as the forbidden `utilization ?? 0`.
+    const cluster = await prisma.cluster.create({
+      data: {
+        tenantId: 'default',
+        name: uniqueName('no-history'),
+        source: 'vsphere',
+        baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      },
+    });
+    await prisma.cluster.update({
+      where: { id: cluster.id },
+      data: { createdAt: new Date(Date.UTC(2025, 10, 20)) },
+    });
+
+    const res = await server.inject({ method: 'GET', url: `/api/clusters/${cluster.id}` });
+    expect(res.statusCode).toBe(200);
+    const body = clusterResponseSchema.parse(res.json());
+
+    expect(body.metrics).toEqual([]);
+    expect(body.baselineDate).toBe('2025-11-20');
+    expect(body.baselineDate).not.toBe(new Date().toISOString().slice(0, 10));
+  });
+
+  it('absorbs a delta already inside a vSphere baseline, agreeing with /forecast', async () => {
+    // A vSphere snapshot measures TOTAL actual usage, so a tracked delta dated at
+    // or before the capture is already inside the number and adding it again
+    // double-counts (forecast.ts `absorbed`, recorded decision Q9b). /forecast has
+    // always applied that rule because forecast-loader passes `baselineSource`;
+    // the cluster endpoints did not, because `metrics` came from a legacy table
+    // that has no `source` column. Reading both from the same history row
+    // converges them — a deliberate, purchasing-visible change, argued in the PR.
+    const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    const cluster = await prisma.cluster.create({
+      data: {
+        tenantId: 'default',
+        name: uniqueName('vsphere-absorb'),
+        source: 'vsphere',
+        baselineDate: new Date(Date.UTC(2026, 4, 1)),
+        baselineHistory: {
+          create: {
+            tenantId: 'default',
+            metricTypeId: metric.id,
+            capturedAt: new Date(Date.UTC(2026, 4, 1)),
+            source: 'vsphere',
+            baselineConsumption: 4000,
+            baselineCapacity: 8192,
+          },
+        },
+      },
+    });
+    await makeEvent(prisma, {
+      clusterId: cluster.id,
+      title: uniqueName('absorbed-event'),
+      effectiveDate: new Date(Date.UTC(2026, 3, 1)), // April: BEFORE the May capture
+      consumptionDelta: 500,
+    });
+
+    const res = await server.inject({ method: 'GET', url: `/api/clusters/${cluster.id}` });
+    const body = clusterResponseSchema.parse(res.json());
+    // 4000, not 4500: April's delta is already inside May's measurement.
+    expect(body.metrics[0]?.currentConsumption).toBe(4000);
+
+    const month = new Date().toISOString().slice(0, 7);
+    const forecast = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${cluster.id}/forecast?metric=memory_gb&from=${month}&to=${month}`,
+    });
+    expect(forecast.statusCode).toBe(200);
+    const fc = forecast.json() as { months: Array<{ consumption: number }> };
+    expect(fc.months[0]?.consumption).toBe(body.metrics[0]?.currentConsumption);
+  });
+
+  it('does NOT absorb a pre-baseline delta on a manual cluster', async () => {
+    // The other half of Q9b, asserted so the `baselineSource` pass-through cannot
+    // be "simplified" to a constant. A manual baseline is the portion NOT modelled
+    // by tracked entities (vision.md Invariant 1), so a tracked delta is never
+    // inside it regardless of date.
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('manual-no-absorb'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 4000,
+      baselineCapacity: 8192,
+    });
+    await makeEvent(prisma, {
+      clusterId: cluster.id,
+      title: uniqueName('unabsorbed-event'),
+      effectiveDate: new Date(Date.UTC(2026, 3, 1)),
+      consumptionDelta: 500,
+    });
+
+    const res = await server.inject({ method: 'GET', url: `/api/clusters/${cluster.id}` });
+    const body = clusterResponseSchema.parse(res.json());
+    expect(body.metrics[0]?.currentConsumption).toBe(4500);
+  });
+});
+
+describe('PUT /api/clusters/:id — a date-only edit re-anchors baseline history', () => {
+  it('re-dates each metric’s newest row in place, inventing and destroying nothing', async () => {
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('reanchor'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { baselineDate: '2026-06-01' },
+    });
+    expect(res.statusCode).toBe(200);
+    // The response echoes the submitted date, so the edit does not silently
+    // revert in the baseline form (which resets its input from the response).
+    expect(clusterResponseSchema.parse(res.json()).baselineDate).toBe('2026-06-01');
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-06-01');
+    // Re-dated, not re-measured: the recorded numbers are untouched.
+    expect(rows[0]?.baselineConsumption.toNumber()).toBe(100);
+  });
+
+  it('refuses with 422 BASELINE_PERIOD_OCCUPIED rather than overwriting a recorded period', async () => {
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('occupied'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'memory_gb',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)),
+          baselineConsumption: 300,
+          baselineCapacity: 1000,
+        },
+      ],
+    });
+
+    // The newest row is July; May is already taken. Re-dating July onto May would
+    // have to destroy an append-only measurement, so it is refused instead.
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { baselineDate: '2026-05-01' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: { code: string } }).error.code).toBe('BASELINE_PERIOD_OCCUPIED');
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(rows.map((r) => r.capturedAt.toISOString().slice(0, 10))).toEqual([
+      '2026-05-01',
+      '2026-07-01',
+    ]);
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 300]);
+  });
+
+  it('is a no-op on a cluster with no baseline history', async () => {
+    // A synced cluster before its first snapshot has nothing to re-date. It must
+    // not fabricate a measurement nobody took just to honour the submitted date.
+    const cluster = await prisma.cluster.create({
+      data: {
+        tenantId: 'default',
+        name: uniqueName('reanchor-empty'),
+        source: 'vsphere',
+        baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      },
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { baselineDate: '2026-06-01' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await prisma.clusterBaselineHistory.count({ where: { clusterId: cluster.id } })).toBe(0);
+  });
+
+  it('re-anchors and renames in one request', async () => {
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('reanchor-rename'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+    });
+    const renamed = uniqueName('renamed');
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { name: renamed, baselineDate: '2026-06-01' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = clusterResponseSchema.parse(res.json());
+    expect(body.name).toBe(renamed);
+    expect(body.baselineDate).toBe('2026-06-01');
   });
 });
