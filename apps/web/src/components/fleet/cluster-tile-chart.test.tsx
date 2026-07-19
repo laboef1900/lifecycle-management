@@ -247,8 +247,20 @@ describe('<ClusterTileChart>', () => {
     // "actual" series is the single anchor point and everything (including
     // that same anchor) is also part of the dashed "forecast" series. All these
     // values are within [40,125] so the plotted line equals the true util.
-    expect(rows[0]).toEqual({ month: '2026-07-01', util: 70, actual: 70, forecast: 70 });
-    expect(rows[1]).toEqual({ month: '2026-08-01', util: 80, actual: null, forecast: 80 });
+    expect(rows[0]).toEqual({
+      month: '2026-07-01',
+      util: 70,
+      actual: 70,
+      forecast: 70,
+      offScale: null,
+    });
+    expect(rows[1]).toEqual({
+      month: '2026-08-01',
+      util: 80,
+      actual: null,
+      forecast: 80,
+      offScale: null,
+    });
   });
 
   it('keeps the actual segment solid (no dash) and the forecast segment dashed', () => {
@@ -274,6 +286,44 @@ describe('<ClusterTileChart>', () => {
     expect(screen.queryByTestId('grid')).not.toBeInTheDocument();
   });
 
+  it('marks below-floor rows in the off-scale dash so a pinned 40% run cannot be mistaken for genuine 40% utilization', () => {
+    // 38.2% is below the 40% floor and clamps to it — the exact case from the
+    // audit finding (CL-Prod-P2-Oracle reading "38.2% used" but plotting flat
+    // at the 40% edge, indistinguishable from a true 40% cluster).
+    const lowMonths: ForecastMonthPoint[] = [
+      { month: CURRENT_MONTH, consumption: 382, capacity: 1000, utilization: 0.382 },
+      { month: shiftMonth(CURRENT_MONTH, 1), consumption: 700, capacity: 1000, utilization: 0.7 },
+    ];
+    render(
+      <ClusterTileChart
+        months={lowMonths}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
+    );
+    const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+      month: string;
+      util: number;
+      offScale: number | null;
+    }>;
+    expect(rows[0]).toMatchObject({ util: 38.2, offScale: 40 });
+    expect(rows[1]).toMatchObject({ util: 70, offScale: null });
+
+    // Reuses OFF_SCALE_DASH ('1 2') — the same constant the hairlines use for
+    // their own off-scale cue — rather than inventing a second pattern.
+    expect(screen.getByTestId('line-offScale').dataset.dash).toBe('1 2');
+  });
+
+  it('does not mark on-scale rows as off-scale', () => {
+    render(
+      <ClusterTileChart months={months} thresholds={{ warn: 0.7, crit: 0.9 }} orderByDate={null} />,
+    );
+    const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+      offScale: number | null;
+    }>;
+    expect(rows.every((r) => r.offScale === null)).toBe(true);
+  });
+
   it('clamps below-floor utilization to the window edge while keeping the true value for the tooltip', () => {
     // Zero/unknown-capacity clusters (#198) report 0% and would sit entirely
     // below the 40% floor. The plotted line pins to the floor so it stays
@@ -294,9 +344,23 @@ describe('<ClusterTileChart>', () => {
       util: number;
       actual: number | null;
       forecast: number | null;
+      offScale: number | null;
     }>;
-    expect(rows[0]).toEqual({ month: '2026-07-01', util: 10, actual: 40, forecast: 40 });
-    expect(rows[1]).toEqual({ month: '2026-08-01', util: 0, actual: null, forecast: 40 });
+    // Both months are below the 40% floor, so both also carry the off-scale cue.
+    expect(rows[0]).toEqual({
+      month: '2026-07-01',
+      util: 10,
+      actual: 40,
+      forecast: 40,
+      offScale: 40,
+    });
+    expect(rows[1]).toEqual({
+      month: '2026-08-01',
+      util: 0,
+      actual: null,
+      forecast: 40,
+      offScale: 40,
+    });
   });
 
   it('clamps above-ceiling utilization to the window top so it cannot stretch the shared scale', () => {
@@ -321,14 +385,23 @@ describe('<ClusterTileChart>', () => {
       util: number;
       actual: number | null;
       forecast: number | null;
+      offScale: number | null;
     }>;
     // True util is preserved for the tooltip; only the plotted values clamp.
-    expect(rows[0]).toEqual({ month: CURRENT_MONTH, util: 140, actual: 125, forecast: 125 });
+    // Above-ceiling is not off-scale-LOW, so offScale stays null here.
+    expect(rows[0]).toEqual({
+      month: CURRENT_MONTH,
+      util: 140,
+      actual: 125,
+      forecast: 125,
+      offScale: null,
+    });
     expect(rows[1]).toEqual({
       month: shiftMonth(CURRENT_MONTH, 1),
       util: 160,
       actual: null,
       forecast: 125,
+      offScale: null,
     });
     // The breach dot rides the same clamp — at util 140 it must sit at 125.
     expect(screen.getByTestId('breach-dot').dataset.y).toBe('125');

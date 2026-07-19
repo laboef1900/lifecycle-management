@@ -76,6 +76,14 @@ interface TileChartRow {
   actual: number | null;
   /** Clamped utilization % for months at/after "now" (drawn dashed) — null elsewhere. */
   forecast: number | null;
+  /**
+   * Same clamped value as `actual`/`forecast` (always exactly `Y_MIN`), but
+   * ONLY when the true util fell below the window floor — null elsewhere.
+   * Drawn as an {@link OFF_SCALE_DASH} overlay ON TOP of the actual/forecast
+   * line so a run pinned at 40% can't be misread as genuine 40% utilization,
+   * extending the hairlines' own off-scale convention to the data series.
+   */
+  offScale: number | null;
 }
 
 /**
@@ -124,6 +132,7 @@ export function ClusterTileChart({
       util: value,
       actual: i <= currentIndex ? plotted : null,
       forecast: i >= currentIndex ? plotted : null,
+      offScale: value < Y_MIN ? plotted : null,
     };
   });
 
@@ -288,6 +297,20 @@ export function ClusterTileChart({
             stroke={colors.consumption}
             strokeWidth={1.75}
             strokeDasharray="6 4"
+            dot={false}
+            isAnimationActive={false}
+            connectNulls={false}
+          />
+          {/* Off-scale overlay (#243 Part B): drawn ON TOP of the actual/
+              forecast line above, so a run pinned at the 40% floor picks up
+              the same OFF_SCALE_DASH the hairlines use for their own clamp,
+              rather than reading as genuine 40% utilization. */}
+          <Line
+            type="monotone"
+            dataKey="offScale"
+            stroke={colors.consumption}
+            strokeWidth={2}
+            strokeDasharray={OFF_SCALE_DASH}
             dot={false}
             isAnimationActive={false}
             connectNulls={false}
