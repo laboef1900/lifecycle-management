@@ -44,6 +44,62 @@ BEGIN
     END IF;
 END $$;
 
+-- NORMALISE `captured_at` to the first of its month, BEFORE the legacy table goes.
+--
+-- 20260717120000_add_cluster_baseline_history backfilled `captured_at` from
+-- `clusters.baseline_date` VERBATIM — no date_trunc — and that column stored
+-- whatever day an operator typed: `dateOnly` in @lcm/shared is a bare YYYY-MM-DD
+-- regex with no first-of-month refinement, and the create dialog is a free
+-- `<input type="date">`. Every other writer snaps through `startOfUtcMonth`, so a
+-- pre-#177 cluster can hold the single mid-month row in this table.
+--
+-- Harmless only while the legacy table was the read side. From this migration on,
+-- `ClusterResponse.metrics` and `.baselineDate` are newest-per-metric =
+-- MAX(captured_at) — and a stale 2026-01-15 backfill row outranks the 2026-01-01
+-- correction the application wrote beside it during the dual-write release. The
+-- legacy table held only the correction, which is what clients actually saw, so
+-- without this step the drop silently swaps in pre-correction numbers on the
+-- fleet console, the cluster panel and the forecast, with no error raised and no
+-- way to reach the correct row through the API. The #177 orphan guard above does
+-- not catch it: a history row for that (cluster, metric) does exist.
+--
+-- The guard runs first so a database where snapping would COLLAPSE two rows into
+-- one period fails the deploy for operator-reviewed cleanup, rather than having
+-- the collision resolved by an implicit tiebreak on numbers that buy hardware.
+-- Prisma runs each migration in a transaction, so the RAISE rolls the whole thing
+-- back and `prisma migrate deploy` exits non-zero — Fastify never starts.
+--
+-- @ai-warning The `lcm:step-start` / `lcm:step-end` sentinels are load-bearing:
+-- baseline-history-migration.test.ts slices these two statements out of THIS file
+-- and executes them against seeded rows, so the suite exercises the shipped SQL
+-- instead of a copy that can drift away from it. Keep them if you edit the steps.
+
+-- lcm:step-start normalise-captured-at-guard
+DO $$
+DECLARE
+    collision_count BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO collision_count
+    FROM (
+        SELECT 1
+        FROM "cluster_baseline_history"
+        GROUP BY "cluster_id", "metric_type_id", date_trunc('month', "captured_at")
+        HAVING COUNT(*) > 1
+    ) AS collisions;
+    IF collision_count <> 0 THEN
+        RAISE EXCEPTION
+            'Refusing to normalise cluster_baseline_history.captured_at: % (cluster, metric, month) group(s) hold more than one row, so snapping to the first of the month would destroy a measurement. Reconcile them by hand first.',
+            collision_count;
+    END IF;
+END $$;
+-- lcm:step-end normalise-captured-at-guard
+
+-- lcm:step-start normalise-captured-at
+UPDATE "cluster_baseline_history"
+SET "captured_at" = date_trunc('month', "captured_at")::date
+WHERE "captured_at" <> date_trunc('month', "captured_at")::date;
+-- lcm:step-end normalise-captured-at
+
 DROP TABLE "cluster_metric_baselines";
 
 -- `clusters.baseline_date` was one operator-declared date shared by every metric.
