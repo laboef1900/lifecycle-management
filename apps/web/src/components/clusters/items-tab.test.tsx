@@ -81,14 +81,16 @@ describe('ItemsTab', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows the Add item button for managers and hides it for viewers', async () => {
+  it('shows the Add app or event button for managers and hides it for viewers', async () => {
     renderTab(true);
-    expect(await screen.findByRole('button', { name: /add item/i })).toBeInTheDocument();
+    // Renamed from "Add item" (#243 Part B) — the domain never calls these
+    // "items", only apps and events.
+    expect(await screen.findByRole('button', { name: 'Add app or event' })).toBeInTheDocument();
 
     cleanup();
     renderTab(false);
     await screen.findByText('openshift-lab');
-    expect(screen.queryByRole('button', { name: /add item/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add app or event' })).not.toBeInTheDocument();
   });
 
   it('renders both application and event rows with type and category', async () => {
@@ -157,6 +159,43 @@ describe('ItemsTab', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('No apps or events yet.')).toBeInTheDocument();
     expect(screen.queryByText('openshift-lab')).not.toBeInTheDocument();
+  });
+
+  it('moves the Add app or event CTA into the empty state instead of duplicating the header button (#243 Part B)', async () => {
+    vi.spyOn(api.items, 'listByCluster').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab();
+
+    // Wait for the EmptyState's own (unique) title, not the header subtitle
+    // — "No apps or events yet." renders from the very first paint (items
+    // defaults to [] while the query is still pending), so it resolves
+    // before the mocked fetch settles and races the assertion below.
+    await screen.findByText(
+      'Add an application to track its memory allocation, or an event to annotate the forecast.',
+    );
+    // Exactly one "Add app or event" control — the header CTA is hidden while
+    // the table has no rows, so it never coexists with the empty state's own
+    // action.
+    expect(screen.getAllByRole('button', { name: 'Add app or event' })).toHaveLength(1);
+  });
+
+  it('hides the empty-state action for viewers (no mutation affordance)', async () => {
+    vi.spyOn(api.items, 'listByCluster').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 500,
+      offset: 0,
+    });
+    renderTab(false);
+
+    await screen.findByText(
+      'Add an application to track its memory allocation, or an event to annotate the forecast.',
+    );
+    expect(screen.queryByRole('button', { name: 'Add app or event' })).not.toBeInTheDocument();
   });
 
   it('shows skeleton placeholders while the items query is pending', () => {

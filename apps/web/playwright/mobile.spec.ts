@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test';
 
+const API_BASE = 'http://localhost:8090';
+
+const suffix = (): string =>
+  `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
+
 test.describe('mobile layout at 390x844', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
@@ -98,5 +103,67 @@ test.describe('mobile layout at 390x844', () => {
 
     await expect(page).toHaveURL(/\/settings$/);
     await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
+  });
+
+  test('hosts table keeps the Actions column reachable when scrolled (#243 Part B)', async ({
+    page,
+    request,
+  }) => {
+    // Self-contained (own cluster + host) rather than relying on seeded data,
+    // since the Lifecycle gantt column's min-w-[230px] only overflows the
+    // 390px viewport once a host row actually exists.
+    const clusterName = `CL-E2E-STICKY-${suffix()}`;
+    let clusterId: string | null = null;
+
+    try {
+      await page.goto('/settings');
+      await page.getByRole('button', { name: '+ Add cluster' }).click();
+      const createDialog = page.getByRole('dialog', { name: 'New cluster' });
+      await createDialog.getByRole('textbox', { name: 'Name' }).fill(clusterName);
+      await createDialog.getByRole('spinbutton', { name: 'Consumption (GB)' }).fill('1000');
+      await createDialog.getByRole('spinbutton', { name: 'Capacity (GB)' }).fill('5000');
+      await createDialog.getByRole('button', { name: 'Create cluster' }).click();
+      await expect(createDialog).toBeHidden();
+
+      await page.goto('/');
+      await page.getByRole('link', { name: clusterName }).click();
+      await expect(page).toHaveURL(/\/clusters\/[^/]+$/);
+      const match = /\/clusters\/([^/?#]+)/.exec(page.url());
+      clusterId = match?.[1] ?? null;
+
+      const panel = page.locator('.cluster-panel');
+      await panel.getByRole('tab', { name: 'Hosts' }).click();
+      await panel.getByRole('button', { name: 'Add host' }).click();
+      const hostDialog = page.getByRole('dialog', { name: 'Add host' });
+      await hostDialog.getByRole('textbox', { name: 'Name' }).fill('host-mobile-sticky');
+      await hostDialog
+        .getByRole('spinbutton', { name: 'Initial memory capacity (GB)' })
+        .fill('1000');
+      await hostDialog.getByRole('button', { name: 'Add host' }).click();
+      await expect(hostDialog).toBeHidden();
+
+      const row = page.getByRole('row', { name: /host-mobile-sticky/ });
+      await expect(row).toBeVisible();
+      const moreButton = row.getByRole('button', { name: 'More actions' });
+
+      // Scroll the table's own overflow-auto wrapper (ui/table.tsx) to its
+      // horizontal max — without the sticky column this would carry the
+      // Actions cell off the left edge of the 390px viewport with it.
+      const table = panel.locator('table').first();
+      await table.evaluate((el) => {
+        const scrollParent = el.parentElement;
+        if (scrollParent) scrollParent.scrollLeft = scrollParent.scrollWidth;
+      });
+
+      const box = await moreButton.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    } finally {
+      if (clusterId) {
+        const deleteResp = await request.delete(`${API_BASE}/api/clusters/${clusterId}`);
+        expect(deleteResp.status()).toBe(204);
+      }
+    }
   });
 });
