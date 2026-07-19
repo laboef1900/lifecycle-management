@@ -376,8 +376,16 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // Below `lg` the Scenario sheet covers the very chart a scenario edits
   // (#243 Part B): a successful Apply/Clear closes the sheet so the user
   // lands on the updated forecast with the header indicator visible. At
-  // `lg`+ the chart updates live beside the pane, so it stays open. Guarded
-  // on `paneOpen` so a change landing mid-exit cannot re-dispatch 'close'.
+  // `lg`+ the chart updates live beside the pane, so it stays open.
+  // The `paneOpen` guard cannot see a mid-exit change: AnimatePresence
+  // re-renders the exiting sheet with its last-open props, so an Apply
+  // clicked during the 200ms exit runs this closure with `paneOpen` frozen
+  // `true` and re-dispatches 'close' — harmless, because the reducer's
+  // 'close' is a value no-op while `{open: false, exiting: true}`. What the
+  // guard does protect is any future caller outside the pane (fresh
+  // closures): 'close' dispatched on a fully-closed pane would set
+  // `exiting: true` with no pane mounted to ever fire 'exit-complete',
+  // leaving the content column inert below `lg` for good.
   // (Declared after `closePane` — it participates in the pane lifecycle.)
   const paneCoversContent = paneLayout.coversContent;
   const handleScenarioChange = useCallback(

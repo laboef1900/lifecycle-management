@@ -212,15 +212,27 @@ describe('label legibility (#243 Part B High-2)', () => {
   });
 
   it('clamps the WTY EXPIRED label anchor into the viewBox at both edges (tick keeps the true x)', () => {
-    // Left edge: warranty expired before domain.min → pctToX clamps the tick
-    // to x=0; the centered label must be inset by its half width, not halved.
+    // The clamp output is deterministic in both cases below, so these are exact
+    // pins rather than one-sided bounds: a constant or inverted clamp would
+    // satisfy a >=/<= assertion, but only the exact anchor — plus the tick
+    // keeping its true edge-clamped x — catches such a break.
+
+    // Left edge: warranty expired before domain.min → pctToX clamps the tick to
+    // x=0; the centered label anchor clamps to exactly WTY_LABEL_HALF_WIDTH (34),
+    // inset by its half width rather than halved.
     const left = makeHost({ warrantyEndsAt: '2020-01-01' });
-    const { unmount } = render(<HostLifecycleGanttRow host={left} domain={DOMAIN} today={TODAY} />);
-    expect(Number(screen.getByText('WTY EXPIRED').getAttribute('x'))).toBeGreaterThanOrEqual(34);
+    const { container: leftContainer, unmount } = render(
+      <HostLifecycleGanttRow host={left} domain={DOMAIN} today={TODAY} />,
+    );
+    expect(Number(screen.getByText('WTY EXPIRED').getAttribute('x'))).toBe(34);
+    // The warranty tick keeps its true (edge-clamped) x. stroke-width 2 uniquely
+    // selects it — the NOW line is stroke-width 1.
+    const leftTick = leftContainer.querySelector('line[stroke-width="2"]');
+    expect(leftTick?.getAttribute('x1')).toBe('0');
     unmount();
 
-    // Right edge: an expired warranty past domain.max (host decommissioned
-    // years ago) → tick clamps to x=600; the label must stay fully visible.
+    // Right edge: an expired warranty past domain.max (host decommissioned years
+    // ago) → tick clamps to x=600; the label anchor clamps to exactly 600 - 34.
     const right = makeHost({
       commissionedAt: '2020-01-01',
       decommissionedAt: '2023-12-01',
@@ -231,7 +243,11 @@ describe('label legibility (#243 Part B High-2)', () => {
       min: new Date('2020-01-01T00:00:00Z'),
       max: new Date('2024-01-01T00:00:00Z'),
     };
-    render(<HostLifecycleGanttRow host={right} domain={pastDomain} today={TODAY} />);
-    expect(Number(screen.getByText('WTY EXPIRED').getAttribute('x'))).toBeLessThanOrEqual(600 - 34);
+    const { container: rightContainer } = render(
+      <HostLifecycleGanttRow host={right} domain={pastDomain} today={TODAY} />,
+    );
+    expect(Number(screen.getByText('WTY EXPIRED').getAttribute('x'))).toBe(566);
+    const rightTick = rightContainer.querySelector('line[stroke-width="2"]');
+    expect(rightTick?.getAttribute('x1')).toBe('600');
   });
 });

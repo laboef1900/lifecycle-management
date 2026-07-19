@@ -44,14 +44,23 @@ describe('<BulletMeter>', () => {
     // dark-theme --warning === --accent (the vanishing-tick failure mode).
     expect(warnTick).toHaveClass('shadow-[0_0_0_1px_var(--card)]');
     expect(critTick).toHaveClass('shadow-[0_0_0_1px_var(--card)]');
-    // Full opacity: 70% amber over amber was half the vanishing act.
-    expect(warnTick.className).not.toMatch(/bg-warning\/\d/);
-    expect(critTick.className).not.toMatch(/bg-destructive\/\d/);
+    // Full opacity: 70% amber over amber was half the vanishing act. Reject any
+    // alpha suffix syntax (digit `bg-warning/70` OR bracket `bg-warning/[0.7]`)
+    // plus any `opacity-*` utility — all three re-open the same vanishing act.
+    expect(warnTick.className).not.toMatch(/bg-warning\//);
+    expect(critTick.className).not.toMatch(/bg-destructive\//);
+    expect(warnTick.className).not.toMatch(/opacity-\d/);
+    expect(critTick.className).not.toMatch(/opacity-\d/);
   });
 
   it('differentiates crit from warn by shape — taller tick, not hue alone (WCAG 1.4.1)', () => {
     render(<BulletMeter value={45} warn={70} crit={90} />);
     expect(screen.getByTestId('bullet-meter-warn-tick')).toHaveClass('-top-0.5', '-bottom-0.5');
     expect(screen.getByTestId('bullet-meter-crit-tick')).toHaveClass('-top-1', '-bottom-1');
+    // The crit tick's extra height is only visible because the track never
+    // clips: pin the no-clipping invariant so an `overflow-hidden` added to
+    // the container someday doesn't silently equalize the ticks again,
+    // leaving hue as the only differentiator.
+    expect(screen.getByRole('img').className).not.toMatch(/overflow-hidden/);
   });
 });

@@ -152,6 +152,26 @@ test.describe('scenario pane as a modal sheet below lg', () => {
     // …and focus is back on the toggle that reopens the pane.
     await expect(page.getByTestId('scenario-button')).toBeFocused();
   });
+
+  test('Clear closes the sheet too and drops the scenario indicator', async ({ page }) => {
+    await openFirstCluster(page);
+    await openScenarioPane(page, SUB_LG.width);
+
+    await page.getByRole('button', { name: 'Apply' }).click();
+    await expect(page.getByTestId('scenario-pane-body')).toHaveCount(0);
+
+    // Reopen: the pane re-seeds from the applied scenario and offers Clear.
+    await openScenarioPane(page, SUB_LG.width);
+    await page.getByTestId('scenario-clear').click();
+
+    // The other "successful change" path (#243 Part B High-4) dismisses the
+    // covering sheet the same way — landing on the baseline forecast with the
+    // indicator gone and the column interactive again.
+    await expect(page.getByTestId('scenario-pane-body')).toHaveCount(0);
+    await expect(page.getByTestId('scenario-active-indicator')).toHaveCount(0);
+    await expect(page.getByTestId('panel-content')).not.toHaveAttribute('inert', '');
+    await expect(page.getByTestId('scenario-button')).toBeFocused();
+  });
 });
 
 test.describe('scenario pane beside the content column at lg and up', () => {
