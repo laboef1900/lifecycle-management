@@ -585,9 +585,18 @@ treating this as a low-severity incident.
   is served as an anonymous **ADMIN** — exactly the exposure described under
   "Break-glass: RECOVERY_DISABLE_AUTH" below, including the SSRF-adjacent
   settings endpoints. The stored `oidc` mode being preserved does **not**
-  mean authentication is being enforced. The window closes only when the key
-  is fixed (or rolled back) **and the server is restarted** — the degrade is
-  decided at boot, so repairing `.env` alone changes nothing until then.
+  mean authentication is being enforced. The degrade is decided at boot, so
+  repairing `.env` alone changes nothing until the server is restarted — but a
+  restart is not the only way out. **A successful save in Settings →
+  Authentication closes the window immediately**: the degrade is recorded once
+  at boot and never re-applied, so the reload that follows the write re-derives
+  the enforced mode from it. Re-entering the client secret restores `oidc`
+  enforcement on the spot (the save re-encrypts under whatever key is set now,
+  so a rotated key works and only a missing one blocks it); saving `local`
+  closes the API without needing a key. Saving `disabled` applies just as
+  immediately but leaves the API open by design, and both non-`oidc` saves
+  permanently delete the stored client secret (see "Switching away from OIDC
+  deletes the stored client secret" below).
 
   Two signals make the state visible. In the logs, an `error`
   (`auth_config.open_despite_configuration`) is emitted on every boot where
