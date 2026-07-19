@@ -1,12 +1,16 @@
 import type { HostState } from '@lcm/shared';
 
+// ALL-CAPS (#243 Part B copy item 2): every other status-class badge in the
+// app (cluster-tile.tsx's OK/WARN/CRIT, recommendation-chip.tsx's ORDER NOW/
+// PLANNED, FlagChip's BASELINE/EVENT chips) is ALL-CAPS — this was the one
+// sentence-case outlier ("In service").
 const LABELS: Record<HostState, string> = {
-  ordered: 'Ordered',
-  racked: 'Racked',
-  in_service: 'In service',
-  degraded: 'Degraded',
-  decommissioned: 'Decommissioned',
-  disposed: 'Disposed',
+  ordered: 'ORDERED',
+  racked: 'RACKED',
+  in_service: 'IN SERVICE',
+  degraded: 'DEGRADED',
+  decommissioned: 'DECOMMISSIONED',
+  disposed: 'DISPOSED',
 };
 
 const COLORS: Record<HostState, string> = {
