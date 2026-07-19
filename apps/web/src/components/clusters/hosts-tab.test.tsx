@@ -256,4 +256,28 @@ describe('HostsTab', () => {
     expect(screen.getAllByText(/2027-03-15/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/2029-03-15/).length).toBeGreaterThan(0);
   });
+
+  it('table icon affordances hover with the neutral ghost tint, never brand amber (#243 Part B High-3)', async () => {
+    renderTab();
+    await screen.findAllByRole('button', { name: 'Expand history' });
+    // Positive: the expand chevron and the h-7/w-7 icon-action buttons use the
+    // ghost pairing (amber hover computes ~1.33:1 dark — SC 1.4.3).
+    for (const btn of screen.getAllByRole('button', { name: 'Expand history' })) {
+      expect(btn).toHaveClass('hover:bg-card-hover');
+      // Muted base, foreground on hover: inside a hovered row the row already
+      // paints --card-hover, so the *text* transition is the visible affordance
+      // (review finding — without a muted base both hover halves were no-ops).
+      expect(btn).toHaveClass('text-muted-foreground', 'hover:text-foreground');
+    }
+    const iconButtons = Array.from(document.querySelectorAll('button.h-7.w-7'));
+    expect(iconButtons.length).toBeGreaterThan(0);
+    for (const btn of iconButtons) {
+      expect(btn.className).toMatch(/hover:bg-card-hover|hover:bg-destructive\/10/);
+    }
+    // Negative: no bare shadcn hover:bg-accent leftovers anywhere in the tab.
+    const offenders = Array.from(document.querySelectorAll('button')).filter((b) =>
+      /(?:^|\s)hover:bg-accent(?:\s|$)/.test(b.className),
+    );
+    expect(offenders).toEqual([]);
+  });
 });

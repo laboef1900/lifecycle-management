@@ -137,7 +137,7 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
                           <button
                             type="button"
                             onClick={() => toggle(item.id)}
-                            className="rounded p-1 hover:bg-accent"
+                            className="rounded p-1 text-muted-foreground hover:bg-card-hover hover:text-foreground"
                             aria-expanded={isOpen}
                             aria-label={isOpen ? 'Collapse history' : 'Expand history'}
                           >
@@ -351,7 +351,7 @@ function IconButton({
         'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
         destructive
           ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-          : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+          : 'text-muted-foreground hover:bg-card-hover hover:text-foreground',
       )}
     >
       {children}

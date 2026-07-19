@@ -500,6 +500,9 @@ describe('<ClusterPanel>', () => {
 
   it('announces scenario activation and clearing via the live region (IMPORTANT #4)', async () => {
     vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(forecast());
+    // Side-by-side width: the pane stays open across Apply → Clear (below lg
+    // a successful change now dismisses the covering sheet, #243 Part B).
+    stubViewportWidth(1280);
     const user = userEvent.setup();
     render(<Harness show />);
 
@@ -554,6 +557,110 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(await screen.findByTestId('scenario-controls')).toBeInTheDocument();
   });
 
+  it('closes the covering sheet after Apply so the chart is visible (#243 Part B High-4)', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    // The sheet dismisses itself — the user lands on the updated forecast…
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    // …with the change announced and the header indicator as the visible cue…
+    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+      'Scenario active: Lose 1 host.',
+    );
+    expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
+    // …and focus back on the toggle that reopens the pane.
+    await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
+  });
+
+  it('closes the covering sheet after Clear too, announcing the baseline restore (#243 Part B High-4)', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    // Apply from the sheet (closes it), reopen, then Clear — the other
+    // "successful change" path must dismiss the covering sheet the same way.
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId('scenario-clear'));
+
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+      'Baseline forecast restored.',
+    );
+    // The scenario is gone: no active indicator remains on the toggle.
+    expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
+  });
+
+  it('keeps the side-by-side pane open after Apply at lg+ — the chart updates live beside it', async () => {
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Lose 1 host.',
+      ),
+    );
+    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
+    expect(screen.getByTestId('scenario-summary')).toHaveTextContent('Active: Lose 1 host');
+  });
+
+  it('keeps the covering sheet open when Apply fails validation — the error must stay visible', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    const count = screen.getByLabelText(/hosts to drop/i);
+    await user.clear(count);
+    await user.type(count, '0');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    // No scenario change happened, so the sheet must NOT dismiss (#243 Part B
+    // High-4 closes it only on a *successful* Apply/Clear) — the inline error
+    // lives inside the sheet and would vanish with it.
+    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Count must be ≥ 1.');
+    expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
+  });
+
+  it('auto-closes on Apply after a resize below lg mid-session — coversContent is read live', async () => {
+    const resizeTo = stubResizableViewport(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+
+    // Cross below lg with the pane open: the side-by-side pane becomes the
+    // covering sheet, so the next Apply must dismiss it — a stale
+    // `paneCoversContent` closure would keep the sheet over the chart,
+    // exactly the High-4 failure this fix exists to prevent.
+    resizeTo(900);
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
+  });
+
   it('opening the pane moves focus into it; closing returns focus to the Scenario button', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
@@ -605,8 +712,8 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
       ),
     );
 
-    // Close the pane; the applied scenario must survive and stay visible.
-    await user.keyboard('{Escape}');
+    // Applying from the covering sheet dismisses it (#243 Part B High-4); the
+    // applied scenario must survive and stay visible on the header button.
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
 
     const indicator = screen.getByTestId('scenario-active-indicator');
@@ -909,7 +1016,9 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
       ),
     );
 
-    await user.keyboard('{Escape}');
+    // At this (default, sub-lg) width the successful Apply itself dismisses
+    // the covering sheet (#243 Part B High-4) — no manual Escape, which would
+    // now hit the panel-close path instead (#243 Part B review).
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
 
     await user.click(screen.getByTestId('scenario-button'));
