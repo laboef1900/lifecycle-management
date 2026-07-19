@@ -555,13 +555,16 @@ required to enable OIDC at all — without it, `auth_config` seeds (and
 stays) disabled, and the settings UI can't persist a client secret either.
 This is a fail-safe, not a crash: a missing or invalid key never takes the
 server down. Read "fail-safe" precisely, though — it means the server stays
-_up_, not that the deployment stays _secured_. An unreadable key degrades
-authentication to `disabled`, which leaves the API open until the key is
-fixed. See the first bullet below before treating this as a low-severity
-incident.
+_up_, not that the deployment stays _secured_. On a deployment storing
+`mode: oidc`, an unreadable key degrades authentication to `disabled`, which
+leaves the API open until the key is fixed. Decryption is gated on the stored
+mode, so `local` and `disabled` rows never touch the encrypted columns and are
+not degraded by an unreadable key at all. See the first bullet below before
+treating this as a low-severity incident.
 
-- **Losing the key, or booting with the wrong one** (unset, or changed to a
-  value that can't decrypt what's already stored — e.g. mid-rotation,
+- **Losing the key, or booting with the wrong one, on a deployment storing
+  `mode: oidc`** (unset, or changed to a value that can't decrypt what's
+  already stored — e.g. mid-rotation,
   before the secret has been re-entered): the server detects it can't
   decrypt the stored secret at boot, logs an error, and forces
   `mode=disabled` automatically — it does **not** wipe the encrypted
@@ -572,15 +575,28 @@ incident.
   `mode` still says `oidc`, so nothing has to be re-selected in Settings
   once the key is back.
 
+  A stored `local` or `disabled` row is unaffected: its encrypted columns are
+  never read, so an unreadable key changes nothing about how it boots. Such a
+  row keeps enforcing exactly what it says.
+
   **Treat this as a security incident, not just an outage.** For as long as
-  the server runs with an unreadable key, the effective mode is `disabled`:
-  every `/api/*` route is reachable **without a session**, and every request
+  an **OIDC** deployment runs with an unreadable key, the effective mode is
+  `disabled`: every `/api/*` route is reachable **without a session**, and every request
   is served as an anonymous **ADMIN** — exactly the exposure described under
   "Break-glass: RECOVERY_DISABLE_AUTH" below, including the SSRF-adjacent
   settings endpoints. The stored `oidc` mode being preserved does **not**
-  mean authentication is being enforced. The window closes only when the key
-  is fixed (or rolled back) **and the server is restarted** — the degrade is
-  decided at boot, so repairing `.env` alone changes nothing until then.
+  mean authentication is being enforced. The degrade is decided at boot, so
+  repairing `.env` alone changes nothing until the server is restarted — but a
+  restart is not the only way out. **A successful save in Settings →
+  Authentication closes the window immediately**: the degrade is recorded once
+  at boot and never re-applied, so the reload that follows the write re-derives
+  the enforced mode from it. Re-entering the client secret restores `oidc`
+  enforcement on the spot (the save re-encrypts under whatever key is set now,
+  so a rotated key works and only a missing one blocks it); saving `local`
+  closes the API without needing a key. Saving `disabled` applies just as
+  immediately but leaves the API open by design, and both non-`oidc` saves
+  permanently delete the stored client secret (see "Switching away from OIDC
+  deletes the stored client secret" below).
 
   Two signals make the state visible. In the logs, an `error`
   (`auth_config.open_despite_configuration`) is emitted on every boot where
@@ -598,28 +614,36 @@ incident.
   break-glass episode" below — the exposure was identical, so the review
   is too.
 
-- **Caveat for `AUTH_STRICT_BOOT=true` deployments.** Because the stored
+- **Caveat for `AUTH_STRICT_BOOT=true` deployments** (OIDC deployments only —
+  see "Which stored modes refuse to boot" just below). Because the stored
   mode survives the degrade, the _next_ boot sees the same configured row
   it still can't decrypt and, under strict boot, **refuses to start**
   rather than fail open. That is what strict boot is for, but it changes
   "restart to resume normal operation" into "the server will not start
   until the key is fixed".
 
-  **Which stored modes refuse to boot.** Every mode that is not
-  `disabled` — both `oidc` **and** `local`. Degrading either of them to
-  `mode=disabled` turns a closed deployment into an open, unauthenticated
-  one, which is exactly what strict boot exists to prevent. (Earlier
-  versions scoped the refusal to `oidc` only, so a `local` deployment with
-  an unreadable key booted wide open despite `AUTH_STRICT_BOOT=true`.)
+  **Which stored modes refuse to boot.** Only `oidc` — it is the only mode
+  whose secrets are decrypted at boot, so it is the only mode a key failure
+  can degrade. A stored `local` row no longer reaches this path: since
+  decryption is gated on the stored mode, its leftover ciphertext is never
+  read, the deployment keeps enforcing `local`, and there is nothing for
+  strict boot to refuse.
 
-  A stored mode of `disabled` still boots normally, even under strict
-  boot. Such a row is already open by the operator's own choice, so
-  refusing it would be an outage with no security benefit — and it is a
-  realistic state: switching OIDC → disabled from Settings leaves the
-  encrypted client secret in the row, so a later key rotation produces a
-  decrypt failure on a deployment that was never enforcing
-  authentication in the first place. Strict boot must not crash-loop on
-  that stale ciphertext.
+  (This is **not** a return to the earlier `oidc`-only _scoping_ bug, where a
+  `local` deployment with an unreadable key degraded to an open API despite
+  `AUTH_STRICT_BOOT=true`. That fail-open is closed at the source now:
+  `local` does not degrade, so it does not need refusing. The strict-boot
+  predicate itself remains the divergence test `!== 'disabled'`, not a mode
+  enumeration — what narrowed is which modes can reach it, not the test.)
+
+  A stored mode of `disabled` still boots normally, even under strict boot,
+  and now does so **structurally** rather than by exemption: its encrypted
+  columns are never read, so no decrypt failure is raised in the first place.
+  Such a row is also already open by the operator's own choice, so refusing it
+  would be an outage with no security benefit. Rows carrying stale ciphertext
+  still exist — switching OIDC → disabled used to leave the encrypted client
+  secret behind — but saving a non-oidc mode now clears both secret columns,
+  so that state stops accumulating on any deployment kept up to date.
 
   **Two recovery paths**, both requiring a restart:
 
@@ -650,6 +674,43 @@ incident.
   crash-looping — either finish the re-entry step above, or roll
   `CONFIG_ENCRYPTION_KEY` back to the previous value to recover the
   existing configuration without re-entering anything.
+- **Switching away from OIDC deletes the stored client secret.** Saving
+  `local` or `disabled` in **Settings → Authentication** clears both encrypted
+  columns (client secret and login-state signing secret), so switching back to
+  `oidc` later requires **re-entering the client secret** — there is nothing
+  stored to fall back on. The attempt is refused with a clear
+  `INCOMPLETE_OIDC_CONFIG` error rather than silently enabling OIDC without a
+  secret, and the Settings panel shows an empty "Client secret" field instead
+  of "•••••••• configured" to signal it up front.
+
+  This reverses earlier behaviour, where the secret survived an
+  OIDC → disabled → OIDC round trip untouched. It is deliberate: that
+  surviving ciphertext is exactly what a later key rotation turned into a
+  decrypt failure on a row that never needed the secret, which degraded the
+  deployment to an open API. The same applies to first-boot seeding — supplying
+  `OIDC_*` env vars while `AUTH_MODE` is unset or `disabled` seeds a disabled
+  row and does not retain the client secret (logged as
+  `auth_config.seeded_client_secret_discarded`; boot never fails over it).
+
+  Because the deletion is irreversible — and specifically **not** undone by
+  restoring `CONFIG_ENCRYPTION_KEY`, which is the recovery every other failure
+  in this section relies on — **Settings → Authentication** asks for
+  confirmation before sending a save that switches away from `oidc`, naming
+  exactly what is deleted. The alert shown during a decrypt-degraded boot says
+  the same thing: its "the encrypted secrets are intact and are never wiped"
+  guarantee describes the **degrade**, not a save made from that screen.
+
+  Submitting a client secret **alongside** a non-oidc mode is refused with
+  `422 CLIENT_SECRET_NOT_APPLICABLE` rather than accepted and discarded — the
+  save would have thrown the value away, and answering `200` would have hidden
+  that until enabling OIDC later failed. Clear the field (or omit
+  `clientSecret`) and the save proceeds; clearing needs no encryption key, so
+  this never blocks a keyless deployment from leaving a broken OIDC config.
+
+  Note this affects **explicit saves only**. A degraded boot still writes
+  nothing at all, so the "fix the key and restart, with nothing to re-enter"
+  recovery above is unchanged.
+
 - Never commit `CONFIG_ENCRYPTION_KEY` or check it into version control —
   treat it like `POSTGRES_PASSWORD`.
 
@@ -688,8 +749,8 @@ for the same reason.
 
 > **SECURITY NOTE — bootstrap/break-glass exposure.** Whenever auth is
 > disabled — the initial bootstrap window before any admin exists, or any
-> time `RECOVERY_DISABLE_AUTH` or the `CONFIG_ENCRYPTION_KEY` fail-safe has
-> forced it off — the Settings → Authentication API (`GET`/`PUT
+> time `RECOVERY_DISABLE_AUTH` or the `CONFIG_ENCRYPTION_KEY` fail-safe
+> (OIDC deployments only) has forced it off — the Settings → Authentication API (`GET`/`PUT
 /api/settings/auth`, `POST /api/settings/auth/test`) is reachable by
 > **anyone** who can reach the server, with no session required. The test
 > and save endpoints perform a live OIDC discovery request to whatever
@@ -741,7 +802,7 @@ overridden one. Anyone who could reach the server during the window could
 have created an account or reset an existing password — and that access
 survives after authentication is correctly restored. Treat this as
 mandatory after **any** episode in which the API ran open, including past
-ones — that means break-glass windows _and_ any boot degraded by an
+ones — that means break-glass windows _and_ any **OIDC** boot degraded by an
 unreadable `CONFIG_ENCRYPTION_KEY` (see that section above), since the
 exposure is identical:
 
@@ -878,4 +939,4 @@ After 5 consecutive failed login attempts, an account locks with exponential bac
 
 The existing break-glass path covers local accounts too — no new environment variable was introduced for them. Follow "Break-glass: RECOVERY_DISABLE_AUTH" above, including the verification probe and the post-episode account audit; resetting a password or creating a fresh admin from **Settings → Authentication** is exactly the recovery that section is written for.
 
-> `CONFIG_ENCRYPTION_KEY` is **not** required for `local` mode. The argon2id password hashes live directly on the `users` table, not in the AES-GCM-encrypted `auth_config` row — only `oidc` mode needs the encryption key, to store the OIDC client secret.
+> `CONFIG_ENCRYPTION_KEY` is **not** required for `local` mode. The argon2id password hashes live directly on the `users` table, not in the AES-GCM-encrypted `auth_config` row — only `oidc` mode needs the encryption key, to store the OIDC client secret, and only `oidc` reads it at boot. A `local` row that still carries leftover encrypted OIDC columns from an earlier configuration keeps them untouched and unread, so a missing, wrong, or rotated key leaves `local` enforcing exactly as configured. Saving `local` from Settings also clears those columns outright.

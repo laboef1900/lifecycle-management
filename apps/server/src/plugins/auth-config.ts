@@ -107,6 +107,32 @@ function normalizeStoredMode(mode: string): EffectiveAuthConfig['mode'] {
 }
 
 /**
+ * Strict boot's refusal predicate: would degrading this stored mode to the
+ * in-memory `disabled` fail-safe WIDEN access? True for every configured
+ * (closed) mode; false for `disabled`, where failing open is not a downgrade
+ * and refusing boot would be a spurious outage (#136 F1).
+ *
+ * Extracted and exported so the arm that is currently UNREACHABLE can still be
+ * pinned by a test — see the `@ai-warning` below and the direct assertions in
+ * `auth-config-plugin.test.ts`.
+ *
+ * @ai-warning Do NOT re-narrow this to `=== 'oidc'`, even though `oidc` is now
+ * the only mode that can reach the call site. The two are equivalent TODAY only
+ * because `toEffective()` gates decryption on the stored mode (#241), so
+ * `local`/`disabled` rows never raise a decrypt failure in the first place.
+ * Hardcoding the mode would silently fail OPEN the moment any future mode
+ * stores decryptable secrets — which is exactly how the original scoping bug
+ * worked: with unconditional decryption, an `=== 'oidc'` guard let a stored
+ * `local` row degrade to an open, anonymous-ADMIN API despite strict boot being
+ * explicitly enabled (#222). Keep it a structural test of "would degrading
+ * widen access?", and let reachability be decided by which modes actually read
+ * secrets. `disabled` stays exempt either way.
+ */
+export function degradeWouldWidenAccess(storedMode: string): boolean {
+  return normalizeStoredMode(storedMode) !== 'disabled';
+}
+
+/**
  * Decorates `fastify.authConfig` — the boot-time-loaded, live-reloadable view
  * of `EffectiveAuthConfig` (Task C3's DB-backed source of truth). Registered
  * after `prisma`, before `auth`/`oidc` (those plugins read `authConfig.current`
@@ -123,30 +149,37 @@ function normalizeStoredMode(mode: string): EffectiveAuthConfig['mode'] {
  *  3. Fail-safe guard: if load() couldn't decrypt for ANY reason
  *     (`AuthSecretDecryptError` — key missing, key wrong, or ciphertext
  *     corrupted, while a secret is stored), degrade the EFFECTIVE mode to
- *     `disabled` **in memory only** (#222). The stored row is not written at
- *     all: `service.update()` would try to re-encrypt secrets with a key we
- *     don't have, and even a direct `mode`-only write would destroy the
- *     operator's configuration — restoring or rolling back
- *     `CONFIG_ENCRYPTION_KEY` must recover the deployment exactly as it was,
- *     with nothing to re-enter. `clientSecretEnc`/`signingSecretEnc` are
- *     likewise never cleared: the stored ciphertext may still be recoverable
- *     and is the only copy of an externally-sourced client secret. Log
- *     loudly, then hand-build the effective config from the row already
- *     fetched below, without decrypting — calling
- *     service.load()/toEffective() again would throw the exact same error,
- *     this time outside the try/catch, crashing boot.
+ *     `disabled` **in memory only** (#222). Only a stored `oidc` row can reach
+ *     this: `toEffective()` gates decryption on the stored mode (#241), so
+ *     `local`/`disabled` rows never read their (possibly leftover) encrypted
+ *     columns, never raise the error, and are never degraded by a key failure.
+ *     The stored row is not written at all: `service.update()` would try to
+ *     re-encrypt secrets with a key we don't have, and even a direct
+ *     `mode`-only write would destroy the operator's configuration — restoring
+ *     or rolling back `CONFIG_ENCRYPTION_KEY` must recover the deployment
+ *     exactly as it was, with nothing to re-enter.
+ *     `clientSecretEnc`/`signingSecretEnc` are likewise never cleared here: the
+ *     stored ciphertext may still be recoverable and is the only copy of an
+ *     externally-sourced client secret. (Clearing them is exclusively an
+ *     explicit operator SAVE of a non-oidc mode — see
+ *     `AuthConfigService.update()` — never a degrade.) Log loudly, then
+ *     hand-build the effective config from the row already fetched below,
+ *     without decrypting — calling service.load()/toEffective() again would
+ *     throw the exact same error, this time outside the try/catch, crashing
+ *     boot.
  *  3b. Strict boot (opt-in): if `AUTH_STRICT_BOOT` is set, step 3's decrypt
- *     failure fired, AND the row's stored mode is NOT `disabled` (i.e. `oidc`
- *     or `local` — anything the degrade would actually open up), abort boot
+ *     failure fired, AND the row's stored mode is NOT `disabled`, abort boot
  *     with `AuthConfigStrictBootError` (before anything is written, leaving the
  *     configured row intact) instead of degrading to the open mode=disabled
  *     state — unless `RECOVERY_DISABLE_AUTH` is also set, which still wins as the
- *     deliberate override. A row already stored as `disabled` that merely retains
- *     a leftover encrypted secret degrades normally: failing open is not a
- *     downgrade there, so refusing boot would be a spurious outage (#136 F1).
- *     The guard is the divergence predicate, never a mode enumeration — scoping
- *     it to `oidc` alone let a stored `local` deployment fail OPEN under an
- *     explicitly-enabled security control (#222).
+ *     deliberate override.
+ *     Since #241 the only stored mode that can reach step 3 at all is `oidc`,
+ *     so in practice this refuses oidc deployments only. That is a narrowing of
+ *     what is REACHABLE, not of the predicate: it stays the divergence test
+ *     `!== 'disabled'` so it remains correct for any future mode that stores
+ *     decryptable secrets. Two separate reasons a `disabled` row still boots:
+ *     it no longer decrypts at all (#241), and even if it did, failing open is
+ *     not a downgrade there, so refusing would be a spurious outage (#136 F1).
  *  4. Break-glass: if `RECOVERY_DISABLE_AUTH` is set, `enforce()` masks the
  *     effective mode to `disabled` **in memory only** — applied to the boot
  *     value AND to every later `reload()`, so the override is sticky for the
@@ -218,29 +251,26 @@ const authConfigPluginFn: FastifyPluginAsync<AuthConfigPluginOptions> = async (
     if (!(err instanceof AuthSecretDecryptError)) {
       throw err;
     }
-    // A decrypt failure only warrants refusing boot when degrading would
-    // actually WIDEN access — i.e. when the stored mode is not already
-    // `disabled`. The guard is therefore the divergence predicate
-    // (`normalizeStoredMode(...) !== 'disabled'`), not an enumeration of modes.
-    //
-    // @ai-warning Do NOT re-narrow this to `=== 'oidc'`. That scoping existed
-    // once (#136 F1) to stop a legitimately-disabled deployment that merely
-    // retains stale ciphertext from refusing to boot — `toEffective()` decrypts
-    // leftover secret columns regardless of the row's mode, which is why such a
-    // row reaches this path at all. The `!== 'disabled'` form preserves that
-    // exemption exactly, while closing the fail-open it left behind (#222): a
-    // row stored as `local` with an undecryptable secret degraded to an open,
-    // anonymous-ADMIN API despite strict boot being explicitly enabled.
     const storedRow = await fastify.prisma.authConfig.findUnique({ where: { id: SINGLETON_ID } });
     // Opt-in strict boot: refuse to start rather than silently degrade a
-    // configured (oidc OR local) deployment to an open mode=disabled API.
+    // configured deployment to an open mode=disabled API.
     // RECOVERY_DISABLE_AUTH still wins as the deliberate break-glass override.
     // Throw BEFORE anything is written so the stored configured row is left
     // untouched for recovery. Raised outside the guarded load() (in the catch),
     // so it propagates and aborts boot.
+    //
+    // "Configured" is the STRUCTURAL test `degradeWouldWidenAccess()` —
+    // deliberately not an enumeration of modes; see its `@ai-warning`. #241
+    // narrowed only its REACHABILITY, not the predicate: a stored `local` row no
+    // longer decrypts anything, so it can no longer raise AuthSecretDecryptError
+    // and can no longer arrive here at all, leaving `oidc` as the only mode that
+    // reaches this guard in practice. The `local` arm is unreachable-but-correct
+    // and is kept so that a future mode which does store decryptable secrets is
+    // covered by construction rather than by someone remembering to widen the
+    // guard — which is why the predicate is asserted directly in its own test.
     if (
       storedRow !== null &&
-      normalizeStoredMode(storedRow.mode) !== 'disabled' &&
+      degradeWouldWidenAccess(storedRow.mode) &&
       env.AUTH_STRICT_BOOT &&
       !env.RECOVERY_DISABLE_AUTH
     ) {

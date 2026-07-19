@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { AuthConfigUpdate } from '@lcm/shared';
+
 import { encrypt, loadKey } from '../crypto/secret-box.js';
 import { prisma } from './setup.js';
 import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
@@ -11,6 +13,25 @@ import {
 
 const KEY = loadKey(Buffer.alloc(32, 7).toString('base64'));
 const WRONG_KEY = loadKey(Buffer.alloc(32, 9).toString('base64'));
+
+/**
+ * Every non-`mode` field `authConfigUpdateSchema` requires (or defaults), so a
+ * test can spell out only the fields it is actually about. The Settings form
+ * always submits the full object, which is what this mirrors.
+ */
+const baseUpdate = {
+  issuerUrl: null,
+  clientId: null,
+  appBaseUrl: null,
+  scopes: 'openid profile email',
+  roleClaim: null,
+  adminValues: null,
+  defaultRole: 'admin',
+  allowedEmailDomains: null,
+  allowedEmails: null,
+  sessionTtlHours: 12,
+  allowInsecure: false,
+} satisfies Omit<AuthConfigUpdate, 'mode'>;
 
 describe('AuthConfigService.load', () => {
   it('creates a default disabled row on first load when no env + no key', async () => {
@@ -27,7 +48,8 @@ describe('AuthConfigService.load', () => {
     // so the encrypted-at-rest assertion below is deterministic — a plain-word
     // marker like 'shh' can appear in random base64 ciphertext by chance.
     const plaintextSecret = 'shh*plaintext*marker';
-    const svc = new AuthConfigService(prisma, KEY);
+    const warn = vi.fn();
+    const svc = new AuthConfigService(prisma, KEY, { warn });
     const cfg = await svc.load(
       makeOidcTestEnv({
         OIDC_ISSUER_URL: 'https://idp',
@@ -47,6 +69,10 @@ describe('AuthConfigService.load', () => {
     expect(row!.clientSecretEnc).not.toBeNull();
     expect(row!.clientSecretEnc).not.toContain(plaintextSecret); // encrypted at rest
     expect(row!.signingSecretEnc).not.toBeNull();
+    // Negative control for the discard warning below: an oidc seed KEEPS the
+    // secret, so nothing may warn here. Pins the discard log to the case it
+    // describes instead of firing on every seed.
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('seeds as disabled (never crashing) when the key is null even though env has OIDC vars and a client secret', async () => {
@@ -117,18 +143,59 @@ describe('AuthConfigService.load', () => {
     await expect(svc.load()).rejects.toThrow(/could not be decrypted/);
   });
 
-  it("throws from toEffective's own decrypt guard (not load()'s upgrade-path guard) when a disabled row has a secret set", async () => {
-    // mode: 'disabled' means load()'s upgrade-path guard
-    // (`row.mode === 'oidc' && !row.signingSecretEnc`) never fires here, so
-    // the only way this can throw is toEffective's decryptColumn guard
-    // running unconditionally over row.clientSecretEnc regardless of mode.
+  it('loads a disabled row that still holds leftover ciphertext WITHOUT decrypting it (#241)', async () => {
+    // The direct inverse of the pre-#241 behaviour this test used to pin.
+    // `toEffective()` decrypted every secret column regardless of the row's
+    // mode, so a row whose stored mode has no use for a secret still threw
+    // AuthSecretDecryptError — which the plugin's boot guard turned into a
+    // degrade to `mode=disabled`. Decryption is now gated on the stored mode,
+    // so a non-oidc row never reads the columns at all and an unreadable
+    // CONFIG_ENCRYPTION_KEY cannot degrade it.
     await prisma.authConfig.create({
       data: { id: 'singleton', mode: 'disabled', clientSecretEnc: 'x.y.z' },
     });
     const svc = new AuthConfigService(prisma, null);
-    await expect(svc.load()).rejects.toThrow(
-      /AuthConfig has a stored client secret but CONFIG_ENCRYPTION_KEY is not configured; cannot decrypt/,
+
+    const cfg = await svc.load();
+
+    expect(cfg.mode).toBe('disabled');
+    expect(cfg.clientSecret).toBeNull();
+    expect(cfg.signingSecret).toBeNull();
+    // #241 changes what is READ, never what is stored: only an explicit
+    // Settings save clears the columns, so the ciphertext survives untouched.
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.clientSecretEnc).toBe('x.y.z');
+  });
+
+  it('does not persist an env-seeded client secret when AUTH_MODE seeds a disabled row (#241)', async () => {
+    // Reachable by omitting AUTH_MODE while setting the OIDC_* vars: env.ts
+    // defaults AUTH_MODE to `disabled`, so the seed writes a disabled row. The
+    // secret used to be stored (encrypted) against a later switch to oidc;
+    // saving a non-oidc mode now clears both columns, so it is dropped and the
+    // operator re-enters it in Settings when they enable OIDC.
+    const warn = vi.fn();
+    const svc = new AuthConfigService(prisma, KEY, { warn });
+
+    const cfg = await svc.load(
+      makeOidcTestEnv({ AUTH_MODE: 'disabled', OIDC_CLIENT_SECRET: 'seeded-secret' }),
     );
+
+    expect(cfg.mode).toBe('disabled');
+    expect(cfg.clientSecret).toBeNull();
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('disabled');
+    expect(row!.clientSecretEnc).toBeNull();
+    expect(row!.signingSecretEnc).toBeNull();
+    // The non-secret fields still seed normally.
+    expect(row!.clientId).toBe('lcm-test');
+    // Dropping an operator-supplied secret must be OBSERVABLE, not silent:
+    // without a log line the only symptom is OIDC quietly not working later.
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'auth_config.seeded_client_secret_discarded' }),
+      expect.stringContaining('AUTH_MODE'),
+    );
+    // ...and the warning itself must never carry the secret it just dropped.
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('seeded-secret');
   });
 });
 
@@ -387,6 +454,114 @@ describe('AuthConfigService.update', () => {
     const after = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
     expect(after!.signingSecretEnc).toBe(signingSecretEncBefore);
   });
+
+  it('clears BOTH secret columns when saving mode=disabled (#241)', async () => {
+    // A deliberate reversal of the #222/#126 preservation contract for MODE
+    // CHANGES: a disabled row has no use for either secret, so leaving them
+    // behind only accumulates ciphertext that a later key rotation could turn
+    // into a spurious decrypt failure. Clearing them on an explicit operator
+    // save is what stops that state from arising at all.
+    const svc = new AuthConfigService(prisma, KEY);
+    await svc.update({ ...baseUpdate, mode: 'oidc', clientId: 'a', clientSecret: 'x' }, null);
+    const before = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(before!.clientSecretEnc).not.toBeNull();
+    expect(before!.signingSecretEnc).not.toBeNull();
+
+    await svc.update({ ...baseUpdate, mode: 'disabled', clientId: 'a' }, null);
+
+    const after = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(after!.mode).toBe('disabled');
+    expect(after!.clientSecretEnc).toBeNull();
+    expect(after!.signingSecretEnc).toBeNull();
+  });
+
+  it('clears BOTH secret columns when saving mode=local (#241)', async () => {
+    const svc = new AuthConfigService(prisma, KEY);
+    await svc.update({ ...baseUpdate, mode: 'oidc', clientId: 'a', clientSecret: 'x' }, null);
+
+    await svc.update({ ...baseUpdate, mode: 'local', clientId: 'a' }, null);
+
+    const after = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(after!.mode).toBe('local');
+    expect(after!.clientSecretEnc).toBeNull();
+    expect(after!.signingSecretEnc).toBeNull();
+    // ...and the resulting row loads cleanly: local no longer has anything to
+    // decrypt, so it keeps enforcing whatever the key situation is (#241).
+    const cfg = await svc.load();
+    expect(cfg.mode).toBe('local');
+    expect(cfg.clientSecret).toBeNull();
+    expect(cfg.signingSecret).toBeNull();
+  });
+
+  it('REFUSES a client secret submitted alongside a non-oidc mode instead of discarding it, and writes nothing (#241)', async () => {
+    // A submitted secret cannot be honoured under a non-oidc mode, because the
+    // clearing block nulls both columns. Accepting the write and dropping the
+    // value would answer 200 to a caller whose input was thrown away — "saved"
+    // while the secret it sent is gone. Refusing is the honest answer, and it
+    // is the same shape as `rotateSigningSecret()`'s OIDC_MODE_REQUIRED.
+    const svc = new AuthConfigService(prisma, KEY);
+    await svc.update({ ...baseUpdate, mode: 'oidc', clientId: 'a', clientSecret: 'keep-me' }, null);
+    const before = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+
+    await expect(
+      svc.update({ ...baseUpdate, mode: 'local', clientId: 'a', clientSecret: 'dropped' }, null),
+    ).rejects.toMatchObject({ code: 'CLIENT_SECRET_NOT_APPLICABLE', statusCode: 422 });
+
+    // Refusing is all-or-nothing: the row is exactly as it was, so the caller
+    // can fix the request without a half-applied mode change to undo.
+    const after = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(after!.mode).toBe('oidc');
+    expect(after!.clientSecretEnc).toBe(before!.clientSecretEnc);
+    expect(after!.signingSecretEnc).toBe(before!.signingSecretEnc);
+  });
+
+  it('reports a missing encryption key BEFORE the non-applicable refusal, keeping ENCRYPTION_KEY_REQUIRED first (#241)', async () => {
+    // ORDER is load-bearing, and the constraint lives INSIDE the clientSecret
+    // branch: `requireKey()` runs ahead of the mode refusal. A missing key is
+    // the precondition that holds for every mode, so it is reported first —
+    // the same ordering `rotateSigningSecret()` uses. The route-level canary
+    // ("fails with 422 ENCRYPTION_KEY_REQUIRED (not 500) ... and persists
+    // nothing", settings-auth-routes.test.ts) pins the same property end to end.
+    const noKey = new AuthConfigService(prisma, null);
+    await expect(
+      noKey.update({ ...baseUpdate, mode: 'disabled', clientSecret: 'x' }, null),
+    ).rejects.toMatchObject({ code: 'ENCRYPTION_KEY_REQUIRED' });
+    expect(await prisma.authConfig.findUnique({ where: { id: 'singleton' } })).toBeNull();
+  });
+
+  it('still accepts an explicit null clientSecret with a non-oidc mode and no key configured (#241)', async () => {
+    // The escape hatch the refusal must not close: CLEARING needs no key and is
+    // not a "submitted secret", so a keyless deployment can always save its way
+    // out of a broken OIDC config. `emptyToNull` in the shared schema turns a
+    // stray '' into exactly this case, and the Settings form omits the field
+    // entirely when it is blank.
+    const noKey = new AuthConfigService(prisma, null);
+
+    await noKey.update({ ...baseUpdate, mode: 'local', clientId: 'a', clientSecret: null }, null);
+
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('local');
+    expect(row!.clientSecretEnc).toBeNull();
+    expect(row!.signingSecretEnc).toBeNull();
+  });
+
+  it('still stores and generates secrets on an oidc save — the #241 nulling must not touch the oidc path', async () => {
+    const svc = new AuthConfigService(prisma, KEY);
+    await svc.update({ ...baseUpdate, mode: 'disabled' }, null);
+
+    await svc.update(
+      { ...baseUpdate, mode: 'oidc', clientId: 'a', clientSecret: 'the-secret' },
+      null,
+    );
+
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('oidc');
+    expect(row!.clientSecretEnc).not.toBeNull();
+    expect(row!.signingSecretEnc).not.toBeNull();
+    const cfg = await svc.load();
+    expect(cfg.clientSecret).toBe('the-secret');
+    expect(cfg.signingSecret).not.toBeNull();
+  });
 });
 
 describe('AuthConfigService.toEffective', () => {
@@ -394,6 +569,57 @@ describe('AuthConfigService.toEffective', () => {
     const svc = new AuthConfigService(prisma, null);
     const row = await prisma.authConfig.create({ data: { id: 'singleton', mode: 'local' } });
     expect(svc.toEffective(row).mode).toBe('local');
+  });
+
+  it('returns null for both secrets on a LOCAL row whose ciphertext was written under a different key (#241)', async () => {
+    // THE fail-open #241 closes. A deployment storing `local` that still holds
+    // leftover OIDC ciphertext used to throw here after a key rotation, which
+    // the plugin's boot guard degraded to `mode=disabled` — an anonymous-ADMIN
+    // open API for a deployment that was explicitly configured closed.
+    const row = await prisma.authConfig.create({
+      data: {
+        id: 'singleton',
+        mode: 'local',
+        clientSecretEnc: encrypt('old-client-secret', KEY),
+        signingSecretEnc: encrypt('old-signing-secret', KEY),
+      },
+    });
+    const svc = new AuthConfigService(prisma, WRONG_KEY);
+
+    const cfg = svc.toEffective(row);
+
+    expect(cfg.mode).toBe('local');
+    expect(cfg.clientSecret).toBeNull();
+    expect(cfg.signingSecret).toBeNull();
+  });
+
+  it('returns null for both secrets on a LOCAL row when no key is configured at all (#241)', async () => {
+    const row = await prisma.authConfig.create({
+      data: { id: 'singleton', mode: 'local', signingSecretEnc: 'x.y.z' },
+    });
+    const svc = new AuthConfigService(prisma, null);
+
+    const cfg = svc.toEffective(row);
+
+    expect(cfg.mode).toBe('local');
+    expect(cfg.signingSecret).toBeNull();
+  });
+
+  it('STILL throws AuthSecretDecryptError for an oidc row whose client secret cannot be decrypted (#241 preserves the one real degrade)', async () => {
+    // oidc is the only mode that reads the encrypted columns, so it is the only
+    // mode a key failure can degrade. That degrade is deliberate and must not
+    // be weakened by the mode gating.
+    const row = await prisma.authConfig.create({
+      data: {
+        id: 'singleton',
+        mode: 'oidc',
+        clientSecretEnc: encrypt('old-client-secret', KEY),
+        signingSecretEnc: encrypt('old-signing-secret', KEY),
+      },
+    });
+    const svc = new AuthConfigService(prisma, WRONG_KEY);
+
+    expect(() => svc.toEffective(row)).toThrow(AuthSecretDecryptError);
   });
 });
 
