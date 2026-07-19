@@ -18,6 +18,14 @@ describe('SERVICE_ERROR_CODES', () => {
     expect(SERVICE_ERROR_CODES).toContain('CONNECTION_DISABLED');
   });
 
+  it('carries OIDC_MODE_REQUIRED (signing-secret rotation refused outside oidc mode)', () => {
+    // The login-state signing secret only signs OIDC login-state cookies, and
+    // saving a non-oidc mode clears both secret columns (#241). Rotating one
+    // onto a `disabled`/`local` row would store a secret nothing reads, so the
+    // route refuses with its own code rather than a generic 422.
+    expect(SERVICE_ERROR_CODES).toContain('OIDC_MODE_REQUIRED');
+  });
+
   it('contains no duplicate codes', () => {
     // TS will never catch this. The array is `as const` and NOT sorted, so a
     // second copy of an existing literal is legal TypeScript that the derived

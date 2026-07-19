@@ -77,6 +77,30 @@ describe('<AuthenticationForm>', () => {
     expect(screen.getByText(/connected/i)).toBeInTheDocument();
   });
 
+  it('shows a bare "Client secret" input instead of "configured" + Replace when a non-oidc mode reports clientSecretSet false (#241)', async () => {
+    // Saving a non-oidc mode now CLEARS the stored client secret server-side,
+    // so a stored `local` (or `disabled`) config reports clientSecretSet:
+    // false. Losing the "•••••••• configured" + Replace affordance is the
+    // intended signal that re-enabling OIDC needs the secret typed again — the
+    // server refuses the switch with 422 INCOMPLETE_OIDC_CONFIG otherwise.
+    vi.mocked(api.settings.auth.get).mockResolvedValue({
+      ...baseConfig,
+      mode: 'local',
+      issuerUrl: 'https://idp.example.com',
+      clientId: 'client-123',
+      appBaseUrl: 'https://app.example.com',
+      clientSecretSet: false,
+    });
+    renderWithClient(<AuthenticationForm />);
+
+    const secretInput = await screen.findByLabelText(/client secret/i);
+    // The "not yet set" placeholder, not the "Enter new client secret" one
+    // shown while replacing a stored secret.
+    expect(secretInput).toHaveAttribute('placeholder', 'Client secret');
+    expect(screen.queryByText(/configured/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /replace/i })).not.toBeInTheDocument();
+  });
+
   it('leaves clientSecret unchanged (omitted) when the secret field is left blank on save', async () => {
     vi.mocked(api.settings.auth.get).mockResolvedValue({
       ...baseConfig,
