@@ -119,6 +119,82 @@ describe('baseline history — append semantics', () => {
     expect(history[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-05-01');
   });
 
+  it('a mid-month CREATE snaps in the response too, not only in the row', async () => {
+    // `ClusterResponse.baselineDate` is documented as ALWAYS first-of-month, and
+    // it is derived straight from `captured_at` — so the row assertion above and
+    // this one pin the same `startOfUtcMonth` from the two ends that matter. The
+    // response half is what baseline-edit-form.tsx resets its date input from, and
+    // what a consumer slicing `YYYY-MM` off it reads.
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name: uniqueName('snap-create-echo'),
+        baselineDate: '2026-05-15',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json() as { id: string; baselineDate: string };
+    expect(body.baselineDate).toBe('2026-05-01');
+
+    const history = await prisma.clusterBaselineHistory.findMany({ where: { clusterId: body.id } });
+    expect(history[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-05-01');
+  });
+
+  it('a mid-month RE-DATE snaps the moved row to the first of the month', async () => {
+    // The update path's own `startOfUtcMonth`, which the create tests cannot
+    // reach. A date-only edit MOVES the metric's newest row onto the submitted
+    // period; unsnapped, that row lands at 2026-06-15 and becomes the one anchor
+    // in the table the period unique key — the monthly idempotency guarantee —
+    // cannot deduplicate against next month's snapshot at 2026-06-01.
+    const id = await createCluster(uniqueName('snap-redate'), '2026-05-01', 100, 1000);
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${id}`,
+      payload: { baselineDate: '2026-06-15' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { baselineDate: string }).baselineDate).toBe('2026-06-01');
+
+    const history = await prisma.clusterBaselineHistory.findMany({ where: { clusterId: id } });
+    expect(history).toHaveLength(1);
+    expect(history[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-06-01');
+  });
+
+  it('a mid-month combined edit snaps the row the values are written to', async () => {
+    // The other update write site. A forward-dated combined edit APPENDS at the
+    // target rather than moving anything, so `capturedAt` reaches the table
+    // through the upsert key instead of through the re-anchor — a separate
+    // statement, and one a snap applied at only one of the two would leave open.
+    const id = await createCluster(uniqueName('snap-combined'), '2026-05-01', 100, 1000);
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${id}`,
+      payload: {
+        baselineDate: '2026-06-15',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 200, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const history = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(history.map((h) => h.capturedAt.toISOString().slice(0, 10))).toEqual([
+      '2026-05-01',
+      '2026-06-01',
+    ]);
+    expect(history[1]?.baselineConsumption.toNumber()).toBe(200);
+  });
+
   it('the DATABASE rejects two baselines for the same cluster/metric/period', async () => {
     const id = await createCluster(uniqueName('unique'), '2026-05-01');
     const existing = await prisma.clusterBaselineHistory.findFirstOrThrow({
@@ -319,11 +395,19 @@ describe('baseline history — the derived cluster baselineDate', () => {
 });
 
 describe('baseline history — history is the only source of ClusterResponse.metrics', () => {
-  it('every metric served by the API is backed by a history row', async () => {
+  it('serves every metric from that metric’s NEWEST history row', async () => {
     // Replaces the #177 orphan invariant (every `cluster_metric_baselines` row
     // has a history row), which the contract migration makes vacuous by deleting
     // the table. Restated from the other end: nothing may reach a client that the
     // append-only history cannot account for.
+    //
+    // Asserting merely that SOME history row exists per served metric would be
+    // unfalsifiable — `toResponse` maps over exactly the rows `loadNewestBaselines`
+    // returned, so a wrong row is still a row, and a `_min`/`_max` flip, a dropped
+    // `orderBy` or a period attached to the wrong row would all pass. The bite is
+    // in WHICH row, so the served numbers are compared against the newest one
+    // re-derived here; `multiMetricCluster` holds memory at both March (100) and
+    // August (800), which is what makes the two answers differ.
     await createCluster(uniqueName('inv-a'), '2026-05-01');
     await createCluster(uniqueName('inv-b'), '2026-06-01');
     await multiMetricCluster();
@@ -331,16 +415,26 @@ describe('baseline history — history is the only source of ClusterResponse.met
     const res = await server.inject({ method: 'GET', url: '/api/clusters?limit=100' });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      items: Array<{ id: string; metrics: Array<{ metricTypeKey: string }> }>;
+      items: Array<{
+        id: string;
+        metrics: Array<{
+          metricTypeKey: string;
+          baselineConsumption: number;
+          baselineCapacity: number;
+        }>;
+      }>;
     };
 
     let checked = 0;
     for (const cluster of body.items) {
       for (const metric of cluster.metrics) {
-        const row = await prisma.clusterBaselineHistory.findFirst({
+        const newest = await prisma.clusterBaselineHistory.findFirst({
           where: { clusterId: cluster.id, metricType: { key: metric.metricTypeKey } },
+          orderBy: { capturedAt: 'desc' },
         });
-        expect(row).not.toBeNull();
+        expect(newest).not.toBeNull();
+        expect(metric.baselineConsumption).toBe(newest?.baselineConsumption.toNumber());
+        expect(metric.baselineCapacity).toBe(newest?.baselineCapacity.toNumber());
         checked += 1;
       }
     }
