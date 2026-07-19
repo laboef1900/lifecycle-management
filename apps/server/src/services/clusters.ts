@@ -218,6 +218,20 @@ export class ClustersService {
     // inventory and a non-zero baseline double-counts the fleet.
     if (input.baselines) {
       assertSyncedBaselineCapacityZero(existing.source, id, input.baselines);
+
+      // Same refusal as create(). Two entries for one metric resolve to the SAME
+      // (cluster, metric, period) upsert key, so the second silently overwrites the
+      // first and a number the operator supplied is dropped with a 200 OK. Postgres
+      // cannot catch this one — sequential upserts inside a transaction never
+      // breach the period index — so it has to be refused before the write.
+      const duplicated = duplicateMetricKeys(input.baselines);
+      if (duplicated.length > 0) {
+        throw new UnprocessableError(
+          'BASELINE_PERIOD_OCCUPIED',
+          `This request records ${duplicated.join(', ')} more than once. ` +
+            'A cluster holds one baseline per metric per period.',
+        );
+      }
     }
 
     const data: Prisma.ClusterUpdateInput = {};

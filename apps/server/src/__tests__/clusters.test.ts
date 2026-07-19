@@ -1407,4 +1407,42 @@ describe('PUT /api/clusters/:id — a combined date + values edit', () => {
     // its date input from this field onto a month the operator never typed.
     expect(clusterResponseSchema.parse(res.json()).baselineDate).toBe('2026-05-01');
   });
+
+  it('refuses a metric listed twice instead of silently dropping one of the values', async () => {
+    // The create-side twin of this lives above. Here Postgres cannot be the
+    // backstop: the two entries resolve to the SAME (cluster, metric, period)
+    // upsert key, and sequential upserts inside one transaction never breach the
+    // period index — the second simply overwrites the first. So without a
+    // pre-write refusal the operator submits two numbers, gets 200 OK, and one of
+    // them is gone with nothing to indicate which.
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('dup-metric-update'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+          { metricTypeKey: 'memory_gb', baselineConsumption: 200, baselineCapacity: 2000 },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('BASELINE_PERIOD_OCCUPIED');
+    expect(body.error.message).toContain('memory_gb');
+
+    // The refusal ran before the write, so the stored baseline is untouched —
+    // neither submitted value was applied.
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+    });
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100]);
+  });
 });
