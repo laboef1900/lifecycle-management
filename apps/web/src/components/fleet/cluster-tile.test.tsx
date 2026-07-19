@@ -321,7 +321,11 @@ describe('<ClusterTile>', () => {
         thresholds={{ warn: 0.7, crit: 0.9 }}
       />,
     );
-    expect(screen.getByText('Archived')).toBeInTheDocument();
+    const archivedBadge = screen.getByText('Archived');
+    expect(archivedBadge).toBeInTheDocument();
+    // Icon + text on the badge (#243, WCAG 1.4.1): the tile's dimming is
+    // never the only archived signal.
+    expect(archivedBadge.querySelector('svg')).not.toBeNull();
     expect(screen.getByLabelText('archived — no forecast')).toHaveTextContent('—');
     const link = screen.getByRole('link');
     expect(link).not.toHaveTextContent('0+');

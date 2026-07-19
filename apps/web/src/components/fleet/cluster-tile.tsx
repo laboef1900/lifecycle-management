@@ -1,6 +1,7 @@
 import type { ForecastResponse, LiveUsage } from '@lcm/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
+import { Archive } from 'lucide-react';
 import { memo } from 'react';
 
 import { Badge } from '@/components/ui/badge';
@@ -295,7 +296,13 @@ export const ClusterTile = memo(function ClusterTile({
         <Badge variant={badge.variant} dot>
           {badge.label}
         </Badge>
-        {cluster.archivedAt ? <Badge variant="outline">Archived</Badge> : null}
+        {/* Icon + text, never the tile's dimming alone (#243, WCAG 1.4.1). */}
+        {cluster.archivedAt ? (
+          <Badge variant="outline">
+            <Archive className="h-3 w-3" aria-hidden />
+            Archived
+          </Badge>
+        ) : null}
         {!isArchived ? <SyncStateBadge cluster={cluster} /> : null}
       </div>
 

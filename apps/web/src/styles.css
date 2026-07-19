@@ -62,6 +62,13 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.025);
   --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.05);
   --overlay-shadow: 0 2px 4px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.1);
+  /* Glass tokens (#243): the scenario controls card is the ONE sanctioned
+     glass surface (CLAUDE.md house-style amendment). Derived from the slate
+     surface tokens; the fallback is near-opaque so the no-backdrop-filter and
+     prefers-reduced-transparency paths pass AA on their own. */
+  --glass-fill: rgba(255, 255, 255, 0.7);
+  --glass-border: color-mix(in srgb, var(--border-strong) 80%, transparent);
+  --glass-fallback: rgba(255, 255, 255, 0.94);
   /* Surface gradients (spec §3). The dark theme is the mockup's richer,
      gradient-lit chassis; the light sibling has no gradient recipe in the
      spec, so it stays flat (solid --background / --card) here and is
@@ -141,6 +148,11 @@ html.dark {
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.2);
   --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.3);
   --overlay-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.45);
+  /* Dark glass (#243): fill/fallback are --card (#151b2c) with alpha; the
+     border is a light hairline so the card keeps a lit edge on dark charts. */
+  --glass-fill: rgba(21, 27, 44, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-fallback: rgba(21, 27, 44, 0.94);
   --surface-backdrop: radial-gradient(
     1200px 500px at 50% -220px,
     #141b31 0%,
@@ -166,6 +178,23 @@ html.dark {
 }
 
 @theme {
+  /* Breakpoints pinned to their px defaults (#243 review). Tailwind v4's
+     defaults are rem-based (--breakpoint-lg: 64rem …), and rem in a media
+     query resolves against the user's BROWSER default font size — while the
+     app's JS layout queries (PANE_SIDE_BY_SIDE_QUERY '(min-width: 1024px)'
+     and isWide '(min-width: 640px)' in cluster-panel.tsx) and the
+     .scenario-card AA fallback below are fixed px. At e.g. a 20px browser
+     font, `lg:` would fire at 1280px, opening a 1024–1280px band where JS
+     declared the scenario pane side-by-side (content column NOT inert) while
+     CSS still rendered the sheet layout — a near-viewport-wide glass card
+     over live, tabbable content. Pinning every breakpoint keeps utilities
+     and matchMedia in lockstep at any font size; new JS media queries MUST
+     use the same px values. */
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -290,4 +319,61 @@ body {
    Narrow this and the sheet would leave part of an inert column on screen. */
 .cluster-panel {
   width: 100vw;
+}
+
+/* Scenario controls card (#243): the single sanctioned glass surface (house
+   style permits exactly one designated glass surface per view — this one).
+   The base declaration is the near-opaque fallback and must pass AA on its
+   own: it serves browsers without backdrop-filter AND
+   prefers-reduced-transparency users (the media query is not Baseline — no
+   Firefox support — so the default can never rely on it firing). The
+   @supports block layers the real glass on top. Never animate the blur
+   radius; the card's motion wrapper animates transform/opacity only. */
+.scenario-card {
+  background: var(--glass-fallback);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-modal);
+  /* Themed lift (--overlay-shadow) + an inset lit top edge. Deviation from
+     the #243 recipe's fixed rgb(0 0 0 / .35) shadow, recorded there: the
+     fixed value out-shadowed every other light-theme overlay. */
+  box-shadow:
+    var(--overlay-shadow),
+    inset 0 1px 0 rgb(255 255 255 / 0.08);
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .scenario-card {
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    backdrop-filter: blur(14px) saturate(160%);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .scenario-card {
+    background: var(--glass-fallback);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* Light theme below `lg` only: the card sits on the sheet's black/40 scrim,
+   and the 70% white fill composited over scrim-dimmed light content lands
+   around #e0e0e0 — where the card's 10px `--fg-subtle` labels measure ~3.7:1,
+   under the 4.5:1 AA floor that token was explicitly re-tuned to meet. Per
+   the #243 rule ("fix by raising tint alpha, never by more blur"), the sheet
+   body uses the near-opaque fallback there (4.68:1). Dark theme passes under
+   its scrim (≈5:1+) and light at `lg`+ has no scrim (≈4.8:1), so both keep
+   full glass. The 1024px breakpoint MUST stay in lockstep with
+   PANE_SIDE_BY_SIDE_QUERY / the `lg:` utilities in cluster-panel.tsx —
+   guaranteed since the @theme block pins --breakpoint-lg to the same literal
+   1024px. */
+@media (max-width: 1023.98px) {
+  html:not(.dark) .scenario-card {
+    background: var(--glass-fallback);
+    /* Match the prefers-reduced-transparency rule above: with a 94%-opaque
+       fill there is no reason to keep a 14px blur compositing underneath. */
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }

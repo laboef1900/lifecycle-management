@@ -67,7 +67,7 @@ test('create cluster, add host + application, chart reflects updates', async ({
     // (also role=dialog, portalled to document.body) never collides.
     const panel = page.locator('.cluster-panel');
     await expect(panel).toHaveAttribute('role', 'dialog');
-    await expect(panel.getByRole('heading', { name: clusterName, level: 2 })).toBeVisible();
+    await expect(panel.getByRole('heading', { name: clusterName, level: 1 })).toBeVisible();
 
     // KPI strip below the header — 4 tiles (utilization, headroom, runway, order-by).
     // Scope to the strip; "Headroom" also appears in the forecast-chart legend.
