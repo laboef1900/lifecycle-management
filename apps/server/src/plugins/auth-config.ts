@@ -243,11 +243,22 @@ const authConfigPluginFn: FastifyPluginAsync<AuthConfigPluginOptions> = async (
     // modes actually read secrets. `disabled` stays exempt either way (#136 F1).
     const storedRow = await fastify.prisma.authConfig.findUnique({ where: { id: SINGLETON_ID } });
     // Opt-in strict boot: refuse to start rather than silently degrade a
-    // configured (oidc OR local) deployment to an open mode=disabled API.
+    // configured deployment to an open mode=disabled API.
     // RECOVERY_DISABLE_AUTH still wins as the deliberate break-glass override.
     // Throw BEFORE anything is written so the stored configured row is left
     // untouched for recovery. Raised outside the guarded load() (in the catch),
     // so it propagates and aborts boot.
+    //
+    // "Configured" stays the STRUCTURAL test `!== 'disabled'` — deliberately
+    // not narrowed to `=== 'oidc'` (see the @ai-warning above). It asks "would
+    // degrading widen access?", which is the property an enumeration of modes
+    // got wrong in #222. #241 narrowed only its REACHABILITY, not the
+    // predicate: a stored `local` row no longer decrypts anything, so it can no
+    // longer raise AuthSecretDecryptError and can no longer arrive here at all,
+    // leaving `oidc` as the only mode that reaches this guard in practice. The
+    // `local` arm is now unreachable-but-correct, and is kept so that a future
+    // mode which does store decryptable secrets is covered by construction
+    // rather than by someone remembering to widen the guard.
     if (
       storedRow !== null &&
       normalizeStoredMode(storedRow.mode) !== 'disabled' &&
