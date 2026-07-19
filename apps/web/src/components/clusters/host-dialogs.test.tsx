@@ -94,6 +94,33 @@ describe('<CreateHostDialog> validation', () => {
   });
 });
 
+describe('<CreateHostDialog> required-field markers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(api.hosts, 'create').mockResolvedValue(makeHost());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('marks Name, Commissioned at, and Initial memory capacity as required', () => {
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <CreateHostDialog open onOpenChange={vi.fn()} clusterId="cl-1" />
+      </QueryClientProvider>,
+    );
+
+    for (const name of ['Name', 'Commissioned at', 'Initial memory capacity (GB)']) {
+      const field = screen.getByLabelText(name);
+      expect(field).toHaveAttribute('required');
+      expect(field).toHaveAttribute('aria-required', 'true');
+    }
+    // Description is genuinely optional — it must not pick up the marker.
+    expect(screen.getByLabelText('Description')).not.toHaveAttribute('required');
+  });
+});
+
 describe('<EditHostDialog> validation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -127,6 +154,22 @@ describe('<EditHostDialog> validation', () => {
     expect(await screen.findByText(/too small/i)).toBeInTheDocument();
     expect(toast.error).not.toHaveBeenCalled();
     expect(api.hosts.update).not.toHaveBeenCalled();
+  });
+
+  it('moves focus to the Name field on a failed submit', async () => {
+    const user = userEvent.setup();
+    renderEditDialog();
+
+    const nameInput = screen.getByRole('textbox', { name: 'Name' });
+    nameInput.removeAttribute('required');
+    await user.clear(nameInput);
+    // Move focus off the field the way a real submit click would — otherwise
+    // the assertion below would pass even if the effect never ran.
+    screen.getByRole('button', { name: 'Save' }).focus();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(nameInput).toHaveFocus());
   });
 
   it('falls back to a toast when no schema issue maps to a form field', async () => {
