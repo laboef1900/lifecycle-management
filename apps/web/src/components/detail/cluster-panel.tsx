@@ -663,20 +663,22 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                 isPending={liveUsageQuery.isPending}
               />
 
-              <div className="flex items-center justify-between gap-3">
-                <div className="space-y-1">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Forecast
-                  </p>
-                  {/* h2: the h1 is the cluster name (#243), and this section
-                      heading is a structural sibling of the tab panels' h2s —
-                      h3 here skipped a level in the exposed outline. */}
-                  <h2 className="text-base font-semibold">
-                    {activeForecast
-                      ? forecastHeading(activeForecast.procurement, activeCapacityKnown)
-                      : 'Capacity forecast'}
-                  </h2>
-                </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                {/* h2: the h1 is the cluster name (#243), and this section
+                    heading is a structural sibling of the tab panels' h2s —
+                    h3 here skipped a level in the exposed outline. No eyebrow
+                    above it (#243 Part B item 8): the heading already names
+                    the section, and the eyebrow was a one-off text style with
+                    no sibling to align to. `flex-wrap` (#243 Part B item 6):
+                    below 390px there isn't room for the heading text plus
+                    WindowControls on one row, so the control drops to its own
+                    line instead of being compressed into internally-wrapping
+                    segment labels. */}
+                <h2 className="text-base font-semibold">
+                  {activeForecast
+                    ? forecastHeading(activeForecast.procurement, activeCapacityKnown)
+                    : 'Capacity forecast'}
+                </h2>
                 <WindowControls value={windowSelection} onChange={setWindowSelection} />
               </div>
 

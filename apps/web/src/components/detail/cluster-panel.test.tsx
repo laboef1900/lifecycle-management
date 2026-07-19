@@ -403,6 +403,28 @@ describe('<ClusterPanel>', () => {
     expect(description).toHaveClass('line-clamp-1');
   });
 
+  it('drops the one-off "FORECAST" eyebrow above the forecast heading (#243 Part B item 8)', async () => {
+    render(<Harness show />);
+    const heading = await screen.findByRole('heading', { name: /no breach in window/i });
+
+    // The eyebrow's DOM text was "Forecast" (an `uppercase` CSS class made it
+    // *read* as "FORECAST" — the text node itself is title-case, so this must
+    // assert on the actual node text, not the rendered casing). The heading
+    // itself always starts with "Forecast — …", never the bare word, so an
+    // exact match only ever catches a surviving standalone eyebrow.
+    expect(screen.queryByText('Forecast', { exact: true })).toBeNull();
+    expect(heading.tagName).toBe('H2');
+  });
+
+  it('lets the Forecast heading row wrap so WindowControls drops to its own line at narrow widths (#243 Part B item 6)', async () => {
+    render(<Harness show />);
+    const heading = await screen.findByRole('heading', { name: /no breach in window/i });
+
+    const headingRow = heading.closest('div');
+    expect(headingRow).toHaveClass('flex-wrap');
+    expect(headingRow).toContainElement(screen.getByRole('group', { name: 'Forecast window' }));
+  });
+
   it('restores focus to the previously-focused element after the panel closes', async () => {
     const { rerender } = render(<Harness show={false} />);
     const trigger = screen.getByRole('button', { name: 'Open trigger' });
