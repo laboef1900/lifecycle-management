@@ -79,7 +79,54 @@ export interface MakeClusterOptions {
     baselineConsumption?: number;
     baselineCapacity?: number;
     source?: 'manual' | 'vsphere';
+    /** See {@link MakeClusterOptions.observedAt} — same rule, per extra row. */
+    observedAt?: Date | null;
   }[];
+  /**
+   * Provenance of the PRIMARY baseline-history row (the one the options above
+   * produce). Distinct from `source`, which is the CLUSTER's provenance: a synced
+   * cluster imported before its first snapshot has `source: 'vsphere'` and no
+   * vSphere baseline row at all. Defaults to `manual`.
+   */
+  baselineSource?: 'manual' | 'vsphere';
+  /**
+   * The instant the measurement was actually taken — `ClusterBaselineHistory.
+   * observedAt`, which forecast absorption keys off (`absorbsDeltas` in
+   * forecast.ts). Omitted, it is DERIVED, not left null:
+   *
+   *   - a `vsphere` row gets its own `capturedAt`, because that is the only state
+   *     production can produce. `VsphereSnapshotService` writes both columns from
+   *     one `measuredAt` (`capturedAt: startOfUtcMonth(measuredAt)`,
+   *     `observedAt: measuredAt`), so snapping `observedAt` always yields
+   *     `capturedAt`. A `vsphere` row with `observedAt: null` is an UNREACHABLE
+   *     state, and a fixture in it silently exercises the null guard instead of
+   *     the boundary the test means to test — which is how the regression corpus
+   *     for defects 1-6 ended up on the replaced code path.
+   *   - a `manual` row gets `null`. Manual baselines are never measured, and the
+   *     source gate in `absorbed` returns before the column is read anyway.
+   *
+   * Pass it explicitly (including `null`) only to fabricate a state deliberately:
+   * a mid-month instant where the SNAP is what a test is pinning, or `null` on a
+   * `vsphere` row to exercise the broken-invariant fail-safe.
+   */
+  observedAt?: Date | null;
+}
+
+/**
+ * The `observedAt` a baseline-history row would really carry. See
+ * {@link MakeClusterOptions.observedAt} for why a `vsphere` row defaults to its
+ * own `capturedAt` rather than to null.
+ *
+ * `undefined` means "not specified" and derives; an explicit `null` is honoured,
+ * so a test can still fabricate the broken-invariant row on purpose.
+ */
+function resolveObservedAt(
+  explicit: Date | null | undefined,
+  source: 'manual' | 'vsphere',
+  capturedAt: Date,
+): Date | null {
+  if (explicit !== undefined) return explicit;
+  return source === 'vsphere' ? capturedAt : null;
 }
 
 export async function makeCluster(
@@ -92,15 +139,23 @@ export async function makeCluster(
   const name = options.name ?? `cluster-${nextSuffix()}`;
 
   const extraBaselines = await Promise.all(
-    (options.extraBaselines ?? []).map(async (extra) => ({
-      tenantId,
-      metricTypeId: await resolveMetricId(prisma, extra.metricKey),
-      capturedAt: startOfUtcMonth(extra.capturedAt),
-      source: extra.source ?? 'manual',
-      baselineConsumption: new Prisma.Decimal(extra.baselineConsumption ?? 0),
-      baselineCapacity: new Prisma.Decimal(extra.baselineCapacity ?? 0),
-    })),
+    (options.extraBaselines ?? []).map(async (extra) => {
+      const capturedAt = startOfUtcMonth(extra.capturedAt);
+      const source = extra.source ?? 'manual';
+      return {
+        tenantId,
+        metricTypeId: await resolveMetricId(prisma, extra.metricKey),
+        capturedAt,
+        source,
+        observedAt: resolveObservedAt(extra.observedAt, source, capturedAt),
+        baselineConsumption: new Prisma.Decimal(extra.baselineConsumption ?? 0),
+        baselineCapacity: new Prisma.Decimal(extra.baselineCapacity ?? 0),
+      };
+    }),
   );
+
+  const primaryCapturedAt = startOfUtcMonth(options.baselineDate ?? DEFAULT_BASELINE_DATE);
+  const primarySource = options.baselineSource ?? 'manual';
 
   const cluster = await prisma.cluster.create({
     data: {
@@ -121,8 +176,9 @@ export async function makeCluster(
           {
             tenantId,
             metricTypeId,
-            capturedAt: startOfUtcMonth(options.baselineDate ?? DEFAULT_BASELINE_DATE),
-            source: 'manual',
+            capturedAt: primaryCapturedAt,
+            source: primarySource,
+            observedAt: resolveObservedAt(options.observedAt, primarySource, primaryCapturedAt),
             baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
             baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
           },

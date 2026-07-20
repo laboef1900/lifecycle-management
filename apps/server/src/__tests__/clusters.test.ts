@@ -666,6 +666,8 @@ describe('ClusterResponse.metrics is derived from baseline history', () => {
             metricTypeId: metric.id,
             capturedAt: new Date(Date.UTC(2026, 4, 1)),
             source: 'vsphere',
+            // The real polling instant the period label was snapped FROM.
+            observedAt: new Date(Date.UTC(2026, 4, 14, 11, 30)),
             baselineConsumption: 4000,
             // VsphereSnapshotService writes 0 deliberately: capacity comes from
             // the synced host inventory, so a non-zero baseline double-counts it.
@@ -744,6 +746,8 @@ describe('ClusterResponse.metrics is derived from baseline history', () => {
             metricTypeId: metric.id,
             capturedAt: new Date(Date.UTC(2026, 4, 1)),
             source: 'vsphere',
+            // The real polling instant the period label was snapped FROM.
+            observedAt: new Date(Date.UTC(2026, 4, 14, 11, 30)),
             baselineConsumption: 4000,
             baselineCapacity: 8192,
           },
@@ -1093,21 +1097,25 @@ describe('PUT /api/clusters/:id — a date-only edit re-anchors baseline history
  * honest to do — the metric's newest row is at a period later than the one the
  * operator says it was captured in, and appending is impossible, so it is
  * re-dated. FORWARDS there is nothing: no value to append, and re-dating drags a
- * measurement onto a month nobody measured. Three consequences follow from the
- * move, all silent and all pointing the same way — towards deferring hardware
+ * measurement onto a month nobody measured. Two consequences follow from the
+ * move, both silent and both pointing the same way — towards deferring hardware
  * that is actually needed:
  *
- *   1. The move writes `capturedAt` only, so `source: 'vsphere'` survives, and
- *      forecast.ts `absorbed` treats everything dated at or before the new
- *      anchor as already inside the measurement. Deltas that started AFTER the
- *      capture are erased from the forecast.
- *   2. The moved row occupies the current period, and VsphereSnapshotService
+ *   1. The moved row occupies the current period, and VsphereSnapshotService
  *      writes with `skipDuplicates` — so the month's real vCenter measurement is
  *      dropped and last month's number is recorded as this month's.
- *   3. On a multi-metric cluster the snapshot job writes memory_gb only, so a
+ *   2. On a multi-metric cluster the snapshot job writes memory_gb only, so a
  *      second metric lags by design. Dragging its untouched row forward destroys
  *      the period it was actually measured in and flips the cluster from stale
  *      to fresh without measuring anything.
+ *
+ * A THIRD consequence headed this list until the absorption boundary moved off
+ * `capturedAt`: "the move writes `capturedAt` only, so `source: 'vsphere'`
+ * survives, and `absorbed` treats everything dated at or before the new anchor as
+ * already inside the measurement — deltas that started AFTER the capture are
+ * erased from the forecast." `absorbed` now keys off `observedAt`, which no edit
+ * path writes, so a forward move cannot widen absorption by a single day. It is
+ * recorded here rather than deleted because the test below is still named for it.
  *
  * So it is REFUSED, per request, rather than silently no-opped: a no-op returns
  * 200 with a response echoing neither the submitted date nor anything else, and
@@ -1222,7 +1230,7 @@ describe('PUT /api/clusters/:id — a FORWARD date-only edit is refused, not fab
     expect(after.name).toBe(original);
   });
 
-  it('never silently drops a synced cluster’s forecast consumption (consequence 1)', async () => {
+  it('never silently drops a synced cluster’s forecast consumption (the retired consequence 1)', async () => {
     // The traced regression, end to end. The cluster is vSphere-sourced and its
     // April measurement is 1000; a growth event lands in May, AFTER the capture,
     // so it is correctly outside the measurement and the forecast reads 1500.
@@ -1231,6 +1239,13 @@ describe('PUT /api/clusters/:id — a FORWARD date-only edit is refused, not fab
     // `source: 'vsphere'` intact, `absorbed` swallowed the May event, and
     // currentConsumption silently fell back to 1000 — 500 GB of real, growing
     // consumption erased from the number that decides when hardware is bought.
+    //
+    // That mechanism is now DEAD TWICE OVER, and the test is kept for the outer
+    // half. `absorbed` keys off `observedAt` (mid-April here, untouched by any
+    // edit), so even if the forward move landed, the May event would still be
+    // counted and consumption would still read 1500. What this test now pins is
+    // the refusal itself and the no-write guarantee — NOT the absorption
+    // mechanism its name refers to. See the block docstring above.
     const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
     const cluster = await prisma.cluster.create({
       data: {
@@ -1243,6 +1258,8 @@ describe('PUT /api/clusters/:id — a FORWARD date-only edit is refused, not fab
             metricTypeId: metric.id,
             capturedAt: new Date(Date.UTC(2026, 3, 1)), // April
             source: 'vsphere',
+            // The real polling instant the period label was snapped FROM.
+            observedAt: new Date(Date.UTC(2026, 3, 14, 11, 30)),
             baselineConsumption: 1000,
             baselineCapacity: 5000,
           },
@@ -1310,6 +1327,8 @@ describe('PUT /api/clusters/:id — a re-dated row keeps its provenance', () => 
             metricTypeId: metric.id,
             capturedAt: new Date(Date.UTC(2026, 5, 1)), // June
             source: 'vsphere',
+            // The real polling instant the period label was snapped FROM.
+            observedAt: new Date(Date.UTC(2026, 5, 14, 11, 30)),
             baselineConsumption: 1000,
             baselineCapacity: 5000,
           },
@@ -1342,13 +1361,22 @@ describe('PUT /api/clusters/:id — a re-dated row keeps its provenance', () => 
     // provenance vCenter earned. Two separate facts about one row.
     expect(rows[0]?.source).toBe('vsphere');
 
-    // ...and the forecast follows the DATE, which is what moved: May is now after
-    // the anchor, so its event is no longer inside the measurement and is counted.
-    // The number errs high, never low.
+    // ...and the forecast does NOT follow the date. `absorbed` keys off
+    // `observedAt` — the June polling instant, which the re-date did not touch —
+    // so May's event is still inside the measurement and is still not re-added.
+    //
+    // This assertion USED to read 1500, on the reasoning that "the forecast
+    // follows the DATE, which is what moved". That reasoning described the
+    // pre-fix boundary and is now false; re-labelling a June measurement as April
+    // does not un-measure May. Leaving the number where the measurement put it is
+    // also the only reading that is safe on BOTH deltas: re-adding a
+    // `consumptionDelta` errs high (safe) but re-adding a `capacityDelta` invents
+    // capacity and defers hardware (unsafe), and this rule cannot pick.
     const after = clusterResponseSchema.parse(
       (await server.inject({ method: 'GET', url: `/api/clusters/${cluster.id}` })).json(),
     );
-    expect(after.metrics[0]?.currentConsumption).toBe(1500);
+    expect(after.metrics[0]?.currentConsumption).toBe(1000);
+    expect(after.metrics[0]?.currentConsumption).toBe(before.metrics[0]?.currentConsumption);
     expect(after.metrics[0]?.baselineConsumption).toBe(1000); // re-dated, never re-measured
   });
 
@@ -1375,6 +1403,8 @@ describe('PUT /api/clusters/:id — a re-dated row keeps its provenance', () => 
             metricTypeId: metric.id,
             capturedAt: new Date(Date.UTC(2026, 5, 1)), // June
             source: 'vsphere',
+            // The real polling instant the period label was snapped FROM.
+            observedAt: new Date(Date.UTC(2026, 5, 14, 11, 30)),
             baselineConsumption: 1000,
             // Zero by the Q9a invariant: on a synced cluster the hosts ARE the
             // capacity, so the scalar must not double-count them.
@@ -1523,20 +1553,38 @@ describe('PUT /api/clusters/:id — a re-date cannot move the absorption boundar
     // The theorem, asserted rather than argued: VsphereSnapshotService derives
     // `capturedAt` and `observedAt` from ONE `measuredAt`, so
     // `startOfUtcMonth(observedAt) === capturedAt` for every row no edit has
-    // touched. A row carrying that `observedAt` must therefore be
-    // indistinguishable from one carrying none — every manual row, and every row
-    // the expand migration backfilled with `observed_at` NULL.
+    // touched. The observedAt-keyed boundary must therefore land on exactly the
+    // numbers the capturedAt-keyed one produced: June absorbs May's +500.
     const withObserved = await read(
       await syncedClusterMeasuredInJune('noop-observed', new Date(Date.UTC(2026, 5, 17, 9, 22))),
     );
-    const withoutObserved = await read(await syncedClusterMeasuredInJune('noop-null', null));
-
-    expect(withObserved.metrics).toEqual(withoutObserved.metrics);
-    // Pinned concretely too, so a regression that broke BOTH sides equally still
-    // fails: May's +500 is inside the June measurement and is not re-added.
     expect(withObserved.metrics[0]?.currentCapacity).toBe(2000);
     expect(withObserved.metrics[0]?.currentConsumption).toBe(1000);
     expect(withObserved.metrics[0]?.utilization).toBe(0.5);
+  });
+
+  it('absorbs NOTHING on a vsphere row whose measured period is missing', async () => {
+    // The DELIBERATE fail-safe, and the one place this state is fabricated.
+    //
+    // An earlier revision of this test asserted the opposite — that a null
+    // `observedAt` is INDISTINGUISHABLE from the row above, because `absorbed`
+    // fell back to `baselineDate`. That fallback was removed: `baselineDate` is
+    // the operator-editable label this whole fix took the boundary OFF, so
+    // falling back to it silently reinstates the defect for any row whose
+    // `source='vsphere' => observed_at NOT NULL` invariant is broken. Nothing
+    // enforces that invariant — no CHECK constraint, and docs/operations.md's
+    // Guard-1 runbook has operators re-run the expand `INSERT ... SELECT` by hand.
+    //
+    // Unreachable in production today (VsphereSnapshotService always writes both
+    // columns), so this is a guard, not a code path — but a guard that has to err
+    // in the buy-earlier direction rather than trust an editable field.
+    const failSafe = await read(await syncedClusterMeasuredInJune('noop-null', null));
+
+    // May's +500 capacityDelta is COUNTED, not absorbed: 2000 + 500.
+    expect(failSafe.metrics[0]?.currentCapacity).toBe(2500);
+    expect(failSafe.metrics[0]?.utilization).toBe(0.4);
+    // Explicitly not the old `baselineDate` fallback, which read 2000 / 0.5.
+    expect(failSafe.metrics[0]?.currentCapacity).not.toBe(2000);
   });
 
   it('snaps observedAt to its month rather than comparing the raw polling instant', async () => {
@@ -2149,6 +2197,8 @@ describe('PUT /api/clusters/:id — a combined date + values edit', () => {
               metricTypeId: memory.id,
               capturedAt: new Date(Date.UTC(2026, 5, 1)), // memory at June, vSphere
               source: 'vsphere',
+              // The real polling instant the period label was snapped FROM.
+              observedAt: new Date(Date.UTC(2026, 5, 14, 11, 30)),
               baselineConsumption: 1000,
               baselineCapacity: 0, // Q9a: synced hosts carry the capacity
             },
@@ -2157,6 +2207,8 @@ describe('PUT /api/clusters/:id — a combined date + values edit', () => {
               metricTypeId: cpu.id,
               capturedAt: new Date(Date.UTC(2026, 0, 1)), // cpu at January, vSphere
               source: 'vsphere',
+              // The real polling instant the period label was snapped FROM.
+              observedAt: new Date(Date.UTC(2026, 0, 14, 11, 30)),
               baselineConsumption: 10,
               baselineCapacity: 0,
             },
@@ -2287,6 +2339,8 @@ describe('PUT /api/clusters/:id — a dateless value edit writes only what it co
               metricTypeId: memory.id,
               capturedAt: new Date(Date.UTC(2026, 5, 1)), // memory at June, vSphere
               source: 'vsphere',
+              // The real polling instant the period label was snapped FROM.
+              observedAt: new Date(Date.UTC(2026, 5, 14, 11, 30)),
               baselineConsumption: 1000,
               baselineCapacity: 0, // Q9a: synced hosts carry the capacity
             },
@@ -2295,6 +2349,8 @@ describe('PUT /api/clusters/:id — a dateless value edit writes only what it co
               metricTypeId: cpu.id,
               capturedAt: new Date(Date.UTC(2026, 0, 1)), // cpu at January, vSphere
               source: 'vsphere',
+              // The real polling instant the period label was snapped FROM.
+              observedAt: new Date(Date.UTC(2026, 0, 14, 11, 30)),
               baselineConsumption: 10,
               baselineCapacity: 0,
             },
@@ -2384,6 +2440,8 @@ describe('PUT /api/clusters/:id — a dateless value edit writes only what it co
             metricTypeId: memory.id,
             capturedAt: new Date(Date.UTC(2026, 5, 1)), // June, vSphere
             source: 'vsphere',
+            // The real polling instant the period label was snapped FROM.
+            observedAt: new Date(Date.UTC(2026, 5, 14, 11, 30)),
             baselineConsumption: 1000,
             baselineCapacity: 0,
           },

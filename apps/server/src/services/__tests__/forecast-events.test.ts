@@ -157,6 +157,24 @@ describe('computeForecast — delta absorption depends on the baseline source', 
     },
   ];
 
+  /**
+   * A synced baseline in the shape production can actually produce.
+   *
+   * `baselineSource: 'vsphere'` ALONE is not that shape. `VsphereSnapshotService`
+   * is the sole writer of both columns and derives them from one `measuredAt`, so
+   * every real `vsphere` row carries a measured period, and `baselineMeasuredAt`
+   * equals `baselineDate` on every row no edit has re-dated. A fixture omitting it
+   * describes a row whose `source='vsphere' => observed_at NOT NULL` invariant is
+   * broken, which `absorbed` fails safe on by absorbing NOTHING — so it would
+   * quietly exercise the null guard instead of the absorption rule these tests
+   * exist to pin. That guard has its own test at the end of this block.
+   */
+  const synced = (events: ForecastInput['events']): ForecastInput => ({
+    ...makeInput(events),
+    baselineSource: 'vsphere',
+    baselineMeasuredAt: new Date('2026-05-01T00:00:00Z'),
+  });
+
   it('manual baseline: a pre-baseline delta is ADDED (the baseline excludes tracked entities)', () => {
     const r = computeForecast(
       { ...makeInput(preBaselineEvent), baselineSource: 'manual' },
@@ -170,7 +188,7 @@ describe('computeForecast — delta absorption depends on the baseline source', 
 
   it('vsphere baseline: a pre-baseline delta is ABSORBED (the snapshot already measured it)', () => {
     const r = computeForecast(
-      { ...makeInput(preBaselineEvent), baselineSource: 'vsphere' },
+      synced(preBaselineEvent),
       new Date('2026-05-01T00:00:00Z'),
       new Date('2026-07-01T00:00:00Z'),
     );
@@ -182,12 +200,7 @@ describe('computeForecast — delta absorption depends on the baseline source', 
 
   it('vsphere baseline: a POST-baseline delta still applies — only absorption is filtered', () => {
     const r = computeForecast(
-      {
-        ...makeInput([
-          { ...preBaselineEvent[0]!, effectiveDate: new Date('2026-06-01T00:00:00Z') },
-        ]),
-        baselineSource: 'vsphere',
-      },
+      synced([{ ...preBaselineEvent[0]!, effectiveDate: new Date('2026-06-01T00:00:00Z') }]),
       new Date('2026-05-01T00:00:00Z'),
       new Date('2026-07-01T00:00:00Z'),
     );
@@ -204,22 +217,21 @@ describe('computeForecast — delta absorption depends on the baseline source', 
     expect(r.months.map((m) => m.consumption)).toEqual([1300, 1300, 1300]);
   });
 
+  const capacityBeforeBaseline: ForecastInput['events'] = [
+    {
+      id: 'e-cap',
+      effectiveDate: new Date('2026-03-01T00:00:00Z'),
+      category: 'hardware',
+      title: 'memory installed before the baseline',
+      description: null,
+      consumptionDelta: null,
+      capacityDelta: 2560,
+    },
+  ];
+
   it('vsphere baseline absorbs a capacityDelta too, not just consumption', () => {
     const r = computeForecast(
-      {
-        ...makeInput([
-          {
-            id: 'e-cap',
-            effectiveDate: new Date('2026-03-01T00:00:00Z'),
-            category: 'hardware',
-            title: 'memory installed before the baseline',
-            description: null,
-            consumptionDelta: null,
-            capacityDelta: 2560,
-          },
-        ]),
-        baselineSource: 'vsphere',
-      },
+      synced(capacityBeforeBaseline),
       new Date('2026-05-01T00:00:00Z'),
       new Date('2026-06-01T00:00:00Z'),
     );
@@ -227,5 +239,31 @@ describe('computeForecast — delta absorption depends on the baseline source', 
     // event's delta on top would invent 2560 GiB that does not exist — and
     // overstated capacity is what stops hardware being ordered.
     expect(r.months.map((m) => m.capacity)).toEqual([5000, 5000]);
+  });
+
+  it('a vsphere baseline with NO measured period absorbs NOTHING (fail-safe)', () => {
+    // The broken-invariant guard, pinned deliberately because nothing in the
+    // schema enforces `source='vsphere' => observed_at NOT NULL` — there is no
+    // CHECK constraint, and the Guard-1 runbook in docs/operations.md tells
+    // operators to re-run the expand `INSERT ... SELECT` by hand.
+    //
+    // The tempting reading is "fall back to `baselineDate`". That is exactly the
+    // operator-editable label `absorbed` was just taken OFF, so falling back
+    // reinstates the defect the moment the invariant breaks. Absorbing nothing
+    // instead counts the delta: capacity here reads 7560, not 5000. Overstated
+    // capacity would normally be the unsafe direction, but a real synced row
+    // carries `baselineCapacity: 0` by the Q9a invariant (the synced HOSTS are the
+    // capacity), so on the shape this branch can actually be reached in, the
+    // residual is a duplicated consumptionDelta — buy earlier, never later.
+    const r = computeForecast(
+      { ...makeInput(capacityBeforeBaseline), baselineSource: 'vsphere' },
+      new Date('2026-05-01T00:00:00Z'),
+      new Date('2026-06-01T00:00:00Z'),
+    );
+    expect(r.months.map((m) => m.capacity)).toEqual([7560, 7560]);
+
+    // And explicitly NOT the `baselineDate` fallback, which would have absorbed
+    // the March delta exactly as the sibling test above does.
+    expect(r.months.map((m) => m.capacity)).not.toEqual([5000, 5000]);
   });
 });
