@@ -68,4 +68,29 @@ describe('IdempotencyService', () => {
     // Allow a small window for test execution time.
     expect(Math.abs(row.expiresAt.getTime() - expectedExpiryMs)).toBeLessThan(5000);
   });
+
+  it('record falls back to the schema default (24h) and does not create a tenantSettings row when none exists', async () => {
+    const tenantId = `no-settings-${Date.now()}`;
+    await expect(prisma.tenantSettings.findUnique({ where: { tenantId } })).resolves.toBeNull();
+
+    const before = Date.now();
+    await service.record({
+      key: '55555555-5555-4555-8555-555555555555',
+      route: 'POST /items/bulk-shift-dates',
+      requestHash: 'hash-e',
+      status: 200,
+      body: {},
+      tenantId,
+    });
+
+    const row = await prisma.idempotencyKey.findUniqueOrThrow({
+      where: { key: '55555555-5555-4555-8555-555555555555' },
+    });
+    const expectedExpiryMs = before + 24 * 60 * 60 * 1000;
+    expect(Math.abs(row.expiresAt.getTime() - expectedExpiryMs)).toBeLessThan(5000);
+
+    // record() must be a pure read of tenant_settings, not an upsert: no row
+    // should have been created as a side effect.
+    await expect(prisma.tenantSettings.findUnique({ where: { tenantId } })).resolves.toBeNull();
+  });
 });

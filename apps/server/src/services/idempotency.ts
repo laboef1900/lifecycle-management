@@ -38,22 +38,25 @@ export class IdempotencyService {
   }
 
   /**
-   * Reads the tenant's configured `idempotencyKeyRetentionHours` (upserting a
-   * default row if none exists yet, mirroring `SettingsService.getTenant`'s
-   * own upsert-on-read pattern) and stores the record with `expiresAt`
-   * computed from that value at THIS moment — a later change to the setting
-   * does not retroactively shorten or extend an already-stored key's life.
+   * Reads the tenant's configured `idempotencyKeyRetentionHours` and stores
+   * the record with `expiresAt` computed from that value at THIS moment — a
+   * later change to the setting does not retroactively shorten or extend an
+   * already-stored key's life.
    */
   async record(
     params: IdempotencyRecordParams,
     tx: Prisma.TransactionClient | PrismaClient = this.prisma,
   ): Promise<void> {
-    const settings = await tx.tenantSettings.upsert({
+    const settings = await tx.tenantSettings.findUnique({
       where: { tenantId: params.tenantId },
-      create: { tenantId: params.tenantId },
-      update: {},
       select: { idempotencyKeyRetentionHours: true },
     });
+    // Falls back to the schema's own @default(24) when no tenant_settings row
+    // exists yet — record() must never WRITE tenant_settings (a plain read
+    // avoids taking a row lock on the shared settings singleton inside this
+    // Serializable transaction, which would otherwise make unrelated
+    // concurrent bulk-shifts contend with each other for no reason).
+    const retentionHours = settings?.idempotencyKeyRetentionHours ?? 24;
     const now = Date.now();
     await tx.idempotencyKey.create({
       data: {
@@ -62,7 +65,7 @@ export class IdempotencyService {
         requestHash: params.requestHash,
         responseStatus: params.status,
         responseBody: params.body as Prisma.InputJsonValue,
-        expiresAt: new Date(now + settings.idempotencyKeyRetentionHours * 60 * 60 * 1000),
+        expiresAt: new Date(now + retentionHours * 60 * 60 * 1000),
       },
     });
   }

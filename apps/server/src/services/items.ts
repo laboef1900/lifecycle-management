@@ -403,6 +403,10 @@ export class ItemsService {
           );
         }
         if (cached !== null) {
+          // `cached.status` (always 200 today) is intentionally unused here —
+          // Fastify defaults the reply to 200. A future second consumer of
+          // IdempotencyService that records a non-200 status would need to
+          // set the reply code from `cached.status` explicitly.
           return cached.body as ItemBulkShiftDatesResponse;
         }
 

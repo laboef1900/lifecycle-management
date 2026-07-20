@@ -139,4 +139,74 @@ describe('POST /api/items/bulk-shift-dates — idempotency', () => {
     // Exactly one month, not two — the whole point of the test.
     expect(row.effectiveDate.toISOString().slice(0, 10)).toBe('2026-02-15');
   });
+
+  it('two concurrent bulk shifts on disjoint item sets do not contend on tenant_settings', async () => {
+    // Regression test for the fix to IdempotencyService.record: it used to
+    // upsert tenant_settings (a write) on every call, which took a row lock
+    // on the shared singleton row inside this Serializable transaction. Two
+    // completely unrelated bulk shifts — different clusters, different
+    // items, different Idempotency-Key values — would then contend on that
+    // one row and could abort each other with a serialization conflict, even
+    // though neither transaction touches any data the other one reads or
+    // writes. After the fix, record() only reads tenant_settings.
+    //
+    // What this test does NOT assert: that both requests always return 200.
+    // Verified by direct probing (concurrent bulkShiftDates calls against a
+    // freshly-seeded Testcontainers Postgres, both before and after this
+    // fix, with items on maximally-separated primary keys and with the
+    // `items`/`item_allocations` tables pre-padded with hundreds of rows):
+    // Postgres's own Serializable Snapshot Isolation takes predicate locks
+    // at page (not row) granularity, and a nearly-empty test table has every
+    // row on the same handful of physical pages regardless of key value or
+    // insertion order — so two *any* concurrent bulk-shifts, even on wholly
+    // disjoint items, can still hit a genuine 40001 from that table alone.
+    // That is pre-existing, accepted behaviour (see the `@ai-note` above
+    // `bulkShiftDates`: a serialization conflict is deliberately surfaced as
+    // a sanitized 500, not retried) and this fix cannot and does not change
+    // it — it only removes the ADDITIONAL, guaranteed-every-time contention
+    // that came from unconditionally writing the tenant_settings singleton.
+    // So the reliable, deterministic signal for this fix is that
+    // tenant_settings.updatedAt is untouched by either request — not the
+    // pair's status codes, which remain a real Postgres SSI conflict away
+    // from either racing outcome.
+    const settingsBefore = await prisma.tenantSettings.upsert({
+      where: { tenantId: 'default' },
+      create: { tenantId: 'default' },
+      update: {},
+    });
+
+    const clusterA = await makeCluster(prisma);
+    const clusterB = await makeCluster(prisma);
+    const appA = await makeApplication(prisma, {
+      clusterId: clusterA.id,
+      startedAt: utc('2026-01-15'),
+    });
+    const appB = await makeApplication(prisma, {
+      clusterId: clusterB.id,
+      startedAt: utc('2026-03-10'),
+    });
+
+    const [a, b] = await Promise.all([
+      shift(
+        { itemIds: [appA.id], shift: { amount: 1, unit: 'months' } },
+        'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      ),
+      shift(
+        { itemIds: [appB.id], shift: { amount: 2, unit: 'months' } },
+        'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1',
+      ),
+    ]);
+
+    // At least one request must complete; a genuine, pre-existing 40001 from
+    // the (unrelated) items-table predicate lock may still abort the other.
+    expect([a.statusCode, b.statusCode]).toContain(200);
+    expect([a.statusCode, b.statusCode].every((s) => s === 200 || s === 500)).toBe(true);
+
+    // The fix under test: record() must never write tenant_settings, so its
+    // @updatedAt column is untouched no matter how the race above resolved.
+    const settingsAfter = await prisma.tenantSettings.findUniqueOrThrow({
+      where: { tenantId: 'default' },
+    });
+    expect(settingsAfter.updatedAt.getTime()).toBe(settingsBefore.updatedAt.getTime());
+  });
 });
