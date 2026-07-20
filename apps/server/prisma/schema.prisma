@@ -41,12 +41,13 @@ model Tenant {
 }
 
 model TenantSettings {
-  tenantId                 String   @id @map("tenant_id")
-  warnThreshold            Decimal  @default(0.70) @map("warn_threshold") @db.Decimal(4, 3)
-  critThreshold            Decimal  @default(0.90) @map("crit_threshold") @db.Decimal(4, 3)
-  procurementLeadTimeWeeks Int      @default(8) @map("procurement_lead_time_weeks")
-  createdAt                DateTime @default(now()) @map("created_at")
-  updatedAt                DateTime @updatedAt @map("updated_at")
+  tenantId                     String   @id @map("tenant_id")
+  warnThreshold                Decimal  @default(0.70) @map("warn_threshold") @db.Decimal(4, 3)
+  critThreshold                Decimal  @default(0.90) @map("crit_threshold") @db.Decimal(4, 3)
+  procurementLeadTimeWeeks     Int      @default(8) @map("procurement_lead_time_weeks")
+  idempotencyKeyRetentionHours Int      @default(24) @map("idempotency_key_retention_hours")
+  createdAt                    DateTime @default(now()) @map("created_at")
+  updatedAt                    DateTime @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -378,6 +379,28 @@ model Category {
 
   @@unique([tenantId, name], map: "categories_tenant_name_unique")
   @@map("categories")
+}
+
+/**
+ * General-purpose request-idempotency cache (#263). No `tenantId`: this app
+ * has no cross-tenant boundary in v1 by design (see CLAUDE.md "Resource
+ * ownership"), so the key alone is the uniqueness constraint. `route`
+ * identifies which endpoint issued the key (audit trail / future multi-route
+ * reuse); `requestHash` detects the same key replayed with a different
+ * payload. Purged by an in-process sweep once `expiresAt` passes — this is an
+ * ephemeral dedup cache, not business data.
+ */
+model IdempotencyKey {
+  key            String   @id
+  route          String
+  requestHash    String   @map("request_hash")
+  responseStatus Int      @map("response_status")
+  responseBody   Json     @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at")
+  expiresAt      DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("idempotency_keys")
 }
 
 // ---------- Auth ----------
