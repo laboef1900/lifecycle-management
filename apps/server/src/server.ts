@@ -16,6 +16,7 @@ import type { Env } from './env.js';
 import { authConfigPlugin } from './plugins/auth-config.js';
 import { authPlugin, authStartupWarnings, type AuthStartupWarning } from './plugins/auth.js';
 import { errorHandlerPlugin } from './plugins/error-handler.js';
+import { idempotencyCleanupPlugin } from './plugins/idempotency-cleanup.js';
 import { oidcPlugin } from './plugins/oidc.js';
 import { prismaPlugin } from './plugins/prisma.js';
 import { tenantContextPlugin } from './plugins/tenant-context.js';
@@ -128,6 +129,13 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   // the rate-limit/under-pressure skip above; it drains on shutdown via `onClose`.
   await server.register(vsphereSchedulerPlugin, {
     configKey: env.CONFIG_ENCRYPTION_KEY ? loadKey(env.CONFIG_ENCRYPTION_KEY) : null,
+    autostart: env.NODE_ENV !== 'test',
+  });
+
+  // Purges expired idempotency-key rows (#263). Same never-ticks-in-test
+  // rule as the vSphere scheduler above, for the same reason (isolate:false
+  // means a stray background tick could race assertions across files).
+  await server.register(idempotencyCleanupPlugin, {
     autostart: env.NODE_ENV !== 'test',
   });
 
