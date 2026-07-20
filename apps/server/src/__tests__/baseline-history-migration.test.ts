@@ -319,6 +319,10 @@ describe('contract migration — guard 3, legacy vs. newest history values', () 
     await prisma.$executeRawUnsafe(migrationStep('legacy-value-comparison-guard'));
   }
 
+  async function runOrphanGuard(): Promise<void> {
+    await prisma.$executeRawUnsafe(migrationStep('orphan-baseline-guard'));
+  }
+
   it('refuses the drop when a different-month correction would flip the served value', async () => {
     // The reproduced defect, exactly. baseline_date was 2026-06-20, so the expand
     // migration backfilled history@2026-06-20 = 100; the operator then corrected
@@ -362,18 +366,71 @@ describe('contract migration — guard 3, legacy vs. newest history values', () 
     await expect(runGuard()).rejects.toThrow(/operations\.md/u);
   });
 
-  it('allows a manual cluster that later received vSphere snapshots', async () => {
-    // THE FALSE-POSITIVE CASE, and the reason the guard is restricted to a newest
-    // row with source='manual'. A manual cluster that was later connected to
-    // vCenter legitimately has a newer, authoritative `vsphere` row whose numbers
-    // do not match the stale legacy value nobody has written to since. That
-    // divergence is CORRECT — the sync superseded the manual entry — and blocking
-    // the deploy on it would refuse every real upgrade.
+  it('refuses when a manual correction is newer in WALL-CLOCK but older in PERIOD', async () => {
+    // THE DEFECT THE source='manual' EXCLUSION LET THROUGH. The legacy table is
+    // last-write-wins in WALL-CLOCK order; `newest` here is computed in PERIOD
+    // order. The two disagree whenever an operator's correction is the most recent
+    // WRITE but is anchored to an EARLIER period than an existing vSphere snapshot.
+    //
+    // Sequence: the June snapshot writes history@2026-06-01 = 900 (source
+    // 'vsphere'). The operator then corrects the March baseline, writing
+    // history@2026-03-01 = 500 and, by dual-write, legacy = 500. 500 is the last
+    // thing written to the legacy table, so 500 is what `toResponse` served.
+    //
+    // Newest-by-period is the 'vsphere' row, so the old exclusion dropped the pair
+    // and the migration reported success. Post-drop the served value is 900.
+    // Reproduced empirically: 500 -> 900, silently, on the number that buys
+    // hardware. The guard is now TOTAL over the legacy table — no source predicate
+    // — because "the two sides differ" IS "the served value changes", which is
+    // exactly what an operator must review.
+    const clusterId = await emptyCluster('guard3-wallclock');
+    await historyRow(clusterId, {
+      capturedAt: new Date(Date.UTC(2026, 5, 1)),
+      consumption: 900,
+      source: 'vsphere',
+    });
+    await historyRow(clusterId, { capturedAt: new Date(Date.UTC(2026, 2, 1)), consumption: 500 });
+    await seedLegacy(clusterId, 500, 1000);
+
+    await expect(runGuard()).rejects.toThrow(/disagree/iu);
+  });
+
+  it('refuses a manual cluster later synced, because that IS a served-value change', async () => {
+    // CHANGED EXPECTATION (was: `resolves`). This is the case the source exclusion
+    // existed to wave through, on the argument that the legacy value is one
+    // "nobody has written since" and the newer snapshot is authoritative.
+    //
+    // The first half is not reliably true — see the wall-clock test above, where
+    // the legacy value was written AFTER the vsphere row. And the second half
+    // answers the wrong question. The guard does not ask "which number is better?",
+    // it asks "does the number served CHANGE when the legacy table goes?" Pre-drop
+    // `toResponse` read the legacy table, so the answer here is yes: 250 -> 900.
+    // That is a real change to a purchasing number and the operator must see it.
+    //
+    // The cost is a blocked deploy with an executable runbook; the owner has
+    // confirmed this deployment is not yet in production, so a blocked deploy is
+    // cheap and a silent wrong number is not.
     const clusterId = await emptyCluster('guard3-synced');
     await historyRow(clusterId, { capturedAt: new Date(Date.UTC(2026, 0, 1)), consumption: 250 });
     await historyRow(clusterId, {
       capturedAt: new Date(Date.UTC(2026, 5, 1)),
       consumption: 900,
+      source: 'vsphere',
+    });
+    await seedLegacy(clusterId, 250, 1000);
+
+    await expect(runGuard()).rejects.toThrow(/disagree/iu);
+  });
+
+  it('still allows a synced cluster whose snapshot AGREES with the legacy value', async () => {
+    // The exclusion's removal must not become "every synced cluster fails". A pair
+    // that agrees passes whatever its newest row's source is — which is the only
+    // property that keeps the totalised guard deployable.
+    const clusterId = await emptyCluster('guard3-synced-agree');
+    await historyRow(clusterId, {
+      capturedAt: new Date(Date.UTC(2026, 5, 1)),
+      consumption: 250,
+      capacity: 1000,
       source: 'vsphere',
     });
     await seedLegacy(clusterId, 250, 1000);
@@ -420,6 +477,62 @@ describe('contract migration — guard 3, legacy vs. newest history values', () 
     });
 
     await expect(runGuard()).resolves.toBeUndefined();
+  });
+
+  /**
+   * GUARD 1 — the orphan check.
+   *
+   * It shipped with neither step sentinels nor a test, which made it the weakest
+   * link in a chain guard 3 explicitly leans on: guard 3's coverage is only "total
+   * over the legacy table" because guard 1 proves no legacy row lacks a history
+   * row for its (cluster, metric) pair. A typo narrowing the NOT EXISTS
+   * correlation — dropping the `metric_type_id` conjunct, say — leaves a guard
+   * that still compiles, still runs, still reports success, and proves nothing.
+   * Nothing in the suite would have failed.
+   */
+  it('refuses the drop when a legacy baseline has no history row at all', async () => {
+    const clusterId = await emptyCluster('guard1-orphan');
+    await seedLegacy(clusterId, 250, 1000);
+
+    await expect(runOrphanGuard()).rejects.toThrow(/Backfill is incomplete/iu);
+  });
+
+  it('correlates the orphan check on METRIC as well as cluster', async () => {
+    // The narrowing a typo produces, pinned. This cluster HAS history — for a
+    // different metric. A guard correlating on `cluster_id` alone finds a row,
+    // counts zero orphans and waves the deploy through, dropping a legacy value
+    // that has no replacement anywhere.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195g1' },
+      update: {},
+      create: { key: 'cpu_cores_195g1', displayName: 'CPU (guard1 test)', unit: 'cores' },
+    });
+    const clusterId = await emptyCluster('guard1-metric');
+    await historyRow(clusterId, { capturedAt: new Date(Date.UTC(2026, 5, 1)), consumption: 250 });
+    await seedLegacy(clusterId, 250, 1000, 'cpu_cores_195g1');
+
+    await expect(runOrphanGuard()).rejects.toThrow(/Backfill is incomplete/iu);
+  });
+
+  it('passes when every legacy baseline has a history row for its own metric', async () => {
+    const clusterId = await emptyCluster('guard1-ok');
+    await historyRow(clusterId, { capturedAt: new Date(Date.UTC(2026, 5, 1)), consumption: 250 });
+    await seedLegacy(clusterId, 250, 1000);
+
+    await expect(runOrphanGuard()).resolves.toBeUndefined();
+  });
+
+  it('runs before normalisation, guard 3 and the DROP', async () => {
+    // Ordering, asserted because guard 3 cites guard 1 as already-passed.
+    const sql = readFileSync(MIGRATION_SQL, 'utf8');
+    const orphan = sql.indexOf('-- lcm:step-start orphan-baseline-guard');
+    const normalise = sql.indexOf('-- lcm:step-start normalise-captured-at-guard');
+    const guard3 = sql.indexOf('-- lcm:step-start legacy-value-comparison-guard');
+    const drop = sql.indexOf('DROP TABLE "cluster_metric_baselines"');
+    expect(orphan).toBeGreaterThan(-1);
+    expect(normalise).toBeGreaterThan(orphan);
+    expect(guard3).toBeGreaterThan(normalise);
+    expect(drop).toBeGreaterThan(guard3);
   });
 
   it('runs after normalisation and before the DROP', async () => {

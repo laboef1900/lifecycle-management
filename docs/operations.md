@@ -424,9 +424,30 @@ with no error raised, and the correct row would be unreachable through the API.
 Guard 3 refuses instead, because it runs **before** the `DROP` with the legacy table
 still holding exactly what clients were served.
 
-Unlike Guard 2 there is no structural rule to apply mechanically: **the value the
-legacy table holds is authoritative**, because it is by definition what was being
-served. The fix is to append it at the newest period.
+A second shape reaches this guard, and it is why the guard carries **no source
+filter**: the legacy table was last-write-wins in **wall-clock** order, while
+"newest" is computed in **period** order. An operator correction that was the most
+recent _write_ but is anchored to an _earlier_ period than an existing vCenter
+snapshot leaves the snapshot holding `MAX(captured_at)`, so the served value flips
+the other way (`500 → 900` in the reproduced case). A newest row with
+`source = 'vsphere'` is therefore reported too — earlier releases excluded it, which
+is exactly how this case escaped.
+
+Unlike Guard 2 there is no structural rule to apply mechanically. **Decide, per
+pair, which number is right**, then apply the matching remediation below. The
+question the guard asks is only "does the served value change?" — it deliberately
+does not guess which side is correct.
+
+- **(a) The legacy value is stale and should yield to the newer measurement.**
+  Typical when the newest row is a genuine vCenter snapshot taken after the last
+  manual entry: the sync superseded it and the history row is what you want served.
+- **(b) The legacy value is a correction that must be promoted.** Typical when the
+  newest row is the expand migration's own backfill (`source = 'manual'`) and the
+  operator's correction sits at an earlier period. The legacy value is by definition
+  what clients were being served.
+
+Step 1 below shows both sides plus the newest row's period and source, which is what
+tells the two shapes apart.
 
 ```bash
 # 1. See every disagreeing pair, with both sides side by side.
@@ -449,24 +470,62 @@ JOIN newest n         ON n.cluster_id = b.cluster_id
                      AND n.metric_type_id = b.metric_type_id
 JOIN "clusters" c     ON c.id  = b.cluster_id
 JOIN "metric_types" mt ON mt.id = b.metric_type_id
-WHERE n.source = 'manual'
-  AND ((n.baseline_consumption, n.baseline_capacity)
-       IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity))
+WHERE (n.baseline_consumption, n.baseline_capacity)
+      IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity)
 ORDER BY c.name, mt.key;
 SQL
 ```
 
+Both remediations below take an explicit list of `(cluster name, metric key)` pairs,
+so you opt in **per pair** after reading step 1. Run either, both, or neither — but
+every reported pair must appear in exactly one of them before the deploy will pass.
+
 ```bash
-# 2. Promote the served value onto the newest period, in place. Self-verifying: the
-#    same guard runs at the end and RAISEs if any pair still disagrees, which rolls
-#    the whole transaction back.
+# 2a. SHAPE (a): accept the newer measurement, discarding the stale legacy value.
+#     This writes ONLY to cluster_metric_baselines — the table the migration drops
+#     moments later — so it records your decision without touching a single
+#     measurement. History is left exactly as it is, and the value served after the
+#     drop is the history row you just confirmed.
 docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
 BEGIN;
 
-WITH newest AS (
+WITH reviewed (cluster_name, metric_key) AS (
+    VALUES ('prod-cluster-01', 'memory_gb')   -- <<< EDIT: one row per accepted pair
+),
+newest AS (
     SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
-           h.id, h.cluster_id, h.metric_type_id, h.source,
+           h.cluster_id, h.metric_type_id,
            h.baseline_consumption, h.baseline_capacity
+    FROM "cluster_baseline_history" h
+    ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
+)
+UPDATE "cluster_metric_baselines" b
+SET baseline_consumption = n.baseline_consumption,
+    baseline_capacity    = n.baseline_capacity
+FROM newest n
+JOIN "clusters" c      ON c.id  = n.cluster_id
+JOIN "metric_types" mt ON mt.id = n.metric_type_id
+JOIN reviewed r        ON r.cluster_name = c.name AND r.metric_key = mt.key
+WHERE b.cluster_id = n.cluster_id
+  AND b.metric_type_id = n.metric_type_id;
+
+COMMIT;
+SQL
+```
+
+```bash
+# 2b. SHAPE (b): promote the served value onto the newest period, in place.
+#     This re-values the newest history row and RE-DATES NOTHING — the period the
+#     operator recorded is left alone and only the numbers move onto it.
+docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+
+WITH reviewed (cluster_name, metric_key) AS (
+    VALUES ('prod-cluster-02', 'memory_gb')   -- <<< EDIT: one row per promoted pair
+),
+newest AS (
+    SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
+           h.id, h.cluster_id, h.metric_type_id
     FROM "cluster_baseline_history" h
     ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
 )
@@ -476,53 +535,53 @@ SET baseline_consumption = b.baseline_consumption,
 FROM newest n
 JOIN "cluster_metric_baselines" b
   ON b.cluster_id = n.cluster_id AND b.metric_type_id = n.metric_type_id
-WHERE t.id = n.id
-  AND n.source = 'manual'
-  AND ((n.baseline_consumption, n.baseline_capacity)
-       IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity));
-
-DO $$
-DECLARE
-    remaining BIGINT;
-BEGIN
-    WITH newest AS (
-        SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
-               h.cluster_id, h.metric_type_id, h.source,
-               h.baseline_consumption, h.baseline_capacity
-        FROM "cluster_baseline_history" h
-        ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
-    )
-    SELECT COUNT(*) INTO remaining
-    FROM "cluster_metric_baselines" b
-    JOIN newest n ON n.cluster_id = b.cluster_id
-                 AND n.metric_type_id = b.metric_type_id
-    WHERE n.source = 'manual'
-      AND ((n.baseline_consumption, n.baseline_capacity)
-           IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity));
-    IF remaining <> 0 THEN
-        RAISE EXCEPTION
-            'Rolled back: % pair(s) still disagree. Stop and inspect before touching anything.',
-            remaining;
-    END IF;
-END $$;
+JOIN "clusters" c      ON c.id  = n.cluster_id
+JOIN "metric_types" mt ON mt.id = n.metric_type_id
+JOIN reviewed r        ON r.cluster_name = c.name AND r.metric_key = mt.key
+WHERE t.id = n.id;
 
 COMMIT;
 SQL
 ```
 
-This **re-values the newest row, it does not re-date anything** — the period the
-operator recorded is left alone, and only the numbers move onto it. The alternative
-(deleting the stale backfill row so the correction becomes newest again) also clears
-the guard but throws away a measurement, and it back-dates the cluster's
-`ClusterResponse.baselineDate` by however far the correction reached, which can flip
-a healthy cluster to stale. Prefer the `UPDATE`.
+Shape (b) deliberately re-values rather than deleting. The alternative — deleting the
+stale backfill row so the correction becomes newest again — also clears the guard but
+throws away a measurement, and it back-dates the cluster's `ClusterResponse.baselineDate`
+by however far the correction reached, which can flip a healthy cluster to stale.
 
-> **A pair where the newest row is `source = 'vsphere'` is deliberately not
-> reported.** A manual cluster later connected to vCenter legitimately holds a newer,
-> authoritative snapshot whose numbers do not match the stale legacy value nobody has
-> written to since; that divergence is correct and must not block the deploy. If you
-> widen the query above by dropping `n.source = 'manual'`, you will "find" those
-> clusters and, by fixing them, overwrite real measurements with stale manual ones.
+```bash
+# 3. Verify. This is the guard's own predicate, so a clean run here means the deploy
+#    will get past it. Non-zero output means at least one pair is still unreviewed.
+docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
+WITH newest AS (
+    SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
+           h.cluster_id, h.metric_type_id,
+           h.baseline_consumption, h.baseline_capacity
+    FROM "cluster_baseline_history" h
+    ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
+)
+SELECT c.name AS cluster, mt.key AS metric
+FROM "cluster_metric_baselines" b
+JOIN newest n          ON n.cluster_id = b.cluster_id
+                      AND n.metric_type_id = b.metric_type_id
+JOIN "clusters" c      ON c.id  = b.cluster_id
+JOIN "metric_types" mt ON mt.id = b.metric_type_id
+WHERE (n.baseline_consumption, n.baseline_capacity)
+      IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity)
+ORDER BY c.name, mt.key;
+SQL
+```
+
+> **Every disagreeing pair is reported, whatever the newest row's `source`.** An
+> earlier release excluded pairs whose newest row was `source = 'vsphere'`, on the
+> argument that a manual cluster later connected to vCenter holds a newer,
+> authoritative snapshot diverging from a legacy value "nobody has written since".
+> That exclusion hid a real silent flip: the legacy table was last-write-wins in
+> wall-clock order, so an operator correction anchored to an earlier period than an
+> existing snapshot **was** written after it, and the pair was dropped anyway. Do
+> not reinstate the filter. Use shape (a) to accept the snapshot — it is one
+> `UPDATE` against a table that is dropped seconds later, and it overwrites no
+> measurement.
 
 #### Clearing the failed-migration record
 

@@ -25,6 +25,7 @@
 -- migration in a transaction, so the RAISE rolls the whole thing back atomically and
 -- the container entrypoint's `prisma migrate deploy` exits non-zero — Fastify never
 -- starts, serving nothing rather than serving wrong numbers.
+-- lcm:step-start orphan-baseline-guard
 DO $$
 DECLARE
     orphan_count BIGINT;
@@ -43,6 +44,7 @@ BEGIN
             orphan_count;
     END IF;
 END $$;
+-- lcm:step-end orphan-baseline-guard
 
 -- NORMALISE `captured_at` to the first of its month, BEFORE the legacy table goes.
 --
@@ -84,6 +86,10 @@ END $$;
 -- baseline-history-migration.test.ts slices these statements out of THIS file and
 -- executes them against seeded rows, so the suite exercises the shipped SQL
 -- instead of a copy that can drift away from it. Keep them if you edit the steps.
+-- Every guard in this file carries them, guard 1 included: it was the one guard
+-- with neither sentinels nor a test, and guard 3's correctness argument leans on
+-- it, so a typo narrowing its NOT EXISTS correlation would have made it vacuous
+-- with nothing anywhere failing.
 
 -- lcm:step-start normalise-captured-at-guard
 DO $$
@@ -140,16 +146,36 @@ WHERE "captured_at" <> date_trunc('month', "captured_at")::date;
 -- join, so a legacy row with no history row at all would simply not be compared —
 -- exactly the case that would lose its value outright. Guard 1 proves that case
 -- does not exist, which is what makes this guard's coverage total over the legacy
--- table rather than merely over the pairs that happen to match.
+-- table rather than merely over the pairs that happen to match. (That argument
+-- only became sound when the source predicate below was removed: a WHERE clause
+-- dropping pairs independently of guard 1 made "total" false no matter what guard
+-- 1 proved. Guard 1 now carries step sentinels and tests of its own for the same
+-- reason — this guard's correctness leans on it.)
 --
--- @ai-warning THE source='manual' RESTRICTION IS A FALSE-POSITIVE EXCLUSION, not
--- an optimisation — widening it blocks legitimate deploys. A manual cluster later
--- connected to vCenter legitimately holds a newer, authoritative `vsphere` row
--- whose numbers do not match the stale legacy value nobody has written since; that
--- divergence is CORRECT and must not fail the deploy. In the defect case the
--- newest row is the expand migration's backfill, which is source='manual', so the
--- restriction keeps the detection. Clusters synced from birth have no legacy row
--- at all and the INNER JOIN excludes them — do not make it a LEFT JOIN.
+-- @ai-warning NO SOURCE PREDICATE, DELIBERATELY. An earlier revision restricted
+-- this to a newest row with source='manual', justified as a false-positive
+-- exclusion: "a manual cluster later connected to vCenter legitimately holds a
+-- newer, authoritative `vsphere` row whose numbers do not match the stale legacy
+-- value nobody has written since." Both halves were wrong.
+--
+-- "Nobody has written since" is provably false. The legacy table was last-write-
+-- wins in WALL-CLOCK order, while `newest` below is computed in PERIOD order. When
+-- an operator's correction is the most recent WRITE but is anchored to an EARLIER
+-- period than an existing vSphere snapshot, the newest-by-period row is 'vsphere',
+-- the pair was excluded, and the served value silently flipped. Reproduced
+-- empirically: pre-drop 500, post-drop 900, migration reports success.
+--
+-- And "authoritative" answers the wrong question. This guard does not ask which
+-- number is better; it asks whether the number SERVED changes when the legacy
+-- table goes. Pre-drop the served value IS the legacy value, because `toResponse`
+-- read that table; post-drop it is the newest-by-period row. So "they differ" is
+-- exactly "the served value changes", which is precisely what the operator must
+-- review — including when the newer row is a genuine snapshot. Both remediation
+-- shapes are documented and executable: see "Guard 3" in docs/operations.md.
+--
+-- A blocked deploy is cheap here and a silently changed purchasing number is not.
+-- Clusters synced from birth have no legacy row at all and the INNER JOIN excludes
+-- them — do not make it a LEFT JOIN.
 --
 -- Compared on the NUMERIC type. Both columns are DECIMAL(18,3), so Postgres has
 -- already normalised the scale on each side and 250 vs 250.000 cannot arise here
@@ -170,7 +196,6 @@ BEGIN
         SELECT DISTINCT ON (h."cluster_id", h."metric_type_id")
                h."cluster_id",
                h."metric_type_id",
-               h."source",
                h."baseline_consumption",
                h."baseline_capacity"
         FROM "cluster_baseline_history" h
@@ -184,9 +209,8 @@ BEGIN
          AND n."metric_type_id" = b."metric_type_id"
         JOIN "clusters" c ON c."id" = b."cluster_id"
         JOIN "metric_types" m ON m."id" = b."metric_type_id"
-        WHERE n."source" = 'manual'
-          AND (n."baseline_consumption" IS DISTINCT FROM b."baseline_consumption"
-            OR n."baseline_capacity" IS DISTINCT FROM b."baseline_capacity")
+        WHERE n."baseline_consumption" IS DISTINCT FROM b."baseline_consumption"
+           OR n."baseline_capacity" IS DISTINCT FROM b."baseline_capacity"
     )
     SELECT
         (SELECT COUNT(*) FROM divergent),
