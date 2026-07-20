@@ -368,33 +368,30 @@ export class ClustersService {
         // rule ("an admin correcting a bad sync is an explicit overwrite that
         // flips `source` to manual") actually describes.
         //
-        // Flipping it HERE reads plausible — a human picked the period — and is
-        // purchasing-critical in the wrong direction. `absorbed` in forecast.ts is
-        // SOURCE-gated and all-or-nothing, so relabelling stops it absorbing
-        // anything at all, including deltas dated before the new anchor that the
-        // measurement genuinely contains. On a synced cluster that re-adds a
-        // pre-anchor `capacityDelta` the baseline already counted: capacity
-        // inflates, utilization FALLS, and nothing was measured and no value was
-        // submitted. That is the defer-hardware direction the re-anchor guard
-        // exists to prevent.
+        // Keeping `source` is safe on much stronger grounds than when this comment
+        // was first written, and the grounds have now changed TWICE — recorded
+        // rather than quietly rewritten, because both superseded arguments were
+        // wrong in ways that shipped:
         //
-        // Keeping `source` is now safe on much stronger grounds than when this
-        // comment was first written. `absorbed` no longer reads `capturedAt` at
-        // all: it keys off `observedAt`, which nothing on this path writes. So a
-        // move does not change WHICH deltas are absorbed by any amount, in either
-        // direction — the boundary is simply not a function of anything this
-        // statement touches. (The superseded argument was that a backward move
-        // "only ever narrows" the DATE-based boundary. That was true of the old
-        // boundary and is now doubly irrelevant: the boundary is not the date,
-        // and narrowing was never actually safe, because the same narrowing that
-        // counts more consumption also re-adds measured `capacityDelta`s.)
+        //   1. "A backward move only ever NARROWS the date-based boundary, which
+        //      is safe." False: the same narrowing that counts more consumption
+        //      also re-adds `capacityDelta`s the snapshot already measured.
+        //      Narrowing is safe on consumption and unsafe on capacity, so
+        //      all-or-nothing absorption has no safe direction to move in.
+        //   2. "The flip is forbidden because the SOURCE GATE is the first thing
+        //      `absorbed` checks." That WAS true and is now false: `absorbed` does
+        //      not read `source` at all, precisely because a value edit flips it.
         //
-        // What survives unchanged is the conclusion: the flip is still forbidden,
-        // because the SOURCE GATE is still the first thing `absorbed` checks, and
-        // relabelling a measured row `manual` still stops absorption wholesale.
-        // Pinned by `clusters.test.ts` "a re-dated row keeps its provenance" (the
-        // `source` assertion and the capacityDelta sibling) and, for the boundary
-        // itself, by "a re-date cannot move the absorption boundary".
+        // What holds today is simpler and does not depend on either: absorption is
+        // a function of `observedAt` alone, and NOTHING on this path writes
+        // `observedAt`. So a move changes which deltas are absorbed by exactly
+        // zero, in either direction and whatever `source` says.
+        //
+        // `source` is still left alone here, on its own merits rather than as a
+        // forecast safeguard: a move re-dates a measurement, it does not re-measure
+        // it, and provenance is what the row's VALUES came from. Pinned by
+        // `clusters.test.ts` "a re-dated row keeps its provenance" and, for the
+        // boundary itself, by "a re-date cannot move the absorption boundary".
         //
         // `VsphereSnapshotService`'s `skipDuplicates` is ON CONFLICT DO NOTHING on
         // the period unique index and never reads `source`, so no value of this
@@ -424,13 +421,18 @@ export class ClustersService {
       // touched that metric. Writing an unchanged one anyway is destructive in two
       // directions, and BOTH are reachable dateless as well as dated:
       //   - a same-period write onto that metric's own `vsphere` row flips `source`
-      //     to `manual`, and `absorbed` in forecast.ts is SOURCE-gated and
-      //     all-or-nothing, so a pre-anchor `capacityDelta` the measurement already
-      //     contains stops being absorbed: capacity inflates, utilization FALLS,
-      //     nothing measured and no value submitted — the defer-hardware direction
-      //     the re-anchor guard exists to prevent; and
+      //     to `manual` and rewrites its VALUES with numbers the operator never
+      //     touched, overwriting a real vCenter measurement in place; and
       //   - a before-period write drops the metric's fresher numbers onto an older
       //     recorded period.
+      //
+      // The forecast consequence that used to head this list is GONE and is
+      // recorded rather than deleted: "the flip stops `absorbed` absorbing a
+      // pre-anchor `capacityDelta`, so capacity inflates and utilization falls."
+      // That was true while `absorbed` was SOURCE-gated. It no longer is — the gate
+      // is `observedAt`, which no edit path writes — so a `source` flip changes no
+      // forecast number at all. The rule survives on the two data-loss consequences
+      // above, which never involved absorption.
       // So an unchanged metric is treated EXACTLY like an omitted one (#181),
       // whether or not a date was submitted — not written at all. A corrected
       // metric still writes: at the target (landing the submitted date on the
