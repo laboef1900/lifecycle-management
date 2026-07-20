@@ -1,6 +1,6 @@
 import type { VsphereConnectionResponse, VsphereProbeResult } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -480,6 +480,60 @@ describe('<VcenterConnectionsPanel> — trust certificate (#259)', () => {
     // changed under the admin, or a host that went away. Collapsing them into
     // "failed" costs the admin the diagnosis.
     expect(await screen.findByRole('alert')).toHaveTextContent(message);
+  });
+
+  it('★ seals every close path while the trust submission is in flight', async () => {
+    vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([
+      connection({ status: 'tls_untrusted' }),
+    ]);
+    mockProbe();
+    // Never settles: the mutation stays pending for the whole test.
+    vi.spyOn(api.settings.vsphere.connections, 'trustCa').mockReturnValue(
+      new Promise(() => undefined),
+    );
+    renderWithClient(<VcenterConnectionsPanel />);
+    await openTrustDialog();
+
+    await userEvent.type(screen.getByLabelText(/password for svc-lcm/i), 'pw');
+    await userEvent.click(screen.getByRole('button', { name: /^trust certificate$/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /working/i })).toBeDisabled());
+
+    // React Query does not cancel a mutation on unmount, so a dialog dismissed
+    // mid-submit still fires onSuccess afterwards — clearing the parent's target
+    // and force-closing whatever dialog is open by then, possibly a different
+    // connection's, discarding a password the admin had already typed.
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // Dispatched directly: Radix sets `pointer-events: none` on the body while a
+    // modal is open, so userEvent refuses the click before Radix ever sees it.
+    // `pointerdown` on an outside node is what DismissableLayer actually listens for.
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // The X routes through the same guard; Cancel is disabled outright.
+    await userEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeDisabled();
+  });
+
+  it('still closes freely while the read-only probe is in flight', async () => {
+    vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([
+      connection({ status: 'tls_untrusted' }),
+    ]);
+    // Probe never settles — the dialog sits in its loading state.
+    vi.spyOn(api.settings.vsphere, 'probe').mockReturnValue(new Promise(() => undefined));
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: /trust certificate: vc-prod/i }),
+    );
+    expect(await screen.findByText(/reading the certificate/i)).toBeInTheDocument();
+
+    // The probe sends no credential and pins nothing, so abandoning it costs
+    // nothing — only the trust submission is worth trapping the admin for.
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('offers nothing to confirm when the host cannot be reached', async () => {

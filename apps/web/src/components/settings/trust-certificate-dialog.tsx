@@ -96,9 +96,32 @@ export function TrustCertificateDialog({
   const fingerprint = probe?.reachable ? probe.rootFingerprintSha256 : null;
   const trustError = trustMutation.error;
 
+  // Every close path is sealed while the trust submission is in flight, matching
+  // the already-disabled Cancel button. React Query does not cancel a mutation on
+  // unmount, so a dialog dismissed mid-submit still fires `onSuccess` afterwards —
+  // which clears the parent's target and force-closes whatever dialog is open by
+  // then, possibly a *different* connection's, discarding a typed password. The
+  // guard covers the X button too (it lives in the shared DialogContent and routes
+  // through here); the preventDefaults stop Radix dismissing before it asks.
+  // Gated on the TRUST mutation only — the probe is read-only and safe to abandon.
+  const sealed = trustMutation.isPending;
+
   return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (sealed) return;
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent
+        onEscapeKeyDown={(e) => {
+          if (sealed) e.preventDefault();
+        }}
+        onInteractOutside={(e) => {
+          if (sealed) e.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>
@@ -169,11 +192,7 @@ export function TrustCertificateDialog({
         ) : null}
 
         <DialogFooter>
-          <Button
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={trustMutation.isPending}
-          >
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={sealed}>
             Cancel
           </Button>
           <Button
