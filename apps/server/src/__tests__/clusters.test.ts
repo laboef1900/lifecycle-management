@@ -1831,7 +1831,24 @@ describe('PUT /api/clusters/:id — a combined date + values edit', () => {
     expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 300]);
   });
 
-  it('refuses with 422 when the combined edit targets an occupied period', async () => {
+  it('corrects an already-recorded period IN PLACE rather than refusing', async () => {
+    // CHANGED BEHAVIOUR, and the reason: the previous 422 named an operation the
+    // API does not offer. History held May=100 and July=300 (newest); an operator
+    // submitting `baselineDate: '2026-05-01'` with values intends to correct MAY.
+    // `moving` was [the July row] (07 > 05), `blocking` then found the existing May
+    // row, and the request was refused with BASELINE_PERIOD_OCCUPIED whose message
+    // says "Edit that period directly instead" — which nothing lets you do.
+    //
+    // The move was never necessary here. The target period is occupied by the very
+    // row being corrected, so the upsert at `target` updates it in place,
+    // non-destructively. So a corrected metric whose target is already held by one
+    // of its own non-moving rows is excluded from `moving` and the request becomes
+    // the in-place correction it always was.
+    //
+    // This does NOT re-open the reordering defect the refusal exists for (see the
+    // sibling test above, which still 422s): a move onto a FREE period behind an
+    // older row is still refused, and here no row moves at all, so July stays the
+    // newest row for its metric and the invariant holds vacuously.
     const cluster = await makeCluster(prisma, {
       name: uniqueName('combined-occupied'),
       baselineDate: new Date(Date.UTC(2026, 4, 1)),
@@ -1847,9 +1864,6 @@ describe('PUT /api/clusters/:id — a combined date + values edit', () => {
       ],
     });
 
-    // May holds a recorded measurement. Landing July's row on it would overwrite
-    // that measurement with July's numbers — silently, on data that buys
-    // hardware — so the whole request is refused rather than merged.
     const res = await server.inject({
       method: 'PUT',
       url: `/api/clusters/${cluster.id}`,
@@ -1860,11 +1874,56 @@ describe('PUT /api/clusters/:id — a combined date + values edit', () => {
         ],
       },
     });
+    expect(res.statusCode).toBe(200);
+
+    // May was corrected 100 -> 150. July is untouched and both periods survive:
+    // the correction re-values one measurement and destroys none.
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(rows.map((r) => r.capturedAt.toISOString().slice(0, 10))).toEqual([
+      '2026-05-01',
+      '2026-07-01',
+    ]);
+    expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([150, 300]);
+
+    // The response still reports JULY, not the submitted May: `baselineDate` is
+    // MIN over newest-per-metric and July is still this metric's newest row. That
+    // is honest — correcting an older period does not make it the newest one — and
+    // it is the documented MIN caveat, not a regression.
+    expect(clusterResponseSchema.parse(res.json()).baselineDate).toBe('2026-07-01');
+  });
+
+  it('still refuses a DATE-ONLY edit onto an occupied period, having no values to apply', async () => {
+    // The other half of the exclusion, and the reason it is scoped to a metric the
+    // request actually CORRECTS. With no values submitted there is nothing for an
+    // in-place upsert to write, so skipping the move would make the request a
+    // silent 200 no-op that discards the operator's date. Refusing is the only
+    // honest answer left.
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('dateonly-occupied'),
+      baselineDate: new Date(Date.UTC(2026, 4, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'memory_gb',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)),
+          baselineConsumption: 300,
+          baselineCapacity: 1000,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { baselineDate: '2026-05-01' },
+    });
     expect(res.statusCode).toBe(422);
     const body = res.json() as { error: { code: string; message: string } };
     expect(body.error.code).toBe('BASELINE_PERIOD_OCCUPIED');
-    // Refused by the check, naming the metric and period — see the date-only
-    // occupancy test for why the message, not just the code, is asserted.
     expect(body.error.message).toContain('memory_gb');
 
     const rows = await prisma.clusterBaselineHistory.findMany({

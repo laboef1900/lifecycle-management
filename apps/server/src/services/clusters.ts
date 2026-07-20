@@ -663,9 +663,16 @@ export class ClustersService {
    * behind an existing May of 100, leaves history reading Apr=300, May=100 — the
    * July measurement plotted at April and a 300 -> 100 drop nobody measured, on a
    * chart that feeds hardware purchasing. Refusing on `capturedAt >= target`
-   * subsumes the exact-period check (`==` is the occupied case, `>` the
-   * reordering one), leaving one invariant: a moved row stays the newest row for
-   * its metric.
+   * covers both shapes (`==` the occupied case, `>` the reordering one), leaving
+   * one invariant: a moved row stays the newest row for its metric.
+   *
+   * ONE EXCEPTION, added after the refusal was found to be unsatisfiable. When the
+   * request carries VALUES for a metric whose target period is already held by one
+   * of that metric's own rows, nothing needs to move — the upsert corrects that row
+   * in place. Refusing there told the operator to "edit that period directly", an
+   * operation the API does not offer, which made correcting an already-recorded
+   * historical period impossible. See `occupyingTarget` below for why the exception
+   * is confined to value-carrying requests and why it leaves the invariant intact.
    *
    * The scope is PER METRIC, because the unique key is (cluster, metric, period).
    * A cluster-wide check would refuse the legitimate edit where one metric
@@ -743,7 +750,7 @@ export class ClustersService {
 
     // The moving rows themselves are excluded: a backwards move starts from a
     // period later than the target, so it would otherwise block itself.
-    const blocking = await this.prisma.clusterBaselineHistory.findMany({
+    const conflicts = await this.prisma.clusterBaselineHistory.findMany({
       where: {
         clusterId,
         tenantId,
@@ -751,22 +758,61 @@ export class ClustersService {
         capturedAt: { gte: target },
         id: { notIn: moving.map((row) => row.id) },
       },
-      select: { metricTypeId: true },
+      select: { metricTypeId: true, capturedAt: true },
     });
-    const blockedMetrics = new Set(blocking.map((row) => row.metricTypeId));
 
-    for (const row of moving) {
+    /** Metrics one of whose OTHER rows sits exactly ON the target period. */
+    const occupyingTarget = new Set(
+      conflicts
+        .filter((row) => row.capturedAt.getTime() === target.getTime())
+        .map((row) => row.metricTypeId),
+    );
+
+    // THE IN-PLACE CORRECTION. When the request CORRECTS a metric and that
+    // metric's target period is already held by one of its own rows, there is
+    // nothing to move: the upsert in `update` addresses `target` directly and
+    // updates that row in place, non-destructively. Refusing instead produced a
+    // 422 telling the operator to "edit that period directly" — an operation this
+    // API does not offer — so correcting an already-recorded historical period was
+    // simply impossible.
+    //
+    // @ai-warning Scoped to `correcting !== undefined`, and that scope IS the
+    // safety argument. A DATE-ONLY request has no values to land, so skipping the
+    // move there would turn the refusal into a silent 200 that discards the
+    // operator's date — the exact failure class this method exists to prevent.
+    // Only a request that will actually WRITE at `target` may decline to move onto
+    // it.
+    //
+    // It does not re-open the reordering defect the refusal exists for. That
+    // defect needs a MOVE onto a FREE period behind an older row (re-dating July's
+    // 300 onto a free April behind an existing May of 100, leaving Apr=300,
+    // May=100 — a drop nobody measured). Here nothing moves at all, so the
+    // invariant "a moved row stays the newest row for its metric" holds vacuously,
+    // and a free target is still checked by the loop below exactly as before.
+    //
+    // The submitted date is NOT echoed back in this case: `ClusterResponse.
+    // baselineDate` is MIN over newest-per-metric, and correcting an older period
+    // does not make it the newest one. That is honest rather than a regression —
+    // see the MIN caveat in docs/operations.md.
+    const moves =
+      correcting === undefined
+        ? moving
+        : moving.filter((row) => !occupyingTarget.has(row.metricTypeId));
+
+    const blockedMetrics = new Set(conflicts.map((row) => row.metricTypeId));
+
+    for (const row of moves) {
       if (blockedMetrics.has(row.metricTypeId)) {
         throw new UnprocessableError(
           'BASELINE_PERIOD_OCCUPIED',
           `A ${row.metricType.key} baseline is already recorded at or after ` +
             `${formatDate(target).slice(0, 7)}; re-dating onto it would overwrite or reorder a ` +
-            'recorded measurement. Edit that period directly instead.',
+            'recorded measurement. Submit the values for that period to correct it in place.',
         );
       }
     }
 
-    return moving.map((row) => ({ id: row.id, capturedAt: target }));
+    return moves.map((row) => ({ id: row.id, capturedAt: target }));
   }
 
   /**
