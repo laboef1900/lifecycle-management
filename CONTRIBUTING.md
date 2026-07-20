@@ -92,6 +92,14 @@ merge is clean.
   component.
 - The Playwright golden path in `apps/web/playwright/` covers the
   end-to-end smoke; extend it if a major user flow changes.
+- **After adding or changing an export in `packages/shared`, rebuild it
+  (`pnpm --filter @lcm/shared build`) before trusting the web tests.**
+  `apps/web` resolves `@lcm/shared` to its built `dist`, not to source. A stale
+  `dist` makes a newly added export blow up at runtime as "is not a function" —
+  or, worse, lets the web tests quietly pass against the _previous_
+  implementation of an export you changed. `pnpm typecheck` catches neither,
+  since the types resolve correctly either way. CI is unaffected (it builds
+  before testing); this is a local-loop hazard only. See issue #265.
 
 ## What lives where
 
