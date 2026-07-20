@@ -32,6 +32,45 @@ export function addUtcMonths(date: Date, months: number): Date {
   return result;
 }
 
+/** The relative units a bulk date shift may be expressed in. */
+export type DateShiftUnit = 'days' | 'weeks' | 'months';
+
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * Move a UTC calendar date by a signed relative amount.
+ *
+ * Shared deliberately: the server applies the shift and the web dialog previews
+ * it, and the two MUST agree exactly — a preview that disagrees with the write
+ * turns the confirmation step into a lie. Months delegate to `addUtcMonths`, so
+ * day-of-month clamping (Jan 31 + 1mo = Feb 28) is identical on both sides.
+ *
+ * @ai-warning Month clamping is monotone but NOT injective: Jan 29 and Jan 31
+ * both land on Feb 28. Callers shifting a *set* of dates that must stay
+ * distinct (an item's allocation rows) have to re-check distinctness after the
+ * shift — see `ItemsService.bulkShiftDates`.
+ */
+export function shiftDateByUnit(date: Date, amount: number, unit: DateShiftUnit): Date {
+  if (unit === 'months') return addUtcMonths(date, amount);
+  const days = unit === 'weeks' ? amount * 7 : amount;
+  return new Date(date.getTime() + days * MS_PER_DAY);
+}
+
+/** Inclusive bounds for any date this app will persist, as UTC epoch ms. */
+const MIN_SUPPORTED_DATE_MS = Date.UTC(1970, 0, 1);
+const MAX_SUPPORTED_DATE_MS = Date.UTC(2999, 11, 31);
+
+/**
+ * Whether `date` is a real date inside the range the `YYYY-MM-DD` wire format
+ * and the Postgres `date` column can both represent. A large relative shift can
+ * push a date outside it (or, at the extreme, to `Invalid Date`), which must be
+ * rejected rather than written.
+ */
+export function isSupportedDate(date: Date): boolean {
+  const ms = date.getTime();
+  return Number.isFinite(ms) && ms >= MIN_SUPPORTED_DATE_MS && ms <= MAX_SUPPORTED_DATE_MS;
+}
+
 /**
  * The first of `date`'s month at 00:00 UTC — the canonical **period anchor**.
  *
