@@ -88,6 +88,19 @@
      overridden with the real gradients in html.dark below. */
   --surface-backdrop: var(--background);
   --surface-card: var(--card);
+  /* Login hero (#257). A per-theme pair rather than a reuse of
+     --surface-backdrop, which is flat var(--background) in light and only
+     carries a gradient in dark — the hero gets a designed light counterpart
+     (owner decision 2026-07-20), so both themes declare a real surface here.
+     Light is a warm off-white with an amber-tinted wash; the grid tint is
+     amber here and a plain white hairline in dark.
+     @ai-warning the stops are tuned against the WORST-case composite — the
+     darkest gradient stop with a grid line painted over it — so that every
+     element sitting on the hero clears AA in both themes. --fg-muted (the
+     supporting sentence) is the tightest at 4.87:1 light / 4.81:1 dark.
+     Retune a stop and those have to be re-measured. */
+  --hero-surface: linear-gradient(155deg, #fdfbf6 0%, #faf5ea 55%, #f6f0e4 100%);
+  --hero-grid: rgb(143 100 0 / 0.06);
   /* Bullet-meter fill (spec §3: "amber meter gradient"). Light theme has no
      literal recipe in the spec ("derive from light --accent") — a darker
      shade of the light --accent to --accent itself keeps the same ramp
@@ -172,6 +185,12 @@ html.dark {
     var(--background) 60%
   );
   --surface-card: linear-gradient(180deg, #171e31, #131928);
+  /* Dark hero (#257): the near-black treatment, lit from the top-left so the
+     brand lockup sits in the light and the checklist falls away into the
+     background. #161d33 is the lightest point and therefore the worst case
+     for the light text on top — see the :root note. */
+  --hero-surface: radial-gradient(900px 520px at 15% -10%, #161d33 0%, #0b0f1c 62%);
+  --hero-grid: rgb(255 255 255 / 0.045);
   /* Exact spec §3 value: linear-gradient(90deg,#D9A32C,#FFC53D). */
   --meter-gradient: linear-gradient(90deg, #d9a32c, var(--accent));
 
@@ -342,6 +361,21 @@ body {
    Narrow this and the sheet would leave part of an inert column on screen. */
 .cluster-panel {
   width: 100vw;
+}
+
+/* Login hero panel (#257): the brand column of the split-screen /login layout.
+   An opaque page surface — deliberately NOT glass; the scenario controls card
+   is this app's one sanctioned glass surface (#243), and that exception is for
+   the floating-controls layer, never a page surface. The grid is two 1px
+   repeating gradients over the themed --hero-surface wash; the flat
+   background-color underneath is the fallback for forced-colors mode, which
+   drops background-image entirely. */
+.login-hero {
+  background-color: var(--background);
+  background-image:
+    repeating-linear-gradient(to right, var(--hero-grid) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(to bottom, var(--hero-grid) 0 1px, transparent 1px 72px),
+    var(--hero-surface);
 }
 
 /* Scenario controls card (#243): the single sanctioned glass surface (house
