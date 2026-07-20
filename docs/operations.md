@@ -258,8 +258,8 @@ numbers. Your data is intact: this is a **blocked deploy, not corruption**.
 > lacking the migration → P3009 and exit 1; `migrate resolve --rolled-back` from that
 > same directory → exit 0, and `migrate deploy` then boots clean._
 
-Two guards can stop it, and they call for different responses. Read the RAISE message
-in `docker compose logs server` to tell them apart.
+Three guards can stop it, and they call for different responses. Read the RAISE
+message in `docker compose logs server` to tell them apart.
 
 #### Guard 1 — orphaned legacy baselines
 
@@ -403,6 +403,127 @@ Two cases reach it, and neither is resolved by deleting more rows:
 
 Stop and investigate; do not delete rows to make the guard pass.
 
+#### Guard 3 — the served value would change
+
+> `Refusing to drop cluster_metric_baselines: N (cluster, metric) pair(s) disagree between the legacy baseline and the newest cluster_baseline_history row, so dropping the legacy table would silently change the value served for them. Affected (up to 20 shown): ...`
+
+The other case ordinary use of the previous release produces, and the one Guard 2
+cannot see because **nothing collides** — the two rows are in different months:
+
+1. A pre-#177 cluster carries `baseline_date = 2026-06-20`, so the expand migration
+   backfilled `captured_at = 2026-06-20` with that cluster's value (say `100`).
+2. During the dual-write release an operator corrected the baseline and re-anchored
+   it **backwards**, to `2026-03-01` with the corrected value (say `250`). That wrote
+   history `2026-03-01 = 250` and, by dual-write, `cluster_metric_baselines = 250`.
+3. `250` is what the fleet console, the cluster panel and the forecast have been
+   serving ever since, because the legacy table was the read side.
+
+After the drop, the read side is newest-per-metric = `MAX(captured_at)` — the
+normalised `2026-06-01` backfill row, `100`. The served value would flip `250 → 100`
+with no error raised, and the correct row would be unreachable through the API.
+Guard 3 refuses instead, because it runs **before** the `DROP` with the legacy table
+still holding exactly what clients were served.
+
+Unlike Guard 2 there is no structural rule to apply mechanically: **the value the
+legacy table holds is authoritative**, because it is by definition what was being
+served. The fix is to append it at the newest period.
+
+```bash
+# 1. See every disagreeing pair, with both sides side by side.
+docker compose exec -T db psql -U lcm -d lcm <<'SQL'
+WITH newest AS (
+    SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
+           h.cluster_id, h.metric_type_id, h.captured_at, h.source,
+           h.baseline_consumption, h.baseline_capacity
+    FROM "cluster_baseline_history" h
+    ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
+)
+SELECT c.name AS cluster, mt.key AS metric,
+       n.captured_at AS newest_period, n.source AS newest_source,
+       n.baseline_consumption AS newest_consumption,
+       n.baseline_capacity    AS newest_capacity,
+       b.baseline_consumption AS served_consumption,
+       b.baseline_capacity    AS served_capacity
+FROM "cluster_metric_baselines" b
+JOIN newest n         ON n.cluster_id = b.cluster_id
+                     AND n.metric_type_id = b.metric_type_id
+JOIN "clusters" c     ON c.id  = b.cluster_id
+JOIN "metric_types" mt ON mt.id = b.metric_type_id
+WHERE n.source = 'manual'
+  AND ((n.baseline_consumption, n.baseline_capacity)
+       IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity))
+ORDER BY c.name, mt.key;
+SQL
+```
+
+```bash
+# 2. Promote the served value onto the newest period, in place. Self-verifying: the
+#    same guard runs at the end and RAISEs if any pair still disagrees, which rolls
+#    the whole transaction back.
+docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+
+WITH newest AS (
+    SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
+           h.id, h.cluster_id, h.metric_type_id, h.source,
+           h.baseline_consumption, h.baseline_capacity
+    FROM "cluster_baseline_history" h
+    ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
+)
+UPDATE "cluster_baseline_history" t
+SET baseline_consumption = b.baseline_consumption,
+    baseline_capacity    = b.baseline_capacity
+FROM newest n
+JOIN "cluster_metric_baselines" b
+  ON b.cluster_id = n.cluster_id AND b.metric_type_id = n.metric_type_id
+WHERE t.id = n.id
+  AND n.source = 'manual'
+  AND ((n.baseline_consumption, n.baseline_capacity)
+       IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity));
+
+DO $$
+DECLARE
+    remaining BIGINT;
+BEGIN
+    WITH newest AS (
+        SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
+               h.cluster_id, h.metric_type_id, h.source,
+               h.baseline_consumption, h.baseline_capacity
+        FROM "cluster_baseline_history" h
+        ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
+    )
+    SELECT COUNT(*) INTO remaining
+    FROM "cluster_metric_baselines" b
+    JOIN newest n ON n.cluster_id = b.cluster_id
+                 AND n.metric_type_id = b.metric_type_id
+    WHERE n.source = 'manual'
+      AND ((n.baseline_consumption, n.baseline_capacity)
+           IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity));
+    IF remaining <> 0 THEN
+        RAISE EXCEPTION
+            'Rolled back: % pair(s) still disagree. Stop and inspect before touching anything.',
+            remaining;
+    END IF;
+END $$;
+
+COMMIT;
+SQL
+```
+
+This **re-values the newest row, it does not re-date anything** — the period the
+operator recorded is left alone, and only the numbers move onto it. The alternative
+(deleting the stale backfill row so the correction becomes newest again) also clears
+the guard but throws away a measurement, and it back-dates the cluster's
+`ClusterResponse.baselineDate` by however far the correction reached, which can flip
+a healthy cluster to stale. Prefer the `UPDATE`.
+
+> **A pair where the newest row is `source = 'vsphere'` is deliberately not
+> reported.** A manual cluster later connected to vCenter legitimately holds a newer,
+> authoritative snapshot whose numbers do not match the stale legacy value nobody has
+> written to since; that divergence is correct and must not block the deploy. If you
+> widen the query above by dropping `n.source = 'manual'`, you will "find" those
+> clusters and, by fixing them, overwrite real measurements with stale manual ones.
+
 #### Clearing the failed-migration record
 
 **Not optional, and not only a roll-forward step.** Prisma recorded the failed
@@ -444,16 +565,16 @@ in the dump being checked and not in the schema afterwards.
   on the fleet console, because metrics came from a table the sync never wrote.
 - **Synced clusters report utilization as unknown** where their baseline capacity is
   0 and their hosts carry the capacity — the documented Q9d/#200 intent, now visible.
-- **Baseline VALUES may change on a cluster that was re-dated during the dual-write
-  release**, specifically where that edit anchored the baseline to a period _older_
-  than the backfilled `baseline_date`. `ClusterResponse.metrics` now follows the
-  newest period rather than the last write, so the older correction stops outranking
-  the stale backfill row and the displayed numbers revert to the backfill's. Neither
-  migration guard catches this — the two rows are in different months, so nothing
-  collides — and once `cluster_metric_baselines` is dropped there is no record of
-  which row was previously served. **Spot-check any cluster whose baseline date was
-  corrected backwards in that window** and re-enter the value if it reads wrong;
-  saving it appends a correction at the newest period, which then wins outright.
+- **A cluster re-dated backwards during the dual-write release now blocks the
+  deploy instead of silently changing value.** Where such an edit anchored the
+  baseline to a period _older_ than the backfilled `baseline_date`,
+  `ClusterResponse.metrics` would follow the newest period rather than the last
+  write, so the older correction stops outranking the stale backfill row and the
+  displayed numbers revert to the backfill's. Guards 1 and 2 do not see it — the
+  two rows are in different months, so nothing collides — but **Guard 3** does,
+  by comparing the legacy value against the newest history row while both are
+  still present. You will hit a refused migration rather than a wrong number; see
+  "Guard 3 — the served value would change" for the fix.
 - **A date-only baseline edit can now be refused.** Changing only the date re-dates
   an existing measurement, so it can move a baseline _backwards_ only. Submitting a
   later date alone returns 422 `BASELINE_PERIOD_NOT_MEASURED`, because there is no

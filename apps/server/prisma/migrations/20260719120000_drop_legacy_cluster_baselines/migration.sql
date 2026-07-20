@@ -64,18 +64,15 @@ END $$;
 -- API. The #177 orphan guard above does not catch it: a history row for that
 -- (cluster, metric) does exist.
 --
--- SCOPE — what this step does NOT cover. It only closes the same-month case,
+-- SCOPE — what this step does NOT cover. It only closes the SAME-month case,
 -- where snapping makes the correction and the backfill collide (the guard) or
 -- coincide. A correction that re-anchored to a DIFFERENT month is untouched by
--- normalisation and still changes displayed values: an operator who re-dated a
--- baseline to a period OLDER than the backfilled `baseline_date` left the stale
--- backfill row holding MAX(captured_at), so it becomes the served row while the
--- legacy table was serving the correction. Both guards pass — the (cluster,
--- metric) history row exists and the two rows are in different months — and
--- nothing here can tell the two apart, because after the legacy table is gone
--- there is no record of which row was being served. This is a deliberate,
--- documented value change rather than a defect to detect: see "After this
--- migration: what changed for operators" in docs/operations.md.
+-- normalisation: an operator who re-dated a baseline to a period OLDER than the
+-- backfilled `baseline_date` left the stale backfill row holding
+-- MAX(captured_at), so it becomes the served row while the legacy table was
+-- serving the correction. Both guards above pass — the (cluster, metric) history
+-- row exists, and the two rows are in different months. Guard 3 below is what
+-- catches that one, by comparing values rather than dates.
 --
 -- The guard runs first so a database where snapping would COLLAPSE two rows into
 -- one period fails the deploy for operator-reviewed cleanup, rather than having
@@ -84,8 +81,8 @@ END $$;
 -- back and `prisma migrate deploy` exits non-zero — Fastify never starts.
 --
 -- @ai-warning The `lcm:step-start` / `lcm:step-end` sentinels are load-bearing:
--- baseline-history-migration.test.ts slices these two statements out of THIS file
--- and executes them against seeded rows, so the suite exercises the shipped SQL
+-- baseline-history-migration.test.ts slices these statements out of THIS file and
+-- executes them against seeded rows, so the suite exercises the shipped SQL
 -- instead of a copy that can drift away from it. Keep them if you edit the steps.
 
 -- lcm:step-start normalise-captured-at-guard
@@ -113,6 +110,97 @@ UPDATE "cluster_baseline_history"
 SET "captured_at" = date_trunc('month', "captured_at")::date
 WHERE "captured_at" <> date_trunc('month', "captured_at")::date;
 -- lcm:step-end normalise-captured-at
+
+-- GUARD 3 — the served VALUE must survive the drop.
+--
+-- Guards 1 and 2 ask date questions: does a history row exist, and would snapping
+-- destroy one? Neither can see the different-month case described above, and it is
+-- the one that silently changes a purchasing number. Reproduced against this
+-- migration before this guard existed: baseline_date 2026-06-20, so the expand
+-- backfill wrote history@2026-06-20 = 100; the operator later corrected the
+-- baseline re-anchoring backwards, writing history@2026-03-01 = 250 and (dual
+-- write) legacy = 250. 250 is what clients were served. After the DROP,
+-- newest-per-metric is MAX(captured_at) = the normalised 2026-06-01 row = 100.
+-- Observed: 250 -> 100, no error, and no way to reach the correct row through the
+-- API afterwards.
+--
+-- It IS detectable, and an earlier revision of this file wrongly claimed it was
+-- not ("after the legacy table is gone there is no record of which row was being
+-- served"). That reasoning confused when the DROP happens with when the guard
+-- runs. Every guard here runs BEFORE the DROP, inside the same transaction, with
+-- `cluster_metric_baselines` fully populated and holding exactly what the
+-- application was serving. Comparing the two sides is all the detection takes, and
+-- the window for it closes one statement later.
+--
+-- Placed AFTER normalisation on purpose: "newest" must be computed on the
+-- `captured_at` values the application will actually see once this migration
+-- commits, not on the pre-snap ones.
+--
+-- It also DEPENDS on guard 1 having already passed. The join below is an INNER
+-- join, so a legacy row with no history row at all would simply not be compared —
+-- exactly the case that would lose its value outright. Guard 1 proves that case
+-- does not exist, which is what makes this guard's coverage total over the legacy
+-- table rather than merely over the pairs that happen to match.
+--
+-- @ai-warning THE source='manual' RESTRICTION IS A FALSE-POSITIVE EXCLUSION, not
+-- an optimisation — widening it blocks legitimate deploys. A manual cluster later
+-- connected to vCenter legitimately holds a newer, authoritative `vsphere` row
+-- whose numbers do not match the stale legacy value nobody has written since; that
+-- divergence is CORRECT and must not fail the deploy. In the defect case the
+-- newest row is the expand migration's backfill, which is source='manual', so the
+-- restriction keeps the detection. Clusters synced from birth have no legacy row
+-- at all and the INNER JOIN excludes them — do not make it a LEFT JOIN.
+--
+-- Compared on the NUMERIC type. Both columns are DECIMAL(18,3), so Postgres has
+-- already normalised the scale on each side and 250 vs 250.000 cannot arise here
+-- — but comparing the values rather than a text rendering is the property that
+-- keeps that true if either column's scale is ever widened. `IS DISTINCT FROM`
+-- rather than `<>` for the same reason: both columns are NOT NULL today, and a
+-- NULL slipping in must read as a difference, not swallow the whole row.
+
+-- lcm:step-start legacy-value-comparison-guard
+DO $$
+DECLARE
+    divergent_count BIGINT;
+    divergent_sample TEXT;
+BEGIN
+    WITH newest AS (
+        -- One row per (cluster, metric): the period unique index makes
+        -- `captured_at` unique within a pair, so DISTINCT ON is deterministic.
+        SELECT DISTINCT ON (h."cluster_id", h."metric_type_id")
+               h."cluster_id",
+               h."metric_type_id",
+               h."source",
+               h."baseline_consumption",
+               h."baseline_capacity"
+        FROM "cluster_baseline_history" h
+        ORDER BY h."cluster_id", h."metric_type_id", h."captured_at" DESC
+    ),
+    divergent AS (
+        SELECT c."name" AS cluster_name, m."key" AS metric_key
+        FROM "cluster_metric_baselines" b
+        JOIN newest n
+          ON n."cluster_id" = b."cluster_id"
+         AND n."metric_type_id" = b."metric_type_id"
+        JOIN "clusters" c ON c."id" = b."cluster_id"
+        JOIN "metric_types" m ON m."id" = b."metric_type_id"
+        WHERE n."source" = 'manual'
+          AND (n."baseline_consumption" IS DISTINCT FROM b."baseline_consumption"
+            OR n."baseline_capacity" IS DISTINCT FROM b."baseline_capacity")
+    )
+    SELECT
+        (SELECT COUNT(*) FROM divergent),
+        (SELECT string_agg(cluster_name || '/' || metric_key, ', ' ORDER BY cluster_name, metric_key)
+         FROM (SELECT * FROM divergent ORDER BY cluster_name, metric_key LIMIT 20) AS capped)
+    INTO divergent_count, divergent_sample;
+
+    IF divergent_count <> 0 THEN
+        RAISE EXCEPTION
+            'Refusing to drop cluster_metric_baselines: % (cluster, metric) pair(s) disagree between the legacy baseline and the newest cluster_baseline_history row, so dropping the legacy table would silently change the value served for them. Affected (up to 20 shown): %. Reconcile them before deploying — see "Guard 3" under the migration-failure runbook in docs/operations.md.',
+            divergent_count, divergent_sample;
+    END IF;
+END $$;
+-- lcm:step-end legacy-value-comparison-guard
 
 DROP TABLE "cluster_metric_baselines";
 
