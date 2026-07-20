@@ -78,6 +78,7 @@ describe('/_app/settings admin-only Authentication panel gate', () => {
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
+      idempotencyKeyRetentionHours: 24,
     });
     vi.spyOn(api.settings.categories, 'list').mockResolvedValue([]);
     // Only actually fetched when the panel is visible, but harmless to mock

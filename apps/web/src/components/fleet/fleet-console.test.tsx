@@ -171,7 +171,13 @@ function makeCluster(overrides: Partial<ClusterResponse> = {}): ClusterResponse 
 }
 
 function makeTenantSettings(overrides: Partial<TenantSettings> = {}): TenantSettings {
-  return { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 13, ...overrides };
+  return {
+    warnThreshold: 0.7,
+    critThreshold: 0.9,
+    procurementLeadTimeWeeks: 13,
+    idempotencyKeyRetentionHours: 24,
+    ...overrides,
+  };
 }
 
 function makeForecast(overrides: Partial<ForecastResponse> = {}): ForecastResponse {

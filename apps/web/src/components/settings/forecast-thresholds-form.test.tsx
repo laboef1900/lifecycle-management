@@ -27,11 +27,13 @@ describe('<ForecastThresholdsForm>', () => {
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
+      idempotencyKeyRetentionHours: 24,
     });
     vi.spyOn(api.settings.tenant, 'update').mockResolvedValue({
       warnThreshold: 0.65,
       critThreshold: 0.85,
       procurementLeadTimeWeeks: 6,
+      idempotencyKeyRetentionHours: 12,
     });
   });
 
@@ -69,6 +71,7 @@ describe('<ForecastThresholdsForm>', () => {
         warnThreshold: 0.65,
         critThreshold: 0.85,
         procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
       });
     });
   });
@@ -120,6 +123,7 @@ describe('<ForecastThresholdsForm>', () => {
         warnThreshold: 0.7,
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 12,
+        idempotencyKeyRetentionHours: 24,
       });
     });
   });
@@ -173,5 +177,42 @@ describe('<ForecastThresholdsForm>', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Something broke');
     });
+  });
+
+  it('loads and displays the current retention hours', async () => {
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() => {
+      expect(screen.getByLabelText(/idempotency key retention/i)).toHaveValue(24);
+    });
+  });
+
+  it('submits an edited retention value alongside the unchanged thresholds', async () => {
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/idempotency key retention/i)).toHaveValue(24),
+    );
+    await userEvent.clear(screen.getByLabelText(/idempotency key retention/i));
+    await userEvent.type(screen.getByLabelText(/idempotency key retention/i), '48');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => {
+      expect(api.settings.tenant.update).toHaveBeenCalledWith({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 48,
+      });
+    });
+  });
+
+  it('shows inline error when retention hours is outside 1..168', async () => {
+    renderWithClient(<ForecastThresholdsForm />);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/idempotency key retention/i)).toHaveValue(24),
+    );
+    await userEvent.clear(screen.getByLabelText(/idempotency key retention/i));
+    await userEvent.type(screen.getByLabelText(/idempotency key retention/i), '200');
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/1 (and|to) 168/i);
+    expect(api.settings.tenant.update).not.toHaveBeenCalled();
   });
 });
