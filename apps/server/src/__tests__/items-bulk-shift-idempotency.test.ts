@@ -129,11 +129,21 @@ describe('POST /api/items/bulk-shift-dates — idempotency', () => {
 
     const [a, b] = await Promise.all([shift(payload, key), shift(payload, key)]);
     const statuses = [a.statusCode, b.statusCode].sort();
-    // One committed (200); the loser hits a serialization conflict. Per the
-    // existing @ai-note on bulkShiftDates, that conflict is NOT translated to
-    // a friendly code here and surfaces as a sanitized 500 — accepted
-    // behaviour, unchanged by this feature.
-    expect(statuses).toEqual([200, 500]);
+    // The winner always commits (200). The loser's outcome depends on timing:
+    // if its transaction starts before the winner commits, it collides and
+    // hits a genuine Postgres serialization conflict — per the existing
+    // @ai-note on bulkShiftDates, that is NOT translated to a friendly code
+    // here and surfaces as a sanitized 500 (accepted behaviour, unchanged by
+    // this feature). If it starts late enough to see the winner's already-
+    // committed idempotency-key row, it instead gets a legitimate 200 cache
+    // hit — also correct, and NOT a bug: this is `record()` reading
+    // tenant_settings (a fix for #263) rather than upserting it, which
+    // narrows the transaction and makes the cache-hit outcome more likely
+    // than before. Both outcomes are safe; assert on the invariant that
+    // actually matters (exactly one shift applied) rather than which of the
+    // two safe races happened to win.
+    expect(statuses.every((s) => s === 200 || s === 500)).toBe(true);
+    expect(statuses).toContain(200);
 
     const row = await prisma.item.findUniqueOrThrow({ where: { id: app.id } });
     // Exactly one month, not two — the whole point of the test.
