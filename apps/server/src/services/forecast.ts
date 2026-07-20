@@ -52,7 +52,10 @@ export interface ForecastInput {
    *
    * Snapped to the first of the month by every caller: `capturedAt` is a period
    * anchor, so comparing a raw instant against month-aligned delta dates would
-   * shift the boundary mid-month. `null`/omitted falls back to `baselineDate`.
+   * shift the boundary mid-month.
+   *
+   * `null`/omitted on a `vsphere` baseline absorbs NOTHING — there is no fallback
+   * to `baselineDate`. See `absorbsDeltas` for why that is the fail-safe reading.
    */
   baselineMeasuredAt?: Date | null;
   baselineConsumption: number;
@@ -260,15 +263,38 @@ export function computeForecast(
  * SAME instant, so for any row never re-dated
  * `startOfUtcMonth(observedAt) === capturedAt` exactly, and the two expressions
  * are indistinguishable. They diverge only for a row whose `capturedAt` was
- * moved — which is precisely the defect. Manual and backfilled rows carry
- * `observedAt = NULL` (the expand migration wrote it so) and fall back to
- * `baselineDate`, which the source gate above makes unreachable anyway. The
- * change is therefore strictly a NARROWING of when an editable field decides a
- * purchasing number.
+ * moved — which is precisely the defect.
+ *
+ * @ai-warning A `vsphere` row with NO measured period absorbs NOTHING. It does
+ * NOT fall back to `baselineDate`. The fallback used to exist and was removed
+ * deliberately: `baselineDate` is the operator-editable label this function was
+ * just taken off, so falling back to it reinstates the defect the moment the
+ * `source='vsphere' => observed_at NOT NULL` invariant breaks — and nothing
+ * ENFORCES that invariant. There is no CHECK constraint, and the Guard-1 runbook
+ * in `docs/operations.md` tells operators to re-run the expand `INSERT ... SELECT`
+ * by hand, which is exactly the path that produces a `vsphere` row with a NULL
+ * `observed_at`. A silent fallback would turn that hand-write into a purchasing
+ * change nobody made.
+ *
+ * Absorbing nothing is the FAIL-SAFE direction, and it is safe on both deltas at
+ * once — which is what no boundary MOVE can be. A `consumptionDelta` that is not
+ * absorbed is counted, so consumption errs HIGH; a `capacityDelta` that is not
+ * absorbed is... also counted, which errs capacity HIGH. Those pull opposite ways
+ * on utilization in general, so the claim is narrower and rests on the Q9a
+ * invariant: `VsphereSnapshotService` writes `baselineCapacity: 0` because the
+ * synced HOSTS are the capacity, so a synced cluster's capacity comes from
+ * inventory and the scalar contributes nothing to double-count. The residual risk
+ * is a duplicated `consumptionDelta` — buy earlier than strictly needed, never
+ * later. That is the direction this whole path is defended in.
+ *
+ * Reachable in production only if the invariant is already broken, so this branch
+ * is a guard, not a code path: manual rows never reach it (the source gate above
+ * returns first) and every `VsphereSnapshotService` row carries `observedAt`.
  */
 function absorbed(effectiveDate: Date, input: ForecastInput): boolean {
   if (input.baselineSource !== 'vsphere') return false;
-  const boundary = input.baselineMeasuredAt ?? input.baselineDate;
+  const boundary = input.baselineMeasuredAt;
+  if (!boundary) return false;
   return effectiveDate <= boundary;
 }
 

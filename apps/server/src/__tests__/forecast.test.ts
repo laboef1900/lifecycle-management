@@ -311,12 +311,30 @@ describe('computeForecast — absorption boundary vs. the editable baseline date
     expect(result.months[0]?.utilization).toBe(0.5);
   });
 
-  it('falls back to the baseline date when no measurement period is known', () => {
-    // Every pre-existing caller and fixture, and every backfilled row (the expand
-    // migration wrote observed_at NULL). Behaviour must be exactly what it was.
-    const result = computeForecast(anchored({}), d('2026-07-01'), d('2026-07-01'));
+  it('absorbs NOTHING when no measurement period is known, rather than trusting the label', () => {
+    // The fail-safe. A `vsphere` row with no measured period does NOT fall back to
+    // `baselineDate` — that is the operator-editable label this rule was just taken
+    // off, so a fallback reinstates the defect for exactly the rows whose
+    // `source='vsphere' => observed_at NOT NULL` invariant is broken, and nothing
+    // enforces that invariant (no CHECK constraint; the Guard-1 runbook in
+    // docs/operations.md has operators re-run the expand `INSERT ... SELECT`).
+    //
+    // The delta is dated BEFORE the label on purpose. That is the only shape that
+    // tells the two readings apart: the removed fallback absorbed it (capacity
+    // 2000), absorbing nothing counts it (2500). This block's default fixture is
+    // dated AFTER the label, where both readings agree — which is exactly how a
+    // fallback could hide behind a green test.
+    const result = computeForecast(
+      anchored({
+        events: [event('e0', '2026-03-01', 'hardware_change', 'Earlier expansion', null, 500)],
+      }),
+      d('2026-07-01'),
+      d('2026-07-01'),
+    );
     expect(result.months[0]?.capacity).toBe(2500);
     expect(result.months[0]?.utilization).toBe(0.4);
+    // Not the removed `baselineDate` fallback, which read 2000 / 0.5 here.
+    expect(result.months[0]?.capacity).not.toBe(2000);
   });
 
   it('stays inert for a manual baseline, whatever the measurement period says', () => {
