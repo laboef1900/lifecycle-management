@@ -1641,10 +1641,68 @@ describe('PUT /api/clusters/:id — a re-date cannot move the absorption boundar
     expect(response.metrics[0]?.utilization).toBe(0.4);
   });
 
-  it('leaves a manual baseline unabsorbed however its period is re-dated', async () => {
-    // The source gate short-circuits before any date comparison (docs/vision.md
-    // Invariant 1: a manual baseline is the portion NOT modelled by tracked
-    // entities). The new boundary must not reach this cluster at all.
+  it('keeps absorption when a human corrects a synced cluster’s consumption', async () => {
+    // THE EIGHTH DEFECT, and the reason `absorbed` no longer consults `source` at
+    // all. Moving the BOUNDARY onto the immutable measured period was necessary
+    // and not sufficient: the GATE was still `source`, and `update()`'s upsert
+    // sets `source: 'manual'` unconditionally on any value correction. So a
+    // dateless 1% consumption fix — exactly what baseline-edit-form.tsx sends —
+    // switched absorption off wholesale and re-added a `capacityDelta` the June
+    // measurement already contains.
+    //
+    // Observed before the fix: currentCapacity 2000 -> 2500, utilization
+    // 0.5 -> 0.404. A +1% CONSUMPTION correction invented 500 GB of CAPACITY and
+    // moved utilization DOWN — the defer-hardware direction, from an edit that
+    // never mentioned capacity. Irreversible through the API, too: nothing ever
+    // writes `source` back to 'vsphere' (the snapshot job is createMany +
+    // skipDuplicates, which never updates an existing row).
+    const clusterId = await syncedClusterMeasuredInJune(
+      'absorb-survives-correction',
+      new Date(Date.UTC(2026, 5, 17, 9, 22)),
+    );
+
+    const before = await read(clusterId);
+    expect(before.metrics[0]?.currentCapacity).toBe(2000);
+    expect(before.metrics[0]?.utilization).toBe(0.5);
+
+    // Dateless, single metric, consumption only — and `baselineCapacity: 0`
+    // because the Q9a invariant refuses anything else on a synced cluster.
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${clusterId}`,
+      payload: {
+        baselines: [{ metricTypeKey: 'memory_gb', baselineConsumption: 1010, baselineCapacity: 0 }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await read(clusterId);
+    // The corrected number is the ONLY thing that moved.
+    expect(after.metrics[0]?.baselineConsumption).toBe(1010);
+    expect(after.metrics[0]?.currentConsumption).toBe(1010);
+    // Capacity and utilization are untouched: May's +500 is still inside the June
+    // measurement, because the measurement still happened in June. A human
+    // correcting its VALUE does not un-take it.
+    expect(after.metrics[0]?.currentCapacity).toBe(2000);
+    expect(after.metrics[0]?.utilization).toBe(0.505);
+
+    // And the row really did flip to manual — the absorption survives DESPITE
+    // that, which is the point. Asserted so a future "fix" that keeps the number
+    // right by not flipping `source` cannot pass this test by accident.
+    const row = await prisma.clusterBaselineHistory.findFirstOrThrow({
+      where: { clusterId },
+    });
+    expect(row.source).toBe('manual');
+    expect(row.observedAt).not.toBeNull();
+  });
+
+  it('leaves a genuinely manual baseline unabsorbed however its period is re-dated', async () => {
+    // Q9a, preserved exactly where it applies. A genuinely manual row is not
+    // "source = manual" — it is a row that was never MEASURED, i.e. `observedAt`
+    // is NULL, which is what every manual write path produces (the upsert in
+    // `update()` sets no `observedAt`, and `POST /api/clusters` does not either).
+    // docs/vision.md Invariant 1: a manual baseline is the portion NOT modelled by
+    // tracked entities, so nothing tracked is ever inside it.
     const cluster = await makeCluster(prisma, {
       name: uniqueName('manual-boundary'),
       baselineDate: new Date(Date.UTC(2026, 5, 1)),

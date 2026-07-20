@@ -274,12 +274,16 @@ describe('computeForecast — perf', () => {
  * consumption AND capacity, so there is no safe direction: narrowing the boundary
  * re-adds a `capacityDelta` the snapshot already measured, capacity inflates,
  * utilization falls, and hardware is deferred with nothing measured.
+ *
+ * The same argument retired the `source` GATE one round later. `source` is not a
+ * date, but it is just as mutable — `ClustersService.update()` flips it to
+ * 'manual' on any value correction — and flipping it turned absorption off
+ * ENTIRELY, which is the widest possible move of the same boundary.
  */
 describe('computeForecast — absorption boundary vs. the editable baseline date', () => {
   const anchored = (overrides: Partial<ForecastInput>): ForecastInput => ({
     // The LABEL, re-dated backwards by an operator from 2026-06 to 2026-04.
     baselineDate: d('2026-04-01'),
-    baselineSource: 'vsphere',
     baselineConsumption: 1000,
     // Zero by the Q9a invariant: on a synced cluster the hosts ARE the capacity.
     baselineCapacity: 0,
@@ -337,17 +341,42 @@ describe('computeForecast — absorption boundary vs. the editable baseline date
     expect(result.months[0]?.capacity).not.toBe(2000);
   });
 
-  it('stays inert for a manual baseline, whatever the measurement period says', () => {
-    // The source gate short-circuits first (docs/vision.md Invariant 1: a manual
-    // baseline is the portion NOT modelled by tracked entities, so nothing tracked
-    // is ever inside it). `baselineMeasuredAt` must not create absorption where
-    // there was none.
+  it('stays inert for a baseline that was never measured (Invariant 1)', () => {
+    // docs/vision.md Invariant 1: a manual baseline is the portion NOT modelled by
+    // tracked entities, so nothing tracked is ever inside it. On this interface a
+    // manual baseline IS `baselineMeasuredAt: null` — no manual write path sets
+    // `observedAt` — so the same absent-measurement branch expresses Invariant 1
+    // and the broken-invariant guard at once.
+    //
+    // CHANGED EXPECTATION, deliberately: this used to pass
+    // `baselineSource: 'manual'` TOGETHER WITH a measured period, and assert that
+    // the source gate suppressed absorption. That combination is unreachable — a
+    // row with an `observedAt` was measured — and pinning it is what kept the
+    // mutable `source` gate alive through several review rounds. What the gate
+    // actually bought in production was the reverse of this test's intent: it let
+    // a value correction (which flips `source` to 'manual') switch absorption off
+    // on a genuinely MEASURED row. The honest fixture is the absent measurement.
     const result = computeForecast(
-      anchored({ baselineSource: 'manual', baselineMeasuredAt: d('2026-06-01') }),
+      anchored({ baselineMeasuredAt: null }),
       d('2026-07-01'),
       d('2026-07-01'),
     );
     expect(result.months[0]?.capacity).toBe(2500);
     expect(result.months[0]?.utilization).toBe(0.4);
+  });
+
+  it('absorbs on a measured row even after its source was flipped to manual', () => {
+    // The eighth defect, at the level of the pure function: `source` is not an
+    // input here at all any more, so there is nothing for a value correction to
+    // flip. The fixture is the post-correction row — measured in June, relabelled
+    // manual by `ClustersService.update()`'s upsert — and May's +500 stays inside
+    // the June measurement.
+    const result = computeForecast(
+      anchored({ baselineMeasuredAt: d('2026-06-01'), baselineConsumption: 1010 }),
+      d('2026-07-01'),
+      d('2026-07-01'),
+    );
+    expect(result.months[0]?.capacity).toBe(2000);
+    expect(result.months[0]?.utilization).toBe(0.505);
   });
 });

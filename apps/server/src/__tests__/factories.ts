@@ -102,8 +102,12 @@ export interface MakeClusterOptions {
    *     state, and a fixture in it silently exercises the null guard instead of
    *     the boundary the test means to test — which is how the regression corpus
    *     for defects 1-6 ended up on the replaced code path.
-   *   - a `manual` row gets `null`. Manual baselines are never measured, and the
-   *     source gate in `absorbed` returns before the column is read anyway.
+   *   - a `manual` row gets `null`. Manual baselines are never measured — no
+   *     manual write path sets `observedAt` — and a null measured period is
+   *     exactly what makes `absorbed` return false for them. That is now the ONLY
+   *     thing keeping a manual baseline unabsorbed: `absorbed` does not read
+   *     `source`, so a fixture that set `observedAt` on a manual row would
+   *     describe an absorbing baseline, not a manual one.
    *
    * Pass it explicitly (including `null`) only to fabricate a state deliberately:
    * a mid-month instant where the SNAP is what a test is pinning, or `null` on a

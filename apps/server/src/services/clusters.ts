@@ -847,20 +847,20 @@ export class ClustersService {
           // Anchoring every metric on the MIN would silently backdate the fresher
           // ones and move their currentConsumption/currentCapacity.
           baselineDate: b.capturedAt,
-          // What the anchor MEANS decides whether tracked deltas dated at or
-          // before it are already inside its numbers (`absorbed` in forecast.ts,
-          // recorded decision Q9b). forecast-loader has always passed this;
-          // the cluster endpoints could not, because the legacy baseline table
-          // had no `source` column. Reading both from the same history row is
-          // what converges them.
-          baselineSource: b.source === 'vsphere' ? 'vsphere' : 'manual',
-          // And the immutable period that measurement was taken in — see
-          // `absorbed` in forecast.ts. `capturedAt` above is a label the
-          // re-anchor above can move; `observedAt` is not, so a date edit can no
-          // longer shift which deltas the snapshot is deemed to contain. Snapped
-          // for the same reason forecast-loader snaps it: both columns come from
-          // one `measuredAt`, so this equals `capturedAt` on every row that was
-          // never re-dated.
+          // The immutable period the measurement was taken in, and the ONLY input
+          // to absorption (`absorbed` in forecast.ts, recorded decision Q9b).
+          // forecast-loader has always passed an absorption input; the cluster
+          // endpoints could not, because the legacy baseline table had no
+          // provenance at all. Reading it off the same history row is what
+          // converges them.
+          //
+          // `capturedAt` above is a label the re-anchor can move and `source` is a
+          // flag any value correction flips, so neither may gate this. `observedAt`
+          // is written once by VsphereSnapshotService and by nothing else, so
+          // neither a date edit nor a value edit can shift which deltas the
+          // measurement is deemed to contain. Snapped for the same reason
+          // forecast-loader snaps it: both columns come from one `measuredAt`, so
+          // this equals `capturedAt` on every row that was never re-dated.
           baselineMeasuredAt: b.observedAt ? startOfUtcMonth(b.observedAt) : null,
           baselineConsumption,
           baselineCapacity,

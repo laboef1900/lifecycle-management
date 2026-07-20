@@ -189,13 +189,17 @@ export class ForecastService {
     return {
       input: {
         baselineDate: anchor.capturedAt,
-        // What the anchor MEANS decides whether tracked deltas dated at or before
-        // it are already inside its numbers. See `absorbed` in forecast.ts.
-        baselineSource: anchor.source === 'vsphere' ? 'vsphere' : 'manual',
-        // The IMMUTABLE half of that decision. `capturedAt` above is a period
-        // label a baseline edit can re-date; `observedAt` is the instant vCenter
-        // was polled and no edit path writes it, so the absorption boundary stops
-        // moving when an operator corrects a date. SNAPPED, never the raw instant:
+        // Whether tracked deltas dated at or before the anchor are already inside
+        // its numbers is decided by ONE fact: was this baseline measured, and
+        // when. See `absorbed` in forecast.ts — and note that `source` is
+        // deliberately NOT passed, because it is mutable by a value edit that says
+        // nothing about when the measurement was taken. `capturedAt` above is a
+        // period label a baseline edit can re-date; `observedAt` is the instant
+        // vCenter was polled and no edit path writes it, so the absorption
+        // boundary stops moving when an operator corrects a date or a value. A row
+        // that was never measured has `observedAt = null` and absorbs nothing,
+        // which is exactly Invariant 1 for a manual baseline. SNAPPED, never the
+        // raw instant:
         // `VsphereSnapshotService` derives both columns from one `measuredAt`, so
         // `startOfUtcMonth(observedAt) === capturedAt` for every row never
         // re-dated — which is what makes this a provable no-op there.

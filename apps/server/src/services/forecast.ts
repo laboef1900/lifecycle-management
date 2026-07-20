@@ -38,24 +38,18 @@ export interface ForecastEvent {
 export interface ForecastInput {
   baselineDate: Date;
   /**
-   * What the anchoring baseline MEANS — which decides whether a delta dated at or
-   * before it is already contained in the measurement. See `absorbsDeltas`.
+   * The PERIOD the baseline was ACTUALLY MEASURED in, or `null`/omitted when it
+   * was never measured at all. This is the ONE input to absorption — see
+   * `absorbed`, and note in particular that the baseline's `source` is NOT an
+   * input to it and deliberately no longer appears on this interface.
    *
-   * Defaults to `'manual'` when omitted, preserving the semantics every existing
-   * caller and test relies on.
-   */
-  baselineSource?: 'manual' | 'vsphere';
-  /**
-   * The PERIOD the vSphere measurement was ACTUALLY taken in — immutable, unlike
-   * `baselineDate`, which is an operator-editable label. Absorption keys off this
-   * so re-dating a row cannot move the boundary. See `absorbsDeltas`.
+   * Immutable, unlike `baselineDate`, which is an operator-editable label.
+   * Derives from `ClusterBaselineHistory.observedAt`, written only by
+   * `VsphereSnapshotService` and touched by no edit path.
    *
    * Snapped to the first of the month by every caller: `capturedAt` is a period
    * anchor, so comparing a raw instant against month-aligned delta dates would
    * shift the boundary mid-month.
-   *
-   * `null`/omitted on a `vsphere` baseline absorbs NOTHING — there is no fallback
-   * to `baselineDate`. See `absorbsDeltas` for why that is the fail-safe reading.
    */
   baselineMeasuredAt?: Date | null;
   baselineConsumption: number;
@@ -217,26 +211,20 @@ export function computeForecast(
  * Is a delta already contained in the anchoring baseline, and therefore not to be
  * added again?
  *
- * @ai-warning The answer depends entirely on what the baseline MEANS, and the two
- * sources mean different things. Getting this wrong is silent and
- * purchasing-critical in both directions — filter too much and the forecast
- * under-reports consumption (hardware ordered too late); filter too little and it
- * double-counts (capacity that does not exist).
- *
- *   - `manual` — the admin enters the portion NOT modelled by tracked entities
- *     (docs/vision.md, Invariant 1). A tracked delta is therefore *never* inside
- *     it, whatever its date, so nothing is absorbed. This is long-standing,
- *     deliberately tested behaviour: see forecast-events.test.ts, "keeps a
- *     pre-window event active in every month of the window".
- *   - `vsphere` — the monthly snapshot measures TOTAL actual usage, so any delta
- *     dated at or before the capture is already inside the number and adding it
- *     double-counts. That is the absorption the epic #172 gate found (§D35).
+ * ONE question decides it: WAS THE BASELINE MEASURED, AND WHEN? A measurement
+ * records TOTAL actual usage at an instant, so any delta dated at or before it is
+ * already inside the number and adding it double-counts (the absorption the epic
+ * #172 gate found, §D35). A baseline that was never measured contains nothing but
+ * what an admin typed, and Invariant 1 (docs/vision.md) says what an admin types
+ * is the portion NOT modelled by tracked entities — so a tracked delta is never
+ * inside it, whatever its date. `baselineMeasuredAt === null` expresses exactly
+ * that second case, which is why it needs no separate branch.
  *
  * The boundary is `<=`: a delta effective on the capture date is treated as
- * already measured. A snapshot is taken at the first of the month, and an event
- * dated that same day describes a change during a month the snapshot has already
- * observed the start of — so the conservative reading (assume measured, do not
- * add) is the one that cannot invent capacity.
+ * already measured. A snapshot's period anchor is the first of the month, and an
+ * event dated that same day describes a change during a month the snapshot has
+ * already observed the start of — so the conservative reading (assume measured,
+ * do not add) is the one that cannot invent capacity.
  *
  * Filtering lives HERE, at forecast time, and must never move to write time: a
  * create-time check on `startedAt > capturedAt` is true when written and made
@@ -244,56 +232,78 @@ export function computeForecast(
  * automates. It would be green at write and wrong a month later, with no warning.
  * At forecast time it is self-correcting as the anchor advances.
  *
- * Recorded decisions Q9b (2026-07-17) and its source-aware amendment, raised when
- * implementation showed the uniform rule contradicted Invariant 1.
+ * Recorded decisions Q9b (2026-07-17) and its source-aware amendment; the source
+ * half of that amendment is superseded below, the Invariant-1 half is preserved.
  *
- * @ai-warning THE BOUNDARY IS `baselineMeasuredAt`, NOT `baselineDate`.
- * `baselineDate` is `ClusterBaselineHistory.capturedAt` — a period LABEL that
- * `PUT /api/clusters/:id` re-dates. Keying absorption on it made every date edit
- * a silent forecast edit, and this rule is all-or-nothing across BOTH deltas, so
- * neither direction is safe: narrowing the boundary counts more consumption
- * (safe) AND re-adds `capacityDelta`s the snapshot already measured — capacity
- * inflates, utilization falls, hardware is deferred, and nothing was measured.
- * `baselineMeasuredAt` derives from `observedAt`, written only by
- * `VsphereSnapshotService` and touched by no edit path, so the boundary is now
- * immutable for the row's lifetime.
+ * @ai-warning THE GATE IS THE MEASURED PERIOD, NOT `source`. Both of the obvious
+ * alternatives are defects that shipped here and were reverted:
  *
- * THEOREM (why this is not a behaviour change). `VsphereSnapshotService` writes
- * `capturedAt: startOfUtcMonth(measuredAt)` and `observedAt: measuredAt` from the
- * SAME instant, so for any row never re-dated
- * `startOfUtcMonth(observedAt) === capturedAt` exactly, and the two expressions
- * are indistinguishable. They diverge only for a row whose `capturedAt` was
- * moved — which is precisely the defect.
+ *   - `baselineDate` (`ClusterBaselineHistory.capturedAt`) is a period LABEL that
+ *     `PUT /api/clusters/:id` re-dates, so keying the boundary on it made every
+ *     date edit a silent forecast edit.
+ *   - `source` is MUTABLE TOO, and worse, mutable by an edit that says nothing
+ *     about dates: `ClustersService.update()`'s upsert writes `source: 'manual'`
+ *     unconditionally on any value correction. Gating on it meant a dateless 1%
+ *     consumption fix — the exact payload baseline-edit-form.tsx sends — turned
+ *     absorption off wholesale, re-adding every `capacityDelta` the measurement
+ *     already contained. Irreversibly: nothing ever writes `source` back to
+ *     `'vsphere'` (the snapshot job is createMany + skipDuplicates, which never
+ *     updates an existing row).
  *
- * @ai-warning A `vsphere` row with NO measured period absorbs NOTHING. It does
- * NOT fall back to `baselineDate`. The fallback used to exist and was removed
- * deliberately: `baselineDate` is the operator-editable label this function was
- * just taken off, so falling back to it reinstates the defect the moment the
- * `source='vsphere' => observed_at NOT NULL` invariant breaks — and nothing
- * ENFORCES that invariant. There is no CHECK constraint, and the Guard-1 runbook
- * in `docs/operations.md` tells operators to re-run the expand `INSERT ... SELECT`
- * by hand, which is exactly the path that produces a `vsphere` row with a NULL
- * `observed_at`. A silent fallback would turn that hand-write into a purchasing
- * change nobody made.
+ * `observedAt` is the only fact here that no edit path writes, which is what
+ * makes it the only safe gate. Whether a pre-capture delta is already inside the
+ * measurement is a fact about WHEN THE MEASUREMENT WAS TAKEN, not about who last
+ * typed a number into it.
  *
- * Absorbing nothing is the FAIL-SAFE direction, and it is safe on both deltas at
- * once — which is what no boundary MOVE can be. A `consumptionDelta` that is not
- * absorbed is counted, so consumption errs HIGH; a `capacityDelta` that is not
- * absorbed is... also counted, which errs capacity HIGH. Those pull opposite ways
- * on utilization in general, so the claim is narrower and rests on the Q9a
- * invariant: `VsphereSnapshotService` writes `baselineCapacity: 0` because the
- * synced HOSTS are the capacity, so a synced cluster's capacity comes from
- * inventory and the scalar contributes nothing to double-count. The residual risk
- * is a duplicated `consumptionDelta` — buy earlier than strictly needed, never
- * later. That is the direction this whole path is defended in.
+ * SEMANTIC CONSEQUENCE, stated explicitly because it is a deliberate behaviour
+ * change: a human correcting a synced cluster's consumption KEEPS absorption. The
+ * measurement still happened at that instant; the human corrected its VALUE.
+ * Invariant 1 is untouched by this — a genuinely manual baseline is one that was
+ * never measured, so it carries `observedAt = null` (no manual write path sets
+ * that column) and still absorbs nothing.
  *
- * Reachable in production only if the invariant is already broken, so this branch
- * is a guard, not a code path: manual rows never reach it (the source gate above
- * returns first) and every `VsphereSnapshotService` row carries `observedAt`.
+ * THEOREM (why the boundary move was not a behaviour change).
+ * `VsphereSnapshotService` writes `capturedAt: startOfUtcMonth(measuredAt)` and
+ * `observedAt: measuredAt` from the SAME instant, so for any row never re-dated
+ * `startOfUtcMonth(observedAt) === capturedAt` exactly.
+ *
+ * @ai-warning A `vsphere` row with NO measured period absorbs NOTHING, and does
+ * NOT fall back to `baselineDate` — that is the operator-editable label this
+ * function was taken off, so a fallback reinstates the defect the moment the
+ * `source='vsphere' => observed_at NOT NULL` invariant breaks. Nothing ENFORCES
+ * that invariant: there is no CHECK constraint, and the Guard-1 runbook in
+ * `docs/operations.md` tells operators to re-run the expand `INSERT ... SELECT`
+ * by hand, which is exactly the path that produces such a row.
+ *
+ * THE DIRECTION OF THAT FALL-BACK, checked per field rather than asserted. This
+ * used to claim absorbing nothing is "safe on both deltas at once" because
+ * `VsphereSnapshotService` writes `baselineCapacity: 0`. THAT WAS A NON-SEQUITUR
+ * and is deliberately recorded rather than quietly deleted: `baselineCapacity` (a
+ * scalar) and `capacityDelta` (events) are SEPARATE TERMS of
+ * `capacity = baselineCapacity + Σ hostCapacity + Σ non-absorbed capacityDelta`,
+ * and zeroing the first says nothing whatever about the third. The true behaviour
+ * is mixed and must be read one field at a time:
+ *
+ *   - an unabsorbed `consumptionDelta` is counted, so consumption errs HIGH —
+ *     utilization rises, buy EARLIER, safe;
+ *   - an unabsorbed `capacityDelta` is counted, so capacity errs HIGH —
+ *     utilization FALLS, buy LATER, UNSAFE.
+ *
+ * So this is not a uniformly safe direction, and no claim that it is may be
+ * restored. It is the RIGHT direction anyway, on different grounds: the row's
+ * measured period is unknown, the only other candidate is a field an operator can
+ * edit, and trusting that field lets a hand-written row silently change a
+ * purchasing number. `clusters.test.ts` pins the real consequence — capacity 2500
+ * and utilization 0.4 against the absorbed row's 2000 and 0.5 — so the unsafe
+ * half is asserted rather than argued away. It stays acceptable only because the
+ * branch is unreachable while the invariant holds: every `VsphereSnapshotService`
+ * row carries `observedAt`, and a row that was never measured is a manual
+ * baseline, where absorbing nothing is not a fail-safe but the correct answer.
  */
 function absorbed(effectiveDate: Date, input: ForecastInput): boolean {
-  if (input.baselineSource !== 'vsphere') return false;
   const boundary = input.baselineMeasuredAt;
+  // Never measured => nothing is inside a measurement. Covers manual baselines
+  // (Invariant 1) and the broken-invariant guard above with one expression.
   if (!boundary) return false;
   return effectiveDate <= boundary;
 }
