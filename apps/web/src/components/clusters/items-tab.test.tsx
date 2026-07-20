@@ -1,6 +1,7 @@
 import type { ItemResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
@@ -235,5 +236,162 @@ describe('ItemsTab', () => {
       /(?:^|\s)hover:bg-accent(?:\s|$)/.test(b.className),
     );
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('ItemsTab — bulk date shift (#256)', () => {
+  beforeEach(() => {
+    vi.spyOn(api.items, 'listByCluster').mockResolvedValue({
+      items: [makeApplication(), makeEvent()],
+      total: 2,
+      limit: 100,
+      offset: 0,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const openShiftDialog = async (user: ReturnType<typeof userEvent.setup>): Promise<void> => {
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all apps and events' }));
+    await user.click(screen.getByRole('button', { name: /Shift dates/ }));
+  };
+
+  it('hides the selection checkboxes from viewers', async () => {
+    renderTab(false);
+    await screen.findByText('openshift-lab');
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+
+  it('reveals the action bar with a live count once a row is selected', async () => {
+    const user = userEvent.setup();
+    renderTab();
+
+    expect(screen.queryByRole('button', { name: /Shift dates/ })).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Select openshift-lab' }));
+    expect(screen.getByRole('status')).toHaveTextContent('1 selected');
+    expect(screen.getByRole('button', { name: /Shift dates/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select Wachstum Q4' }));
+    expect(screen.getByRole('status')).toHaveTextContent('2 selected');
+  });
+
+  it('select-all toggles every row, and goes indeterminate on a partial selection', async () => {
+    const user = userEvent.setup();
+    renderTab();
+
+    const selectAll = (await screen.findByRole('checkbox', {
+      name: 'Select all apps and events',
+    })) as HTMLInputElement;
+
+    await user.click(selectAll);
+    expect(screen.getByRole('status')).toHaveTextContent('2 selected');
+    expect(selectAll.checked).toBe(true);
+    expect(selectAll.indeterminate).toBe(false);
+
+    // Unticking one row leaves the header in the mixed state.
+    await user.click(screen.getByRole('checkbox', { name: 'Select Wachstum Q4' }));
+    expect(screen.getByRole('status')).toHaveTextContent('1 selected');
+    expect(selectAll.checked).toBe(false);
+    expect(selectAll.indeterminate).toBe(true);
+
+    // Toggling the header again from the mixed state selects everything.
+    await user.click(selectAll);
+    expect(screen.getByRole('status')).toHaveTextContent('2 selected');
+  });
+
+  it('clears the selection and hides the action bar', async () => {
+    const user = userEvent.setup();
+    renderTab();
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Select openshift-lab' }));
+    await user.click(screen.getByRole('button', { name: 'Clear selection' }));
+
+    expect(screen.queryByRole('button', { name: /Shift dates/ })).not.toBeInTheDocument();
+  });
+
+  it('previews the old → new date for every selected entry before applying', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await openShiftDialog(user);
+
+    const preview = within(screen.getByRole('region', { name: 'Date change preview' }));
+
+    // Defaults are +1 month, so the app moves 2026-01-15 → 2026-02-15 and the
+    // event 2026-03-01 → 2026-04-01.
+    const appRow = preview.getByText('openshift-lab').closest('li');
+    expect(appRow).toHaveTextContent('2026-01-15');
+    expect(appRow).toHaveTextContent('2026-02-15');
+
+    const eventRow = preview.getByText('Wachstum Q4').closest('li');
+    expect(eventRow).toHaveTextContent('2026-03-01');
+    expect(eventRow).toHaveTextContent('2026-04-01');
+  });
+
+  it('tells the operator that an application s allocation dates cascade', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await openShiftDialog(user);
+
+    const preview = within(screen.getByRole('region', { name: 'Date change preview' }));
+    expect(preview.getByText('openshift-lab').closest('li')).toHaveTextContent(
+      'also moves 1 allocation date',
+    );
+    // The event carries no allocations, so it gets no cascade note.
+    expect(preview.getByText('Wachstum Q4').closest('li')).not.toHaveTextContent('also moves');
+  });
+
+  it('recomputes the preview when the direction or unit changes', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await openShiftDialog(user);
+
+    await user.click(screen.getByRole('button', { name: 'Earlier' }));
+    const preview = within(screen.getByRole('region', { name: 'Date change preview' }));
+    expect(preview.getByText('Wachstum Q4').closest('li')).toHaveTextContent('2026-02-01');
+
+    await user.click(screen.getByRole('button', { name: 'Days' }));
+    expect(preview.getByText('Wachstum Q4').closest('li')).toHaveTextContent('2026-02-28');
+  });
+
+  it('sends one signed shift for the whole selection and clears it afterwards', async () => {
+    const user = userEvent.setup();
+    const bulkShift = vi.spyOn(api.items, 'bulkShiftDates').mockResolvedValue({
+      shifted: 2,
+      items: [],
+    });
+    renderTab();
+    await openShiftDialog(user);
+
+    await user.click(screen.getByRole('button', { name: 'Earlier' }));
+    await user.clear(screen.getByLabelText(/Amount/));
+    await user.type(screen.getByLabelText(/Amount/), '3');
+    await user.click(screen.getByRole('button', { name: 'Shift 2 entries' }));
+
+    await waitFor(() =>
+      expect(bulkShift).toHaveBeenCalledWith({
+        itemIds: ['app-1', 'evt-1'],
+        shift: { amount: -3, unit: 'months' },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /Shift dates/ })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('blocks the apply button while the amount is invalid', async () => {
+    const user = userEvent.setup();
+    const bulkShift = vi.spyOn(api.items, 'bulkShiftDates');
+    renderTab();
+    await openShiftDialog(user);
+
+    await user.clear(screen.getByLabelText(/Amount/));
+    await user.type(screen.getByLabelText(/Amount/), '999');
+
+    expect(screen.getByText('At most 120 months')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Shift 2 entries' })).toBeDisabled();
+    expect(bulkShift).not.toHaveBeenCalled();
   });
 });
