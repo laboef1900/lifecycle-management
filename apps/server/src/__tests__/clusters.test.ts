@@ -1420,6 +1420,219 @@ describe('PUT /api/clusters/:id — a re-dated row keeps its provenance', () => 
   });
 });
 
+/**
+ * THE SEVENTH DEFECT in this write path, and the reason `absorbed` no longer
+ * reads the operator-editable date at all.
+ *
+ * Every earlier fix kept the absorption boundary ON `capturedAt` and constrained
+ * the ways `capturedAt` could move. That closes cases one at a time and can never
+ * close them all, because the boundary itself is editable: any accepted re-date
+ * moves it, and `absorbed` is all-or-nothing across consumption AND capacity, so
+ * there is no safe direction to move it in. Narrowing counts more consumption
+ * (safe) and simultaneously re-adds `capacityDelta`s the snapshot already
+ * measured (unsafe — capacity inflates, utilization falls, hardware is deferred).
+ *
+ * The test above pins a delta dated before BOTH anchors, which no boundary in
+ * that range can un-absorb. The gap is a delta dated BETWEEN the target and the
+ * real measurement: the snapshot genuinely contains it, and the re-date used to
+ * throw it back into the forecast. Fix: the boundary derives from `observedAt`,
+ * which `VsphereSnapshotService` writes once and nothing else ever touches.
+ */
+describe('PUT /api/clusters/:id — a re-date cannot move the absorption boundary', () => {
+  async function syncedClusterMeasuredInJune(
+    name: string,
+    observedAt: Date | null,
+  ): Promise<string> {
+    const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    const cluster = await prisma.cluster.create({
+      data: {
+        tenantId: 'default',
+        name: uniqueName(name),
+        source: 'vsphere',
+        baselineHistory: {
+          create: {
+            tenantId: 'default',
+            metricTypeId: metric.id,
+            // The period LABEL, as VsphereSnapshotService snaps it.
+            capturedAt: new Date(Date.UTC(2026, 5, 1)),
+            source: 'vsphere',
+            // The real polling instant that label was snapped FROM. Mid-month on
+            // purpose: it is the raw value, and the code must snap it back rather
+            // than compare the instant.
+            observedAt,
+            baselineConsumption: 1000,
+            // Zero by the Q9a invariant — the synced hosts ARE the capacity.
+            baselineCapacity: 0,
+          },
+        },
+      },
+    });
+    await makeHost(prisma, {
+      clusterId: cluster.id,
+      name: uniqueName(`${name}-host`),
+      commissionedAt: new Date(Date.UTC(2026, 0, 1)),
+      initialCapacity: [{ effectiveFrom: new Date(Date.UTC(2026, 0, 1)), amount: 2000 }],
+    });
+    await makeEvent(prisma, {
+      clusterId: cluster.id,
+      title: uniqueName(`${name}-capacity`),
+      // BETWEEN the re-date target (April) and the measurement (June): inside the
+      // June snapshot, outside an April boundary.
+      effectiveDate: new Date(Date.UTC(2026, 4, 1)),
+      consumptionDelta: null,
+      capacityDelta: 500,
+    });
+    return cluster.id;
+  }
+
+  async function read(clusterId: string): Promise<ReturnType<typeof clusterResponseSchema.parse>> {
+    const res = await server.inject({ method: 'GET', url: `/api/clusters/${clusterId}` });
+    return clusterResponseSchema.parse(res.json());
+  }
+
+  it('holds utilization at 0.5 when a backward re-date jumps a measured capacityDelta', async () => {
+    const clusterId = await syncedClusterMeasuredInJune(
+      'boundary-immutable',
+      new Date(Date.UTC(2026, 5, 17, 9, 22)),
+    );
+
+    const before = await read(clusterId);
+    expect(before.metrics[0]?.currentCapacity).toBe(2000);
+    expect(before.metrics[0]?.utilization).toBe(0.5);
+
+    // A pure date edit. Nothing was measured and no value was submitted, so no
+    // number on this cluster may move.
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${clusterId}`,
+      payload: { baselineDate: '2026-04-01' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await read(clusterId);
+    // The label moved...
+    expect(after.baselineDate).toBe('2026-04-01');
+    // ...and nothing else did. Before this fix: 2500 and 0.4 — 500 GB of capacity
+    // invented by a date edit, on the number that buys hardware.
+    expect(after.metrics[0]?.currentCapacity).toBe(2000);
+    expect(after.metrics[0]?.utilization).toBe(0.5);
+    expect(after.metrics[0]?.currentConsumption).toBe(before.metrics[0]?.currentConsumption);
+  });
+
+  it('is a provable no-op for a synced cluster that was never re-dated', async () => {
+    // The theorem, asserted rather than argued: VsphereSnapshotService derives
+    // `capturedAt` and `observedAt` from ONE `measuredAt`, so
+    // `startOfUtcMonth(observedAt) === capturedAt` for every row no edit has
+    // touched. A row carrying that `observedAt` must therefore be
+    // indistinguishable from one carrying none — every manual row, and every row
+    // the expand migration backfilled with `observed_at` NULL.
+    const withObserved = await read(
+      await syncedClusterMeasuredInJune('noop-observed', new Date(Date.UTC(2026, 5, 17, 9, 22))),
+    );
+    const withoutObserved = await read(await syncedClusterMeasuredInJune('noop-null', null));
+
+    expect(withObserved.metrics).toEqual(withoutObserved.metrics);
+    // Pinned concretely too, so a regression that broke BOTH sides equally still
+    // fails: May's +500 is inside the June measurement and is not re-added.
+    expect(withObserved.metrics[0]?.currentCapacity).toBe(2000);
+    expect(withObserved.metrics[0]?.currentConsumption).toBe(1000);
+    expect(withObserved.metrics[0]?.utilization).toBe(0.5);
+  });
+
+  it('snaps observedAt to its month rather than comparing the raw polling instant', async () => {
+    // What makes the no-op theorem hold is the SNAP. `capturedAt` is a period
+    // anchor at the first of the month; `observedAt` is a raw instant partway
+    // through it. Comparing the instant would move the boundary forward by up to
+    // 30 days on EVERY synced cluster — a real, mixed-direction behaviour change
+    // wearing this fix's clothes, and one no other test here can see, because
+    // every other delta in this suite is month-aligned and lands on the same side
+    // of both.
+    //
+    // `Item.effectiveDate` is a free `dateOnly` (no first-of-month refinement), so
+    // a mid-month delta is reachable through the ordinary events API. This one is
+    // dated AFTER the period anchor but BEFORE the polling instant: absorbed under
+    // the raw instant, not absorbed under the snap — and "not absorbed" is what
+    // `capturedAt` produced before this change.
+    const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    const cluster = await prisma.cluster.create({
+      data: {
+        tenantId: 'default',
+        name: uniqueName('snap-not-instant'),
+        source: 'vsphere',
+        baselineHistory: {
+          create: {
+            tenantId: 'default',
+            metricTypeId: metric.id,
+            capturedAt: new Date(Date.UTC(2026, 5, 1)),
+            source: 'vsphere',
+            observedAt: new Date(Date.UTC(2026, 5, 17, 9, 22)),
+            baselineConsumption: 1000,
+            baselineCapacity: 0,
+          },
+        },
+      },
+    });
+    await makeHost(prisma, {
+      clusterId: cluster.id,
+      name: uniqueName('snap-not-instant-host'),
+      commissionedAt: new Date(Date.UTC(2026, 0, 1)),
+      initialCapacity: [{ effectiveFrom: new Date(Date.UTC(2026, 0, 1)), amount: 2000 }],
+    });
+    await makeEvent(prisma, {
+      clusterId: cluster.id,
+      title: uniqueName('snap-not-instant-capacity'),
+      effectiveDate: new Date(Date.UTC(2026, 5, 10)), // 10 June: after the anchor, before the poll
+      consumptionDelta: null,
+      capacityDelta: 500,
+    });
+
+    const response = await read(cluster.id);
+    // Unchanged from the `capturedAt` boundary. Under a raw-instant comparison
+    // this reads 2000 / 0.5 — the delta silently swallowed.
+    expect(response.metrics[0]?.currentCapacity).toBe(2500);
+    expect(response.metrics[0]?.utilization).toBe(0.4);
+  });
+
+  it('leaves a manual baseline unabsorbed however its period is re-dated', async () => {
+    // The source gate short-circuits before any date comparison (docs/vision.md
+    // Invariant 1: a manual baseline is the portion NOT modelled by tracked
+    // entities). The new boundary must not reach this cluster at all.
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('manual-boundary'),
+      baselineDate: new Date(Date.UTC(2026, 5, 1)),
+      baselineConsumption: 1000,
+      baselineCapacity: 0,
+    });
+    await makeHost(prisma, {
+      clusterId: cluster.id,
+      name: uniqueName('manual-boundary-host'),
+      commissionedAt: new Date(Date.UTC(2026, 0, 1)),
+      initialCapacity: [{ effectiveFrom: new Date(Date.UTC(2026, 0, 1)), amount: 2000 }],
+    });
+    await makeEvent(prisma, {
+      clusterId: cluster.id,
+      title: uniqueName('manual-boundary-capacity'),
+      effectiveDate: new Date(Date.UTC(2026, 4, 1)),
+      consumptionDelta: null,
+      capacityDelta: 500,
+    });
+
+    const before = await read(cluster.id);
+    expect(before.metrics[0]?.currentCapacity).toBe(2500);
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { baselineDate: '2026-04-01' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await read(cluster.id);
+    expect(after.metrics[0]?.currentCapacity).toBe(2500);
+    expect(after.metrics[0]?.utilization).toBe(0.4);
+  });
+});
+
 describe('PUT /api/clusters/:id — a combined date + values edit', () => {
   /**
    * The PRIMARY path out of baseline-edit-form.tsx: `handleConfirm` sets

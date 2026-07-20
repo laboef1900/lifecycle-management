@@ -45,6 +45,16 @@ export interface ForecastInput {
    * caller and test relies on.
    */
   baselineSource?: 'manual' | 'vsphere';
+  /**
+   * The PERIOD the vSphere measurement was ACTUALLY taken in — immutable, unlike
+   * `baselineDate`, which is an operator-editable label. Absorption keys off this
+   * so re-dating a row cannot move the boundary. See `absorbsDeltas`.
+   *
+   * Snapped to the first of the month by every caller: `capturedAt` is a period
+   * anchor, so comparing a raw instant against month-aligned delta dates would
+   * shift the boundary mid-month. `null`/omitted falls back to `baselineDate`.
+   */
+  baselineMeasuredAt?: Date | null;
   baselineConsumption: number;
   baselineCapacity: number;
   hosts: ForecastHost[];
@@ -233,10 +243,33 @@ export function computeForecast(
  *
  * Recorded decisions Q9b (2026-07-17) and its source-aware amendment, raised when
  * implementation showed the uniform rule contradicted Invariant 1.
+ *
+ * @ai-warning THE BOUNDARY IS `baselineMeasuredAt`, NOT `baselineDate`.
+ * `baselineDate` is `ClusterBaselineHistory.capturedAt` — a period LABEL that
+ * `PUT /api/clusters/:id` re-dates. Keying absorption on it made every date edit
+ * a silent forecast edit, and this rule is all-or-nothing across BOTH deltas, so
+ * neither direction is safe: narrowing the boundary counts more consumption
+ * (safe) AND re-adds `capacityDelta`s the snapshot already measured — capacity
+ * inflates, utilization falls, hardware is deferred, and nothing was measured.
+ * `baselineMeasuredAt` derives from `observedAt`, written only by
+ * `VsphereSnapshotService` and touched by no edit path, so the boundary is now
+ * immutable for the row's lifetime.
+ *
+ * THEOREM (why this is not a behaviour change). `VsphereSnapshotService` writes
+ * `capturedAt: startOfUtcMonth(measuredAt)` and `observedAt: measuredAt` from the
+ * SAME instant, so for any row never re-dated
+ * `startOfUtcMonth(observedAt) === capturedAt` exactly, and the two expressions
+ * are indistinguishable. They diverge only for a row whose `capturedAt` was
+ * moved — which is precisely the defect. Manual and backfilled rows carry
+ * `observedAt = NULL` (the expand migration wrote it so) and fall back to
+ * `baselineDate`, which the source gate above makes unreachable anyway. The
+ * change is therefore strictly a NARROWING of when an editable field decides a
+ * purchasing number.
  */
 function absorbed(effectiveDate: Date, input: ForecastInput): boolean {
   if (input.baselineSource !== 'vsphere') return false;
-  return effectiveDate <= input.baselineDate;
+  const boundary = input.baselineMeasuredAt ?? input.baselineDate;
+  return effectiveDate <= boundary;
 }
 
 function effectiveCapacityAt(host: ForecastHost, date: Date): number {

@@ -262,3 +262,74 @@ describe('computeForecast — perf', () => {
     expect(elapsed).toBeLessThan(100);
   });
 });
+
+/**
+ * ABSORPTION KEYS OFF THE MEASUREMENT PERIOD, NOT THE OPERATOR'S LABEL.
+ *
+ * `baselineDate` is `capturedAt` — a period LABEL an operator can re-date through
+ * `PUT /api/clusters/:id`. `baselineMeasuredAt` is derived from `observedAt`, the
+ * instant vCenter was actually polled, which no edit path writes. Keying the
+ * boundary on the label meant any date edit silently moved which deltas the
+ * measurement was deemed to contain — and `absorbed` is all-or-nothing across
+ * consumption AND capacity, so there is no safe direction: narrowing the boundary
+ * re-adds a `capacityDelta` the snapshot already measured, capacity inflates,
+ * utilization falls, and hardware is deferred with nothing measured.
+ */
+describe('computeForecast — absorption boundary vs. the editable baseline date', () => {
+  const anchored = (overrides: Partial<ForecastInput>): ForecastInput => ({
+    // The LABEL, re-dated backwards by an operator from 2026-06 to 2026-04.
+    baselineDate: d('2026-04-01'),
+    baselineSource: 'vsphere',
+    baselineConsumption: 1000,
+    // Zero by the Q9a invariant: on a synced cluster the hosts ARE the capacity.
+    baselineCapacity: 0,
+    hosts: [
+      {
+        id: 'h1',
+        name: 'HPE-01',
+        commissionedAt: d('2026-01-01'),
+        decommissionedAt: null,
+        projectedDecommissionAt: null,
+        capacities: [{ effectiveFrom: d('2026-01-01'), amount: 2000 }],
+      },
+    ],
+    applications: [],
+    // Dated BETWEEN the re-dated label and the real measurement period — the gap
+    // the boundary moved across.
+    events: [event('e1', '2026-05-01', 'hardware_change', 'Memory expansion', null, 500)],
+    ...overrides,
+  });
+
+  it('absorbs a delta the measurement contains even after the label was re-dated behind it', () => {
+    const result = computeForecast(
+      anchored({ baselineMeasuredAt: d('2026-06-01') }),
+      d('2026-07-01'),
+      d('2026-07-01'),
+    );
+    // May's +500 GB is already inside the June measurement, so it is NOT re-added.
+    expect(result.months[0]?.capacity).toBe(2000);
+    expect(result.months[0]?.utilization).toBe(0.5);
+  });
+
+  it('falls back to the baseline date when no measurement period is known', () => {
+    // Every pre-existing caller and fixture, and every backfilled row (the expand
+    // migration wrote observed_at NULL). Behaviour must be exactly what it was.
+    const result = computeForecast(anchored({}), d('2026-07-01'), d('2026-07-01'));
+    expect(result.months[0]?.capacity).toBe(2500);
+    expect(result.months[0]?.utilization).toBe(0.4);
+  });
+
+  it('stays inert for a manual baseline, whatever the measurement period says', () => {
+    // The source gate short-circuits first (docs/vision.md Invariant 1: a manual
+    // baseline is the portion NOT modelled by tracked entities, so nothing tracked
+    // is ever inside it). `baselineMeasuredAt` must not create absorption where
+    // there was none.
+    const result = computeForecast(
+      anchored({ baselineSource: 'manual', baselineMeasuredAt: d('2026-06-01') }),
+      d('2026-07-01'),
+      d('2026-07-01'),
+    );
+    expect(result.months[0]?.capacity).toBe(2500);
+    expect(result.months[0]?.utilization).toBe(0.4);
+  });
+});

@@ -836,6 +836,14 @@ export class ClustersService {
           // had no `source` column. Reading both from the same history row is
           // what converges them.
           baselineSource: b.source === 'vsphere' ? 'vsphere' : 'manual',
+          // And the immutable period that measurement was taken in — see
+          // `absorbed` in forecast.ts. `capturedAt` above is a label the
+          // re-anchor above can move; `observedAt` is not, so a date edit can no
+          // longer shift which deltas the snapshot is deemed to contain. Snapped
+          // for the same reason forecast-loader snaps it: both columns come from
+          // one `measuredAt`, so this equals `capturedAt` on every row that was
+          // never re-dated.
+          baselineMeasuredAt: b.observedAt ? startOfUtcMonth(b.observedAt) : null,
           baselineConsumption,
           baselineCapacity,
           hosts: row.hosts.map((h) => ({

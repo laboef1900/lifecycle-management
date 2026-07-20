@@ -2,6 +2,7 @@ import {
   formatDateIso,
   MAX_FORECAST_SPAN_MONTHS,
   monthsBetweenUtc,
+  startOfUtcMonth,
   type BaselineHistoryPoint,
   type Scenario,
 } from '@lcm/shared';
@@ -191,6 +192,14 @@ export class ForecastService {
         // What the anchor MEANS decides whether tracked deltas dated at or before
         // it are already inside its numbers. See `absorbed` in forecast.ts.
         baselineSource: anchor.source === 'vsphere' ? 'vsphere' : 'manual',
+        // The IMMUTABLE half of that decision. `capturedAt` above is a period
+        // label a baseline edit can re-date; `observedAt` is the instant vCenter
+        // was polled and no edit path writes it, so the absorption boundary stops
+        // moving when an operator corrects a date. SNAPPED, never the raw instant:
+        // `VsphereSnapshotService` derives both columns from one `measuredAt`, so
+        // `startOfUtcMonth(observedAt) === capturedAt` for every row never
+        // re-dated — which is what makes this a provable no-op there.
+        baselineMeasuredAt: anchor.observedAt ? startOfUtcMonth(anchor.observedAt) : null,
         baselineConsumption: anchor.baselineConsumption.toNumber(),
         baselineCapacity: anchor.baselineCapacity.toNumber(),
         hosts,
