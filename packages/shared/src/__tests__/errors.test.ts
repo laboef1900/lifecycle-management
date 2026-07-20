@@ -23,19 +23,31 @@ describe('SERVICE_ERROR_CODES', () => {
     // target period already holds a recorded measurement, honouring the edit would
     // have to destroy an append-only row, so the request is refused instead. The
     // baseline form needs a distinct code rather than a generic failure, because
-    // the corrective action is specific: edit that period directly.
+    // the corrective action is specific: submit the values for that period, which
+    // corrects the recorded measurement in place rather than moving a row onto it.
+    // (The message used to say "edit that period directly instead", which named no
+    // operation the API offered — a value-carrying edit onto an occupied period was
+    // itself refused. That is fixed, so the advice is now executable.)
     expect(SERVICE_ERROR_CODES).toContain('BASELINE_PERIOD_OCCUPIED');
   });
 
   it('carries BASELINE_PERIOD_NOT_MEASURED (a date-only edit dragged FORWARD)', () => {
     // The other direction of the same edit (#195). A date-only PUT carries no
     // values, so the only way to honour a LATER period would be to re-date a
-    // measurement onto a month nobody measured — which absorbs deltas that
-    // started after the capture, lets the row shadow the real snapshot for that
-    // period, and clears staleness without measuring anything. There is nothing
-    // honest to write, so it is refused; the corrective action differs from
-    // BASELINE_PERIOD_OCCUPIED (submit the values, which appends), so the code
-    // has to differ too.
+    // measurement onto a month nobody measured — which lets the row shadow the
+    // real snapshot for that period and clears staleness without measuring
+    // anything. There is nothing honest to write, so it is refused; the corrective
+    // action differs from BASELINE_PERIOD_OCCUPIED (submit the values), so the
+    // code has to differ too.
+    //
+    // A third consequence used to be listed first here and is GONE: "it absorbs
+    // deltas that started after the capture". That was true while absorption keyed
+    // off `captured_at`; it keys off `observed_at`, which no edit path writes, so a
+    // re-date changes no absorption at all. clusters.ts records the same removal at
+    // the refusal itself — the code exists on the two surviving grounds.
+    //
+    // The same code also answers a date-only edit on a cluster with NO history,
+    // where there is likewise no measurement to re-date.
     expect(SERVICE_ERROR_CODES).toContain('BASELINE_PERIOD_NOT_MEASURED');
   });
 

@@ -73,7 +73,12 @@ describe('baselineCapacity invariant on a synced cluster', () => {
     expect(history?.baselineCapacity.toNumber()).toBe(0);
   });
 
-  it('allows a baselineDate-only correction on a synced cluster (no baselines)', async () => {
+  it('allows a baselineDate-only correction on a synced cluster (no baselines IN THE PAYLOAD)', async () => {
+    // "no baselines" names the PAYLOAD, not the cluster: the request omits the
+    // `baselines` field entirely. The cluster itself does carry a baseline-history
+    // row — it has to, or the request would be refused for having no measurement to
+    // re-date.
+    //
     // The factory anchors this cluster at 2026-05-01, and the correction re-dates
     // it BACKWARDS. Direction matters since #195 made `baselineDate` derived from
     // `cluster_baseline_history` rather than a cluster column: a date-only request

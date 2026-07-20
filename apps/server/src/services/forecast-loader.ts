@@ -82,8 +82,14 @@ export class ForecastService {
     const cluster = await this.prisma.cluster.findFirst({
       where: { id: clusterId, tenantId },
       include: {
+        // `tenantId` is redundant with the parent cluster's own tenant filter, and
+        // is included anyway so this reader and `ClustersService.loadNewestBaselines`
+        // — which filters on it — cannot disagree about which rows exist. They must
+        // agree: both compute "the newest row", one for /forecast and one for
+        // ClusterResponse.metrics, and a divergence would show as the cluster panel
+        // and its own forecast chart quoting different numbers.
         baselineHistory: {
-          where: { metricTypeId: metricType.id },
+          where: { tenantId, metricTypeId: metricType.id },
           orderBy: { capturedAt: 'asc' },
         },
         hosts: {

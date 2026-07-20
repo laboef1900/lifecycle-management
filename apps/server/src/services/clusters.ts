@@ -878,6 +878,14 @@ export class ClustersService {
     // (cluster_baseline_history_period_unique). Metric order is pinned so
     // `ClusterResponse.metrics[0]` stays stable — cluster-tile.tsx,
     // cluster-panel.tsx and fleet-console.tsx all read it positionally.
+    //
+    // SCALE CEILING, since `keys` becomes one OR branch per (cluster, metric):
+    // bounded by page `limit` x metrics-per-cluster — a few hundred branches on a
+    // full fleet page, which Postgres serves from the unique key's btree. It is NOT
+    // an N+1 (still two queries however large the page) and, crucially, it does not
+    // grow with accumulated history, which is the bound this whole method exists to
+    // hold. If the fleet ever outgrows it, replace this with a lateral join or a
+    // tuple IN — do not reintroduce a per-cluster query.
     const rows = await this.prisma.clusterBaselineHistory.findMany({
       where: { tenantId, OR: keys },
       include: { metricType: true },
