@@ -349,3 +349,136 @@ describe('POST /api/clusters/:id/forecast/scenario', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+/**
+ * THE /forecast LOADER'S OWN ABSORPTION BOUNDARY.
+ *
+ * `absorbed` is fed from TWO independent places. `ClustersService.toResponse`
+ * builds a per-metric input for `ClusterResponse.metrics`, and `ForecastService`
+ * builds a different one here — different query, different window
+ * (`fromMonth = firstOfMonth(anchor.capturedAt)`), and it is this one that
+ * produces `procurement.breachMonth`, `procurement.orderByDate` and the 24-month
+ * chart hardware purchasing is decided from. Coverage of one says nothing about
+ * the other: before these tests, deleting the `baselineMeasuredAt` line in
+ * forecast-loader.ts left the entire server suite green.
+ *
+ * The fixture separates the two candidate boundaries by a month, which is the
+ * only way to tell them apart. `capturedAt` (the operator-editable LABEL) is
+ * April; `observedAt` (the immutable polling instant) is mid-May; the
+ * `capacityDelta` lands on 1 May — after the label, at-or-before the measurement.
+ * Absorbing it is the measured-period reading; counting it is the label reading.
+ */
+describe('GET /api/clusters/:id/forecast — absorption keys off the measured period', () => {
+  async function reAnchoredSyncedCluster(name: string): Promise<string> {
+    const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
+    const cluster = await prisma.cluster.create({
+      data: {
+        tenantId: 'default',
+        name: `${name}-${Date.now().toString(36)}`,
+        source: 'vsphere',
+        baselineHistory: {
+          create: {
+            tenantId: 'default',
+            metricTypeId: metric.id,
+            // The LABEL, as a backward re-date through PUT /api/clusters/:id
+            // would leave it.
+            capturedAt: new Date(Date.UTC(2026, 3, 1)),
+            source: 'vsphere',
+            // The instant vCenter was actually polled — a month LATER than the
+            // label, and untouched by any edit path.
+            observedAt: new Date(Date.UTC(2026, 4, 15, 8, 40)),
+            baselineConsumption: 1000,
+            // Zero by the Q9a invariant: the synced hosts ARE the capacity.
+            baselineCapacity: 0,
+          },
+        },
+      },
+    });
+    await makeHost(prisma, {
+      clusterId: cluster.id,
+      name: `${name}-host-${Date.now().toString(36)}`,
+      commissionedAt: new Date(Date.UTC(2026, 0, 1)),
+      initialCapacity: [{ effectiveFrom: new Date(Date.UTC(2026, 0, 1)), amount: 2000 }],
+    });
+    await makeEvent(prisma, {
+      clusterId: cluster.id,
+      title: `${name}-capacity-${Date.now().toString(36)}`,
+      // Between the label (April) and the measurement (May): inside the snapshot,
+      // outside an April boundary.
+      effectiveDate: new Date(Date.UTC(2026, 4, 1)),
+      consumptionDelta: null,
+      capacityDelta: 500,
+    });
+    return cluster.id;
+  }
+
+  it('does not re-add a measured capacityDelta the label was re-dated behind', async () => {
+    const id = await reAnchoredSyncedCluster('loader-boundary');
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${id}/forecast?metric=memory_gb&from=2026-06&to=2026-06`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      months: Array<{ capacity: number; consumption: number; utilization: number | null }>;
+    };
+
+    // 2000, not 2500: May's +500 is already inside the May measurement. Under the
+    // label boundary this endpoint reported 2500 and utilization 0.4 — 500 GB of
+    // capacity invented by a date edit, feeding procurement.breachMonth.
+    expect(body.months[0]?.capacity).toBe(2000);
+    expect(body.months[0]?.consumption).toBe(1000);
+    expect(body.months[0]?.utilization).toBe(0.5);
+  });
+
+  it('carries the same boundary into the scenario preview', async () => {
+    // `forClusterWithScenario` runs `applyScenario` between load and compute, so
+    // it inherits whatever `prepare` built. `lose_hosts: 1` removes the only host,
+    // leaving capacity from the events alone — which makes the absorbed delta the
+    // ENTIRE remaining capacity and so impossible to miss: 0 if absorbed, 500 if
+    // the label boundary crept back in.
+    const id = await reAnchoredSyncedCluster('loader-boundary-scenario');
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${id}/forecast/scenario?metric=memory_gb&from=2026-06&to=2026-06`,
+      payload: { kind: 'lose_hosts', count: 1 },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { months: Array<{ capacity: number }> };
+    expect(body.months[0]?.capacity).toBe(0);
+  });
+
+  it('reaches procurement.breachMonth, not just the month rows', async () => {
+    // The number this whole path exists to produce, on the DEFAULT 24-month
+    // window the UI actually requests. A September growth event takes consumption
+    // to 1500. Against the absorbed capacity of 2000 that is 0.75 — at or above
+    // the 0.7 warn threshold — so September breaches and an order date is
+    // emitted. Re-add the measured delta and capacity is 2500, the same 1500
+    // reads 0.60, and breachMonth comes back NULL: the purchase silently
+    // disappears with nothing measured and no value submitted.
+    const id = await reAnchoredSyncedCluster('loader-boundary-procurement');
+    await makeEvent(prisma, {
+      clusterId: id,
+      title: `loader-growth-${Date.now().toString(36)}`,
+      effectiveDate: new Date(Date.UTC(2026, 8, 1)),
+      consumptionDelta: 500,
+    });
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${id}/forecast?metric=memory_gb`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      months: Array<{ month: string; capacity: number; consumption: number }>;
+      procurement: { breachMonth: string | null; orderByDate: string | null };
+    };
+    const september = body.months.find((m) => m.month === '2026-09-01');
+    expect(september?.capacity).toBe(2000);
+    expect(september?.consumption).toBe(1500);
+    expect(body.procurement.breachMonth).toBe('2026-09-01');
+    expect(body.procurement.orderByDate).not.toBeNull();
+  });
+});
