@@ -33,6 +33,13 @@ export interface MakeClusterOptions {
   id?: string;
   name?: string;
   description?: string | null;
+  /**
+   * The PERIOD the cluster's first baseline-history row lands in, snapped to the
+   * first of the month. Since #195 there is no cluster-level baseline date column
+   * behind this — `ClusterResponse.baselineDate` is derived from history — but the
+   * option name is kept because ~8 call sites pass it and several feed the
+   * forecast characterization snapshot.
+   */
   baselineDate?: Date;
   metricKey?: string;
   baselineConsumption?: number;
@@ -50,6 +57,80 @@ export interface MakeClusterOptions {
   externalId?: string;
   externalName?: string;
   lastSyncedAt?: Date;
+  /**
+   * Extra baseline-history rows, each carrying its own metric and its own period.
+   *
+   * The options above produce exactly ONE row — one metric, one period — which
+   * cannot express the fixture `ClusterResponse.baselineDate` has to be tested
+   * against. That field is MIN over the NEWEST row per metric, and telling it
+   * apart from MAX, and from a naive MIN over every row, needs two metrics whose
+   * newest periods differ plus one metric carrying two periods. Every fixture in
+   * the suite before this one had a single row per metric, under which all three
+   * implementations agree.
+   *
+   * `capturedAt` is snapped to the first of the month exactly as every real
+   * writer snaps it: the period unique key is the monthly idempotency guarantee,
+   * so a fixture holding a mid-month anchor would describe a state the
+   * application cannot produce.
+   */
+  extraBaselines?: readonly {
+    metricKey: string;
+    capturedAt: Date;
+    baselineConsumption?: number;
+    baselineCapacity?: number;
+    source?: 'manual' | 'vsphere';
+    /** See {@link MakeClusterOptions.observedAt} — same rule, per extra row. */
+    observedAt?: Date | null;
+  }[];
+  /**
+   * Provenance of the PRIMARY baseline-history row (the one the options above
+   * produce). Distinct from `source`, which is the CLUSTER's provenance: a synced
+   * cluster imported before its first snapshot has `source: 'vsphere'` and no
+   * vSphere baseline row at all. Defaults to `manual`.
+   */
+  baselineSource?: 'manual' | 'vsphere';
+  /**
+   * The instant the measurement was actually taken — `ClusterBaselineHistory.
+   * observedAt`, which forecast absorption keys off (`absorbsDeltas` in
+   * forecast.ts). Omitted, it is DERIVED, not left null:
+   *
+   *   - a `vsphere` row gets its own `capturedAt`, because that is the only state
+   *     production can produce. `VsphereSnapshotService` writes both columns from
+   *     one `measuredAt` (`capturedAt: startOfUtcMonth(measuredAt)`,
+   *     `observedAt: measuredAt`), so snapping `observedAt` always yields
+   *     `capturedAt`. A `vsphere` row with `observedAt: null` is an UNREACHABLE
+   *     state, and a fixture in it silently exercises the null guard instead of
+   *     the boundary the test means to test — which is how the regression corpus
+   *     for defects 1-6 ended up on the replaced code path.
+   *   - a `manual` row gets `null`. Manual baselines are never measured — no
+   *     manual write path sets `observedAt` — and a null measured period is
+   *     exactly what makes `absorbed` return false for them. That is now the ONLY
+   *     thing keeping a manual baseline unabsorbed: `absorbed` does not read
+   *     `source`, so a fixture that set `observedAt` on a manual row would
+   *     describe an absorbing baseline, not a manual one.
+   *
+   * Pass it explicitly (including `null`) only to fabricate a state deliberately:
+   * a mid-month instant where the SNAP is what a test is pinning, or `null` on a
+   * `vsphere` row to exercise the broken-invariant fail-safe.
+   */
+  observedAt?: Date | null;
+}
+
+/**
+ * The `observedAt` a baseline-history row would really carry. See
+ * {@link MakeClusterOptions.observedAt} for why a `vsphere` row defaults to its
+ * own `capturedAt` rather than to null.
+ *
+ * `undefined` means "not specified" and derives; an explicit `null` is honoured,
+ * so a test can still fabricate the broken-invariant row on purpose.
+ */
+function resolveObservedAt(
+  explicit: Date | null | undefined,
+  source: 'manual' | 'vsphere',
+  capturedAt: Date,
+): Date | null {
+  if (explicit !== undefined) return explicit;
+  return source === 'vsphere' ? capturedAt : null;
 }
 
 export async function makeCluster(
@@ -61,39 +142,52 @@ export async function makeCluster(
   const tenantId = options.tenantId ?? DEFAULT_TENANT;
   const name = options.name ?? `cluster-${nextSuffix()}`;
 
+  const extraBaselines = await Promise.all(
+    (options.extraBaselines ?? []).map(async (extra) => {
+      const capturedAt = startOfUtcMonth(extra.capturedAt);
+      const source = extra.source ?? 'manual';
+      return {
+        tenantId,
+        metricTypeId: await resolveMetricId(prisma, extra.metricKey),
+        capturedAt,
+        source,
+        observedAt: resolveObservedAt(extra.observedAt, source, capturedAt),
+        baselineConsumption: new Prisma.Decimal(extra.baselineConsumption ?? 0),
+        baselineCapacity: new Prisma.Decimal(extra.baselineCapacity ?? 0),
+      };
+    }),
+  );
+
+  const primaryCapturedAt = startOfUtcMonth(options.baselineDate ?? DEFAULT_BASELINE_DATE);
+  const primarySource = options.baselineSource ?? 'manual';
+
   const cluster = await prisma.cluster.create({
     data: {
       ...(options.id !== undefined ? { id: options.id } : {}),
       tenantId,
       name,
       description: options.description ?? null,
-      baselineDate: options.baselineDate ?? DEFAULT_BASELINE_DATE,
       ...(options.source !== undefined ? { source: options.source } : {}),
       ...(options.connectionId !== undefined ? { connectionId: options.connectionId } : {}),
       ...(options.externalId !== undefined ? { externalId: options.externalId } : {}),
       ...(options.externalName !== undefined ? { externalName: options.externalName } : {}),
       ...(options.lastSyncedAt !== undefined ? { lastSyncedAt: options.lastSyncedAt } : {}),
-      baselines: {
-        create: {
-          tenantId,
-          metricTypeId,
-          baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
-          baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
-        },
-      },
-      // Mirrors ClustersService's dual-write (#177): `cluster_baseline_history`
-      // is what the forecast reads, `cluster_metric_baselines` is the legacy
-      // table kept for rollback safety. A fixture that writes only the legacy
-      // table produces a cluster the forecast reports as METRIC_NOT_TRACKED.
+      // `cluster_baseline_history` is the only baseline store (#195): the
+      // forecast anchors on it, and `ClusterResponse.metrics`/`baselineDate` are
+      // both derived from it. `baselineDate` names the PERIOD this row lands in.
       baselineHistory: {
-        create: {
-          tenantId,
-          metricTypeId,
-          capturedAt: startOfUtcMonth(options.baselineDate ?? DEFAULT_BASELINE_DATE),
-          source: 'manual',
-          baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
-          baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
-        },
+        create: [
+          {
+            tenantId,
+            metricTypeId,
+            capturedAt: primaryCapturedAt,
+            source: primarySource,
+            observedAt: resolveObservedAt(options.observedAt, primarySource, primaryCapturedAt),
+            baselineConsumption: new Prisma.Decimal(options.baselineConsumption ?? 0),
+            baselineCapacity: new Prisma.Decimal(options.baselineCapacity ?? 0),
+          },
+          ...extraBaselines,
+        ],
       },
     },
   });

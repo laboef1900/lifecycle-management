@@ -1100,7 +1100,7 @@ model ClusterMetricBaseline {
   tenantId            String   @default("default") @map("tenant_id")
   capturedAt          DateTime @map("captured_at") @db.Date      // PERIOD ANCHOR
   source              String   @default("manual")                // 'manual' | 'vsphere'
-  observedAt          DateTime? @map("observed_at") @db.Timestamptz(3)  // informational only
+  observedAt          DateTime? @map("observed_at") @db.Timestamptz(3)  // ABSORPTION BOUNDARY
   baselineConsumption Decimal  @map("baseline_consumption") @db.Decimal(18, 3)
   baselineCapacity    Decimal  @map("baseline_capacity") @db.Decimal(18, 3)
   …
@@ -1111,8 +1111,12 @@ model ClusterMetricBaseline {
 
 - **`capturedAt` is `@db.Date` and IS the period anchor.** The forecast is month-grained and truncates to
   first-of-month anyway (`forecast-loader.ts:109`), so snapping discards nothing the engine could use. The
-  honest cost — conflating _when we measured_ with _which period this represents_ — is what the nullable,
-  informational `observedAt` absorbs; it is in no key and read by nothing on the forecast path.
+  honest cost — conflating _when we measured_ with _which period this represents_ — is what the nullable
+  `observedAt` absorbs; it is in no key, but it is **not** informational and **not** unread. As shipped
+  (#195) it is the sole input to delta absorption (`absorbed` in `forecast.ts`), read on every cluster and
+  forecast request: `captured_at` is an operator-editable label and `source` flips to `manual` on any value
+  correction, so `observed_at` is the only fact here no edit path rewrites. A row that loses it falls into
+  the absorb-nothing branch and its capacity silently inflates.
 - **`source` is NOT in the unique key.** Including it would let a manual and a vSphere row coexist for the
   same period, making **"the newest baseline" ambiguous** and forcing an implicit tiebreak — for a value
   anchoring hardware purchasing, that is a bug waiting to be found by a wrong invoice. Excluding it means

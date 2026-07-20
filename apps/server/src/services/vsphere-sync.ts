@@ -191,8 +191,10 @@ export class VsphereSyncService {
           externalName: collected.name,
           name: await this.uniqueLabel(tenantId, collected.name, null),
           // A synced cluster has no measured baseline yet — the monthly snapshot
-          // (#178) writes the first one. baselineDate anchors at import.
-          baselineDate: new Date(),
+          // (#178) writes the first one. Until then it has no baseline history at
+          // all, so `ClusterResponse.baselineDate` falls back to `createdAt`
+          // (#195) — the same import instant the dropped `baselineDate` column
+          // used to record here explicitly.
         },
       });
       clusterId = cluster.id;

@@ -5,12 +5,16 @@ import { SettingsService } from '../services/settings.js';
 
 const TENANT_ID = 'default';
 
+/**
+ * A cluster with neither baselines nor history — the shape settings care about,
+ * and a shape `ClustersService.toResponse` must tolerate (metrics: [], with
+ * baselineDate falling back to createdAt).
+ */
 async function makeCluster(name: string): Promise<string> {
   const cluster = await prisma.cluster.create({
     data: {
       tenantId: TENANT_ID,
       name,
-      baselineDate: new Date('2026-05-01'),
     },
   });
   return cluster.id;

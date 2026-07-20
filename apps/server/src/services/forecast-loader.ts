@@ -2,6 +2,7 @@ import {
   formatDateIso,
   MAX_FORECAST_SPAN_MONTHS,
   monthsBetweenUtc,
+  startOfUtcMonth,
   type BaselineHistoryPoint,
   type Scenario,
 } from '@lcm/shared';
@@ -81,9 +82,14 @@ export class ForecastService {
     const cluster = await this.prisma.cluster.findFirst({
       where: { id: clusterId, tenantId },
       include: {
-        baselines: { where: { metricTypeId: metricType.id } },
+        // `tenantId` is redundant with the parent cluster's own tenant filter, and
+        // is included anyway so this reader and `ClustersService.loadNewestBaselines`
+        // — which filters on it — cannot disagree about which rows exist. They must
+        // agree: both compute "the newest row", one for /forecast and one for
+        // ClusterResponse.metrics, and a divergence would show as the cluster panel
+        // and its own forecast chart quoting different numbers.
         baselineHistory: {
-          where: { metricTypeId: metricType.id },
+          where: { tenantId, metricTypeId: metricType.id },
           orderBy: { capturedAt: 'asc' },
         },
         hosts: {
@@ -189,9 +195,21 @@ export class ForecastService {
     return {
       input: {
         baselineDate: anchor.capturedAt,
-        // What the anchor MEANS decides whether tracked deltas dated at or before
-        // it are already inside its numbers. See `absorbed` in forecast.ts.
-        baselineSource: anchor.source === 'vsphere' ? 'vsphere' : 'manual',
+        // Whether tracked deltas dated at or before the anchor are already inside
+        // its numbers is decided by ONE fact: was this baseline measured, and
+        // when. See `absorbed` in forecast.ts — and note that `source` is
+        // deliberately NOT passed, because it is mutable by a value edit that says
+        // nothing about when the measurement was taken. `capturedAt` above is a
+        // period label a baseline edit can re-date; `observedAt` is the instant
+        // vCenter was polled and no edit path writes it, so the absorption
+        // boundary stops moving when an operator corrects a date or a value. A row
+        // that was never measured has `observedAt = null` and absorbs nothing,
+        // which is exactly Invariant 1 for a manual baseline. SNAPPED, never the
+        // raw instant:
+        // `VsphereSnapshotService` derives both columns from one `measuredAt`, so
+        // `startOfUtcMonth(observedAt) === capturedAt` for every row never
+        // re-dated — which is what makes this a provable no-op there.
+        baselineMeasuredAt: anchor.observedAt ? startOfUtcMonth(anchor.observedAt) : null,
         baselineConsumption: anchor.baselineConsumption.toNumber(),
         baselineCapacity: anchor.baselineCapacity.toNumber(),
         hosts,

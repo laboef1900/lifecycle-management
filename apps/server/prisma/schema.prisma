@@ -25,7 +25,6 @@ model Tenant {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   clusters            Cluster[]
-  baselines           ClusterMetricBaseline[]
   baselineHistory     ClusterBaselineHistory[]
   vsphereConnections  VsphereConnection[]
   hosts               Host[]
@@ -60,7 +59,6 @@ model MetricType {
   displayName String @map("display_name")
   unit        String
 
-  baselines       ClusterMetricBaseline[]
   baselineHistory ClusterBaselineHistory[]
   hostCapacities  HostMetricCapacity[]
   itemAllocations ItemAllocation[]
@@ -94,14 +92,13 @@ model Cluster {
   tenantId     String    @default("default") @map("tenant_id")
   name         String
   description  String?
-  baselineDate DateTime  @map("baseline_date") @db.Date
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
   archivedAt   DateTime? @map("archived_at")
 
   tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  /// @ai-warning `onDelete: Restrict`, NEVER Cascade. ClusterMetricBaseline and
-  /// ClusterBaselineHistory both cascade from Cluster, so a cascade here would
+  /// @ai-warning `onDelete: Restrict`, NEVER Cascade. ClusterBaselineHistory
+  /// cascades from Cluster, so a cascade here would
   /// chain: delete connection -> delete clusters -> DELETE EVERY BASELINE. One
   /// misclick in Settings would silently destroy the purchasing history this whole
   /// epic exists to accumulate, and it would not even look destructive at the click
@@ -112,7 +109,6 @@ model Cluster {
   /// connectionId — a row no code path expects — and would make the destructive
   /// path automatic rather than deliberate.
   connection      VsphereConnection?       @relation(fields: [connectionId], references: [id], onDelete: Restrict)
-  baselines       ClusterMetricBaseline[]
   baselineHistory ClusterBaselineHistory[]
   hosts           Host[]
   items           Item[]
@@ -143,23 +139,14 @@ model ClusterSettings {
   @@map("cluster_settings")
 }
 
-model ClusterMetricBaseline {
-  clusterId           String  @map("cluster_id")
-  metricTypeId        String  @map("metric_type_id")
-  tenantId            String  @default("default") @map("tenant_id")
-  baselineConsumption Decimal @map("baseline_consumption") @db.Decimal(18, 3)
-  baselineCapacity    Decimal @map("baseline_capacity") @db.Decimal(18, 3)
-
-  cluster    Cluster    @relation(fields: [clusterId], references: [id], onDelete: Cascade)
-  metricType MetricType @relation(fields: [metricTypeId], references: [id])
-  tenant     Tenant     @relation(fields: [tenantId], references: [id])
-
-  @@id([clusterId, metricTypeId])
-  @@map("cluster_metric_baselines")
-}
-
-/// Append-only baseline history — the source of truth for the forecast anchor
-/// and the chart's historical series (#177).
+/// Append-only baseline history — the single source of truth for the forecast
+/// anchor, the chart's historical series (#177), and, since #195, for
+/// `ClusterResponse.metrics` and `ClusterResponse.baselineDate`.
+///
+/// @ai-context #195 dropped the `cluster_metric_baselines` table this superseded
+/// and the `clusters.baseline_date` column that anchored it. There is no longer a
+/// cluster-level baseline date: it is derived per response as MIN over the newest
+/// `capturedAt` per metric, i.e. the cluster's stalest tracked metric.
 ///
 /// @ai-warning `capturedAt` IS the period anchor, not merely "when we measured".
 /// Both manual entry and the vSphere snapshot job snap it to the first of the
@@ -168,8 +155,15 @@ model ClusterMetricBaseline {
 /// restarts and re-runs on a different day of the same month recomputes the same
 /// key and conflicts. Do not "fix" this to a timestamp — that silently drops the
 /// guarantee to day-granularity and lets one month hold two competing truths.
-/// `observedAt` carries the real instant, is informational only, and is read by
-/// nothing on the forecast path.
+/// `observedAt` carries the real instant AND IS LOAD-BEARING ON THE FORECAST PATH:
+/// it is the sole input to delta absorption (`absorbed` in forecast.ts), read on
+/// every cluster and forecast request. Do NOT stop writing it and do NOT drop it.
+/// A `vsphere` row with a NULL `observed_at` falls into the absorb-nothing branch,
+/// which re-adds every `capacityDelta` the snapshot already measured: capacity
+/// inflates, utilization falls, hardware is deferred — and the suite stays green,
+/// because `absorbed` degrades rather than throws. Nothing but this comment
+/// enforces `source='vsphere' => observed_at NOT NULL`; there is no CHECK
+/// constraint.
 ///
 /// @ai-context `source` is deliberately NOT in the unique key. Including it would
 /// let a manual row and a vsphere row coexist for one period, making "the newest

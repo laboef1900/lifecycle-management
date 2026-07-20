@@ -137,14 +137,20 @@ describe('computeForecast — event semantics', () => {
 });
 
 /**
- * The source-aware absorption rule (#177, epic #172).
+ * The absorption rule (#177, epic #172).
  *
- * These two describe the same cluster shape and disagree on purpose. What a
- * baseline MEANS depends on where it came from, and the whole rule exists because
- * the two meanings are genuinely different — not because one is a special case of
- * the other.
+ * These describe the same cluster shape and disagree on purpose. A baseline that
+ * was MEASURED contains the deltas dated at or before the measurement; one that
+ * was never measured is an admin's "everything not modelled elsewhere" and
+ * contains none of them. The two meanings are genuinely different — not one a
+ * special case of the other.
+ *
+ * The rule is keyed on the measured period ALONE. It used to consult `source` as
+ * well, which was a defect: `source` flips to `manual` on any value correction, so
+ * a 1% consumption fix on a synced cluster switched absorption off wholesale.
+ * "Was it measured, and when" is the only fact no edit path can rewrite.
  */
-describe('computeForecast — delta absorption depends on the baseline source', () => {
+describe('computeForecast — delta absorption depends on whether the baseline was measured', () => {
   const preBaselineEvent: ForecastInput['events'] = [
     {
       id: 'e-old',
@@ -157,9 +163,28 @@ describe('computeForecast — delta absorption depends on the baseline source', 
     },
   ];
 
-  it('manual baseline: a pre-baseline delta is ADDED (the baseline excludes tracked entities)', () => {
+  /**
+   * A synced baseline in the shape production can actually produce.
+   *
+   * `VsphereSnapshotService` is the sole writer of `captured_at`/`observed_at` and
+   * derives them from one `measuredAt`, so every real `vsphere` row carries a
+   * measured period and `baselineMeasuredAt` equals `baselineDate` on every row no
+   * edit has re-dated. A fixture omitting it describes a row whose
+   * `source='vsphere' => observed_at NOT NULL` invariant is broken, which
+   * `absorbed` fails safe on by absorbing NOTHING — so it would quietly exercise
+   * the null guard instead of the absorption rule these tests exist to pin. That
+   * guard has its own test at the end of this block.
+   */
+  const measured = (events: ForecastInput['events']): ForecastInput => ({
+    ...makeInput(events),
+    baselineMeasuredAt: new Date('2026-05-01T00:00:00Z'),
+  });
+
+  it('unmeasured baseline: a pre-baseline delta is ADDED (the baseline excludes tracked entities)', () => {
+    // What a genuinely manual row looks like on this interface: no measured
+    // period, because no manual write path sets `observedAt`.
     const r = computeForecast(
-      { ...makeInput(preBaselineEvent), baselineSource: 'manual' },
+      { ...makeInput(preBaselineEvent), baselineMeasuredAt: null },
       new Date('2026-05-01T00:00:00Z'),
       new Date('2026-07-01T00:00:00Z'),
     );
@@ -168,9 +193,9 @@ describe('computeForecast — delta absorption depends on the baseline source', 
     expect(r.months.map((m) => m.consumption)).toEqual([1300, 1300, 1300]);
   });
 
-  it('vsphere baseline: a pre-baseline delta is ABSORBED (the snapshot already measured it)', () => {
+  it('measured baseline: a pre-baseline delta is ABSORBED (the snapshot already measured it)', () => {
     const r = computeForecast(
-      { ...makeInput(preBaselineEvent), baselineSource: 'vsphere' },
+      measured(preBaselineEvent),
       new Date('2026-05-01T00:00:00Z'),
       new Date('2026-07-01T00:00:00Z'),
     );
@@ -180,14 +205,9 @@ describe('computeForecast — delta absorption depends on the baseline source', 
     expect(r.months.map((m) => m.consumption)).toEqual([1000, 1000, 1000]);
   });
 
-  it('vsphere baseline: a POST-baseline delta still applies — only absorption is filtered', () => {
+  it('measured baseline: a POST-baseline delta still applies — only absorption is filtered', () => {
     const r = computeForecast(
-      {
-        ...makeInput([
-          { ...preBaselineEvent[0]!, effectiveDate: new Date('2026-06-01T00:00:00Z') },
-        ]),
-        baselineSource: 'vsphere',
-      },
+      measured([{ ...preBaselineEvent[0]!, effectiveDate: new Date('2026-06-01T00:00:00Z') }]),
       new Date('2026-05-01T00:00:00Z'),
       new Date('2026-07-01T00:00:00Z'),
     );
@@ -195,7 +215,7 @@ describe('computeForecast — delta absorption depends on the baseline source', 
     expect(r.months.map((m) => m.consumption)).toEqual([1000, 1300, 1300]);
   });
 
-  it('omitting baselineSource behaves as manual (every existing caller)', () => {
+  it('omitting the measured period absorbs nothing (every existing caller)', () => {
     const r = computeForecast(
       makeInput(preBaselineEvent),
       new Date('2026-05-01T00:00:00Z'),
@@ -204,22 +224,21 @@ describe('computeForecast — delta absorption depends on the baseline source', 
     expect(r.months.map((m) => m.consumption)).toEqual([1300, 1300, 1300]);
   });
 
-  it('vsphere baseline absorbs a capacityDelta too, not just consumption', () => {
+  const capacityBeforeBaseline: ForecastInput['events'] = [
+    {
+      id: 'e-cap',
+      effectiveDate: new Date('2026-03-01T00:00:00Z'),
+      category: 'hardware',
+      title: 'memory installed before the baseline',
+      description: null,
+      consumptionDelta: null,
+      capacityDelta: 2560,
+    },
+  ];
+
+  it('a measured baseline absorbs a capacityDelta too, not just consumption', () => {
     const r = computeForecast(
-      {
-        ...makeInput([
-          {
-            id: 'e-cap',
-            effectiveDate: new Date('2026-03-01T00:00:00Z'),
-            category: 'hardware',
-            title: 'memory installed before the baseline',
-            description: null,
-            consumptionDelta: null,
-            capacityDelta: 2560,
-          },
-        ]),
-        baselineSource: 'vsphere',
-      },
+      measured(capacityBeforeBaseline),
       new Date('2026-05-01T00:00:00Z'),
       new Date('2026-06-01T00:00:00Z'),
     );
@@ -227,5 +246,36 @@ describe('computeForecast — delta absorption depends on the baseline source', 
     // event's delta on top would invent 2560 GiB that does not exist — and
     // overstated capacity is what stops hardware being ordered.
     expect(r.months.map((m) => m.capacity)).toEqual([5000, 5000]);
+  });
+
+  it('a baseline with NO measured period absorbs NOTHING, capacityDelta included', () => {
+    // The broken-invariant guard, pinned deliberately because nothing in the
+    // schema enforces `source='vsphere' => observed_at NOT NULL` — there is no
+    // CHECK constraint, and the Guard-1 runbook in docs/operations.md tells
+    // operators to re-run the expand `INSERT ... SELECT` by hand.
+    //
+    // The tempting reading is "fall back to `baselineDate`". That is exactly the
+    // operator-editable label `absorbed` was just taken OFF, so falling back
+    // reinstates the defect the moment the invariant breaks.
+    //
+    // This assertion is also the counter-example to the claim that absorbing
+    // nothing is safe in BOTH delta fields at once. It is not, and the retired
+    // argument for it (`VsphereSnapshotService` writes `baselineCapacity: 0`) was
+    // a non-sequitur: `baselineCapacity` is a scalar term and `capacityDelta` is
+    // an event term, and zeroing one says nothing about the other. Counting the
+    // March capacityDelta reads 7560 rather than 5000 — capacity OVERSTATED,
+    // utilization lower, hardware DEFERRED. That is the unsafe direction, asserted
+    // rather than argued away; the branch is acceptable only because it is
+    // unreachable while the invariant holds.
+    const r = computeForecast(
+      { ...makeInput(capacityBeforeBaseline) },
+      new Date('2026-05-01T00:00:00Z'),
+      new Date('2026-06-01T00:00:00Z'),
+    );
+    expect(r.months.map((m) => m.capacity)).toEqual([7560, 7560]);
+
+    // And explicitly NOT the `baselineDate` fallback, which would have absorbed
+    // the March delta exactly as the sibling test above does.
+    expect(r.months.map((m) => m.capacity)).not.toEqual([5000, 5000]);
   });
 });
