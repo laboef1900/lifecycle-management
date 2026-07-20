@@ -23,6 +23,7 @@ import type {
 import type { Paginated } from './pagination.js';
 import {
   effectiveThresholdsSchema,
+  idempotencyKeyRetentionHoursSchema,
   percentSchema,
   procurementLeadTimeWeeksSchema,
 } from './settings.js';
@@ -245,6 +246,7 @@ export const tenantSettingsResponseSchema: z.ZodType<TenantSettings> = z.object(
   warnThreshold: percentSchema,
   critThreshold: percentSchema,
   procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
+  idempotencyKeyRetentionHours: idempotencyKeyRetentionHoursSchema,
 });
 
 // ---------- Pagination envelope ----------

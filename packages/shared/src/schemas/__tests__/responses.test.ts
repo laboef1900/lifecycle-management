@@ -396,6 +396,7 @@ describe('tenantSettingsResponseSchema', () => {
     warnThreshold: 0.7,
     critThreshold: 0.9,
     procurementLeadTimeWeeks: 6,
+    idempotencyKeyRetentionHours: 24,
   };
 
   it('round-trips a representative tenant settings response', () => {
