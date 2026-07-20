@@ -12,6 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 
+import { autoScaleDomain } from '@/lib/chart-scale';
 import { todayIso } from '@/lib/format';
 import { formatMonthShort } from '@/lib/format-month';
 import { useChartColors } from '@/lib/use-chart-colors';
@@ -24,79 +25,81 @@ export interface ClusterTileChartProps {
 }
 
 /**
- * Shared %-of-capacity window across every tile so tiles are visually comparable
- * (spec §4.4, amended 2026-07-18). The floor is 40 %, not 0 %: real clusters of
- * interest sit well above 40 %, so the old 0–125 scale spent its bottom third
- * empty and squeezed the warn/crit band into a top sliver. The window is FIXED
- * (see `allowDataOverflow` on the YAxis) — values outside it are clamped, never
- * allowed to stretch the axis, or the shared scale would stop being shared.
+ * Per-tile y-window (#268, spec §4.4 amended 2026-07-20). Each tile scales to
+ * its OWN data so the consumption line is vertically centred and uses the full
+ * plot height.
+ *
+ * @ai-warning This deliberately reversed the long-standing "fixed window,
+ * identical across all tiles" invariant (originally 0-125 %, tightened to
+ * 40-125 % by #224). Two clusters at very different utilizations now draw the
+ * same line shape, so the y-axis TICK LABELS are the only per-tile cue to
+ * where on the scale a tile actually sits — they are load-bearing, not
+ * decoration, and must never be hidden to save space.
  */
-const Y_MIN = 40;
-const Y_MAX = 125;
-const Y_TICKS = [50, 75, 100];
+const SCALE_OPTIONS = { minSpan: 12, padRatio: 0.18, floor: 0, targetTicks: 3 };
 const X_AXIS_HEIGHT = 16;
-const Y_AXIS_WIDTH = 30;
-
-/** Clamp a utilization % into the fixed shared window so it can't stretch the axis. */
-const clampToWindow = (value: number): number => Math.min(Math.max(value, Y_MIN), Y_MAX);
+const Y_AXIS_WIDTH = 34;
 
 /** Dash pattern for a threshold hairline drawn at its true value. */
 const HAIRLINE_DASH = '4 3';
 /**
  * Dash pattern for a hairline that had to be clamped to a window edge — the
- * "off-scale" cue. Without it a warn threshold of 35 % pinned to the 40 % floor
- * is indistinguishable from one genuinely configured at 40 %, so the tile
- * misreports by 5 points. Pattern (not color) carries the distinction so it
- * survives color-vision deficiency, and the aria-label announces the true
- * percentage either way.
+ * "off-scale" cue. Without it a warn threshold of 90 % pinned to the top of a
+ * 60-75 % window is indistinguishable from one genuinely configured at 75 %.
+ * Pattern (not color) carries the distinction so it survives color-vision
+ * deficiency, and the aria-label announces the true percentage either way.
+ *
+ * Under the retired fixed window this fired rarely (only for thresholds
+ * configured outside 40-125 %). With a per-tile domain it is the NORMAL case:
+ * a healthy cluster's window sits well below crit.
  */
 const OFF_SCALE_DASH = '1 2';
-
-interface Hairline {
-  /** Plotted y, clamped into the shared window. */
-  y: number;
-  /** True when the clamp bit — the line is NOT at its configured value. */
-  offScale: boolean;
-}
-
-function hairlineFor(pct: number): Hairline {
-  const y = clampToWindow(pct);
-  return { y, offScale: y !== pct };
-}
+/** Dash for the 100 %-capacity ceiling — distinct from both hairline dashes. */
+const CAPACITY_DASH = '2 3';
 
 interface TileChartRow {
   month: string;
   /**
-   * True utilization % for this month — always present (0 for unknown/zero
-   * capacity). The tooltip reports this so it stays honest even when the plotted
-   * line is clamped to the window edge.
+   * True utilization % for this month — the canonical value, and the only
+   * field present on EVERY row (`actual`/`forecast` are null outside their
+   * segment). The tooltip reads this.
    */
   util: number;
-  /** Clamped utilization % for months at/before "now" — null elsewhere so the line stops. */
+  /** Utilization % for months at/before "now" — null elsewhere so the line stops. */
   actual: number | null;
-  /** Clamped utilization % for months at/after "now" (drawn dashed) — null elsewhere. */
+  /** Utilization % for months at/after "now" (drawn dashed) — null elsewhere. */
   forecast: number | null;
+}
+
+interface Hairline {
+  key: string;
+  /** Plotted y, clamped into the tile's window. */
+  y: number;
+  /** True when the clamp bit — the line is NOT at its configured value. */
+  offScale: boolean;
+  stroke: string;
+  dash: string;
   /**
-   * Same clamped value as `actual`/`forecast` (always exactly `Y_MIN`), but
-   * ONLY when the true util fell below the window floor — null elsewhere.
-   * Drawn as an {@link OFF_SCALE_DASH} overlay ON TOP of the actual/forecast
-   * line so a run pinned at 40% can't be misread as genuine 40% utilization,
-   * extending the hairlines' own off-scale convention to the data series.
+   * Higher wins when two lines resolve to the same plotted y. Crit outranks
+   * warn outranks the capacity ceiling: the more severe threshold is the one
+   * a purchasing decision hinges on.
    */
-  offScale: number | null;
+  severity: number;
 }
 
 /**
- * Compact per-tile forecast chart: %-of-capacity on the fixed shared window
- * (40-125 % — see the `Y_MIN`/`Y_MAX` block above, which is the single source
- * of truth) so every tile in the grid is visually comparable. Values outside
- * the window — data rows, the breach dot, and the warn/crit hairlines alike —
- * are clamped to its edges rather than allowed to stretch the axis or vanish;
- * a clamped hairline switches to {@link OFF_SCALE_DASH} so an edge value is
- * never mistaken for a configured one. The consumption line is
- * split into a solid "actual" segment up to the current month and a dashed
- * "forecast" segment from the current month on — sharing the anchor point at
- * the current month keeps the line visually continuous.
+ * Compact per-tile forecast chart: %-of-capacity on a window fitted to this
+ * cluster's own data (see {@link SCALE_OPTIONS}), so the consumption line is
+ * centred and fills the plot. The line is split into a solid "actual" segment
+ * up to the current month and a dashed "forecast" segment from the current
+ * month on — sharing the anchor point at the current month keeps the line
+ * visually continuous.
+ *
+ * Because the domain is derived from the data, no data row can fall outside it
+ * — the clamping and off-scale marking that the fixed window needed for the
+ * data series are gone. Threshold hairlines still clamp, because a threshold
+ * is configuration rather than data and routinely sits outside a healthy
+ * cluster's window.
  */
 export function ClusterTileChart({
   months,
@@ -118,13 +121,9 @@ export function ClusterTileChart({
   // Unlike ForecastChart (which gets leading `preWindow` rows from baseline
   // history so "now" can land mid-series), a tile's `months` is always the
   // raw forecast window, which always opens at the current month — so
-  // `foundIndex` is 0 on every real tile. #243 Part B review: the earlier
-  // `foundIndex > 0` guard, copied from ForecastChart's genuine index-0 edge
-  // case, was therefore dead code in production — it suppressed the marker
-  // unconditionally. The house precedent this item cites (`order-by-rail.tsx`,
-  // spec §4.2) draws NOW at the left edge of its window as the normal case,
-  // not an edge case to hide, and this marker is unlabeled so there's no
-  // label-clipping concern either. Render whenever "now" is in the series.
+  // `foundIndex` is 0 on every real tile. Render whenever "now" is in the
+  // series; `order-by-rail.tsx` (spec §4.2) likewise draws NOW at the left
+  // edge of its window as the normal case, not an edge case to hide.
   const showNowMarker = foundIndex >= 0;
 
   const utilPct = (m: ForecastMonthPoint): number =>
@@ -132,27 +131,77 @@ export function ClusterTileChart({
 
   const data: TileChartRow[] = months.map((m, i) => {
     const value = utilPct(m);
-    const plotted = clampToWindow(value);
     return {
       month: m.month,
       util: value,
-      actual: i <= currentIndex ? plotted : null,
-      forecast: i >= currentIndex ? plotted : null,
-      offScale: value < Y_MIN ? plotted : null,
+      actual: i <= currentIndex ? value : null,
+      forecast: i >= currentIndex ? value : null,
     };
   });
 
+  const scale = autoScaleDomain(
+    data.map((r) => r.util),
+    SCALE_OPTIONS,
+  );
+  const clampToWindow = (value: number): number => Math.min(Math.max(value, scale.min), scale.max);
+
   const warnPct = thresholds.warn * 100;
   const critPct = thresholds.crit * 100;
-  const warnLine = hairlineFor(warnPct);
-  const critLine = hairlineFor(critPct);
-  // Two hairlines resolving to the same y render exactly coincident, so the one
-  // drawn first (warn) is permanently hidden under the other. That happens
-  // whenever both thresholds fall outside the window and clamp to the same edge.
-  // Draw a single merged line in the more severe color instead of implying two
-  // distinguishable bands the scale cannot show; the aria-label still reports
-  // both true percentages.
-  const hairlinesCoincide = warnLine.y === critLine.y;
+
+  // Build every horizontal reference line through one clamp, then collapse any
+  // that land on the same plotted y. Two coincident lines render exactly on top
+  // of each other, hiding the lower-severity one permanently while still
+  // implying two distinguishable bands the scale cannot show. Under the old
+  // fixed window only warn/crit could collide; with a per-tile domain the
+  // capacity ceiling joins them (a healthy cluster's window clamps warn, crit
+  // AND 100 % to the same top edge), so the merge is generalised rather than
+  // special-cased to that one pair.
+  const candidates: Array<Omit<Hairline, 'y' | 'offScale'> & { pct: number }> = [
+    {
+      key: 'capacity',
+      pct: 100,
+      stroke: colors.capacity,
+      dash: CAPACITY_DASH,
+      severity: 0,
+    },
+    {
+      key: 'warn',
+      pct: warnPct,
+      stroke: colors.utilizationWarn,
+      dash: HAIRLINE_DASH,
+      severity: 1,
+    },
+    {
+      key: 'crit',
+      pct: critPct,
+      stroke: colors.utilizationCrit,
+      dash: HAIRLINE_DASH,
+      severity: 2,
+    },
+  ];
+
+  const byY = new Map<number, Hairline>();
+  for (const c of candidates) {
+    const y = clampToWindow(c.pct);
+    const offScale = y !== c.pct;
+    const line: Hairline = {
+      key: c.key,
+      y,
+      offScale,
+      stroke: c.stroke,
+      // A clamped line is marked off-scale whatever its role, including the
+      // capacity ceiling — a "100 %" line pinned at 78 % would otherwise read
+      // as a capacity ceiling of 78 %.
+      dash: offScale ? OFF_SCALE_DASH : c.dash,
+      severity: c.severity,
+    };
+    const existing = byY.get(y);
+    if (!existing || line.severity > existing.severity) byY.set(y, line);
+  }
+  const hairlines = [...byY.values()];
+
+  const warnOffScale = clampToWindow(warnPct) !== warnPct;
+  const critOffScale = clampToWindow(critPct) !== critPct;
 
   const breachIndex = months.findIndex(
     (m) => m.capacity > 0 && m.consumption / m.capacity >= thresholds.warn,
@@ -164,9 +213,17 @@ export function ClusterTileChart({
 
   return (
     <div
-      className="h-[130px] w-full"
+      className="h-[168px] w-full"
       role="img"
-      aria-label={chartAriaLabel(months, thresholds, breachIndex, orderByDate)}
+      aria-label={chartAriaLabel({
+        months,
+        thresholds,
+        breachIndex,
+        orderByDate,
+        scale,
+        warnOffScale,
+        critOffScale,
+      })}
     >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 0 }}>
@@ -176,11 +233,10 @@ export function ClusterTileChart({
               <stop offset="100%" stopColor={colors.consumption} stopOpacity={0.05} />
             </linearGradient>
           </defs>
-          {/* No CartesianGrid here (#243 Part B): the y-axis's 50/75/100 tick
-              labels already carry the reference, and the warn/crit/capacity
-              hairlines below are the only lines that should read as a
-              reference — a horizontal grid competed with them for attention
-              on an already-small tile. */}
+          {/* No CartesianGrid here (#243 Part B): the y-axis tick labels already
+              carry the reference, and the warn/crit/capacity hairlines below are
+              the only lines that should read as a reference — a horizontal grid
+              competed with them for attention on an already-small tile. */}
           <XAxis
             dataKey="month"
             height={X_AXIS_HEIGHT}
@@ -196,13 +252,15 @@ export function ClusterTileChart({
           />
           <YAxis
             width={Y_AXIS_WIDTH}
-            domain={[Y_MIN, Y_MAX]}
-            ticks={Y_TICKS}
-            // Keep the shared window fixed: never let below-floor (0 %, unknown
-            // capacity) or above-ceiling (>125 %) data stretch the axis, or tiles
-            // would stop being comparable at a glance.
+            domain={[scale.min, scale.max]}
+            ticks={scale.ticks}
+            // Keep the COMPUTED window exactly as computed. The reason changed
+            // with #268 — it is no longer about cross-tile comparability but
+            // about centring: letting Recharts widen the domain to its own
+            // rounding would drift the line off the middle of the plot, which
+            // is the whole point of the per-tile scale.
             allowDataOverflow
-            tickFormatter={(v: number) => `${v}%`}
+            tickFormatter={(v: number) => `${Math.round(v)}%`}
             tick={{ fontSize: 9, fill: 'var(--fg-subtle)' }}
             tickLine={false}
             axisLine={false}
@@ -212,7 +270,6 @@ export function ClusterTileChart({
               if (!active || !payload || payload.length === 0 || typeof label !== 'string') {
                 return null;
               }
-              // Report the TRUE utilization, not the clamped plotted value.
               const row = payload[0]?.payload as TileChartRow | undefined;
               const value = row ? row.util : null;
               return (
@@ -247,29 +304,19 @@ export function ClusterTileChart({
             isAnimationActive={false}
             connectNulls={false}
           />
-          {/* Clamp the hairlines into the window. Recharts' ReferenceLine
-              defaults to ifOverflow="discard", so a threshold configured below
-              the 40 % floor (percentSchema allows 0.01) would render NOTHING —
-              yet the breach dot still pins to the floor and the aria-label
-              still names the threshold, an inconsistent, misleading tile.
-              Pinning the hairline to the edge instead keeps the tile
-              self-consistent, and OFF_SCALE_DASH marks it as pinned rather
-              than measured so the edge value can't be misread as the
-              configured one. The aria-label keeps reporting the true
-              percentage. */}
-          {hairlinesCoincide ? null : (
+          {/* Clamped into the window above. Recharts' ReferenceLine defaults to
+              ifOverflow="discard", so an out-of-window threshold would render
+              NOTHING — leaving a tile whose aria-label names a threshold it
+              never draws. Pinning to the edge keeps the tile self-consistent;
+              OFF_SCALE_DASH marks it as pinned rather than measured. */}
+          {hairlines.map((line) => (
             <ReferenceLine
-              y={warnLine.y}
-              stroke={colors.utilizationWarn}
-              strokeDasharray={warnLine.offScale ? OFF_SCALE_DASH : HAIRLINE_DASH}
+              key={line.key}
+              y={line.y}
+              stroke={line.stroke}
+              strokeDasharray={line.dash}
             />
-          )}
-          <ReferenceLine
-            y={critLine.y}
-            stroke={colors.utilizationCrit}
-            strokeDasharray={critLine.offScale ? OFF_SCALE_DASH : HAIRLINE_DASH}
-          />
-          <ReferenceLine y={100} stroke={colors.capacity} strokeDasharray="2 3" />
+          ))}
           {showNowMarker ? (
             <ReferenceLine x={currentMonth} stroke="var(--steel)" strokeDasharray="2 3" />
           ) : null}
@@ -307,31 +354,16 @@ export function ClusterTileChart({
             isAnimationActive={false}
             connectNulls={false}
           />
-          {/* Off-scale overlay (#243 Part B): drawn ON TOP of the actual/
-              forecast line above, so a run pinned at the 40% floor picks up
-              the same OFF_SCALE_DASH the hairlines use for their own clamp,
-              rather than reading as genuine 40% utilization. */}
-          <Line
-            type="monotone"
-            dataKey="offScale"
-            stroke={colors.consumption}
-            strokeWidth={2}
-            strokeDasharray={OFF_SCALE_DASH}
-            dot={false}
-            isAnimationActive={false}
-            connectNulls={false}
-          />
           {breachRow ? (
             // Positioned at the WARN-threshold crossing (breachIndex above
             // uses thresholds.warn, not crit), so it must render in the warn
             // color — filling it with utilizationCrit mislabeled a warn
-            // breach as a crit one (PR review fix 4a).
+            // breach as a crit one (PR review fix 4a). No clamp: the dot sits
+            // on a data value, and the domain contains all data by
+            // construction.
             <ReferenceDot
               x={breachRow.month}
-              // Clamp into the fixed window on BOTH ends. The upper clamp keeps a
-              // >125 % breach on-chart; the lower clamp only bites if the warn
-              // threshold is configured below the 40 % floor (breach y ≥ warnPct).
-              y={clampToWindow(breachRow.util)}
+              y={breachRow.util}
               r={4}
               fill={colors.utilizationWarn}
               stroke="var(--card)"
@@ -351,14 +383,28 @@ export function ClusterTileChart({
   );
 }
 
-function chartAriaLabel(
-  months: ForecastMonthPoint[],
-  thresholds: { warn: number; crit: number },
-  breachIndex: number,
-  orderByDate: string | null,
-): string {
+function chartAriaLabel({
+  months,
+  thresholds,
+  breachIndex,
+  orderByDate,
+  scale,
+  warnOffScale,
+  critOffScale,
+}: {
+  months: ForecastMonthPoint[];
+  thresholds: { warn: number; crit: number };
+  breachIndex: number;
+  orderByDate: string | null;
+  scale: { min: number; max: number };
+  warnOffScale: boolean;
+  critOffScale: boolean;
+}): string {
   const parts = [
-    `${months.length}-month forecast as percent of capacity, shared ${Y_MIN} to ${Y_MAX} percent scale across tiles.`,
+    // #268: this sentence used to promise a "shared 40 to 125 percent scale
+    // across tiles". The scale is per-tile now, and saying so is the only way
+    // a non-sighted reader knows the axis differs from the tile next to it.
+    `${months.length}-month forecast as percent of capacity, scaled to this cluster's own range, ${Math.round(scale.min)} to ${Math.round(scale.max)} percent.`,
   ];
   parts.push(
     breachIndex >= 0
@@ -366,7 +412,17 @@ function chartAriaLabel(
       : 'No breach within the window.',
   );
   if (orderByDate) parts.push(`Order by ${orderByDate}.`);
-  parts.push(`Warn threshold ${Math.round(thresholds.warn * 100)} percent.`);
-  parts.push(`Critical threshold ${Math.round(thresholds.crit * 100)} percent.`);
+  // The visible hairline for an off-scale threshold is pinned to a window edge,
+  // so the spoken percentage is the only place its true value survives.
+  parts.push(
+    `Warn threshold ${Math.round(thresholds.warn * 100)} percent${
+      warnOffScale ? ', outside the visible range' : ''
+    }.`,
+  );
+  parts.push(
+    `Critical threshold ${Math.round(thresholds.crit * 100)} percent${
+      critOffScale ? ', outside the visible range' : ''
+    }.`,
+  );
   return parts.join(' ');
 }

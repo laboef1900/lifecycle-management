@@ -315,34 +315,13 @@ export const ClusterTile = memo(function ClusterTile({
           </Badge>
         ) : null}
         {!isArchived ? <SyncStateBadge cluster={cluster} /> : null}
-      </div>
-
-      <div className="flex flex-wrap items-end gap-2">
-        {isArchived ? (
-          <span
-            className="font-mono text-[28px] font-bold leading-none tracking-tight text-fg-muted"
-            aria-label="archived — no forecast"
-          >
-            —
-          </span>
-        ) : runwayUnknown ? (
-          <>
-            <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-fg-muted">
-              —
-            </span>
-            <span className="pb-1 font-mono text-[10px] text-fg-muted">{runwaySub}</span>
-          </>
-        ) : (
-          <>
-            <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-accent">
-              {runway.value}
-              {runway.plus ? '+' : ''}
-              <span className="ml-1 text-xs font-semibold text-fg-muted">{RUNWAY_UNIT}</span>
-            </span>
-            <span className="pb-1 font-mono text-[10px] text-fg-muted">{runwaySub}</span>
-          </>
-        )}
         {/*
+          Spec §4.4 amendment (2026-07-20, #268): the order-by chip moves up
+          here from the runway row. It is the tile's single most decision-bearing
+          fact on a purchasing surface, so it belongs on the identity line beside
+          the name and status — and vacating the runway row is what frees a whole
+          chip row for the chart.
+
           Spec §4.4 amendment (2026-07-19, #243 Part B): the chip renders
           only when there's something to say — a real order-by date, or the
           unknown-capacity case (still an information-bearing state, unlike
@@ -352,7 +331,7 @@ export const ClusterTile = memo(function ClusterTile({
         {orderByDate || orderUnknown ? (
           <span
             className={cn(
-              'ml-auto rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold tracking-[0.08em]',
+              'ml-auto shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold tracking-[0.08em]',
               orderByDate
                 ? ORDER_CHIP_TONE[urgency === 'none' ? 'planned' : urgency]
                 : 'border-border text-fg-muted',
@@ -365,6 +344,52 @@ export const ClusterTile = memo(function ClusterTile({
         ) : null}
       </div>
 
+      {/*
+        `items-baseline` (was `items-end`) so the runway sub-line sits on the
+        same baseline as the numeral's inline unit — under `items-end` the
+        sub-line carried a `pb-1` nudge that left it visibly stepped above the
+        'mo' it qualifies (#268).
+      */}
+      <div className="flex flex-wrap items-baseline gap-2">
+        {isArchived ? (
+          <span
+            className="font-mono text-[28px] font-bold leading-none tracking-tight text-fg-muted"
+            aria-label="archived — no forecast"
+          >
+            —
+          </span>
+        ) : runwayUnknown ? (
+          <>
+            <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-fg-muted">
+              —
+            </span>
+            <span className="font-mono text-[10px] text-fg-muted">{runwaySub}</span>
+          </>
+        ) : (
+          <>
+            <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-accent">
+              {runway.value}
+              {runway.plus ? '+' : ''}
+              <span className="ml-1 text-xs font-semibold text-fg-muted">{RUNWAY_UNIT}</span>
+            </span>
+            <span className="font-mono text-[10px] text-fg-muted">{runwaySub}</span>
+          </>
+        )}
+        {/*
+          Spec §4.4 amendment (2026-07-20, #268): the event chip takes the slot
+          the order-by chip vacated (which moved to the header row above),
+          emptying the bottom flag row so its height can go to the chart.
+        */}
+        {events.length > 0 ? (
+          <FlagChip className="ml-auto shrink-0">
+            EVENT ×{events.length}
+            {events[0]
+              ? ` · ${formatMonthShort(`${events[0].effectiveDate.slice(0, 7)}-01`).toUpperCase()}`
+              : ''}
+          </FlagChip>
+        ) : null}
+      </div>
+
       <p className="text-[11px] leading-[1.45] text-fg-muted">
         {isArchived ? 'Archived — no forecast.' : verdict}
       </p>
@@ -373,17 +398,16 @@ export const ClusterTile = memo(function ClusterTile({
         <LiveUsageInline cluster={cluster} live={live} isPending={liveUsagePending} />
       ) : null}
 
-      <div className="flex flex-wrap gap-1">
-        {!isArchived ? <ProvisionalHostHint count={provisionalCount} /> : null}
-        {events.length > 0 ? (
-          <FlagChip>
-            EVENT ×{events.length}
-            {events[0]
-              ? ` · ${formatMonthShort(`${events[0].effectiveDate.slice(0, 7)}-01`).toUpperCase()}`
-              : ''}
-          </FlagChip>
-        ) : null}
-        {/*
+      {/*
+        The event chip left this row for the runway row above (#268), so on a
+        healthy tile both remaining children are absent and the row collapses —
+        rendered conditionally rather than as an always-present empty flex box,
+        whose `gap` would otherwise still consume height the chart now uses.
+      */}
+      {(!isArchived && provisionalCount > 0) || stale ? (
+        <div className="flex flex-wrap gap-1">
+          {!isArchived ? <ProvisionalHostHint count={provisionalCount} /> : null}
+          {/*
           Spec §4.4 amendment (2026-07-19, #243 Part B): the baseline chip
           now renders only in its stale/warn variant — a fresh baseline
           repeating its date on every tile added no information the
@@ -391,8 +415,9 @@ export const ClusterTile = memo(function ClusterTile({
           That leaves FlagChip with a single (warn) tone — its muted variant
           is gone, not just unused.
         */}
-        {stale ? <FlagChip>⚠ BASELINE {ageDays} D OLD</FlagChip> : null}
-      </div>
+          {stale ? <FlagChip>⚠ BASELINE {ageDays} D OLD</FlagChip> : null}
+        </div>
+      ) : null}
 
       <div className="mt-auto">
         <ClusterTileChart months={entry.months} thresholds={thresholds} orderByDate={orderByDate} />
@@ -401,9 +426,20 @@ export const ClusterTile = memo(function ClusterTile({
   );
 });
 
-function FlagChip({ children }: { children: React.ReactNode }): React.JSX.Element {
+function FlagChip({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}): React.JSX.Element {
   return (
-    <span className="rounded-sm border border-warning/35 px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-[0.05em] text-warning">
+    <span
+      className={cn(
+        'rounded-sm border border-warning/35 px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-[0.05em] text-warning',
+        className,
+      )}
+    >
       {children}
     </span>
   );
