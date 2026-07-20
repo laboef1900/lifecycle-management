@@ -10,6 +10,11 @@ import { toast } from 'sonner';
 
 import { AdminOnly } from '@/components/auth/admin-only';
 import { ConfirmDialog } from '@/components/form/confirm-dialog';
+import { CertificateFingerprint } from '@/components/settings/certificate-fingerprint';
+import {
+  isTrustableStatus,
+  TrustCertificateDialog,
+} from '@/components/settings/trust-certificate-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -58,6 +63,7 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
   const [form, setForm] = React.useState<AddFormState>(EMPTY_FORM);
   const [probe, setProbe] = React.useState<VsphereProbeResult | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<VsphereConnectionResponse | null>(null);
+  const [trustTarget, setTrustTarget] = React.useState<VsphereConnectionResponse | null>(null);
 
   const invalidate = (): void => {
     void queryClient.invalidateQueries({ queryKey: ['vsphere-connections'] });
@@ -160,6 +166,22 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
                 {/* ADMIN-only: viewers never see the control, and the server 403s
                     it regardless. Disabled connections are never syncable — the
                     scheduler filters them out, so a queued run could never fire. */}
+                {/* The recovery path out of an untrusted or changed certificate
+                    (#259). Only offered where it means something — the other
+                    statuses are not fixed by re-pinning. */}
+                {isTrustableStatus(c.status) ? (
+                  <AdminOnly>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Trust certificate: ${c.name}`}
+                      onClick={() => setTrustTarget(c)}
+                    >
+                      <ShieldCheck className="size-3.5" aria-hidden />
+                      Trust certificate
+                    </Button>
+                  </AdminOnly>
+                ) : null}
                 <AdminOnly>
                   <Button
                     variant="outline"
@@ -282,6 +304,24 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
         pending={deleteMutation.isPending}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
       />
+
+      {/* Mounted only while open, so every opening re-probes rather than
+          reusing a fingerprint captured before the certificate changed. */}
+      {trustTarget ? (
+        <TrustCertificateDialog
+          connection={trustTarget}
+          onOpenChange={(open) => {
+            if (!open) setTrustTarget(null);
+          }}
+          onTrusted={() => {
+            invalidate();
+            setTrustTarget(null);
+            // The service resets status to `never_connected`, so the scheduler's
+            // next tick retries on its own — no "Sync now" click required.
+            toast.success('Certificate trusted — the next sync will retry automatically');
+          }}
+        />
+      ) : null}
     </Card>
   );
 }
@@ -383,6 +423,17 @@ function ProbeResult({ probe }: { probe: VsphereProbeResult }): React.JSX.Elemen
     );
   }
 
+  // Reachable, not publicly trusted, yet no readable chain — nothing to confirm,
+  // and inventing a blank fingerprint box would invite confirming nothing at all.
+  if (probe.rootFingerprintSha256 === null) {
+    return (
+      <p className="text-muted-foreground flex items-center gap-2 text-sm">
+        <ShieldAlert className="text-warning size-4" aria-hidden />
+        The host answered but did not present a readable certificate chain.
+      </p>
+    );
+  }
+
   return (
     <div className="border-warning/40 bg-warning/5 rounded-lg border p-3 text-sm">
       <p className="flex items-center gap-2 font-medium">
@@ -394,10 +445,7 @@ function ProbeResult({ probe }: { probe: VsphereProbeResult }): React.JSX.Elemen
         <code className="font-mono text-xs">govc about.cert -thumbprint</code> prints the same
         value.
       </p>
-      <p className="mt-2 font-mono text-xs break-all">{probe.rootFingerprintSha256}</p>
-      {probe.validTo ? (
-        <p className="text-muted-foreground mt-1 text-xs">Expires {probe.validTo}</p>
-      ) : null}
+      <CertificateFingerprint fingerprint={probe.rootFingerprintSha256} validTo={probe.validTo} />
     </div>
   );
 }
