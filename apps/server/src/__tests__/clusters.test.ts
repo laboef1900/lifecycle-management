@@ -729,11 +729,14 @@ describe('ClusterResponse.metrics is derived from baseline history', () => {
   it('absorbs a delta already inside a vSphere baseline, agreeing with /forecast', async () => {
     // A vSphere snapshot measures TOTAL actual usage, so a tracked delta dated at
     // or before the capture is already inside the number and adding it again
-    // double-counts (forecast.ts `absorbed`, recorded decision Q9b). /forecast has
-    // always applied that rule because forecast-loader passes `baselineSource`;
-    // the cluster endpoints did not, because `metrics` came from a legacy table
-    // that has no `source` column. Reading both from the same history row
-    // converges them — a deliberate, purchasing-visible change, argued in the PR.
+    // double-counts (forecast.ts `absorbed`, recorded decision Q9b). The gate is
+    // `ForecastInput.baselineMeasuredAt` — the anchor row's `observedAt`, snapped
+    // to its month — NOT the row's `source`, which a value edit flips. /forecast
+    // has always applied the rule because forecast-loader derives that field from
+    // the anchor; the cluster endpoints did not, because `metrics` came from a
+    // legacy table carrying neither column. Both now derive it from the same
+    // history row, which converges them — a deliberate, purchasing-visible change,
+    // argued in the PR.
     const metric = await prisma.metricType.findUniqueOrThrow({ where: { key: 'memory_gb' } });
     const cluster = await prisma.cluster.create({
       data: {
@@ -777,10 +780,12 @@ describe('ClusterResponse.metrics is derived from baseline history', () => {
   });
 
   it('does NOT absorb a pre-baseline delta on a manual cluster', async () => {
-    // The other half of Q9b, asserted so the `baselineSource` pass-through cannot
-    // be "simplified" to a constant. A manual baseline is the portion NOT modelled
-    // by tracked entities (vision.md Invariant 1), so a tracked delta is never
-    // inside it regardless of date.
+    // The other half of Q9b, asserted so `baselineMeasuredAt` cannot be
+    // "simplified" to a constant — nor its null branch dropped. A manual baseline
+    // is the portion NOT modelled by tracked entities (vision.md Invariant 1), so a
+    // tracked delta is never inside it regardless of date. The mechanism carrying
+    // that: no manual write path sets `observedAt`, so the anchor row's is null,
+    // `baselineMeasuredAt` is null, and `absorbed` returns false for every date.
     const cluster = await makeCluster(prisma, {
       name: uniqueName('manual-no-absorb'),
       baselineDate: new Date(Date.UTC(2026, 4, 1)),
@@ -2006,6 +2011,224 @@ describe('PUT /api/clusters/:id — a combined date + values edit', () => {
       orderBy: { capturedAt: 'asc' },
     });
     expect(rows.map((r) => r.baselineConsumption.toNumber())).toEqual([100, 300]);
+  });
+
+  it('refuses the WHOLE request when only SOME corrected metrics occupy the target', async () => {
+    // THE REGRESSION THE ALL-OR-NOTHING SCOPING EXISTS FOR. The in-place-correction
+    // exclusion was first written per metric — `moving.filter(row => !occupyingTarget
+    // .has(row.metricTypeId))` — which quietly broke the per-REQUEST invariant the
+    // refusal above it is built on. An excluded metric never reaches the block loop,
+    // so the OTHER metrics proceed and the request half-applies with a 200 OK.
+    //
+    // memory_gb holds March=100 AND July=900 (newest); cpu holds July=40 only.
+    // Submitting March with values for both makes memory the in-place case and cpu
+    // an ordinary backward move — and cpu's move is blocked by memory's occupancy
+    // only per REQUEST, never per metric. Per metric the request answered 200: cpu
+    // was re-dated to March and set to 44, memory's March row was corrected to 950,
+    // but memory's July row stayed at 900 AND STAYED NEWEST — so the response served
+    // 900, the operator's 950 never anchored the forecast, and `baselineDate` came
+    // back as MIN(March, March) = the submitted date, falsely confirming the save.
+    //
+    // Applying the legal half is worse than refusing (see the per-request @ai-warning
+    // in `planBaselineReanchor`), so the exclusion is taken only when it covers EVERY
+    // moving metric.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195m' },
+      update: {},
+      create: { key: 'cpu_cores_195m', displayName: 'CPU (mixed)', unit: 'cores' },
+    });
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('mixed-occupancy'),
+      baselineDate: new Date(Date.UTC(2026, 2, 1)), // memory March = 100 (the target)
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'memory_gb',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)), // memory July = 900, newest
+          baselineConsumption: 900,
+          baselineCapacity: 1000,
+        },
+        {
+          metricKey: 'cpu_cores_195m',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)), // cpu July = 40, its only row
+          baselineConsumption: 40,
+          baselineCapacity: 64,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselineDate: '2026-03-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 950, baselineCapacity: 1000 },
+          { metricTypeKey: 'cpu_cores_195m', baselineConsumption: 44, baselineCapacity: 64 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('BASELINE_PERIOD_OCCUPIED');
+
+    // NOTHING was written — not the half the per-metric exclusion let through, and
+    // not the in-place correction either. A refused request writes nothing at all.
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      include: { metricType: { select: { key: true } } },
+      orderBy: [{ capturedAt: 'asc' }, { metricTypeId: 'asc' }],
+    });
+    const state = rows.map((r) => ({
+      key: r.metricType.key,
+      period: r.capturedAt.toISOString().slice(0, 10),
+      consumption: r.baselineConsumption.toNumber(),
+    }));
+    expect(state).toHaveLength(3);
+    expect(state).toContainEqual({ key: 'memory_gb', period: '2026-03-01', consumption: 100 });
+    expect(state).toContainEqual({ key: 'memory_gb', period: '2026-07-01', consumption: 900 });
+    expect(state).toContainEqual({ key: 'cpu_cores_195m', period: '2026-07-01', consumption: 40 });
+  });
+
+  it('corrects EVERY metric in place when they all already occupy the target', async () => {
+    // The other side of the all-or-nothing scoping: when the exclusion covers every
+    // moving metric there is no legal half left behind, so the request is the
+    // multi-metric form of the in-place correction and must still succeed. Pinning
+    // it stops the regression fix from being "fixed" into a blanket refusal.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195n' },
+      update: {},
+      create: { key: 'cpu_cores_195n', displayName: 'CPU (all-occupy)', unit: 'cores' },
+    });
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('all-occupy'),
+      baselineDate: new Date(Date.UTC(2026, 2, 1)),
+      baselineConsumption: 100,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'memory_gb',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)),
+          baselineConsumption: 900,
+          baselineCapacity: 1000,
+        },
+        {
+          metricKey: 'cpu_cores_195n',
+          capturedAt: new Date(Date.UTC(2026, 2, 1)),
+          baselineConsumption: 8,
+          baselineCapacity: 64,
+        },
+        {
+          metricKey: 'cpu_cores_195n',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)),
+          baselineConsumption: 40,
+          baselineCapacity: 64,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselineDate: '2026-03-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 150, baselineCapacity: 1000 },
+          { metricTypeKey: 'cpu_cores_195n', baselineConsumption: 9, baselineCapacity: 64 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Both March rows corrected in place; both July rows untouched and still newest.
+    // Four periods in, four periods out — the correction re-values, never destroys.
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      include: { metricType: { select: { key: true } } },
+      orderBy: [{ capturedAt: 'asc' }, { metricTypeId: 'asc' }],
+    });
+    const state = rows.map((r) => ({
+      key: r.metricType.key,
+      period: r.capturedAt.toISOString().slice(0, 10),
+      consumption: r.baselineConsumption.toNumber(),
+    }));
+    expect(state).toHaveLength(4);
+    expect(state).toContainEqual({ key: 'memory_gb', period: '2026-03-01', consumption: 150 });
+    expect(state).toContainEqual({ key: 'memory_gb', period: '2026-07-01', consumption: 900 });
+    expect(state).toContainEqual({ key: 'cpu_cores_195n', period: '2026-03-01', consumption: 9 });
+    expect(state).toContainEqual({ key: 'cpu_cores_195n', period: '2026-07-01', consumption: 40 });
+
+    // Still July: `baselineDate` is MIN over newest-per-metric and correcting an
+    // older period does not make it the newest one (the documented MIN caveat).
+    expect(clusterResponseSchema.parse(res.json()).baselineDate).toBe('2026-07-01');
+  });
+
+  it('still refuses a multi-metric MOVE onto a free period behind an older row', async () => {
+    // The reordering defect the refusal exists for, in the multi-metric shape the
+    // all-or-nothing scoping has to leave intact. NEITHER metric occupies the target
+    // (April is free for both), so the exclusion never applies and the block loop
+    // runs exactly as before: cpu's July row would land at April BEHIND its own May
+    // row, leaving Apr=300, May=100 — a drop nobody measured, on a chart that feeds
+    // hardware purchasing.
+    await prisma.metricType.upsert({
+      where: { key: 'cpu_cores_195o' },
+      update: {},
+      create: { key: 'cpu_cores_195o', displayName: 'CPU (reorder)', unit: 'cores' },
+    });
+    const cluster = await makeCluster(prisma, {
+      name: uniqueName('multi-reorder'),
+      baselineDate: new Date(Date.UTC(2026, 6, 1)), // memory July only — a clean move
+      baselineConsumption: 900,
+      baselineCapacity: 1000,
+      extraBaselines: [
+        {
+          metricKey: 'cpu_cores_195o',
+          capturedAt: new Date(Date.UTC(2026, 4, 1)), // cpu May = 100, the older row
+          baselineConsumption: 100,
+          baselineCapacity: 64,
+        },
+        {
+          metricKey: 'cpu_cores_195o',
+          capturedAt: new Date(Date.UTC(2026, 6, 1)), // cpu July = 300, would move back
+          baselineConsumption: 300,
+          baselineCapacity: 64,
+        },
+      ],
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselineDate: '2026-04-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 950, baselineCapacity: 1000 },
+          { metricTypeKey: 'cpu_cores_195o', baselineConsumption: 350, baselineCapacity: 64 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('BASELINE_PERIOD_OCCUPIED');
+    expect(body.error.message).toContain('cpu_cores_195o');
+
+    // And the legal half — memory's clean move onto a free April — is not applied
+    // either: the whole request is refused, so every row is exactly as it was.
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+      include: { metricType: { select: { key: true } } },
+      orderBy: [{ capturedAt: 'asc' }, { metricTypeId: 'asc' }],
+    });
+    const state = rows.map((r) => ({
+      key: r.metricType.key,
+      period: r.capturedAt.toISOString().slice(0, 10),
+      consumption: r.baselineConsumption.toNumber(),
+    }));
+    expect(state).toHaveLength(3);
+    expect(state).toContainEqual({ key: 'memory_gb', period: '2026-07-01', consumption: 900 });
+    expect(state).toContainEqual({ key: 'cpu_cores_195o', period: '2026-05-01', consumption: 100 });
+    expect(state).toContainEqual({ key: 'cpu_cores_195o', period: '2026-07-01', consumption: 300 });
   });
 
   it('appends rather than re-dating when the submitted period is later', async () => {

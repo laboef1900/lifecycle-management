@@ -667,16 +667,20 @@ export class ClustersService {
    * one invariant: a moved row stays the newest row for its metric.
    *
    * ONE EXCEPTION, added after the refusal was found to be unsatisfiable. When the
-   * request carries VALUES for a metric whose target period is already held by one
-   * of that metric's own rows, nothing needs to move — the upsert corrects that row
-   * in place. Refusing there told the operator to "edit that period directly", an
-   * operation the API does not offer, which made correcting an already-recorded
-   * historical period impossible. See `occupyingTarget` below for why the exception
-   * is confined to value-carrying requests and why it leaves the invariant intact.
+   * request carries VALUES and EVERY metric that would move is already holding the
+   * target period with one of its own rows, nothing needs to move — the upsert
+   * corrects those rows in place. Refusing there told the operator to "edit that
+   * period directly", an operation the API does not offer, which made correcting an
+   * already-recorded historical period impossible. See `occupyingTarget` below for
+   * why the exception is confined to value-carrying requests, why it is ALL-OR-
+   * NOTHING across the request rather than per metric, and why it leaves the
+   * invariant intact.
    *
-   * The scope is PER METRIC, because the unique key is (cluster, metric, period).
-   * A cluster-wide check would refuse the legitimate edit where one metric
-   * already sits on the target and another is moving onto it.
+   * The occupancy CHECK is per metric, because the unique key is (cluster, metric,
+   * period). A cluster-wide check would refuse the legitimate edit where one metric
+   * already sits on the target and another is moving onto it. The exception built on
+   * top of it is not per metric — a mixed request, where some metrics correct in
+   * place and others must move, is refused whole.
    */
   private async planBaselineReanchor(
     tenantId: string,
@@ -816,6 +820,28 @@ export class ClustersService {
     // invariant "a moved row stays the newest row for its metric" holds vacuously,
     // and a free target is still checked by the loop below exactly as before.
     //
+    // @ai-warning ALL-OR-NOTHING across the request, never per metric — because the
+    // refusal it defers to is itself per REQUEST (see the @ai-warning at the top of
+    // this method). The exclusion was first written as a per-metric
+    // `moving.filter(row => !occupyingTarget.has(row.metricTypeId))`, and that
+    // filter runs BEFORE the block loop, so an excluded metric never reaches the
+    // check while every OTHER metric proceeds: the request half-applies with a
+    // 200 OK. Concretely, on a cluster holding memory at March=100 and July=900
+    // (newest) plus cpu at July only, a March-dated correction of both re-dated cpu
+    // and corrected memory's March row, while memory's July row stayed put AND
+    // STAYED NEWEST — so the response served the old 900, the operator's 950 never
+    // anchored the forecast, and `baselineDate` = MIN(March, March) echoed the
+    // submitted date back and falsely confirmed the save. Applying the legal half
+    // is worse than refusing, exactly as the per-request warning above says.
+    //
+    // Taking the exclusion only when it covers EVERY moving metric leaves the block
+    // loop to refuse the whole mixed request, and keeps the case the exclusion was
+    // added for — where there is no legal half left behind, because nothing moves at
+    // all. Pinned from both sides by `clusters.test.ts`: "corrects an already-
+    // recorded period IN PLACE", "corrects EVERY metric in place when they all
+    // already occupy the target", and "refuses the WHOLE request when only SOME
+    // corrected metrics occupy the target".
+    //
     // The submitted date is NOT echoed back in this case: `ClusterResponse.
     // baselineDate` is MIN over newest-per-metric, and correcting an older period
     // does not make it the newest one. That is honest rather than a regression —
@@ -823,7 +849,9 @@ export class ClustersService {
     const moves =
       correcting === undefined
         ? moving
-        : moving.filter((row) => !occupyingTarget.has(row.metricTypeId));
+        : moving.every((row) => occupyingTarget.has(row.metricTypeId))
+          ? []
+          : moving;
 
     const blockedMetrics = new Set(conflicts.map((row) => row.metricTypeId));
 
