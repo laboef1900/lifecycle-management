@@ -39,6 +39,7 @@ export class SettingsService {
       warnThreshold: decimalToNumber(row.warnThreshold),
       critThreshold: decimalToNumber(row.critThreshold),
       procurementLeadTimeWeeks: row.procurementLeadTimeWeeks,
+      idempotencyKeyRetentionHours: row.idempotencyKeyRetentionHours,
     };
   }
 
@@ -50,17 +51,20 @@ export class SettingsService {
         warnThreshold: input.warnThreshold,
         critThreshold: input.critThreshold,
         procurementLeadTimeWeeks: input.procurementLeadTimeWeeks,
+        idempotencyKeyRetentionHours: input.idempotencyKeyRetentionHours,
       },
       update: {
         warnThreshold: input.warnThreshold,
         critThreshold: input.critThreshold,
         procurementLeadTimeWeeks: input.procurementLeadTimeWeeks,
+        idempotencyKeyRetentionHours: input.idempotencyKeyRetentionHours,
       },
     });
     return {
       warnThreshold: decimalToNumber(row.warnThreshold),
       critThreshold: decimalToNumber(row.critThreshold),
       procurementLeadTimeWeeks: row.procurementLeadTimeWeeks,
+      idempotencyKeyRetentionHours: row.idempotencyKeyRetentionHours,
     };
   }
 
