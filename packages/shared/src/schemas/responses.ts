@@ -15,7 +15,11 @@ import type { HostLifecycleEventResponse } from './host-lifecycle.js';
 import type { HostReplacementResponse } from './host-replacement.js';
 import type { CapacityResponseRow, HostResponse } from './host.js';
 import { itemKindSchema } from './item.js';
-import type { ItemAllocationResponseRow, ItemResponse } from './item.js';
+import type {
+  ItemAllocationResponseRow,
+  ItemBulkShiftDatesResponse,
+  ItemResponse,
+} from './item.js';
 import type { Paginated } from './pagination.js';
 import {
   effectiveThresholdsSchema,
@@ -142,6 +146,11 @@ export const itemResponseSchema: z.ZodType<ItemResponse> = z.object({
   allocations: z.array(itemAllocationResponseRowSchema),
   createdAt: z.string(),
   updatedAt: z.string(),
+});
+
+export const itemBulkShiftDatesResponseSchema: z.ZodType<ItemBulkShiftDatesResponse> = z.object({
+  shifted: z.number().int().nonnegative(),
+  items: z.array(itemResponseSchema),
 });
 
 // ---------- Forecast ----------

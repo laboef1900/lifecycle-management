@@ -32,6 +32,77 @@ export function addUtcMonths(date: Date, months: number): Date {
   return result;
 }
 
+/** The relative units a bulk date shift may be expressed in. */
+export type DateShiftUnit = 'days' | 'weeks' | 'months';
+
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * Move a UTC calendar date by a signed relative amount.
+ *
+ * Shared deliberately: the server applies the shift and the web dialog previews
+ * it, and the two MUST agree exactly — a preview that disagrees with the write
+ * turns the confirmation step into a lie. Months delegate to `addUtcMonths`, so
+ * day-of-month clamping (Jan 31 + 1mo = Feb 28) is identical on both sides.
+ *
+ * @ai-warning Month clamping is monotone but NOT injective: Jan 29 and Jan 31
+ * both land on Feb 28. Callers shifting a *set* of dates that must stay
+ * distinct (an item's allocation rows) have to re-check distinctness after the
+ * shift — use `hasShiftCollision` below.
+ */
+export function shiftDateByUnit(date: Date, amount: number, unit: DateShiftUnit): Date {
+  if (unit === 'months') return addUtcMonths(date, amount);
+  const days = unit === 'weeks' ? amount * 7 : amount;
+  return new Date(date.getTime() + days * MS_PER_DAY);
+}
+
+/** One allocation row reduced to what a collision check needs. */
+export interface ShiftCollisionRow {
+  /** Grouping key — rows only ever collide within the same metric. */
+  metric: string;
+  effectiveFrom: Date;
+}
+
+/**
+ * Whether a uniform shift would collapse two allocation rows of the same metric
+ * onto a single date — the non-injectivity warned about on `shiftDateByUnit`.
+ *
+ * Shared so the server's write path and the web dialog's preview cannot drift.
+ * Duplicating these few lines on the client would silently stop matching the
+ * server the first time either side changed, putting the operator back to
+ * discovering the conflict only after clicking Apply.
+ */
+export function hasShiftCollision(
+  allocations: readonly ShiftCollisionRow[],
+  amount: number,
+  unit: DateShiftUnit,
+): boolean {
+  const seenPerMetric = new Map<string, Set<number>>();
+  for (const row of allocations) {
+    const shifted = shiftDateByUnit(row.effectiveFrom, amount, unit).getTime();
+    const seen = seenPerMetric.get(row.metric) ?? new Set<number>();
+    if (seen.has(shifted)) return true;
+    seen.add(shifted);
+    seenPerMetric.set(row.metric, seen);
+  }
+  return false;
+}
+
+/** Inclusive bounds for any date this app will persist, as UTC epoch ms. */
+const MIN_SUPPORTED_DATE_MS = Date.UTC(1970, 0, 1);
+const MAX_SUPPORTED_DATE_MS = Date.UTC(2999, 11, 31);
+
+/**
+ * Whether `date` is a real date inside the range the `YYYY-MM-DD` wire format
+ * and the Postgres `date` column can both represent. A large relative shift can
+ * push a date outside it (or, at the extreme, to `Invalid Date`), which must be
+ * rejected rather than written.
+ */
+export function isSupportedDate(date: Date): boolean {
+  const ms = date.getTime();
+  return Number.isFinite(ms) && ms >= MIN_SUPPORTED_DATE_MS && ms <= MAX_SUPPORTED_DATE_MS;
+}
+
 /**
  * The first of `date`'s month at 00:00 UTC — the canonical **period anchor**.
  *

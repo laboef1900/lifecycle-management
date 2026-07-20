@@ -1,6 +1,7 @@
 import {
   clusterIdItemsParamsSchema,
   itemAllocationRowInputSchema,
+  itemBulkShiftDatesInputSchema,
   itemCreateInputSchema,
   itemIdParamsSchema,
   itemUpdateInputSchema,
@@ -31,6 +32,14 @@ export const itemsRoutes: FastifyPluginAsync = async (fastify) => {
     const { id } = itemIdParamsSchema.parse(request.params);
     const input = itemUpdateInputSchema.parse(request.body);
     return service.update(request.tenantId, id, input);
+  });
+
+  // Static segment, so it never shadows (or is shadowed by) `/items/:id/...`.
+  // Admin-gated automatically: a mutating /api route outside the read-only
+  // exemption list (see `requiresAdmin` in plugins/auth.ts).
+  fastify.post('/items/bulk-shift-dates', async (request) => {
+    const input = itemBulkShiftDatesInputSchema.parse(request.body);
+    return service.bulkShiftDates(request.tenantId, input);
   });
 
   fastify.post('/items/:id/allocations', async (request, reply) => {

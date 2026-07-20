@@ -38,6 +38,8 @@ import {
   hostUpdateInputSchema,
   isApiErrorBody,
   itemAllocationRowInputSchema,
+  itemBulkShiftDatesInputSchema,
+  itemBulkShiftDatesResponseSchema,
   itemCreateInputSchema,
   itemResponseSchema,
   itemUpdateInputSchema,
@@ -156,6 +158,7 @@ export type CapacityAppendInputWire = z.input<typeof capacityRowInputSchema>;
 export type ItemCreateInputWire = z.input<typeof itemCreateInputSchema>;
 export type ItemUpdateInputWire = z.input<typeof itemUpdateInputSchema>;
 export type ItemAllocationAppendInputWire = z.input<typeof itemAllocationRowInputSchema>;
+export type ItemBulkShiftDatesInputWire = z.input<typeof itemBulkShiftDatesInputSchema>;
 export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
 export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
 export type HostCommissioningConfirmInputWire = z.input<typeof hostCommissioningConfirmInputSchema>;
@@ -306,6 +309,12 @@ export const api = {
         itemResponseSchema,
       ),
     delete: (id: string) => request<void>(`/api/items/${id}`, { method: 'DELETE' }),
+    bulkShiftDates: (input: ItemBulkShiftDatesInputWire) =>
+      request(
+        '/api/items/bulk-shift-dates',
+        { method: 'POST', body: JSON.stringify(input) },
+        itemBulkShiftDatesResponseSchema,
+      ),
   },
   settings: {
     categories: {

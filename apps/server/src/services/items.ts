@@ -1,11 +1,15 @@
 import type {
   ItemAllocationResponseRow,
   ItemAllocationRowInput,
+  ItemBulkShiftDatesInput,
+  ItemBulkShiftDatesResponse,
   ItemCreateInput,
+  ItemDateShift,
   ItemResponse,
   ItemUpdateInput,
   Paginated,
 } from '@lcm/shared';
+import { hasShiftCollision, isSupportedDate, shiftDateByUnit } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
 import { formatDate } from '../lib/dates.js';
@@ -28,6 +32,99 @@ const itemInclude = {
 } satisfies Prisma.ItemInclude;
 
 type ItemRow = Prisma.ItemGetPayload<{ include: typeof itemInclude }>;
+
+/**
+ * Ceiling on the total allocation rows one bulk shift may touch. Every row is
+ * an individual UPDATE inside one serializable transaction (Prisma cannot
+ * express `SET col = col + interval` in `updateMany`), so this bounds how long
+ * that transaction can hold its locks.
+ */
+const MAX_SHIFT_ALLOCATION_ROWS = 1000;
+
+/** How long the bulk-shift transaction may run before Prisma aborts it. */
+const BULK_SHIFT_TIMEOUT_MS = 15_000;
+
+interface ShiftedAllocation {
+  id: string;
+  effectiveFrom: Date;
+}
+
+interface ShiftPlan {
+  itemId: string;
+  effectiveDate: Date;
+  endedAt: Date | null;
+  /** Ordered so no intermediate state violates the allocation unique index. */
+  allocations: ShiftedAllocation[];
+}
+
+/**
+ * Compute one entry's post-shift dates, rejecting anything the write would not
+ * survive. Pure — it performs no I/O, so a whole batch can be validated before
+ * the first UPDATE.
+ */
+function planItemShift(row: ItemRow, shift: ItemDateShift): ShiftPlan {
+  const move = (date: Date): Date => {
+    const shifted = shiftDateByUnit(date, shift.amount, shift.unit);
+    if (!isSupportedDate(shifted)) {
+      throw new UnprocessableError(
+        'SHIFT_DATE_OUT_OF_RANGE',
+        `Shifting "${row.name}" by ${shift.amount} ${shift.unit} moves a date outside the supported range`,
+      );
+    }
+    return shifted;
+  };
+
+  // @ai-note `shiftDateByUnit` is monotone non-decreasing for a fixed
+  // (amount, unit): day-clamping can pull two dates together but never past
+  // each other. That is *why* the cascade cannot break an entry's timeline — if
+  // effectiveDate was on or before its earliest allocation before the shift, it
+  // still is after it, so that invariant needs no separate re-check here.
+  const effectiveDate = move(row.effectiveDate);
+  const endedAt = row.endedAt === null ? null : move(row.endedAt);
+
+  const shifted = row.allocations.map((allocation) => ({
+    id: allocation.id,
+    metricTypeId: allocation.metricTypeId,
+    effectiveFrom: move(allocation.effectiveFrom),
+  }));
+
+  // Monotone, but NOT injective: Jan 29 and Jan 31 both land on Feb 28. That
+  // would violate `@@unique([itemId, metricTypeId, effectiveFrom])` *and*
+  // silently destroy an allocation step, so refuse instead of writing. The web
+  // preview calls this same shared helper, so it can warn before the operator
+  // submits rather than after.
+  if (
+    hasShiftCollision(
+      row.allocations.map((allocation) => ({
+        metric: allocation.metricTypeId,
+        effectiveFrom: allocation.effectiveFrom,
+      })),
+      shift.amount,
+      shift.unit,
+    )
+  ) {
+    throw new UnprocessableError(
+      'SHIFT_ALLOCATION_COLLISION',
+      `Shifting "${row.name}" by ${shift.amount} ${shift.unit} would collapse two allocation rows onto the same date`,
+    );
+  }
+
+  // @ai-note The unique index is checked per statement, not deferred to commit,
+  // so the *order* of the row updates matters even though the final state is
+  // collision-free: shifting {Jan 1, Feb 1} forward by a month would hit the
+  // still-unmoved Feb 1 row. A uniform shift is monotone, so moving the entries
+  // that travel furthest into open space first — descending for a forward
+  // shift, ascending for a backward one — keeps every intermediate state valid.
+  const direction = shift.amount > 0 ? -1 : 1;
+  shifted.sort((a, b) => direction * (a.effectiveFrom.getTime() - b.effectiveFrom.getTime()));
+
+  return {
+    itemId: row.id,
+    effectiveDate,
+    endedAt,
+    allocations: shifted.map(({ id, effectiveFrom }) => ({ id, effectiveFrom })),
+  };
+}
 
 export class ItemsService {
   private readonly categories: CategoriesService;
@@ -244,6 +341,80 @@ export class ItemsService {
     });
 
     return this.getById(tenantId, id);
+  }
+
+  /**
+   * Move a set of entries by one signed relative offset, all-or-nothing.
+   *
+   * The shift **cascades** across an entry's whole timeline — `effectiveDate`,
+   * every `allocations[*].effectiveFrom`, and `endedAt` when set — by the same
+   * delta. That is what keeps the timeline internally consistent: moving only
+   * `effectiveDate` could push an application's start past its own first
+   * allocation, which `update()` already refuses to do one entry at a time.
+   *
+   * @ai-warning Not idempotent: applying the same request twice moves the
+   * entries twice. Callers must re-read before retrying an ambiguous failure.
+   *
+   * @ai-note A genuine serialization conflict (Postgres 40001) is deliberately
+   * NOT retried — it aborts the transaction and surfaces as a sanitized 500,
+   * leaving the data untouched. Accepted for a low-concurrency internal tool
+   * where two admins bulk-shifting the same entries at once is not a real
+   * workload; the failure is safe, just unfriendly. Revisit if that changes.
+   */
+  async bulkShiftDates(
+    tenantId: string,
+    input: ItemBulkShiftDatesInput,
+  ): Promise<ItemBulkShiftDatesResponse> {
+    const uniqueIds = Array.from(new Set(input.itemIds));
+
+    const rows = await this.prisma.$transaction(
+      async (tx) => {
+        const existing = await tx.item.findMany({
+          where: { id: { in: uniqueIds }, tenantId },
+          include: itemInclude,
+        });
+        const byId = new Map(existing.map((row) => [row.id, row]));
+        for (const id of uniqueIds) {
+          if (!byId.has(id)) {
+            throw new NotFoundError('Item', id);
+          }
+        }
+
+        const allocationRows = existing.reduce((sum, row) => sum + row.allocations.length, 0);
+        if (allocationRows > MAX_SHIFT_ALLOCATION_ROWS) {
+          throw new UnprocessableError(
+            'SHIFT_BATCH_TOO_LARGE',
+            `A bulk shift may touch at most ${MAX_SHIFT_ALLOCATION_ROWS} allocation rows; this one touches ${allocationRows}`,
+          );
+        }
+
+        // Plan and validate EVERY entry before writing ANY of them, so an
+        // invalid entry costs no write at all rather than relying on rollback.
+        const plans = existing.map((row) => planItemShift(row, input.shift));
+
+        for (const plan of plans) {
+          await tx.item.update({
+            where: { id: plan.itemId },
+            data: { effectiveDate: plan.effectiveDate, endedAt: plan.endedAt },
+          });
+          for (const allocation of plan.allocations) {
+            await tx.itemAllocation.update({
+              where: { id: allocation.id },
+              data: { effectiveFrom: allocation.effectiveFrom },
+            });
+          }
+        }
+
+        return tx.item.findMany({
+          where: { id: { in: uniqueIds }, tenantId },
+          include: itemInclude,
+          orderBy: [{ effectiveDate: 'asc' }, { createdAt: 'asc' }],
+        });
+      },
+      { isolationLevel: 'Serializable', timeout: BULK_SHIFT_TIMEOUT_MS },
+    );
+
+    return { shifted: rows.length, items: rows.map((row) => this.toResponse(row)) };
   }
 
   async appendAllocation(

@@ -1,6 +1,16 @@
 import type { ItemResponse } from '@lcm/shared';
+import { MAX_BULK_SHIFT_ITEMS } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  CalendarClock,
+  ChevronDown,
+  ChevronRight,
+  MoreVertical,
+  Pencil,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 import { Fragment, useState } from 'react';
 
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +31,7 @@ import { formatGb, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 import {
+  BulkShiftDatesDialog,
   CreateItemDialog,
   DeleteItemDialog,
   EditItemDialog,
@@ -61,8 +72,10 @@ function categoryBadgeVariant(category: string): 'default' | 'outline' | 'succes
 
 export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
+  const [shiftOpen, setShiftOpen] = useState(false);
   const [target, setTarget] = useState<{ item: ItemResponse; kind: DialogKind } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const query = useQuery({
     queryKey: ['items', clusterId],
@@ -82,6 +95,28 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
     a.effectiveDate.localeCompare(b.effectiveDate),
   );
   const total = query.data?.total;
+
+  // Bulk selection is a mutation affordance, so viewers never see the column.
+  const selectable = canManage && items.length > 0;
+  // Derive the selection from the rows currently on screen rather than trusting
+  // the raw id set: a refetch can drop an entry (deleted in another tab), and a
+  // stale id would otherwise inflate the count and 404 the whole batch.
+  const selectedItems = items.filter((item) => selectedIds.has(item.id));
+  const allSelected = items.length > 0 && selectedItems.length === items.length;
+  const overCap = selectedItems.length > MAX_BULK_SHIFT_ITEMS;
+
+  const toggleSelected = (id: string): void => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const clearSelection = (): void => setSelectedIds(new Set());
+  const toggleSelectAll = (): void =>
+    setSelectedIds(allSelected ? new Set() : new Set(items.map((item) => item.id)));
 
   return (
     <div className="space-y-3 py-4">
@@ -108,6 +143,37 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
           ) : null}
         </header>
 
+        {selectable && selectedItems.length > 0 ? (
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-[var(--radius)] border border-steel/40 bg-steel/10 px-3 py-2">
+            <p role="status" className="text-sm font-medium">
+              {selectedItems.length} selected
+            </p>
+            {/* The table pages in up to 500 entries but the endpoint takes 100
+                per batch, so select-all can overshoot. Say so here rather than
+                letting the operator discover it from a rejected request. */}
+            {overCap ? (
+              <p role="alert" className="flex items-center gap-1 text-xs text-destructive">
+                <AlertTriangle aria-hidden className="h-3.5 w-3.5" />
+                Shift at most {MAX_BULK_SHIFT_ITEMS} at a time.
+              </p>
+            ) : null}
+            <div className="ml-auto flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="accent"
+                disabled={overCap}
+                onClick={() => setShiftOpen(true)}
+              >
+                <CalendarClock className="h-4 w-4" />
+                Shift dates…
+              </Button>
+              <Button size="sm" variant="ghost" onClick={clearSelection}>
+                Clear selection
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
         {query.isPending ? (
           <div className="space-y-2">
             <Skeleton className="h-12 w-full" />
@@ -131,6 +197,16 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
           <Table>
             <TableHeader>
               <TableRow>
+                {selectable ? (
+                  <TableHead className="w-8">
+                    <SelectionCheckbox
+                      checked={allSelected}
+                      indeterminate={selectedItems.length > 0 && !allSelected}
+                      onChange={toggleSelectAll}
+                      label="Select all apps and events"
+                    />
+                  </TableHead>
+                ) : null}
                 <TableHead className="w-8" />
                 <TableHead className="w-28">Date</TableHead>
                 <TableHead className="w-28">Type</TableHead>
@@ -146,7 +222,16 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
                 const isOpen = expanded.has(item.id);
                 return (
                   <Fragment key={item.id}>
-                    <TableRow>
+                    <TableRow data-selected={selectedIds.has(item.id) ? 'true' : undefined}>
+                      {selectable ? (
+                        <TableCell>
+                          <SelectionCheckbox
+                            checked={selectedIds.has(item.id)}
+                            onChange={() => toggleSelected(item.id)}
+                            label={`Select ${item.name}`}
+                          />
+                        </TableCell>
+                      ) : null}
                       <TableCell>
                         {isApp ? (
                           <button
@@ -208,6 +293,7 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
                     </TableRow>
                     {isApp && isOpen ? (
                       <TableRow className="bg-muted/20 hover:bg-muted/20">
+                        {selectable ? <TableCell /> : null}
                         <TableCell />
                         <TableCell colSpan={6} className="py-3">
                           <AllocationTimeline rows={item.allocations} />
@@ -228,6 +314,16 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
       </Card>
 
       <CreateItemDialog open={createOpen} onOpenChange={setCreateOpen} clusterId={clusterId} />
+
+      {shiftOpen && selectedItems.length > 0 ? (
+        <BulkShiftDatesDialog
+          open
+          onOpenChange={setShiftOpen}
+          clusterId={clusterId}
+          items={selectedItems}
+          onApplied={clearSelection}
+        />
+      ) : null}
 
       {target?.kind === 'edit' ? (
         <EditItemDialog
@@ -262,6 +358,36 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A native checkbox rather than a Radix primitive: `indeterminate` is a DOM
+ * property with no attribute equivalent, and the native control already gives
+ * space-key operation, the forced-colors palette, and a real accessible name.
+ */
+function SelectionCheckbox({
+  checked,
+  indeterminate = false,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: () => void;
+  label: string;
+}): React.JSX.Element {
+  return (
+    <input
+      type="checkbox"
+      checked={checked}
+      aria-label={label}
+      ref={(node) => {
+        if (node) node.indeterminate = indeterminate;
+      }}
+      onChange={onChange}
+      className="h-4 w-4 cursor-pointer rounded-[4px] border border-input accent-[var(--accent)]"
+    />
   );
 }
 
