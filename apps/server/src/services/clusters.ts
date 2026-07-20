@@ -376,20 +376,31 @@ export class ClustersService {
         // pre-anchor `capacityDelta` the baseline already counted: capacity
         // inflates, utilization FALLS, and nothing was measured and no value was
         // submitted. That is the defer-hardware direction the re-anchor guard
-        // exists to prevent. Keeping the label keeps the DATE-based boundary,
-        // which a backward move only ever narrows — strictly fewer deltas
-        // absorbed than before the edit, i.e. more consumption counted, the safe
-        // direction. `clusters.test.ts` pins both halves.
+        // exists to prevent.
         //
-        // The two mechanisms that would have argued for the flip need a FORWARD
-        // move, and `planBaselineReanchor` refuses those:
-        //  - `absorbed` swallowing MORE than it did needs the anchor to advance;
-        //    a backward target cannot.
-        //  - `VsphereSnapshotService`'s `skipDuplicates` is ON CONFLICT DO NOTHING
-        //    on the period unique index and never reads `source`, so no value of
-        //    this column changes which period it yields. It writes
-        //    `startOfUtcMonth(measuredAt)` — the current month — and a backward
-        //    move only ever VACATES the period it left.
+        // Keeping `source` is now safe on much stronger grounds than when this
+        // comment was first written. `absorbed` no longer reads `capturedAt` at
+        // all: it keys off `observedAt`, which nothing on this path writes. So a
+        // move does not change WHICH deltas are absorbed by any amount, in either
+        // direction — the boundary is simply not a function of anything this
+        // statement touches. (The superseded argument was that a backward move
+        // "only ever narrows" the DATE-based boundary. That was true of the old
+        // boundary and is now doubly irrelevant: the boundary is not the date,
+        // and narrowing was never actually safe, because the same narrowing that
+        // counts more consumption also re-adds measured `capacityDelta`s.)
+        //
+        // What survives unchanged is the conclusion: the flip is still forbidden,
+        // because the SOURCE GATE is still the first thing `absorbed` checks, and
+        // relabelling a measured row `manual` still stops absorption wholesale.
+        // Pinned by `clusters.test.ts` "a re-dated row keeps its provenance" (the
+        // `source` assertion and the capacityDelta sibling) and, for the boundary
+        // itself, by "a re-date cannot move the absorption boundary".
+        //
+        // `VsphereSnapshotService`'s `skipDuplicates` is ON CONFLICT DO NOTHING on
+        // the period unique index and never reads `source`, so no value of this
+        // column changes which period it yields. It writes
+        // `startOfUtcMonth(measuredAt)` — the current month — and a backward move
+        // only ever VACATES the period it left.
         ...moves.map((move) =>
           this.prisma.clusterBaselineHistory.update({
             where: { id: move.id },
@@ -678,15 +689,22 @@ export class ClustersService {
     // operator's submitted date is echoed back changed, and baseline-edit-form.tsx
     // resets it away — a silent partial write with a 200 OK.
     //
-    // Moving forward instead would be silent in three purchasing-visible ways, all
-    // erring the same way (defer hardware that is needed): the move writes
-    // `capturedAt` only, so a `vsphere` row stays labelled measured and forecast.ts
-    // `absorbed` swallows every delta dated at or before the NEW anchor —
-    // consumption measured after the capture simply disappears; the row then
-    // occupies the current period, where VsphereSnapshotService's
-    // `skipDuplicates` drops the month's real measurement in its favour; and a
-    // metric that lags by design is dragged forward, clearing the staleness
-    // `deriveBaselineDate`'s MIN exists to report without measuring anything.
+    // Moving forward instead would be silent in two purchasing-visible ways, both
+    // erring the same way (defer hardware that is needed): the moved row occupies
+    // the current period, where VsphereSnapshotService's `skipDuplicates` drops
+    // the month's real measurement in its favour; and a metric that lags by design
+    // is dragged forward, clearing the staleness `deriveBaselineDate`'s MIN exists
+    // to report without measuring anything.
+    //
+    // A THIRD consequence used to be listed first and is now GONE, deliberately
+    // recorded rather than quietly deleted: "the move writes `capturedAt` only, so
+    // a `vsphere` row stays labelled measured and `absorbed` swallows every delta
+    // dated at or before the NEW anchor — consumption measured after the capture
+    // simply disappears." That was true while the boundary was `capturedAt`. It no
+    // longer is: `absorbed` keys off `observedAt`, which this move does not write,
+    // so a forward move cannot make absorption swallow anything extra. The refusal
+    // stands on the two surviving consequences, which never involved the forecast
+    // boundary at all.
     if (correcting === undefined) {
       const unmeasured = newest.filter((row) => row.capturedAt < target);
       if (unmeasured.length > 0) {

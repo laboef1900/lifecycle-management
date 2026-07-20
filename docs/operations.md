@@ -578,10 +578,39 @@ in the dump being checked and not in the schema afterwards.
 - **A date-only baseline edit can now be refused.** Changing only the date re-dates
   an existing measurement, so it can move a baseline _backwards_ only. Submitting a
   later date alone returns 422 `BASELINE_PERIOD_NOT_MEASURED`, because there is no
-  measurement for that period to move onto it and inventing one would absorb real
-  consumption, shadow the month's vCenter snapshot, and clear the staleness flag
-  without measuring anything. To record a baseline for a later period, submit its
-  values — that appends a new measurement.
+  measurement for that period to move onto it, and inventing one would shadow the
+  month's vCenter snapshot and clear the staleness flag without measuring anything.
+  To record a baseline for a later period, submit its values — that appends a new
+  measurement.
+- **Re-dating a synced cluster's baseline backwards leaves its forecast unchanged.**
+  This is what a re-date does now — **not** something that changes numbers you are
+  already storing; see the last paragraph of this bullet.
+
+  On a cluster whose baseline came from vCenter, the forecast decides which tracked
+  events are already inside the measurement by looking at **when the measurement was
+  taken**, not at the date shown on the baseline. That date is a label you can
+  correct; the measurement period is not, and correcting a label does not un-measure
+  anything. So a backward re-date moves the displayed baseline date and moves no
+  number.
+
+  Concretely: a cluster measured by vCenter in June 2026 (consumption 1000, baseline
+  capacity 0, one 2000 GB host) with a May event adding 500 GB of capacity reads
+  utilization 0.50 both before and after you re-date its baseline to April. Under the
+  older rule the same edit produced 0.90, because the boundary followed the label and
+  threw the already-measured May event back into the forecast — inventing capacity,
+  lowering utilization, and deferring a purchase with nothing measured and no value
+  submitted.
+
+  **Nothing already stored moves when you deploy this.** Re-anchoring a history row
+  is new in this release: on the previous version a date-only edit wrote the
+  `clusters.baseline_date` scalar and never touched a history row. No stored vCenter
+  measurement can therefore be labelled with a period other than the one it was taken
+  in — every existing synced row still satisfies
+  `date_trunc('month', observed_at) = captured_at`, where the old and new rules agree
+  exactly. The difference only becomes reachable once someone uses the new re-date.
+
+  If you want the forecast to change, submit the **values**. That is a measurement
+  and is treated as one; a date alone never is.
 
 ## vCenter connections
 
