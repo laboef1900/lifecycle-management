@@ -641,6 +641,24 @@ in the dump being checked and not in the schema afterwards.
   month's vCenter snapshot and clear the staleness flag without measuring anything.
   To record a baseline for a later period, submit its values — that appends a new
   measurement.
+
+  The same 422 now answers a date-only edit on a cluster with **no baseline history
+  at all** — a synced cluster imported but not yet snapshotted. That request used to
+  return 200 with the date silently discarded. Submit the values to open the
+  cluster's first baseline at the period you want.
+
+  **A rename submitted together with a rejected date is rejected too.** Requests are
+  applied whole or not at all; nothing in the UI sends both fields in one request.
+
+- **Correcting an already-recorded period works, and does not echo your date back.**
+  Submitting a past `baselineDate` together with values corrects the measurement
+  recorded at that period, in place. The baseline date shown afterwards is still the
+  cluster's **stalest metric's newest period**, which on a multi-metric cluster — or
+  after correcting anything but the newest period — is not the date you submitted. So
+  the form's date field can appear to reset. That is inherent to the MIN semantics
+  the staleness flag depends on (`ClusterResponse.baselineDate` is MIN over
+  newest-per-metric, so it reports the metric that stopped being measured), not a
+  failed save. Re-open the cluster to confirm the value landed.
 - **Re-dating a synced cluster's baseline backwards leaves its forecast unchanged.**
   This is what a re-date does now — **not** something that changes numbers you are
   already storing; see the last paragraph of this bullet.

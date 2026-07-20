@@ -1002,9 +1002,20 @@ describe('PUT /api/clusters/:id — a date-only edit re-anchors baseline history
     expect(rows.every((r) => r.capturedAt.toISOString().slice(0, 10) === '2026-05-01')).toBe(true);
   });
 
-  it('is a no-op on a cluster with no baseline history', async () => {
-    // A synced cluster before its first snapshot has nothing to re-date. It must
-    // not fabricate a measurement nobody took just to honour the submitted date.
+  it('refuses a date-only edit on a cluster with no baseline history', async () => {
+    // CHANGED BEHAVIOUR (was: 200, a silent no-op). A synced cluster before its
+    // first snapshot has nothing to re-date, and it must not fabricate a
+    // measurement nobody took — that part is unchanged and still holds. What was
+    // wrong was answering 200: `stored` is empty, so `correcting` is undefined,
+    // `unmeasured` is empty and BASELINE_PERIOD_NOT_MEASURED could not fire,
+    // `moving` is empty, and the write list degenerated to `update({data:{}})`.
+    // The operator got 200 OK with the date silently discarded — the response
+    // still reporting `startOfUtcMonth(createdAt)`.
+    //
+    // The SAME intent on a cluster WITH history is a loud 422. Two identical
+    // requests answering differently because of state the operator cannot see is
+    // the inconsistency; the 422 is the honest half, so the no-history case joins
+    // it rather than the other way round.
     const cluster = await prisma.cluster.create({
       data: {
         tenantId: 'default',
@@ -1018,8 +1029,72 @@ describe('PUT /api/clusters/:id — a date-only edit re-anchors baseline history
       url: `/api/clusters/${cluster.id}`,
       payload: { baselineDate: '2026-06-01' },
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('BASELINE_PERIOD_NOT_MEASURED');
+    // The message must say what to do instead, not just that it failed.
+    expect(body.error.message).toMatch(/no baseline/iu);
+    expect(body.error.message).toMatch(/submit the values/iu);
+
+    // Still fabricates nothing.
     expect(await prisma.clusterBaselineHistory.count({ where: { clusterId: cluster.id } })).toBe(0);
+  });
+
+  it('still records a FIRST baseline when a date arrives WITH values', async () => {
+    // The refusal above must not close the legitimate door beside it. A cluster
+    // with no history plus a dated payload that carries values is recording its
+    // first measurement AT that period — new information, not a re-date — so it
+    // writes. Without this, the refusal would make a dated first baseline
+    // impossible through PUT.
+    const cluster = await prisma.cluster.create({
+      data: { tenantId: 'default', name: uniqueName('first-baseline'), source: 'vsphere' },
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: {
+        baselineDate: '2026-06-01',
+        baselines: [{ metricTypeKey: 'memory_gb', baselineConsumption: 400, baselineCapacity: 0 }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(clusterResponseSchema.parse(res.json()).baselineDate).toBe('2026-06-01');
+
+    const rows = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: cluster.id },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-06-01');
+  });
+
+  it('refuses the rename riding along on a date-only edit with no history', async () => {
+    // The rename is refused WITH the date, matching the precedent the forward
+    // date-only refusal already set ("refuses the rename that rides along"). A
+    // request is applied whole or not at all: half-applying it returns 200 with
+    // the operator's date silently dropped, which is the failure being fixed.
+    //
+    // Nothing in the UI sends this combination — cluster-identity-form.tsx submits
+    // name/description only, and baseline-edit-form.tsx sends `baselineDate` only
+    // when the date input itself changed — so the refusal costs a hand-built API
+    // caller one extra request and costs the UI nothing.
+    const cluster = await prisma.cluster.create({
+      data: { tenantId: 'default', name: uniqueName('rename-empty'), source: 'vsphere' },
+    });
+    const renamed = uniqueName('renamed-empty');
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${cluster.id}`,
+      payload: { name: renamed, baselineDate: '2026-06-01' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: { code: string } }).error.code).toBe(
+      'BASELINE_PERIOD_NOT_MEASURED',
+    );
+
+    const after = await prisma.cluster.findUniqueOrThrow({ where: { id: cluster.id } });
+    expect(after.name).toBe(cluster.name);
   });
 
   it('re-anchors and renames in one request', async () => {

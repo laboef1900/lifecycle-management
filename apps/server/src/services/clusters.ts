@@ -715,6 +715,28 @@ export class ClustersService {
     // stands on the two surviving consequences, which never involved the forecast
     // boundary at all.
     if (correcting === undefined) {
+      // NOTHING RECORDED AT ALL. `unmeasured` below is empty here — there is no row
+      // to be earlier than the target — so this used to fall through to an empty
+      // `moving`, an empty write list, and a 200 OK with the submitted date
+      // silently discarded (the response still reporting `startOfUtcMonth(
+      // createdAt)`). The identical intent on a cluster WITH history is a loud 422,
+      // and two requests answering differently because of state the operator cannot
+      // see is not a distinction worth keeping. Refuse both, in the same terms.
+      //
+      // @ai-warning Reachable ONLY with no values submitted. A dated payload that
+      // CARRIES values on a history-less cluster is recording a first measurement
+      // at that period — new information, not a re-date — and `correcting` is a
+      // full set there, so it never enters this branch and still writes.
+      if (newest.length === 0) {
+        const period = formatDate(target).slice(0, 7);
+        throw new UnprocessableError(
+          'BASELINE_PERIOD_NOT_MEASURED',
+          `No baseline is recorded for this cluster, so there is no measurement to re-date onto ` +
+            `${period}. Changing the date alone moves an existing measurement; it cannot create ` +
+            `one. To record a baseline for ${period}, submit the values for it.`,
+        );
+      }
+
       const unmeasured = newest.filter((row) => row.capturedAt < target);
       if (unmeasured.length > 0) {
         const period = formatDate(target).slice(0, 7);
@@ -738,14 +760,18 @@ export class ClustersService {
       (row) =>
         row.capturedAt > target && (correcting === undefined || correcting.has(row.metricTypeId)),
     );
-    // Nothing to move covers five cases, and all are no-ops rather than writes: a
-    // synced cluster between import and its first snapshot has no row to re-date
-    // (creating one would invent a measurement nobody took, and the refusal above
-    // cannot fire because there is no row to be earlier than the target), a
+    // Nothing to move covers four cases, and all are no-ops rather than writes: a
     // cluster already anchored on the submitted period is simply unchanged, a
     // metric the payload omitted stays untouched, a metric the payload repeats
     // unchanged is untouched for the same reason, and a corrected metric recording
     // a later period is appended rather than re-dated.
+    //
+    // The fifth case this list used to carry — "a synced cluster between import and
+    // its first snapshot has no row to re-date" — is GONE and recorded rather than
+    // deleted. It is no longer a no-op: a DATE-ONLY request there is refused above,
+    // because a 200 that discards the operator's date is not a no-op from the
+    // caller's side. A dated request carrying VALUES still reaches here and still
+    // writes, via `recording` rather than via a move.
     if (moving.length === 0) return [];
 
     // The moving rows themselves are excluded: a backwards move starts from a
