@@ -48,12 +48,44 @@ const MS_PER_DAY = 86_400_000;
  * @ai-warning Month clamping is monotone but NOT injective: Jan 29 and Jan 31
  * both land on Feb 28. Callers shifting a *set* of dates that must stay
  * distinct (an item's allocation rows) have to re-check distinctness after the
- * shift — see `ItemsService.bulkShiftDates`.
+ * shift — use `hasShiftCollision` below.
  */
 export function shiftDateByUnit(date: Date, amount: number, unit: DateShiftUnit): Date {
   if (unit === 'months') return addUtcMonths(date, amount);
   const days = unit === 'weeks' ? amount * 7 : amount;
   return new Date(date.getTime() + days * MS_PER_DAY);
+}
+
+/** One allocation row reduced to what a collision check needs. */
+export interface ShiftCollisionRow {
+  /** Grouping key — rows only ever collide within the same metric. */
+  metric: string;
+  effectiveFrom: Date;
+}
+
+/**
+ * Whether a uniform shift would collapse two allocation rows of the same metric
+ * onto a single date — the non-injectivity warned about on `shiftDateByUnit`.
+ *
+ * Shared so the server's write path and the web dialog's preview cannot drift.
+ * Duplicating these few lines on the client would silently stop matching the
+ * server the first time either side changed, putting the operator back to
+ * discovering the conflict only after clicking Apply.
+ */
+export function hasShiftCollision(
+  allocations: readonly ShiftCollisionRow[],
+  amount: number,
+  unit: DateShiftUnit,
+): boolean {
+  const seenPerMetric = new Map<string, Set<number>>();
+  for (const row of allocations) {
+    const shifted = shiftDateByUnit(row.effectiveFrom, amount, unit).getTime();
+    const seen = seenPerMetric.get(row.metric) ?? new Set<number>();
+    if (seen.has(shifted)) return true;
+    seen.add(shifted);
+    seenPerMetric.set(row.metric, seen);
+  }
+  return false;
 }
 
 /** Inclusive bounds for any date this app will persist, as UTC epoch ms. */

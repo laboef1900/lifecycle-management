@@ -1,13 +1,14 @@
 import type { ItemResponse } from '@lcm/shared';
 import {
   formatDateIso,
+  hasShiftCollision,
   isSupportedDate,
   MAX_SHIFT_BY_UNIT,
   shiftDateByUnit,
   type DateShiftUnit,
 } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { ArrowRight } from 'lucide-react';
+import { AlertTriangle, ArrowRight } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
@@ -35,6 +36,9 @@ interface BulkShiftDatesDialogProps extends CommonDialogProps {
   onApplied: () => void;
 }
 
+/** Why an entry cannot take the current shift, if it cannot. */
+type PreviewProblem = 'out-of-range' | 'collision';
+
 interface PreviewRow {
   id: string;
   name: string;
@@ -42,8 +46,14 @@ interface PreviewRow {
   to: string;
   /** Extra dates that move with the entry, phrased for the operator. */
   cascade: string | null;
-  valid: boolean;
+  problem: PreviewProblem | null;
 }
+
+/** Short per-row label; the fuller explanation lives in the alert below the list. */
+const PROBLEM_LABEL: Record<PreviewProblem, string> = {
+  'out-of-range': 'out of range',
+  collision: 'date conflict',
+};
 
 const UNIT_OPTIONS: { value: DateShiftUnit; label: string }[] = [
   { value: 'days', label: 'Days' },
@@ -61,8 +71,10 @@ function parseIsoDate(value: string): Date {
 }
 
 /**
- * Builds the old → new preview from the SAME shared date maths the server
- * applies, so what the operator confirms is exactly what gets written.
+ * Builds the old → new preview from the SAME shared date maths and the SAME
+ * collision check the server applies, so what the operator confirms is exactly
+ * what gets written — and every reason the server would reject the batch is
+ * visible here first, rather than arriving as a 422 after clicking Apply.
  */
 function buildPreview(items: ItemResponse[], amount: number, unit: DateShiftUnit): PreviewRow[] {
   return items.map((item) => {
@@ -75,12 +87,28 @@ function buildPreview(items: ItemResponse[], amount: number, unit: DateShiftUnit
     }
     if (item.endedAt !== null) moved.push('the end date');
 
-    const endedAtValid =
-      item.endedAt === null ||
-      isSupportedDate(shiftDateByUnit(parseIsoDate(item.endedAt), amount, unit));
-    const allocationsValid = item.allocations.every((allocation) =>
-      isSupportedDate(shiftDateByUnit(parseIsoDate(allocation.effectiveFrom), amount, unit)),
+    const everyDateSupported =
+      isSupportedDate(shifted) &&
+      (item.endedAt === null ||
+        isSupportedDate(shiftDateByUnit(parseIsoDate(item.endedAt), amount, unit))) &&
+      item.allocations.every((allocation) =>
+        isSupportedDate(shiftDateByUnit(parseIsoDate(allocation.effectiveFrom), amount, unit)),
+      );
+
+    const collides = hasShiftCollision(
+      item.allocations.map((allocation) => ({
+        metric: allocation.metricTypeKey,
+        effectiveFrom: parseIsoDate(allocation.effectiveFrom),
+      })),
+      amount,
+      unit,
     );
+
+    const problem: PreviewProblem | null = !everyDateSupported
+      ? 'out-of-range'
+      : collides
+        ? 'collision'
+        : null;
 
     return {
       id: item.id,
@@ -88,7 +116,7 @@ function buildPreview(items: ItemResponse[], amount: number, unit: DateShiftUnit
       from: item.effectiveDate,
       to: isSupportedDate(shifted) ? formatDateIso(shifted) : '—',
       cascade: moved.length > 0 ? `also moves ${moved.join(' and ')}` : null,
-      valid: isSupportedDate(shifted) && endedAtValid && allocationsValid,
+      problem,
     };
   });
 }
@@ -116,7 +144,9 @@ export function BulkShiftDatesDialog({
 
   const amount = amountError === undefined ? (direction === 'earlier' ? -magnitude : magnitude) : 0;
   const preview = amountError === undefined ? buildPreview(items, amount, unit) : [];
-  const outOfRange = preview.filter((row) => !row.valid);
+  const outOfRange = preview.filter((row) => row.problem === 'out-of-range');
+  const colliding = preview.filter((row) => row.problem === 'collision');
+  const blockedRows = outOfRange.length + colliding.length;
 
   const mutation = useMutation({
     mutationFn: (payload: ItemBulkShiftDatesInputWire) => api.items.bulkShiftDates(payload),
@@ -131,7 +161,7 @@ export function BulkShiftDatesDialog({
     onError: (err) => toast.error(describeApiError(err, 'Could not shift the dates')),
   });
 
-  const blocked = amountError !== undefined || outOfRange.length > 0 || items.length === 0;
+  const blocked = amountError !== undefined || blockedRows > 0 || items.length === 0;
 
   const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -211,9 +241,17 @@ export function BulkShiftDatesDialog({
                     <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs tabular-nums">
                       <span className="text-muted-foreground line-through">{row.from}</span>
                       <ArrowRight aria-hidden className="h-3 w-3 text-muted-foreground" />
-                      <span className={row.valid ? 'text-foreground' : 'text-destructive'}>
-                        {row.valid ? row.to : 'out of range'}
-                      </span>
+                      {row.problem === null ? (
+                        <span className="text-foreground">{row.to}</span>
+                      ) : (
+                        // The icon carries the same meaning as the colour, so
+                        // the state survives a forced-colors palette or a
+                        // colour-vision deficiency (WCAG 1.4.1).
+                        <span className="flex items-center gap-1 font-sans text-destructive">
+                          <AlertTriangle aria-hidden className="h-3 w-3" />
+                          {PROBLEM_LABEL[row.problem]}
+                        </span>
+                      )}
                     </span>
                   </li>
                 ))
@@ -225,6 +263,19 @@ export function BulkShiftDatesDialog({
             <p role="alert" className="text-xs text-destructive">
               {outOfRange.length} {outOfRange.length === 1 ? 'entry lands' : 'entries land'} outside
               the supported date range. Reduce the shift before applying.
+            </p>
+          ) : null}
+
+          {colliding.length > 0 ? (
+            <p role="alert" className="text-xs text-destructive">
+              {colliding.length}{' '}
+              {colliding.length === 1
+                ? 'entry would put two of its allocation dates on the same day'
+                : 'entries would put two of their allocation dates on the same day'}{' '}
+              (shifting by months clamps to the end of a shorter month). Change the amount or unit,
+              or deselect{' '}
+              {colliding.length === 1 ? `"${colliding[0]?.name ?? 'it'}"` : 'the flagged entries'}{' '}
+              before applying.
             </p>
           ) : null}
 

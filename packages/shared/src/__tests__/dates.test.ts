@@ -5,6 +5,7 @@ import {
   formatDateIso,
   formatMonthLong,
   formatMonthShort,
+  hasShiftCollision,
   isSupportedDate,
   shiftDateByUnit,
 } from '../dates.js';
@@ -117,5 +118,49 @@ describe('isSupportedDate', () => {
     expect(isSupportedDate(new Date('1969-12-31T00:00:00Z'))).toBe(false);
     expect(isSupportedDate(new Date('3000-01-01T00:00:00Z'))).toBe(false);
     expect(isSupportedDate(new Date('not a date'))).toBe(false);
+  });
+});
+
+describe('shiftDateByUnit — century boundary', () => {
+  const at = (iso: string): Date => new Date(`${iso}T00:00:00.000Z`);
+
+  // 2100 is NOT a leap year (divisible by 100, not by 400), so Feb 29 2096
+  // has no counterpart four years later. Correctness follows from delegating
+  // to native Date; this is the regression guard, since the other tests stop
+  // well short of a century boundary and these dates feed purchasing forecasts.
+  it('clamps Feb 29 2096 + 48 months to Feb 28 2100', () => {
+    expect(formatDateIso(shiftDateByUnit(at('2096-02-29'), 48, 'months'))).toBe('2100-02-28');
+  });
+
+  it('clamps backwards across the same boundary', () => {
+    expect(formatDateIso(shiftDateByUnit(at('2104-02-29'), -48, 'months'))).toBe('2100-02-28');
+  });
+
+  it('still finds Feb 29 in 2400, a 400-divisible leap year', () => {
+    expect(formatDateIso(shiftDateByUnit(at('2396-02-29'), 48, 'months'))).toBe('2400-02-29');
+  });
+});
+
+describe('hasShiftCollision', () => {
+  const row = (metric: string, iso: string): { metric: string; effectiveFrom: Date } => ({
+    metric,
+    effectiveFrom: new Date(`${iso}T00:00:00.000Z`),
+  });
+
+  it('detects two dates in one metric clamping onto the same day', () => {
+    const rows = [row('memory_gb', '2026-01-29'), row('memory_gb', '2026-01-31')];
+    expect(hasShiftCollision(rows, 1, 'months')).toBe(true);
+    // Days never clamp, so the same pair is fine shifted by days.
+    expect(hasShiftCollision(rows, 30, 'days')).toBe(false);
+  });
+
+  it('does not treat identical dates in DIFFERENT metrics as a collision', () => {
+    const rows = [row('memory_gb', '2026-01-29'), row('cpu_cores', '2026-01-31')];
+    expect(hasShiftCollision(rows, 1, 'months')).toBe(false);
+  });
+
+  it('is false for an empty or single-row set', () => {
+    expect(hasShiftCollision([], 1, 'months')).toBe(false);
+    expect(hasShiftCollision([row('memory_gb', '2026-01-31')], 1, 'months')).toBe(false);
   });
 });

@@ -1,6 +1,8 @@
 import type { ItemResponse } from '@lcm/shared';
+import { MAX_BULK_SHIFT_ITEMS } from '@lcm/shared';
 import { useQuery } from '@tanstack/react-query';
 import {
+  AlertTriangle,
   CalendarClock,
   ChevronDown,
   ChevronRight,
@@ -101,6 +103,7 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
   // stale id would otherwise inflate the count and 404 the whole batch.
   const selectedItems = items.filter((item) => selectedIds.has(item.id));
   const allSelected = items.length > 0 && selectedItems.length === items.length;
+  const overCap = selectedItems.length > MAX_BULK_SHIFT_ITEMS;
 
   const toggleSelected = (id: string): void => {
     setSelectedIds((prev) => {
@@ -145,8 +148,22 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
             <p role="status" className="text-sm font-medium">
               {selectedItems.length} selected
             </p>
+            {/* The table pages in up to 500 entries but the endpoint takes 100
+                per batch, so select-all can overshoot. Say so here rather than
+                letting the operator discover it from a rejected request. */}
+            {overCap ? (
+              <p role="alert" className="flex items-center gap-1 text-xs text-destructive">
+                <AlertTriangle aria-hidden className="h-3.5 w-3.5" />
+                Shift at most {MAX_BULK_SHIFT_ITEMS} at a time.
+              </p>
+            ) : null}
             <div className="ml-auto flex items-center gap-2">
-              <Button size="sm" variant="accent" onClick={() => setShiftOpen(true)}>
+              <Button
+                size="sm"
+                variant="accent"
+                disabled={overCap}
+                onClick={() => setShiftOpen(true)}
+              >
                 <CalendarClock className="h-4 w-4" />
                 Shift dates…
               </Button>

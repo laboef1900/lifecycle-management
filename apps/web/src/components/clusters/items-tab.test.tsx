@@ -1,4 +1,5 @@
 import type { ItemResponse } from '@lcm/shared';
+import { MAX_BULK_SHIFT_ITEMS } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -379,6 +380,75 @@ describe('ItemsTab — bulk date shift (#256)', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /Shift dates/ })).not.toBeInTheDocument(),
     );
+  });
+
+  it('flags an entry whose allocation dates would collide, before submit', async () => {
+    // Jan 29 and Jan 31 both clamp to Feb 28 under a +1 month shift — the
+    // server rejects that with SHIFT_ALLOCATION_COLLISION, so the preview has
+    // to surface it rather than letting the operator eat a whole-batch 422.
+    const colliding = makeApplication();
+    const base = colliding.allocations[0];
+    if (!base) throw new Error('fixture must have an allocation to clone');
+    colliding.effectiveDate = '2026-01-29';
+    colliding.allocations = [
+      { ...base, id: 'alloc-1', effectiveFrom: '2026-01-29' },
+      { ...base, id: 'alloc-2', effectiveFrom: '2026-01-31' },
+    ];
+    vi.spyOn(api.items, 'listByCluster').mockResolvedValue({
+      items: [colliding, makeEvent()],
+      total: 2,
+      limit: 100,
+      offset: 0,
+    });
+    const bulkShift = vi.spyOn(api.items, 'bulkShiftDates');
+
+    const user = userEvent.setup();
+    renderTab();
+    await openShiftDialog(user);
+
+    const preview = within(screen.getByRole('region', { name: 'Date change preview' }));
+    // Distinct wording from out-of-range: the operator needs to know which
+    // entry and why, since the fix is a different amount or a deselect.
+    expect(preview.getByText('openshift-lab').closest('li')).toHaveTextContent('date conflict');
+    expect(preview.getByText('Wachstum Q4').closest('li')).toHaveTextContent('2026-04-01');
+    expect(
+      screen.getByText(/would put two of its allocation dates on the same day/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Shift 2 entries' })).toBeDisabled();
+
+    // Switching to a unit that never clamps clears the conflict.
+    await user.click(screen.getByRole('button', { name: 'Days' }));
+    expect(preview.getByText('openshift-lab').closest('li')).not.toHaveTextContent('date conflict');
+    expect(screen.getByRole('button', { name: 'Shift 2 entries' })).toBeEnabled();
+    expect(bulkShift).not.toHaveBeenCalled();
+  });
+
+  it('blocks the shift when the selection exceeds the batch cap', async () => {
+    const many = Array.from({ length: MAX_BULK_SHIFT_ITEMS + 1 }, (_, i) => ({
+      ...makeEvent(),
+      id: `evt-${i}`,
+      name: `event-${i}`,
+    }));
+    vi.spyOn(api.items, 'listByCluster').mockResolvedValue({
+      items: many,
+      total: many.length,
+      limit: 500,
+      offset: 0,
+    });
+
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('checkbox', { name: 'Select all apps and events' }));
+
+    expect(screen.getByRole('status')).toHaveTextContent(`${MAX_BULK_SHIFT_ITEMS + 1} selected`);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      `Shift at most ${MAX_BULK_SHIFT_ITEMS} at a time.`,
+    );
+    expect(screen.getByRole('button', { name: /Shift dates/ })).toBeDisabled();
+
+    // Dropping back to the cap re-enables it.
+    await user.click(screen.getByRole('checkbox', { name: 'Select event-0' }));
+    expect(screen.getByRole('button', { name: /Shift dates/ })).toBeEnabled();
   });
 
   it('blocks the apply button while the amount is invalid', async () => {

@@ -9,7 +9,7 @@ import type {
   ItemUpdateInput,
   Paginated,
 } from '@lcm/shared';
-import { isSupportedDate, shiftDateByUnit } from '@lcm/shared';
+import { hasShiftCollision, isSupportedDate, shiftDateByUnit } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
 import { formatDate } from '../lib/dates.js';
@@ -74,6 +74,11 @@ function planItemShift(row: ItemRow, shift: ItemDateShift): ShiftPlan {
     return shifted;
   };
 
+  // @ai-note `shiftDateByUnit` is monotone non-decreasing for a fixed
+  // (amount, unit): day-clamping can pull two dates together but never past
+  // each other. That is *why* the cascade cannot break an entry's timeline — if
+  // effectiveDate was on or before its earliest allocation before the shift, it
+  // still is after it, so that invariant needs no separate re-check here.
   const effectiveDate = move(row.effectiveDate);
   const endedAt = row.endedAt === null ? null : move(row.endedAt);
 
@@ -83,21 +88,25 @@ function planItemShift(row: ItemRow, shift: ItemDateShift): ShiftPlan {
     effectiveFrom: move(allocation.effectiveFrom),
   }));
 
-  // Month arithmetic clamps the day-of-month, so two distinct source dates can
-  // collapse onto one (Jan 29 and Jan 31 both land on Feb 28). That would
-  // violate `@@unique([itemId, metricTypeId, effectiveFrom])` *and* silently
-  // destroy an allocation step, so refuse instead of writing.
-  const seenPerMetric = new Map<string, Set<number>>();
-  for (const allocation of shifted) {
-    const seen = seenPerMetric.get(allocation.metricTypeId) ?? new Set<number>();
-    if (seen.has(allocation.effectiveFrom.getTime())) {
-      throw new UnprocessableError(
-        'SHIFT_ALLOCATION_COLLISION',
-        `Shifting "${row.name}" by ${shift.amount} ${shift.unit} would collapse two allocation rows onto the same date`,
-      );
-    }
-    seen.add(allocation.effectiveFrom.getTime());
-    seenPerMetric.set(allocation.metricTypeId, seen);
+  // Monotone, but NOT injective: Jan 29 and Jan 31 both land on Feb 28. That
+  // would violate `@@unique([itemId, metricTypeId, effectiveFrom])` *and*
+  // silently destroy an allocation step, so refuse instead of writing. The web
+  // preview calls this same shared helper, so it can warn before the operator
+  // submits rather than after.
+  if (
+    hasShiftCollision(
+      row.allocations.map((allocation) => ({
+        metric: allocation.metricTypeId,
+        effectiveFrom: allocation.effectiveFrom,
+      })),
+      shift.amount,
+      shift.unit,
+    )
+  ) {
+    throw new UnprocessableError(
+      'SHIFT_ALLOCATION_COLLISION',
+      `Shifting "${row.name}" by ${shift.amount} ${shift.unit} would collapse two allocation rows onto the same date`,
+    );
   }
 
   // @ai-note The unique index is checked per statement, not deferred to commit,
@@ -345,6 +354,12 @@ export class ItemsService {
    *
    * @ai-warning Not idempotent: applying the same request twice moves the
    * entries twice. Callers must re-read before retrying an ambiguous failure.
+   *
+   * @ai-note A genuine serialization conflict (Postgres 40001) is deliberately
+   * NOT retried — it aborts the transaction and surfaces as a sanitized 500,
+   * leaving the data untouched. Accepted for a low-concurrency internal tool
+   * where two admins bulk-shifting the same entries at once is not a real
+   * workload; the failure is safe, just unfriendly. Revisit if that changes.
    */
   async bulkShiftDates(
     tenantId: string,
