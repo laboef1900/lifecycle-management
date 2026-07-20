@@ -309,10 +309,14 @@ export const api = {
         itemResponseSchema,
       ),
     delete: (id: string) => request<void>(`/api/items/${id}`, { method: 'DELETE' }),
-    bulkShiftDates: (input: ItemBulkShiftDatesInputWire) =>
+    bulkShiftDates: (input: ItemBulkShiftDatesInputWire, idempotencyKey: string) =>
       request(
         '/api/items/bulk-shift-dates',
-        { method: 'POST', body: JSON.stringify(input) },
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+          headers: { 'Idempotency-Key': idempotencyKey },
+        },
         itemBulkShiftDatesResponseSchema,
       ),
   },
