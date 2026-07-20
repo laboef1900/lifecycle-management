@@ -270,10 +270,25 @@ export function computeForecast(
  * @ai-warning A `vsphere` row with NO measured period absorbs NOTHING, and does
  * NOT fall back to `baselineDate` — that is the operator-editable label this
  * function was taken off, so a fallback reinstates the defect the moment the
- * `source='vsphere' => observed_at NOT NULL` invariant breaks. Nothing ENFORCES
- * that invariant: there is no CHECK constraint, and the Guard-1 runbook in
- * `docs/operations.md` tells operators to re-run the expand `INSERT ... SELECT`
- * by hand, which is exactly the path that produces such a row.
+ * `source='vsphere' => observed_at NOT NULL` invariant breaks.
+ *
+ * Nothing ENFORCES that invariant: there is no CHECK constraint, and no
+ * application writer can restore it either — `VsphereSnapshotService` is
+ * createMany + skipDuplicates, so it never updates an existing row. The
+ * application cannot BREAK it either: every writer that sets `source='vsphere'`
+ * writes `observedAt` from the same instant. So the hazard is out-of-band SQL —
+ * an incident-recovery `INSERT`/`UPDATE` typed by hand, or a restore mixing
+ * schema versions — landing a `vsphere` row that omits `observed_at`. If such a
+ * row is the metric's NEWEST, it becomes the anchor and switches the whole
+ * cluster into the absorb-nothing branch below, inflating capacity.
+ *
+ * NOT the Guard-1 runbook in `docs/operations.md`, which an earlier revision of
+ * this warning named: re-running the expand migration's `INSERT ... SELECT`
+ * writes the literals `'manual', NULL` (see
+ * `20260717120000_add_cluster_baseline_history/migration.sql`), so it produces
+ * manual rows with a null measured period — the correct, intended state for a
+ * manual baseline — and cannot emit a `vsphere` row at all. The hazard is real;
+ * that mechanism is not one of its paths.
  *
  * THE DIRECTION OF THAT FALL-BACK, checked per field rather than asserted. This
  * used to claim absorbing nothing is "safe on both deltas at once" because
