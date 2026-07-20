@@ -51,6 +51,22 @@ describe('autoScaleDomain', () => {
     expect(max).toBeGreaterThanOrEqual(12);
   });
 
+  it('does NOT pin to the floor when the data itself goes below it', () => {
+    // Signed consumption deltas make a negative series reachable. Pinning the
+    // domain to 0 here would put every point outside the window, where the
+    // caller's `allowDataOverflow` clips them away silently — a chart that
+    // simply loses its line with no marker is worse than one showing negatives.
+    const { min, max } = autoScaleDomain([-50, -40]);
+    expect(min).toBeLessThanOrEqual(-50);
+    expect(max).toBeGreaterThanOrEqual(-40);
+  });
+
+  it('keeps every value inside the domain for mixed-sign data', () => {
+    const { min, max } = autoScaleDomain([-10, 5, 30]);
+    expect(min).toBeLessThanOrEqual(-10);
+    expect(max).toBeGreaterThanOrEqual(30);
+  });
+
   it('keeps a near-floor series inside the window without going negative', () => {
     const { min, max } = autoScaleDomain([1, 3]);
     expect(min).toBe(0);

@@ -94,7 +94,13 @@ export function autoScaleDomain(values: number[], options: AutoScaleOptions = {}
   let min = mid - half - pad;
   let max = mid + half + pad;
 
-  if (min < floor) {
+  // Pin to the floor ONLY when the data itself respects it. A series that
+  // genuinely dips below `floor` must stay inside the window: pinning above it
+  // would put real points outside the domain, where the caller's
+  // `allowDataOverflow` clips them away silently, with no marker and no clue
+  // that anything is missing. Showing the negative range is the honest
+  // rendering of negative data.
+  if (min < floor && dataMin >= floor) {
     min = floor;
     // Preserve the intended span rather than squashing the plot against the
     // floor — the line stops being centred (unavoidable at 0) but still fills

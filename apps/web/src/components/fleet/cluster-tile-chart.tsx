@@ -60,11 +60,12 @@ const CAPACITY_DASH = '2 3';
 interface TileChartRow {
   month: string;
   /**
-   * True utilization % for this month — the canonical value, and the only
-   * field present on EVERY row (`actual`/`forecast` are null outside their
-   * segment). The tooltip reads this.
+   * True utilization % for this month, or null when capacity is 0 and it is
+   * therefore unknowable (Q9d — never 0). The canonical value the tooltip
+   * reads: `actual`/`forecast` are additionally null outside their own
+   * segment, so neither of them can stand in for it.
    */
-  util: number;
+  util: number | null;
   /** Utilization % for months at/before "now" — null elsewhere so the line stops. */
   actual: number | null;
   /** Utilization % for months at/after "now" (drawn dashed) — null elsewhere. */
@@ -73,6 +74,8 @@ interface TileChartRow {
 
 interface Hairline {
   key: string;
+  /** The configured percentage this line represents, before any clamp. */
+  pct: number;
   /** Plotted y, clamped into the tile's window. */
   y: number;
   /** True when the clamp bit — the line is NOT at its configured value. */
@@ -85,6 +88,31 @@ interface Hairline {
    * a purchasing decision hinges on.
    */
   severity: number;
+}
+
+/**
+ * Which of several reference lines sharing a plotted y actually gets drawn.
+ *
+ * When they collide at their TRUE values (two thresholds configured equal),
+ * severity wins — crit is the one a purchasing decision hinges on.
+ *
+ * When they collide because they were all clamped to the same window edge,
+ * severity is the wrong answer: a healthy cluster far below every threshold
+ * would get a crit-red line across the top of its tile, reading as an alarm on
+ * the calmest cluster in the fleet. The informative line there is the NEAREST
+ * threshold — the one the cluster would reach first — which is the lowest
+ * percentage above the window, or the highest below it.
+ */
+function pickSurvivor(group: Hairline[], scale: { min: number; max: number }): Hairline {
+  const first = group[0]!;
+  if (group.length === 1) return first;
+  if (group.every((l) => l.offScale)) {
+    const atTop = first.y === scale.max;
+    return group.reduce((best, l) =>
+      atTop ? (l.pct < best.pct ? l : best) : l.pct > best.pct ? l : best,
+    );
+  }
+  return group.reduce((best, l) => (l.severity > best.severity ? l : best));
 }
 
 /**
@@ -126,23 +154,41 @@ export function ClusterTileChart({
   // edge of its window as the normal case, not an edge case to hide.
   const showNowMarker = foundIndex >= 0;
 
-  const utilPct = (m: ForecastMonthPoint): number =>
-    m.capacity > 0 ? (m.consumption / m.capacity) * 100 : 0;
+  /**
+   * Utilization %, or null when capacity is 0 — i.e. unknowable, not low.
+   *
+   * @ai-warning Never `: 0` here. Recorded decision Q9d (see
+   * `ForecastMonthPoint.utilization` in `@lcm/shared`): zero capacity rendered
+   * as "0 % utilised" reads as maximum headroom, healthy — the state in which
+   * no hardware gets ordered. Under the retired fixed window a 0 was clamped to
+   * the 40 % floor AND dashed off-scale, which is what kept the lie off the
+   * chart; a data-derived domain has no floor to clamp to, so 0 would sit
+   * inside a perfectly plausible 0-12 % window with confident 0/5/10 % ticks,
+   * contradicting the same tile's UNKNOWN badge and "add host capacity"
+   * verdict. Null draws no line instead.
+   */
+  const utilPct = (m: ForecastMonthPoint): number | null =>
+    m.capacity > 0 ? (m.consumption / m.capacity) * 100 : null;
 
   const data: TileChartRow[] = months.map((m, i) => {
     const value = utilPct(m);
     return {
       month: m.month,
       util: value,
-      actual: i <= currentIndex ? value : null,
-      forecast: i >= currentIndex ? value : null,
+      actual: value !== null && i <= currentIndex ? value : null,
+      forecast: value !== null && i >= currentIndex ? value : null,
     };
   });
 
-  const scale = autoScaleDomain(
-    data.map((r) => r.util),
-    SCALE_OPTIONS,
-  );
+  const known = data.map((r) => r.util).filter((v): v is number => v !== null);
+  // With nothing measurable there is no "own range" to scale to, and inventing
+  // one from the absent data is how the 0 % lie gets back in. Fall back to the
+  // full 0-100 % axis: the thresholds still plot at their true positions and
+  // no consumption line is drawn at all.
+  const scale =
+    known.length > 0
+      ? autoScaleDomain(known, SCALE_OPTIONS)
+      : { min: 0, max: 100, ticks: [0, 50, 100] };
   const clampToWindow = (value: number): number => Math.min(Math.max(value, scale.min), scale.max);
 
   const warnPct = thresholds.warn * 100;
@@ -180,12 +226,13 @@ export function ClusterTileChart({
     },
   ];
 
-  const byY = new Map<number, Hairline>();
+  const byY = new Map<number, Hairline[]>();
   for (const c of candidates) {
     const y = clampToWindow(c.pct);
     const offScale = y !== c.pct;
     const line: Hairline = {
       key: c.key,
+      pct: c.pct,
       y,
       offScale,
       stroke: c.stroke,
@@ -195,10 +242,9 @@ export function ClusterTileChart({
       dash: offScale ? OFF_SCALE_DASH : c.dash,
       severity: c.severity,
     };
-    const existing = byY.get(y);
-    if (!existing || line.severity > existing.severity) byY.set(y, line);
+    byY.set(y, [...(byY.get(y) ?? []), line]);
   }
-  const hairlines = [...byY.values()];
+  const hairlines = [...byY.values()].map((group) => pickSurvivor(group, scale));
 
   const warnOffScale = clampToWindow(warnPct) !== warnPct;
   const critOffScale = clampToWindow(critPct) !== critPct;
@@ -223,6 +269,8 @@ export function ClusterTileChart({
         scale,
         warnOffScale,
         critOffScale,
+        capacityOffScale: clampToWindow(100) !== 100,
+        knownCount: known.length,
       })}
     >
       <ResponsiveContainer width="100%" height="100%">
@@ -275,9 +323,12 @@ export function ClusterTileChart({
               return (
                 <div className="rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
                   <span className="font-medium">{formatMonthShort(label)}</span>
-                  {value !== null ? (
-                    <span className="ml-2 font-mono tabular-nums">{value.toFixed(1)}%</span>
-                  ) : null}
+                  {/* Say "unknown" rather than falling silent: a bare month with
+                      no number reads as a rendering glitch, and 0 % would be the
+                      Q9d lie. */}
+                  <span className="ml-2 font-mono tabular-nums">
+                    {value !== null ? `${value.toFixed(1)}%` : 'unknown'}
+                  </span>
                 </div>
               );
             }}
@@ -354,7 +405,7 @@ export function ClusterTileChart({
             isAnimationActive={false}
             connectNulls={false}
           />
-          {breachRow ? (
+          {breachRow && breachRow.util !== null ? (
             // Positioned at the WARN-threshold crossing (breachIndex above
             // uses thresholds.warn, not crit), so it must render in the warn
             // color — filling it with utilizationCrit mislabeled a warn
@@ -391,6 +442,8 @@ function chartAriaLabel({
   scale,
   warnOffScale,
   critOffScale,
+  capacityOffScale,
+  knownCount,
 }: {
   months: ForecastMonthPoint[];
   thresholds: { warn: number; crit: number };
@@ -399,13 +452,26 @@ function chartAriaLabel({
   scale: { min: number; max: number };
   warnOffScale: boolean;
   critOffScale: boolean;
+  capacityOffScale: boolean;
+  knownCount: number;
 }): string {
+  // Nothing measurable: describing a scale and a breach state would dress an
+  // empty plot up as a reading. Say what it is and stop.
+  if (knownCount === 0) {
+    return `${months.length}-month forecast, utilization unknown — no capacity recorded, so no line is plotted.`;
+  }
+
   const parts = [
     // #268: this sentence used to promise a "shared 40 to 125 percent scale
     // across tiles". The scale is per-tile now, and saying so is the only way
     // a non-sighted reader knows the axis differs from the tile next to it.
     `${months.length}-month forecast as percent of capacity, scaled to this cluster's own range, ${Math.round(scale.min)} to ${Math.round(scale.max)} percent.`,
   ];
+  if (knownCount < months.length) {
+    parts.push(
+      `${months.length - knownCount} months have no recorded capacity and are not plotted.`,
+    );
+  }
   parts.push(
     breachIndex >= 0
       ? `Warn breach about ${formatMonthShort(months[breachIndex]!.month)}.`
@@ -423,6 +489,14 @@ function chartAriaLabel({
     `Critical threshold ${Math.round(thresholds.crit * 100)} percent${
       critOffScale ? ', outside the visible range' : ''
     }.`,
+  );
+  // The 100 % ceiling is drawn like the thresholds and clamps like them, so it
+  // needs the same spoken treatment — on a healthy tile it is routinely pinned
+  // to an edge or merged away entirely, and was previously never mentioned.
+  parts.push(
+    capacityOffScale
+      ? 'Capacity ceiling 100 percent, outside the visible range.'
+      : 'Capacity ceiling 100 percent.',
   );
   return parts.join(' ');
 }

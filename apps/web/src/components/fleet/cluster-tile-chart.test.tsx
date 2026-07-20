@@ -355,7 +355,7 @@ describe('<ClusterTileChart>', () => {
     // apparatus for the data series is gone rather than merely unused.
     const lowMonths: ForecastMonthPoint[] = [
       { month: '2026-07-01', consumption: 100, capacity: 1000, utilization: 0.1 },
-      { month: '2026-08-01', consumption: 0, capacity: 0, utilization: 0 },
+      { month: '2026-08-01', consumption: 200, capacity: 1000, utilization: 0.2 },
     ];
     render(
       <ClusterTileChart
@@ -366,36 +366,114 @@ describe('<ClusterTileChart>', () => {
     );
     const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
       month: string;
-      util: number;
+      util: number | null;
       actual: number | null;
       forecast: number | null;
     }>;
     expect(rows[0]).toEqual({ month: '2026-07-01', util: 10, actual: 10, forecast: 10 });
-    expect(rows[1]).toEqual({ month: '2026-08-01', util: 0, actual: null, forecast: 0 });
+    expect(rows[1]).toEqual({ month: '2026-08-01', util: 20, actual: null, forecast: 20 });
     expect(screen.queryByTestId('line-offScale')).toBeNull();
   });
 
-  it('pins the domain floor at 0 rather than showing negative percentages', () => {
-    // A series at/near 0% cannot be centred without a sub-zero axis, which is
-    // nonsense for a utilization percentage. The line rides the bottom instead
-    // — the honest rendering of that case, not a centring bug.
+  describe('zero capacity is unknowable, never 0% (recorded decision Q9d)', () => {
+    // The retired fixed window clamped a 0 to the 40% floor AND dashed it
+    // off-scale, which is what kept "0% used" off the chart. A data-derived
+    // domain has no floor to clamp to, so without this the tile would draw a
+    // confident flat line on a plausible 0-12% axis — contradicting its own
+    // UNKNOWN badge and "add host capacity" verdict, on a purchasing surface.
     const zeroMonths: ForecastMonthPoint[] = [
-      { month: '2026-07-01', consumption: 0, capacity: 0, utilization: 0 },
-      { month: '2026-08-01', consumption: 0, capacity: 0, utilization: 0 },
+      { month: '2026-07-01', consumption: 0, capacity: 0, utilization: null },
+      { month: '2026-08-01', consumption: 0, capacity: 0, utilization: null },
     ];
-    render(
-      <ClusterTileChart
-        months={zeroMonths}
-        thresholds={{ warn: 0.7, crit: 0.9 }}
-        orderByDate={null}
-      />,
-    );
-    const [min, max] = JSON.parse(screen.getByTestId('y-axis').dataset.domain ?? '[]') as [
-      number,
-      number,
-    ];
-    expect(min).toBe(0);
-    expect(max).toBeGreaterThanOrEqual(12);
+
+    it('plots no line at all when no month has recorded capacity', () => {
+      render(
+        <ClusterTileChart
+          months={zeroMonths}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+          orderByDate={null}
+        />,
+      );
+      const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+        util: number | null;
+        actual: number | null;
+        forecast: number | null;
+      }>;
+      expect(rows.every((r) => r.util === null && r.actual === null && r.forecast === null)).toBe(
+        true,
+      );
+    });
+
+    it('falls back to the full 0-100 axis instead of inventing a range from absent data', () => {
+      render(
+        <ClusterTileChart
+          months={zeroMonths}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+          orderByDate={null}
+        />,
+      );
+      const yAxis = screen.getByTestId('y-axis');
+      expect(yAxis.dataset.domain).toBe('[0,100]');
+      // A 0-12% window with 0/5/10 ticks is the specific wrong answer: it makes
+      // "no data" look like a precisely measured, extremely healthy cluster.
+      expect(yAxis.dataset.ticks).toBe('[0,50,100]');
+    });
+
+    it('says utilization is unknown in the aria-label rather than describing a scale', () => {
+      render(
+        <ClusterTileChart
+          months={zeroMonths}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+          orderByDate={null}
+        />,
+      );
+      const label = screen.getByRole('img').getAttribute('aria-label') ?? '';
+      expect(label).toContain('utilization unknown');
+      expect(label).toContain('no capacity recorded');
+      expect(label).not.toContain('own range');
+    });
+
+    it('drops only the unmeasurable months when capacity is recorded for some', () => {
+      const mixed: ForecastMonthPoint[] = [
+        { month: '2026-07-01', consumption: 700, capacity: 1000, utilization: 0.7 },
+        { month: '2026-08-01', consumption: 0, capacity: 0, utilization: null },
+        { month: '2026-09-01', consumption: 800, capacity: 1000, utilization: 0.8 },
+      ];
+      render(
+        <ClusterTileChart
+          months={mixed}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+          orderByDate={null}
+        />,
+      );
+      const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+        util: number | null;
+      }>;
+      expect(rows.map((r) => r.util)).toEqual([70, null, 80]);
+      // The gap must not drag the domain toward zero — it is scaled off the two
+      // measured months only.
+      const [min] = JSON.parse(screen.getByTestId('y-axis').dataset.domain ?? '[]') as [number];
+      expect(min).toBeGreaterThan(60);
+      expect(screen.getByRole('img').getAttribute('aria-label')).toContain(
+        '1 months have no recorded capacity',
+      );
+    });
+
+    it('reports unknown in the tooltip rather than a number', () => {
+      render(
+        <ClusterTileChart
+          months={zeroMonths}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+          orderByDate={null}
+        />,
+      );
+      // The mock feeds a payload whose util is 12.5, so a plain render proves
+      // nothing; assert the null path via a row the component itself produced.
+      const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
+        util: number | null;
+      }>;
+      expect(rows[0]?.util).toBeNull();
+    });
   });
 
   it('lets an above-100% cluster scale its own window instead of pinning to a ceiling', () => {
@@ -427,10 +505,51 @@ describe('<ClusterTileChart>', () => {
     expect(screen.getByTestId('breach-dot').dataset.y).toBe('140');
     // Warn (70), crit (90) and the 100% ceiling all fall below this window, so
     // all three collapse onto the floor as a single merged off-scale hairline.
+    // Below the window the NEAREST threshold is the highest one — the capacity
+    // ceiling — not the most severe.
     const yLines = screen.queryAllByTestId(/^refline-y-/);
     expect(yLines).toHaveLength(1);
-    expect(yLines[0]?.dataset.stroke).toBe(CRIT_STROKE);
+    expect(yLines[0]?.dataset.stroke).toBe(CAPACITY_STROKE);
     expect(yLines[0]?.dataset.dash).toBe('1 2');
+  });
+
+  it('shows the NEAREST threshold, not the most severe, when all of them clamp to one edge', () => {
+    // A calm cluster at 30-36% is below warn, crit AND the 100% ceiling, so all
+    // three pin to the top edge. Picking by severity would paint a crit-RED
+    // line across the top of the healthiest tile in the fleet — an alarm on the
+    // one cluster with nothing wrong. The useful line is the one it would hit
+    // first: warn.
+    const calmMonths: ForecastMonthPoint[] = [
+      { month: '2026-07-01', consumption: 300, capacity: 1000, utilization: 0.3 },
+      { month: '2026-08-01', consumption: 360, capacity: 1000, utilization: 0.36 },
+    ];
+    render(
+      <ClusterTileChart
+        months={calmMonths}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        orderByDate={null}
+      />,
+    );
+    const yLines = screen.queryAllByTestId(/^refline-y-/);
+    expect(yLines).toHaveLength(1);
+    expect(yLines[0]?.dataset.stroke).toBe(WARN_STROKE);
+    expect(yLines[0]?.dataset.dash).toBe('1 2');
+    // All three true values still reach assistive tech.
+    const label = screen.getByRole('img').getAttribute('aria-label') ?? '';
+    expect(label).toContain('Warn threshold 70 percent, outside the visible range');
+    expect(label).toContain('Critical threshold 90 percent, outside the visible range');
+    expect(label).toContain('Capacity ceiling 100 percent, outside the visible range');
+  });
+
+  it('still picks by severity when two thresholds collide at their TRUE values', () => {
+    // Equal warn and crit is a legal config; neither is clamped, so the
+    // nearest-threshold rule does not apply and crit must win.
+    render(
+      <ClusterTileChart months={months} thresholds={{ warn: 0.9, crit: 0.9 }} orderByDate={null} />,
+    );
+    expect(hairline(WARN_STROKE)).toBeNull();
+    expect(hairline(CRIT_STROKE)?.dataset.y).toBe('90');
+    expect(hairline(CRIT_STROKE)?.dataset.dash).toBe('4 3');
   });
 
   it('tooltip reports the true utilization, not the clamped plotted value', () => {

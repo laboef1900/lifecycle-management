@@ -276,6 +276,13 @@ export const ClusterTile = memo(function ClusterTile({
       : orderUnknown
         ? 'order status unknown — capacity required'
         : 'no order needed',
+    // The tile's aria-label OVERRIDES its visible content, so a chip that is
+    // never named here is silent to assistive tech however prominent it looks.
+    // The EVENT chip was in that position before #268 and became more visible
+    // when it moved up a row, so name it (issue AC-7).
+    !isArchived && events.length > 0
+      ? `${events.length} event${events.length === 1 ? '' : 's'} in the forecast window`
+      : null,
     stale ? `baseline ${ageDays} days old — re-measure` : null,
     liveSummary || null,
     !isArchived && provisionalCount > 0
