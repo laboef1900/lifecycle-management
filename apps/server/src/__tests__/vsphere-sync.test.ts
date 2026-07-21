@@ -281,6 +281,66 @@ describe('⚠️ sync degrades, never crashes', () => {
     expect(row.lastError).not.toContain('hunter2');
   });
 
+  it('WARNs the raw OpenSSL code on a TLS failure but keeps it out of lastError (#272)', async () => {
+    const conn = await makeConn();
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    // The undici/fetch shape: the real reason is nested under `cause.code`.
+    const err = Object.assign(new Error('unable to verify the first certificate'), {
+      cause: { code: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' },
+    });
+    const sync = new VsphereSyncService(
+      prisma,
+      fakeCollector(async () => {
+        throw err;
+      }),
+      logger,
+    );
+
+    const result = await sync.syncConnection('default', conn, CREDS);
+    expect(result.outcome).toBe('tls_untrusted');
+
+    // A persistent, actionable cert failure warns (the #272 state).
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'vsphere.sync.failed',
+        connectionId: conn,
+        outcome: 'tls_untrusted',
+        tlsCode: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+      }),
+      expect.any(String),
+    );
+    expect(logger.info).not.toHaveBeenCalled();
+
+    // …but the code never reaches the UI-rendered, stored lastError.
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id: conn } });
+    expect(row.lastError).toBe('vCenter presented an untrusted certificate.');
+    expect(row.lastError).not.toContain('UNABLE_TO_GET_ISSUER_CERT_LOCALLY');
+  });
+
+  it('INFOs (not warns) a routine unreachable, with a null tlsCode and no crash', async () => {
+    const conn = await makeConn();
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const sync = new VsphereSyncService(
+      prisma,
+      fakeCollector(async () => {
+        throw new Error('connect ETIMEDOUT 10.0.0.1:443');
+      }),
+      logger,
+    );
+
+    await sync.syncConnection('default', conn, CREDS);
+    // A transient down-for-maintenance vCenter would warn every poll otherwise.
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'vsphere.sync.failed',
+        outcome: 'unreachable',
+        tlsCode: null,
+      }),
+      expect.any(String),
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it('a disabled connection is skipped without contacting vCenter', async () => {
     const conn = await makeConn();
     await prisma.vsphereConnection.update({ where: { id: conn }, data: { enabled: false } });

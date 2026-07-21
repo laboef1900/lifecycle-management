@@ -27,9 +27,44 @@ export interface CapturedChain {
 
 export type TlsProbeOutcome = 'ok' | 'unreachable' | 'tls_untrusted';
 
+/**
+ * Server-log-only description of the chain a probe observed (#272). This is the
+ * evidence that tells an incomplete-chain pin (`terminalSelfSigned: false` on an
+ * `ok` outcome — a leaf/intermediate pinned as if it were a root) apart from a
+ * genuine self-signed anchor.
+ *
+ * @ai-warning This is DIAGNOSTIC and MUST stay server-side. It carries subject
+ * and issuer common names, which the probe route deliberately never returns to a
+ * client (only a fingerprint leaves the server, so the endpoint is useless for
+ * network enumeration). Log it via pino; never put it in a response body.
+ */
+export interface ChainDiagnostics {
+  /** Number of hops from leaf to the chain's terminal cert (0 = single cert). */
+  depth: number;
+  /**
+   * Did the walk terminate at a self-signed cert? `false` means Node ran out of
+   * `issuerCertificate` links before reaching a self-signed anchor — an
+   * incomplete chain, which is the #272 root-cause candidate. Pinning that
+   * terminal makes the credentialed handshake fail with no self-signed anchor.
+   */
+  terminalSelfSigned: boolean;
+  /** Leaf subject CN, for correlating which cert was presented. */
+  leafSubjectCn: string | null;
+  /** Terminal cert subject CN. */
+  terminalSubjectCn: string | null;
+  /** Terminal cert issuer CN — equals the subject CN exactly when self-signed. */
+  terminalIssuerCn: string | null;
+}
+
 export interface TlsProbeResult {
   outcome: TlsProbeOutcome;
   chain: CapturedChain | null;
+  /**
+   * Populated whenever a peer certificate was seen (even when the outcome is not
+   * `ok`); null only when no certificate was presented. Server-log only — see
+   * {@link ChainDiagnostics}.
+   */
+  diagnostics: ChainDiagnostics | null;
 }
 
 function derToPem(der: Buffer): string {
@@ -38,20 +73,113 @@ function derToPem(der: Buffer): string {
 }
 
 /**
+ * The walk's stop condition: Node makes a self-signed root's `issuerCertificate`
+ * point at itself, and leaves it missing/empty when the issuer was NOT presented
+ * (an incomplete chain). BOTH end the walk — this is `rootOf`'s original break
+ * predicate, preserved verbatim so pinning behaviour is unchanged.
+ */
+function chainTerminates(cert: DetailedPeerCertificate): boolean {
+  const issuer = cert.issuerCertificate;
+  return !issuer || issuer === cert || issuer.fingerprint256 === cert.fingerprint256;
+}
+
+/**
+ * Genuinely self-signed: a REAL self-reference, not merely a missing issuer.
+ *
+ * This is the distinction {@link chainTerminates} deliberately blurs. A terminal
+ * with no issuer (`undefined`, or the empty `{}` Node leaves for an unpresented
+ * issuer) terminates the walk but is NOT a self-signed anchor — it is the top of
+ * an incomplete chain, the #272 failure. Requiring a matching non-empty
+ * fingerprint (or object identity) separates the two.
+ */
+function isGenuinelySelfSigned(cert: DetailedPeerCertificate): boolean {
+  const issuer = cert.issuerCertificate;
+  if (!issuer) return false;
+  if (issuer === cert) return true;
+  return Boolean(cert.fingerprint256) && issuer.fingerprint256 === cert.fingerprint256;
+}
+
+/**
  * Walk `issuerCertificate` to the chain's root.
  *
  * Node terminates the chain by making the root's `issuerCertificate` point at
  * itself, so the self-reference is the stop condition — not a bug. The depth cap
  * is belt-and-braces against a malformed chain that never self-references.
+ *
+ * @ai-warning The terminal cert this returns is NOT guaranteed to be self-signed:
+ * if the server presents an incomplete chain (leaf-only or leaf+intermediate),
+ * the walk runs out of `issuerCertificate` links and returns the last hop, which
+ * is not a root. Pinning that terminal makes the credentialed handshake fail with
+ * `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`/`SELF_SIGNED_CERT_IN_CHAIN`. #272 is the
+ * open investigation into exactly this; {@link describeChain} surfaces it in the
+ * log, and hardening `rootOf` to refuse a non-self-signed terminal is the
+ * pending high-risk follow-up (do not change that behaviour in this diagnostics
+ * change).
  */
 function rootOf(leaf: DetailedPeerCertificate): DetailedPeerCertificate {
   let current = leaf;
   for (let depth = 0; depth < 16; depth += 1) {
-    const issuer = current.issuerCertificate;
-    if (!issuer || issuer === current || issuer.fingerprint256 === current.fingerprint256) break;
-    current = issuer;
+    if (chainTerminates(current)) break;
+    current = current.issuerCertificate;
   }
   return current;
+}
+
+/**
+ * Read-only description of the presented chain, for the server log (#272).
+ *
+ * Pure: walks the same `issuerCertificate` links as {@link rootOf} (same stop
+ * condition, so `depth` and the terminal match what gets pinned) but only reports
+ * what it sees — it changes nothing. `terminalSelfSigned` uses the STRICTER
+ * {@link isGenuinelySelfSigned} test, so an incomplete chain whose walk merely
+ * ran out of issuers reads as `false`, not a spurious `true`.
+ */
+export function describeChain(leaf: DetailedPeerCertificate): ChainDiagnostics {
+  let current = leaf;
+  let depth = 0;
+  for (; depth < 16; depth += 1) {
+    if (chainTerminates(current)) break;
+    current = current.issuerCertificate;
+  }
+  return {
+    depth,
+    terminalSelfSigned: isGenuinelySelfSigned(current),
+    leafSubjectCn: cn(leaf.subject?.CN),
+    terminalSubjectCn: cn(current.subject?.CN),
+    terminalIssuerCn: cn(current.issuer?.CN),
+  };
+}
+
+/** A cert RDN's CN is `string | string[]` (multi-valued); collapse to one string. */
+function cn(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
+
+/**
+ * The OpenSSL/Node error code behind a failed TLS handshake, or null (#272).
+ *
+ * Node nests the real reason under `err.cause.code` for `fetch`/undici and
+ * exposes it directly as `err.code` for the raw `tls`/`https` paths, so both are
+ * checked. This is the single fact that separates the #272 root-cause candidates
+ * — `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`/`SELF_SIGNED_CERT_IN_CHAIN` (incomplete
+ * chain) vs a fingerprint/expiry mismatch (rotation) — and it is currently read
+ * by the classifiers and then discarded, logged nowhere.
+ *
+ * @ai-warning Returns ONLY the code (a fixed OpenSSL identifier), never the
+ * message or stack — a vCenter driver error can carry a credential in its message
+ * and must not reach a log line unfiltered.
+ */
+export function extractTlsErrorCode(err: unknown): string | null {
+  // First NON-EMPTY string wins, so an empty nested `cause.code` falls through
+  // to a real top-level `code` rather than masking it (`'' ?? x` would return
+  // the empty string and stop).
+  const nested = (err as { cause?: { code?: unknown } })?.cause?.code;
+  const top = (err as { code?: unknown })?.code;
+  for (const candidate of [nested, top]) {
+    if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -99,7 +227,7 @@ export async function probeCertificate(
     socket.once('secureConnect', () => {
       const detailed = socket.getPeerCertificate(true);
       if (!detailed || Object.keys(detailed).length === 0) {
-        finish({ outcome: 'tls_untrusted', chain: null });
+        finish({ outcome: 'tls_untrusted', chain: null, diagnostics: null });
         return;
       }
       const root = rootOf(detailed);
@@ -114,14 +242,20 @@ export async function probeCertificate(
           validFrom: detailed.valid_from ?? null,
           validTo: detailed.valid_to ?? null,
         },
+        // Server-log only (#272). `terminalSelfSigned: false` on this `ok`
+        // outcome is the incomplete-chain smoking gun: a leaf/intermediate is
+        // about to be pinned as if it were a root.
+        diagnostics: describeChain(detailed),
       });
     });
 
     // Every failure collapses to `unreachable`. Distinguishing refused from
     // filtered from no-route is precisely what makes a scan oracle useful, so the
     // distinction is dropped here and kept in the server log instead.
-    socket.once('timeout', () => finish({ outcome: 'unreachable', chain: null }));
-    socket.once('error', () => finish({ outcome: 'unreachable', chain: null }));
+    socket.once('timeout', () =>
+      finish({ outcome: 'unreachable', chain: null, diagnostics: null }),
+    );
+    socket.once('error', () => finish({ outcome: 'unreachable', chain: null, diagnostics: null }));
   });
 }
 

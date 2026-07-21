@@ -176,11 +176,16 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
       guardTarget(body.hostname);
 
       const result = await probeCertificate(body.hostname, body.port);
+      // Server-log only (#272): the chain shape never leaves the server (the
+      // response below carries only a fingerprint), but `terminalSelfSigned:
+      // false` on an `ok` probe is the incomplete-chain signal — the operator is
+      // about to pin a non-root anchor whose credentialed handshake will fail.
+      // `diagnostics` carries subject/issuer CNs, so it stays out of the response.
+      request.log.info(
+        { event: 'vsphere.probe', outcome: result.outcome, ...(result.diagnostics ?? {}) },
+        result.outcome === 'ok' ? 'vCenter probe captured chain' : 'vCenter probe failed',
+      );
       if (result.outcome !== 'ok' || !result.chain) {
-        request.log.info(
-          { event: 'vsphere.probe', outcome: result.outcome },
-          'vCenter probe failed',
-        );
         return {
           reachable: false,
           trustedBySystemRoots: false,
@@ -265,6 +270,19 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
       // observes, and the admin's fingerprint only has to agree. A client-supplied
       // certificate would let a caller pin an anchor the server never saw.
       const probe = await probeCertificate(connection.hostname, connection.port);
+      // Server-log only (#272): capture the chain shape at the exact moment trust
+      // is being granted. A `terminalSelfSigned: false` here means the pin about
+      // to be stored is an incomplete-chain leaf/intermediate — trust "succeeds"
+      // now and every scheduled sync then fails, which is the reported symptom.
+      request.log.info(
+        {
+          event: 'vsphere.trust',
+          connectionId: id,
+          outcome: probe.outcome,
+          ...(probe.diagnostics ?? {}),
+        },
+        'vCenter trust re-probe',
+      );
       if (probe.outcome !== 'ok' || !probe.chain) {
         throw new UnprocessableError(
           'VCENTER_UNREACHABLE',
