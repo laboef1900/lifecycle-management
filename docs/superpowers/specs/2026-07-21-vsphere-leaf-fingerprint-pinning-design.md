@@ -103,7 +103,7 @@ For **system** mode (`pinnedLeafSha256 === null`) the request keeps `rejectUnaut
 
 1. **No credential byte is written to a pinned-mode socket until the presented leaf SHA-256 equals the stored pin.** Enforced structurally in `createConnection` and proven by the byte-recording test.
 2. **`rejectUnauthorized: false` exists only inside that fingerprint-gated factory.** `system` mode keeps `rejectUnauthorized: true`. There is no third path, and no flag that disables verification.
-3. **A missing/empty pin in pinned mode never connects** (fail closed).
+3. **A null/empty pin never sends the credential to an unverified peer.** Runtime behavior keys off the stored fingerprint, exactly as today keyed off `pinnedRootPem`: a **null** pin takes the system-trust path (`rejectUnauthorized: true`, no gate) — so a not-yet-trusted self-signed vCenter fails the handshake and reports `tls_untrusted` (vet-then-pin), it does not connect insecurely; the `rejectUnauthorized: false` fingerprint gate engages **only** for a non-null pin. Fail closed either way.
 4. **A fingerprint mismatch at sync time sets `cert_mismatch`, stops sending the credential, and requires a human re-confirm.** A new leaf is never auto-accepted.
 5. **Re-pinning still requires the connection password** (unchanged trust-material gate).
 6. **No PEM/subject/issuer/SAN leaves the server** — only the fingerprint and validity dates, as today.
