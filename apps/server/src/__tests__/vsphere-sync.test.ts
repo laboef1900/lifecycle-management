@@ -322,6 +322,61 @@ describe('⚠️ sync degrades, never crashes', () => {
     expect(row.lastError).not.toContain('UNABLE_TO_GET_ISSUER_CERT_LOCALLY');
   });
 
+  it('a leaf-fingerprint mismatch (Task 3, #272) sets cert_mismatch on the connection while the returned outcome stays tls_untrusted', async () => {
+    const conn = await makeConn();
+    // Mirror how vsphere-job-runner builds credentials for a pinned connection:
+    // pinnedLeafSha256 comes from the row's tlsPinnedSha256.
+    await prisma.vsphereConnection.update({
+      where: { id: conn },
+      data: { tlsMode: 'pinned', tlsPinnedSha256: 'AA:BB:CC' },
+    });
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    // The Task 3 credential-path gate: a pinned connection whose presented leaf
+    // no longer matches throws this exact code (soapCall -> collector -> here).
+    const err = Object.assign(new Error('fp mismatch'), { code: 'CERT_FINGERPRINT_MISMATCH' });
+    const sync = new VsphereSyncService(
+      prisma,
+      fakeCollector(async () => {
+        throw err;
+      }),
+      logger,
+    );
+
+    const result = await sync.syncConnection('default', conn, {
+      ...CREDS,
+      pinnedLeafSha256: 'AA:BB:CC',
+    });
+
+    // VsphereSyncOutcome (the job vocabulary) has no cert_mismatch value, so the
+    // returned result maps it to tls_untrusted...
+    expect(result.outcome).toBe('tls_untrusted');
+    expect(result.error).toBe(
+      'vCenter is presenting a different certificate than the one you trusted.',
+    );
+
+    // ...while the connection row gets the more specific status that routes the
+    // operator to the "Replace the trusted certificate" dialog.
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id: conn } });
+    expect(row.status).toBe('cert_mismatch');
+    expect(row.lastError).toBe(
+      'vCenter is presenting a different certificate than the one you trusted.',
+    );
+    expect(row.lastError).not.toContain('CERT_FINGERPRINT_MISMATCH');
+
+    // A fingerprint mismatch is persistent and actionable, so it warns (like
+    // tls_untrusted/auth_failed) — never the routine-unreachable INFO level.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'vsphere.sync.failed',
+        connectionId: conn,
+        outcome: 'cert_mismatch',
+        tlsCode: 'CERT_FINGERPRINT_MISMATCH',
+      }),
+      expect.any(String),
+    );
+    expect(logger.info).not.toHaveBeenCalled();
+  });
+
   it('INFOs (not warns) a routine unreachable, with a null tlsCode and no crash', async () => {
     const conn = await makeConn();
     const logger = { info: vi.fn(), warn: vi.fn() };
