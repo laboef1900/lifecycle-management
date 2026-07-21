@@ -281,9 +281,9 @@ describe('⚠️ sync degrades, never crashes', () => {
     expect(row.lastError).not.toContain('hunter2');
   });
 
-  it('logs the raw OpenSSL code on a TLS failure but keeps it out of lastError (#272)', async () => {
+  it('WARNs the raw OpenSSL code on a TLS failure but keeps it out of lastError (#272)', async () => {
     const conn = await makeConn();
-    const warn = vi.fn();
+    const logger = { info: vi.fn(), warn: vi.fn() };
     // The undici/fetch shape: the real reason is nested under `cause.code`.
     const err = Object.assign(new Error('unable to verify the first certificate'), {
       cause: { code: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' },
@@ -293,14 +293,14 @@ describe('⚠️ sync degrades, never crashes', () => {
       fakeCollector(async () => {
         throw err;
       }),
-      { warn },
+      logger,
     );
 
     const result = await sync.syncConnection('default', conn, CREDS);
     expect(result.outcome).toBe('tls_untrusted');
 
-    // The discarded diagnostic (#272) is now logged server-side, structured.
-    expect(warn).toHaveBeenCalledWith(
+    // A persistent, actionable cert failure warns (the #272 state).
+    expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'vsphere.sync.failed',
         connectionId: conn,
@@ -309,6 +309,7 @@ describe('⚠️ sync degrades, never crashes', () => {
       }),
       expect.any(String),
     );
+    expect(logger.info).not.toHaveBeenCalled();
 
     // …but the code never reaches the UI-rendered, stored lastError.
     const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id: conn } });
@@ -316,19 +317,20 @@ describe('⚠️ sync degrades, never crashes', () => {
     expect(row.lastError).not.toContain('UNABLE_TO_GET_ISSUER_CERT_LOCALLY');
   });
 
-  it('logs a null tlsCode when a non-TLS failure has no code, without crashing', async () => {
+  it('INFOs (not warns) a routine unreachable, with a null tlsCode and no crash', async () => {
     const conn = await makeConn();
-    const warn = vi.fn();
+    const logger = { info: vi.fn(), warn: vi.fn() };
     const sync = new VsphereSyncService(
       prisma,
       fakeCollector(async () => {
         throw new Error('connect ETIMEDOUT 10.0.0.1:443');
       }),
-      { warn },
+      logger,
     );
 
     await sync.syncConnection('default', conn, CREDS);
-    expect(warn).toHaveBeenCalledWith(
+    // A transient down-for-maintenance vCenter would warn every poll otherwise.
+    expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'vsphere.sync.failed',
         outcome: 'unreachable',
@@ -336,6 +338,7 @@ describe('⚠️ sync degrades, never crashes', () => {
       }),
       expect.any(String),
     );
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('a disabled connection is skipped without contacting vCenter', async () => {

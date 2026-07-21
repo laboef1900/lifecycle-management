@@ -1,7 +1,6 @@
 import { startOfUtcMonth, type VsphereSyncResult } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
-import type { CollectorLogger } from './vsphere-collector.js';
 import type {
   CollectedCluster,
   CollectedInventory,
@@ -9,7 +8,18 @@ import type {
 } from './vsphere-inventory.js';
 import { extractTlsErrorCode } from './vsphere-tls.js';
 
-const noopLogger: CollectorLogger = { warn: () => undefined };
+/**
+ * Pino-shaped sink for the sync diagnostic (#272). Its own interface rather than
+ * the collector's `{ warn }`-only `CollectorLogger`: this service logs at two
+ * levels (see the level policy in `syncConnection`), and naming it for the sync
+ * path keeps it honest about who uses it.
+ */
+export interface VsphereLogger {
+  info(details: Record<string, unknown>, message: string): void;
+  warn(details: Record<string, unknown>, message: string): void;
+}
+
+const noopLogger: VsphereLogger = { info: () => undefined, warn: () => undefined };
 
 /**
  * Reconciles vCenter inventory into LCM (#176, epic #172).
@@ -34,7 +44,7 @@ const noopLogger: CollectorLogger = { warn: () => undefined };
  *    the wrong one's capacity with plausible-looking numbers.
  */
 export class VsphereSyncService {
-  private readonly logger: CollectorLogger;
+  private readonly logger: VsphereLogger;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -44,7 +54,7 @@ export class VsphereSyncService {
      * many `new VsphereSyncService(prisma, collector)` call sites (tests
      * included) keep working; defaults to no-op.
      */
-    logger?: CollectorLogger,
+    logger?: VsphereLogger,
   ) {
     this.logger = logger ?? noopLogger;
   }
@@ -106,10 +116,19 @@ export class VsphereSyncService {
       // rotation. Code only, never the message/stack: a driver error can carry
       // the credential, and `lastError` is UI-rendered and stored, so it keeps
       // the sanitized string untouched below.
-      this.logger.warn(
-        { event: 'vsphere.sync.failed', connectionId, outcome, tlsCode: extractTlsErrorCode(err) },
-        'vCenter sync failed',
-      );
+      //
+      // Level policy: `unreachable` is routine and transient (a vCenter down for
+      // a maintenance window would warn on every poll), so it logs at INFO;
+      // `tls_untrusted` and `auth_failed` are persistent, actionable, and the
+      // states #272 is about, so they warn.
+      const details = {
+        event: 'vsphere.sync.failed',
+        connectionId,
+        outcome,
+        tlsCode: extractTlsErrorCode(err),
+      };
+      if (outcome === 'unreachable') this.logger.info(details, 'vCenter sync failed');
+      else this.logger.warn(details, 'vCenter sync failed');
       await this.prisma.vsphereConnection.update({
         where: { id: connectionId },
         data: { status: outcome, lastError: sanitize(err) },

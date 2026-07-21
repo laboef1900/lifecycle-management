@@ -50,6 +50,7 @@ const vsphereSchedulerPluginFn: FastifyPluginAsync<VsphereSchedulerPluginOptions
   });
   const connections = new VsphereConnectionsService(fastify.prisma, opts.configKey);
   const sync = new VsphereSyncService(fastify.prisma, collector, {
+    info: (details, message) => fastify.log.info(details, message),
     warn: (details, message) => fastify.log.warn(details, message),
   });
   const snapshot = new VsphereSnapshotService(fastify.prisma, collector);

@@ -212,10 +212,16 @@ describe('extractTlsErrorCode (#272 diagnostics)', () => {
     expect(extractTlsErrorCode({ code: 'OUTER', cause: { code: 'INNER' } })).toBe('INNER');
   });
 
+  it('falls through an EMPTY nested cause.code to a real top-level code', () => {
+    // `'' ?? x` would have returned the empty string and masked the real code.
+    expect(extractTlsErrorCode({ code: 'REAL', cause: { code: '' } })).toBe('REAL');
+  });
+
   it('returns null when there is no code, rather than an empty or bogus string', () => {
     expect(extractTlsErrorCode(new Error('boom'))).toBeNull();
     expect(extractTlsErrorCode({ code: '' })).toBeNull();
     expect(extractTlsErrorCode({ code: 42 })).toBeNull();
+    expect(extractTlsErrorCode({ cause: { code: '' } })).toBeNull();
     expect(extractTlsErrorCode(null)).toBeNull();
   });
 });
@@ -267,6 +273,24 @@ describe('describeChain (#272 diagnostics)', () => {
       issuerCertificate: undefined,
     } as unknown as DetailedPeerCertificate;
     expect(describeChain(leaf).terminalSelfSigned).toBe(false);
+  });
+
+  it('treats the empty-OBJECT issuer Node can leave as incomplete, not self-signed', () => {
+    // The other shape Node uses for an unpresented issuer is `{}` (not
+    // `undefined`). The walk advances into it once, terminates there, and must
+    // still read as incomplete — this is exactly the ambiguity the diagnostic
+    // exists to observe, so pin it.
+    const leaf = {
+      subject: { CN: 'leaf' },
+      issuer: { CN: 'some-ca' },
+      fingerprint256: 'FP:leaf',
+      issuerCertificate: {}, // empty object, no fingerprint, no subject
+    } as unknown as DetailedPeerCertificate;
+    const d = describeChain(leaf);
+    expect(d.terminalSelfSigned).toBe(false);
+    expect(d.depth).toBe(1); // advanced into the empty object, then stopped
+    expect(d.leafSubjectCn).toBe('leaf');
+    expect(d.terminalSubjectCn).toBeNull(); // the empty object has no CN
   });
 
   it('collapses a multi-valued CN (string[]) to a single string', () => {

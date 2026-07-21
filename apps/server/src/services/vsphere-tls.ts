@@ -171,9 +171,15 @@ function cn(value: string | string[] | undefined): string | null {
  * and must not reach a log line unfiltered.
  */
 export function extractTlsErrorCode(err: unknown): string | null {
-  const code =
-    (err as { cause?: { code?: unknown } })?.cause?.code ?? (err as { code?: unknown })?.code;
-  return typeof code === 'string' && code.length > 0 ? code : null;
+  // First NON-EMPTY string wins, so an empty nested `cause.code` falls through
+  // to a real top-level `code` rather than masking it (`'' ?? x` would return
+  // the empty string and stop).
+  const nested = (err as { cause?: { code?: unknown } })?.cause?.code;
+  const top = (err as { code?: unknown })?.code;
+  for (const candidate of [nested, top]) {
+    if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+  }
+  return null;
 }
 
 /**
