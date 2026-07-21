@@ -6,10 +6,21 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import type { DetailedPeerCertificate } from 'node:tls';
 
-import { OTHER_CERT_PEM, TEST_CERT_PEM, TEST_KEY_PEM } from './vsphere-tls-fixtures.js';
+import {
+  CHAIN_LEAF_PEM,
+  INTERMEDIATE_CA_PEM,
+  OTHER_CERT_PEM,
+  ROOT_CA_BAD_SIG_PEM,
+  ROOT_CA_PEM,
+  TEST_CERT_PEM,
+  TEST_KEY_PEM,
+} from './vsphere-tls-fixtures.js';
 import {
   describeChain,
+  evaluateProbedChain,
   extractTlsErrorCode,
+  isSelfSignedAnchor,
+  isSelfSignedAnchorPem,
   normalizeFingerprint,
   probeCertificate,
   verifiedTlsOptions,
@@ -327,5 +338,104 @@ describe('probeCertificate dials the configured port (#199)', () => {
     // A real single self-signed cert must read as a genuine self-signed terminal
     // (#272) — the healthy case the incomplete-chain signal is measured against.
     expect(result.diagnostics).toMatchObject({ depth: 0, terminalSelfSigned: true });
+  });
+});
+
+/**
+ * The #272 fix (Part A): refuse to pin an anchor OpenSSL would not accept.
+ *
+ * `isSelfSignedAnchorPem` is the authoritative gate — it runs on the actual
+ * certificate bytes and checks the ONE thing OpenSSL requires of a supplied trust
+ * anchor: that it is SELF-ISSUED (subject DN == issuer DN). OpenSSL does NOT
+ * re-verify the anchor's own self-signature (`X509_V_FLAG_CHECK_SS_SIGNATURE` is
+ * off by default — see `ROOT_CA_BAD_SIG_PEM`), so the gate must not either, or it
+ * would refuse a root that validates fine at sync time. Exercised against a REAL
+ * 3-level chain: only the self-issued root is an anchor; the intermediate and leaf
+ * are not — the case vcsim (self-signed leaf == root) could never express, which
+ * is why #272 shipped with no regression test.
+ */
+describe('isSelfSignedAnchorPem (#272 pin gate)', () => {
+  it('accepts a genuine self-signed root', () => {
+    expect(isSelfSignedAnchorPem(ROOT_CA_PEM)).toBe(true);
+  });
+
+  it('accepts a self-signed leaf (vCenter out-of-box / vcsim default)', () => {
+    expect(isSelfSignedAnchorPem(TEST_CERT_PEM)).toBe(true);
+    expect(isSelfSignedAnchorPem(OTHER_CERT_PEM)).toBe(true);
+  });
+
+  it('accepts a self-ISSUED root even when its self-signature does not verify', () => {
+    // OpenSSL trusts a supplied anchor without re-checking its self-signature, so
+    // requiring a valid self-signature here would refuse a root that works at sync
+    // (a regression). Gate on self-issued, not self-signed. Guards against anyone
+    // re-adding a verify() check.
+    expect(isSelfSignedAnchorPem(ROOT_CA_BAD_SIG_PEM)).toBe(true);
+  });
+
+  it('REFUSES an intermediate CA — subject != issuer, so it is not an anchor', () => {
+    // The exact cert `rootOf` wrongly pins when vCenter withholds its root.
+    expect(isSelfSignedAnchorPem(INTERMEDIATE_CA_PEM)).toBe(false);
+  });
+
+  it('REFUSES a CA-signed leaf', () => {
+    expect(isSelfSignedAnchorPem(CHAIN_LEAF_PEM)).toBe(false);
+  });
+
+  it('fails closed on empty or malformed input rather than throwing', () => {
+    expect(isSelfSignedAnchorPem('')).toBe(false);
+    expect(isSelfSignedAnchorPem('   ')).toBe(false);
+    expect(
+      isSelfSignedAnchorPem('-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----'),
+    ).toBe(false);
+    expect(isSelfSignedAnchorPem('nonsense')).toBe(false);
+  });
+});
+
+describe('isSelfSignedAnchor — the terminal-cert test (#272)', () => {
+  it('accepts a self-issued terminal (subject == issuer)', () => {
+    expect(isSelfSignedAnchor(fakeChain(['vcenter.local'], true))).toBe(true);
+  });
+
+  it('rejects a terminal whose subject differs from its issuer (an incomplete-chain pin)', () => {
+    // A leaf whose issuer was never presented: self-terminates the walk, but is
+    // NOT an anchor. This is the #272 defect the gate closes.
+    expect(isSelfSignedAnchor(fakeChain(['leaf'], false))).toBe(false);
+  });
+});
+
+/**
+ * `evaluateProbedChain` is the pure decision `probeCertificate` makes once it has
+ * the peer chain: pin the root only when it is a genuine anchor, otherwise refuse
+ * with `chain_incomplete`. Driven by `fakeChain`, whose incomplete shape was
+ * verified to match real Node 26.5.0 behaviour (terminal `issuerCertificate`
+ * undefined, subject != issuer) during the #272 investigation.
+ */
+describe('evaluateProbedChain (#272 — refuse a non-anchor pin)', () => {
+  it('pins the root of a full leaf→intermediate→root chain', () => {
+    const r = evaluateProbedChain(fakeChain(['leaf', 'intermediate', 'root'], true), false);
+    expect(r.outcome).toBe('ok');
+    expect(r.chain).not.toBeNull();
+    expect(r.diagnostics).toMatchObject({ terminalSelfSigned: true });
+  });
+
+  it('pins a single self-signed leaf', () => {
+    const r = evaluateProbedChain(fakeChain(['vcenter.local'], true), true);
+    expect(r.outcome).toBe('ok');
+    expect(r.chain?.trustedBySystemRoots).toBe(true);
+  });
+
+  it('REFUSES a leaf+intermediate chain with the root withheld — the #272 topology', () => {
+    const r = evaluateProbedChain(fakeChain(['leaf', 'intermediate'], false), false);
+    expect(r.outcome).toBe('chain_incomplete');
+    // Refuse to pin: no bogus root leaves this function.
+    expect(r.chain).toBeNull();
+    // The server-log evidence is still populated so the operator can see why.
+    expect(r.diagnostics).toMatchObject({ terminalSelfSigned: false });
+  });
+
+  it('REFUSES a leaf-only chain', () => {
+    const r = evaluateProbedChain(fakeChain(['leaf'], false), false);
+    expect(r.outcome).toBe('chain_incomplete');
+    expect(r.chain).toBeNull();
   });
 });

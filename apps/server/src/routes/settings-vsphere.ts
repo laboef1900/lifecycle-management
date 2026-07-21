@@ -19,6 +19,63 @@ import { verifyLogin } from '../services/vsphere-client.js';
 import { VsphereConnectionsService } from '../services/vsphere-connections.js';
 import { isDeniedTarget } from '../services/vsphere-guard.js';
 import { probeCertificate } from '../services/vsphere-tls.js';
+import type { TlsProbeOutcome, TlsProbeResult } from '../services/vsphere-tls.js';
+
+/**
+ * Map an internal probe result to the client DTO.
+ *
+ * @ai-warning `chain_incomplete` (#272) is passed through, NOT collapsed into
+ * `tls_untrusted`: vCenter was reachable but withheld its root CA, which the
+ * operator fixes on the vCenter side, so the dialog must show distinct guidance.
+ * Everything the probe cannot pin other than `unreachable`/`chain_incomplete`
+ * still collapses to `tls_untrusted`. Only the fingerprint and validity ever leave
+ * the server — never subject, issuer, or SANs.
+ */
+export function toProbeResponse(result: TlsProbeResult): VsphereProbeResult {
+  if (result.outcome !== 'ok' || !result.chain) {
+    return {
+      reachable: false,
+      trustedBySystemRoots: false,
+      rootFingerprintSha256: null,
+      validFrom: null,
+      validTo: null,
+      outcome:
+        result.outcome === 'unreachable' || result.outcome === 'chain_incomplete'
+          ? result.outcome
+          : 'tls_untrusted',
+    };
+  }
+  return {
+    reachable: true,
+    trustedBySystemRoots: result.chain.trustedBySystemRoots,
+    rootFingerprintSha256: result.chain.rootFingerprintSha256,
+    validFrom: result.chain.validFrom,
+    validTo: result.chain.validTo,
+    outcome: 'ok',
+  };
+}
+
+/**
+ * The error to fail a trust re-probe with when it did not yield a pinnable anchor,
+ * or `null` when the outcome is `ok` (#272).
+ *
+ * @ai-warning `chain_incomplete` gets its own `CHAIN_INCOMPLETE` — a re-pin was
+ * refused because vCenter presented no root CA, not because it was unreachable.
+ * The route still fails CLOSED either way; this only makes the reason accurate.
+ */
+export function trustReprobeError(outcome: TlsProbeOutcome): UnprocessableError | null {
+  if (outcome === 'ok') return null;
+  if (outcome === 'chain_incomplete') {
+    return new UnprocessableError(
+      'CHAIN_INCOMPLETE',
+      'vCenter did not present its root CA. Add the issuing/root CA to vCenter’s certificate chain, then trust again.',
+    );
+  }
+  return new UnprocessableError(
+    'VCENTER_UNREACHABLE',
+    'Could not reach vCenter to read its certificate',
+  );
+}
 
 /**
  * `/api/settings/vsphere` — vCenter connections (#175, epic #172).
@@ -185,28 +242,10 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
         { event: 'vsphere.probe', outcome: result.outcome, ...(result.diagnostics ?? {}) },
         result.outcome === 'ok' ? 'vCenter probe captured chain' : 'vCenter probe failed',
       );
-      if (result.outcome !== 'ok' || !result.chain) {
-        return {
-          reachable: false,
-          trustedBySystemRoots: false,
-          rootFingerprintSha256: null,
-          validFrom: null,
-          validTo: null,
-          outcome: result.outcome === 'unreachable' ? 'unreachable' : 'tls_untrusted',
-        };
-      }
-
       // Only the fingerprint and validity leave the server — never subject, issuer,
-      // or SANs. A fingerprint is a hash: useless for enumerating a network, and
-      // exactly what an admin compares against `govc about.cert -thumbprint`.
-      return {
-        reachable: true,
-        trustedBySystemRoots: result.chain.trustedBySystemRoots,
-        rootFingerprintSha256: result.chain.rootFingerprintSha256,
-        validFrom: result.chain.validFrom,
-        validTo: result.chain.validTo,
-        outcome: 'ok',
-      };
+      // or SANs (a fingerprint is a hash: useless for enumerating a network, and
+      // exactly what an admin compares against `govc about.cert -thumbprint`).
+      return toProbeResponse(result);
     },
   );
 
@@ -284,9 +323,15 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
         'vCenter trust re-probe',
       );
       if (probe.outcome !== 'ok' || !probe.chain) {
-        throw new UnprocessableError(
-          'VCENTER_UNREACHABLE',
-          'Could not reach vCenter to read its certificate',
+        // Fail closed: never pin from a re-probe that yielded no genuine anchor.
+        // `chain_incomplete` (#272) reports the vCenter-side fix distinctly; any
+        // other non-ok outcome (or a missing chain) stays `VCENTER_UNREACHABLE`.
+        throw (
+          trustReprobeError(probe.outcome) ??
+          new UnprocessableError(
+            'VCENTER_UNREACHABLE',
+            'Could not reach vCenter to read its certificate',
+          )
         );
       }
       if (probe.chain.rootFingerprintSha256 !== body.rootFingerprintSha256.toUpperCase()) {

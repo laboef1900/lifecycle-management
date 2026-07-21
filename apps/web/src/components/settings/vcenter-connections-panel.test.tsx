@@ -172,6 +172,26 @@ describe('<VcenterConnectionsPanel>', () => {
     expect(screen.getByText(/govc about.cert -thumbprint/)).toBeInTheDocument();
   });
 
+  it('guides the operator to fix the vCenter chain on an incomplete chain (#272)', async () => {
+    vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
+      reachable: false,
+      trustedBySystemRoots: false,
+      rootFingerprintSha256: null,
+      validFrom: null,
+      validTo: null,
+      outcome: 'chain_incomplete',
+    });
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    await userEvent.type(await screen.findByLabelText(/hostname/i), 'vcenter.corp.local');
+    await userEvent.click(screen.getByRole('button', { name: /check certificate/i }));
+
+    // The actionable, vCenter-side message — not the misleading "could not reach"
+    // copy (the host DID answer).
+    expect(await screen.findByText(/did not present its root CA/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could not reach that host/i)).not.toBeInTheDocument();
+  });
+
   it('says nothing to confirm when a public CA already vouches for the host', async () => {
     vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
       reachable: true,

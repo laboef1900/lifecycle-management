@@ -134,6 +134,16 @@ export function TrustCertificateDialog({
 
         {probeMutation.isPending ? (
           <p className="text-muted-foreground text-sm">Reading the certificate…</p>
+        ) : probe?.outcome === 'chain_incomplete' ? (
+          // #272: vCenter was reachable but did not present its root CA, so there
+          // is no anchor to pin. This is fixed on the vCenter side, so the copy
+          // points there rather than showing the generic "could not reach" message
+          // (fingerprint is null here, so the Trust button stays disabled below).
+          <p className="text-destructive flex items-center gap-2 text-sm" role="alert">
+            <ShieldAlert className="size-4 shrink-0" aria-hidden />
+            vCenter did not present its root CA, so there is no certificate to pin. Add the issuing
+            or root CA to vCenter&rsquo;s certificate chain, then try again.
+          </p>
         ) : fingerprint === null ? (
           <p className="text-destructive flex items-center gap-2 text-sm">
             <ShieldAlert className="size-4" aria-hidden />

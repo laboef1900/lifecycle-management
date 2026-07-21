@@ -179,8 +179,16 @@ export interface VsphereProbeResult {
    * id. `unreachable` merges connection-refused, timed-out, and no-route so the
    * endpoint cannot be used to tell "port closed" from "filtered" from "no route"
    * — the distinctions that make a scan oracle useful.
+   *
+   * `chain_incomplete` (#272) is distinct from `tls_untrusted` on purpose: vCenter
+   * WAS reachable and presented a certificate, but its chain does not terminate at
+   * a self-signed root we can pin (leaf-only, or leaf+intermediate with the root
+   * withheld). The fix is on the vCenter side (add the issuing/root CA to its
+   * chain), so the operator needs that specific guidance, not a generic failure.
+   * It carries no subject/issuer/SAN — only the outcome — so it discloses nothing
+   * a fingerprint would not.
    */
-  outcome: 'ok' | 'unreachable' | 'tls_untrusted' | 'not_a_vcenter';
+  outcome: 'ok' | 'unreachable' | 'tls_untrusted' | 'not_a_vcenter' | 'chain_incomplete';
 }
 
 /**

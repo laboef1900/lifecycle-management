@@ -1,3 +1,4 @@
+import { X509Certificate } from 'node:crypto';
 import {
   connect as tlsConnect,
   type DetailedPeerCertificate,
@@ -25,7 +26,15 @@ export interface CapturedChain {
   validTo: string | null;
 }
 
-export type TlsProbeOutcome = 'ok' | 'unreachable' | 'tls_untrusted';
+/**
+ * `chain_incomplete` (#272) is the fix's new outcome: the peer presented a
+ * certificate but its chain does not terminate at a self-signed anchor we can pin
+ * (leaf-only, or leaf+intermediate with the root withheld). It is distinct from
+ * `tls_untrusted` so the operator gets actionable guidance ("vCenter did not
+ * present its root CA") instead of a generic failure. It is a probe/trust-flow
+ * value only — never a persisted connection status — so it needs no migration.
+ */
+export type TlsProbeOutcome = 'ok' | 'unreachable' | 'tls_untrusted' | 'chain_incomplete';
 
 /**
  * Server-log-only description of the chain a probe observed (#272). This is the
@@ -110,11 +119,11 @@ function isGenuinelySelfSigned(cert: DetailedPeerCertificate): boolean {
  * if the server presents an incomplete chain (leaf-only or leaf+intermediate),
  * the walk runs out of `issuerCertificate` links and returns the last hop, which
  * is not a root. Pinning that terminal makes the credentialed handshake fail with
- * `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`/`SELF_SIGNED_CERT_IN_CHAIN`. #272 is the
- * open investigation into exactly this; {@link describeChain} surfaces it in the
- * log, and hardening `rootOf` to refuse a non-self-signed terminal is the
- * pending high-risk follow-up (do not change that behaviour in this diagnostics
- * change).
+ * `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`/`SELF_SIGNED_CERT_IN_CHAIN` — this was #272.
+ * The gate now lives in {@link evaluateProbedChain}: it pins the terminal ONLY
+ * when {@link isSelfSignedAnchor} confirms it is a genuine anchor, and returns
+ * `chain_incomplete` otherwise. `rootOf` itself is unchanged — it still just walks
+ * to the terminal; callers must vet what it returns before pinning.
  */
 function rootOf(leaf: DetailedPeerCertificate): DetailedPeerCertificate {
   let current = leaf;
@@ -154,6 +163,97 @@ export function describeChain(leaf: DetailedPeerCertificate): ChainDiagnostics {
 function cn(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
+}
+
+/**
+ * Is this certificate a trust anchor OpenSSL would accept when pinned? (#272)
+ *
+ * The authoritative gate for "may we pin this?". It runs on the ACTUAL
+ * certificate bytes via `X509Certificate` (canonical RFC2253 DN strings),
+ * independent of Node's `issuerCertificate` chain reconstruction, so no chain-walk
+ * quirk can fool it.
+ *
+ * The test is **self-ISSUED**: `subject === issuer`. That is exactly and only what
+ * OpenSSL requires of a supplied trust anchor. A leaf/intermediate always has
+ * `subject !== issuer`, so it can never pass — which is the #272 defect (pinning a
+ * non-anchor whose credentialed handshake then fails at sync).
+ *
+ * @ai-warning Do NOT also require the self-signature to verify (`cert.verify(
+ * cert.publicKey)`). OpenSSL does NOT re-verify a supplied anchor's self-signature
+ * — `X509_V_FLAG_CHECK_SS_SIGNATURE` is off by default. Empirically confirmed on
+ * Node 26.5.0: a root with a corrupted self-signature still validates a real chain
+ * when pinned as `ca:` (see `ROOT_CA_BAD_SIG_PEM`). Requiring `verify()` here would
+ * make this gate STRICTER than sync-time verification and refuse a root that works
+ * today — a regression, and it would break the "probe-time trust == sync-time
+ * verification" property this fix exists to guarantee. The TOFU model already
+ * decides trust by the admin-confirmed fingerprint, not the self-signature.
+ *
+ * Fails CLOSED: empty or malformed input returns `false` (refuse to pin), never
+ * throws. Accepts a PEM string or a DER `Buffer` (`cert.raw`) — no key involved.
+ */
+export function isSelfSignedAnchorPem(certData: string | Buffer): boolean {
+  if (typeof certData === 'string' && certData.trim() === '') return false;
+  if (Buffer.isBuffer(certData) && certData.length === 0) return false;
+  try {
+    const cert = new X509Certificate(certData);
+    return cert.subject === cert.issuer;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Is the terminal cert `rootOf` reached an anchor we may pin? (#272)
+ *
+ * Self-issued (subject DN == issuer DN) is the whole test — see
+ * {@link isSelfSignedAnchorPem} for why the self-signature is deliberately NOT
+ * re-verified. In production the raw bytes are present, so the canonical
+ * `X509Certificate` DN comparison governs; shaped test certificates carry no
+ * `raw`, so the parsed subject/issuer objects are compared instead. Both branches
+ * check the identical property — self-issued — so neither is weaker than the other.
+ */
+export function isSelfSignedAnchor(cert: DetailedPeerCertificate): boolean {
+  if (cert.raw) return isSelfSignedAnchorPem(cert.raw);
+  if (!cert.subject || !cert.issuer) return false;
+  return JSON.stringify(cert.subject) === JSON.stringify(cert.issuer);
+}
+
+/**
+ * The pure decision `probeCertificate` makes once it holds the peer chain (#272).
+ *
+ * Pin the chain's root as the trust anchor ONLY when {@link isSelfSignedAnchor}
+ * confirms it is genuine; otherwise return `chain_incomplete` and pin **nothing**
+ * — an incomplete chain (leaf-only, or leaf+intermediate with the root withheld)
+ * leaves `rootOf` on a leaf/intermediate whose credentialed handshake fails every
+ * scheduled sync. Refusing here converts that silent, ~6h-delayed failure into an
+ * immediate, correct diagnosis at trust time. The server-log {@link
+ * ChainDiagnostics} is populated in every branch so the operator can see why.
+ *
+ * Extracted from the socket handler so the pin/refuse decision is unit-testable
+ * without a live TLS server.
+ */
+export function evaluateProbedChain(
+  detailed: DetailedPeerCertificate,
+  trustedBySystemRoots: boolean,
+): TlsProbeResult {
+  const diagnostics = describeChain(detailed);
+  const root = rootOf(detailed);
+  if (!isSelfSignedAnchor(root)) {
+    return { outcome: 'chain_incomplete', chain: null, diagnostics };
+  }
+  return {
+    outcome: 'ok',
+    chain: {
+      rootPem: root.raw ? derToPem(root.raw) : '',
+      rootFingerprintSha256: (root.fingerprint256 ?? '').toUpperCase(),
+      // `authorized` is the honest answer to "would this have worked without
+      // pinning?" — i.e. whether the operator needs the TOFU step at all.
+      trustedBySystemRoots,
+      validFrom: detailed.valid_from ?? null,
+      validTo: detailed.valid_to ?? null,
+    },
+    diagnostics,
+  };
 }
 
 /**
@@ -230,23 +330,11 @@ export async function probeCertificate(
         finish({ outcome: 'tls_untrusted', chain: null, diagnostics: null });
         return;
       }
-      const root = rootOf(detailed);
-      finish({
-        outcome: 'ok',
-        chain: {
-          rootPem: root.raw ? derToPem(root.raw) : '',
-          rootFingerprintSha256: (root.fingerprint256 ?? '').toUpperCase(),
-          // `authorized` is the honest answer to "would this have worked without
-          // pinning?" — i.e. whether the operator needs the TOFU step at all.
-          trustedBySystemRoots: socket.authorized,
-          validFrom: detailed.valid_from ?? null,
-          validTo: detailed.valid_to ?? null,
-        },
-        // Server-log only (#272). `terminalSelfSigned: false` on this `ok`
-        // outcome is the incomplete-chain smoking gun: a leaf/intermediate is
-        // about to be pinned as if it were a root.
-        diagnostics: describeChain(detailed),
-      });
+      // #272: pin the root only when it is a genuine self-signed anchor; an
+      // incomplete chain yields `chain_incomplete` and pins nothing. `diagnostics`
+      // (server-log only) still records the terminal's self-signed status either
+      // way. See {@link evaluateProbedChain}.
+      finish(evaluateProbedChain(detailed, socket.authorized));
     });
 
     // Every failure collapses to `unreachable`. Distinguishing refused from
