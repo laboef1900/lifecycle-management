@@ -1389,3 +1389,18 @@ After 5 consecutive failed login attempts, an account locks with exponential bac
 The existing break-glass path covers local accounts too — no new environment variable was introduced for them. Follow "Break-glass: RECOVERY_DISABLE_AUTH" above, including the verification probe and the post-episode account audit; resetting a password or creating a fresh admin from **Settings → Authentication** is exactly the recovery that section is written for.
 
 > `CONFIG_ENCRYPTION_KEY` is **not** required for `local` mode. The argon2id password hashes live directly on the `users` table, not in the AES-GCM-encrypted `auth_config` row — only `oidc` mode needs the encryption key, to store the OIDC client secret, and only `oidc` reads it at boot. A `local` row that still carries leftover encrypted OIDC columns from an earlier configuration keeps them untouched and unread, so a missing, wrong, or rotated key leaves `local` enforcing exactly as configured. Saving `local` from Settings also clears those columns outright.
+
+## Change governance
+
+### High-risk change approval
+
+**Decision (2026-07-21, project owner `laboef1900`):** high-risk changes — authentication, cryptography, secrets handling, destructive data operations, Prisma migrations, compose/network exposure, `@lcm/shared` contracts, and forecast-engine correctness — MAY be approved by independent AI review instead of a human sign-off. This deliberately relaxes the previous "human approval required, AI does not replace it" rule.
+
+This is a relaxation of a safety control, recorded here for durability. It does **not** relax the accompanying rigor. When AI review is the approver, all of the following are mandatory and captured in the PR:
+
+- A written design (`DESIGN.md` or an equivalent PR section) covering trust boundaries, misuse cases, invariants, failure/recovery, rollback, and security/privacy impact.
+- Independent review by **two** AI reviewers (e.g. `critic` **and** `brahma-analyzer`) at a stricter bar than normal-risk work, with every finding resolved or recorded as explicitly accepted residual risk.
+- The standard gates still pass: `/review`, the full affected verification suite, and green CI (`verify` + `oidc-e2e`).
+- The approving review, its verdict, and the residual-risk record left in the PR so the decision is auditable.
+
+A human MAY still override or reclaim approval for any specific change. Prisma migrations and destructive/irreversible data operations keep their existing backup (`pg_dump`) and recovery-plan requirements on top of the above. The authoritative rule text lives in `CLAUDE.md` (Change Risk and Required Rigor → _Automated high-risk approval_).

@@ -45,11 +45,20 @@ Classify a change before implementation:
 
 Required evidence scales with risk:
 
-| Risk       | Design and specification                                                           | Verification                                                     | Review and recovery                                                   |
-| ---------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------- |
-| **Low**    | A short intent statement                                                           | Focused checks                                                   | Normal PR review                                                      |
-| **Normal** | Approach, acceptance criteria, and edge cases                                      | Relevant automated tests plus affected lint/type/build checks    | Normal PR review; rollback considered                                 |
-| **High**   | Written design, specification, threat model, misuse cases, and explicit invariants | Full affected suite, security checks, and failure/recovery tests | Explicit human approval and a documented rollback or containment plan |
+| Risk       | Design and specification                                                           | Verification                                                     | Review and recovery                                                                              |
+| ---------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **Low**    | A short intent statement                                                           | Focused checks                                                   | Normal PR review                                                                                 |
+| **Normal** | Approach, acceptance criteria, and edge cases                                      | Relevant automated tests plus affected lint/type/build checks    | Normal PR review; rollback considered                                                            |
+| **High**   | Written design, specification, threat model, misuse cases, and explicit invariants | Full affected suite, security checks, and failure/recovery tests | Approval (human **or** automated per policy below) and a documented rollback or containment plan |
+
+**Automated high-risk approval (project-owner policy).** High-risk changes MAY be approved by AI review in place of a human sign-off. This is a deliberate project-owner decision, not a bypass of rigor: the design/specification, threat model, invariants, and full verification requirements above still apply in full. When AI review provides the approval, the following compensating controls are mandatory and MUST be recorded in the PR:
+
+- A written `DESIGN.md` (or equivalent PR section) covering trust boundaries, misuse cases, invariants, failure/recovery, rollback, and security/privacy impact.
+- Independent AI review by **two** reviewers (e.g. `critic` **and** `brahma-analyzer`), clearing a stricter quality bar than normal-risk work, with findings resolved or recorded as explicitly accepted residual risk.
+- The standard PR gates still run and must pass: `/review`, the full affected verification suite, and green CI (`verify` + `oidc-e2e`).
+- The approving AI review, its verdict, and the residual-risk record are captured in the PR so the decision is auditable.
+
+A human MAY still override or reclaim approval for any specific change. Destructive or irreversible data operations and Prisma migrations additionally keep their existing backup + recovery-plan requirements.
 
 ## Tech Stack and Conventions
 
@@ -209,7 +218,7 @@ pnpm --filter @lcm/web generate-routes           # TanStack route tree (routeTre
 
 - **Low-risk changes:** state intent and verify the focused result.
 - **Normal changes:** before implementation, define the approach, behavior, edge cases, error handling, and acceptance criteria. Critically review material assumptions.
-- **High-risk changes** (see Change Risk table): complete a written design and specification, identify trust boundaries and misuse cases, define invariants and recovery, and perform a critical review before coding. Resolve findings or record explicitly accepted residual risks.
+- **High-risk changes** (see Change Risk table): complete a written design and specification, identify trust boundaries and misuse cases, define invariants and recovery, and perform a critical review before coding. Resolve findings or record explicitly accepted residual risks. Approval MAY come from a human or, per the **Automated high-risk approval** policy above, from independent AI review under its compensating controls.
 
 ### 2. Contract-First Boundaries
 
@@ -280,7 +289,7 @@ Before opening or updating a PR, run the complete affected-component suite. CI r
   git worktree add ../<slug> -b feat/<issue#>-<slug> origin/dev
   ```
 
-- **PR flow:** `feat/* → dev` (CI runs: lint → typecheck → test → build). One branch/PR per concern. High-risk changes require explicit human approval — AI review MAY supplement but does not replace it. Promote to production with a `dev → main` sync PR — `main` builds the `:latest` images (pushes to `dev` publish `:dev`).
+- **PR flow:** `feat/* → dev` (CI runs: lint → typecheck → test → build). One branch/PR per concern. High-risk changes require documented approval — a human sign-off, or independent AI review acting as the approver under the **Automated high-risk approval** policy (see Change Risk and Required Rigor). Promote to production with a `dev → main` sync PR — `main` builds the `:latest` images (pushes to `dev` publish `:dev`).
 - **Protected branches:** `main` and `dev` MUST NOT receive direct pushes (see Golden Rule 2). Enforce this through GitHub branch-protection settings.
 - **Merging:** merge commits (`gh pr merge --merge`) to preserve per-task TDD history; squash only for churn nobody will bisect (typos, lint sweeps, dep bumps). **Stacked PRs:** retarget the dependent PR's base to `dev` BEFORE merging the current one, then merge with `--merge`.
 - **Cleanup:** ONLY AFTER the PR is fully merged, remove the worktree and delete the _local_ branch (never the remote):
@@ -303,5 +312,5 @@ A change is done only when:
 - Behavioral changes have regression coverage and critical failure paths are tested.
 - Security, privacy, accessibility, observability, compatibility, and operational effects were considered in proportion to risk.
 - Public contracts, migrations, configuration, and product documentation are updated when affected.
-- High-risk changes have explicit human approval and a credible rollback or containment plan.
+- High-risk changes have documented approval (human, or automated AI review per the Automated high-risk approval policy) and a credible rollback or containment plan.
 - No unresolved placeholders, secrets, temporary bypasses, or unexplained warnings remain.
