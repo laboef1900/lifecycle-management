@@ -122,7 +122,6 @@ export class VsphereJobRunner implements JobRunner {
         port: true,
         username: true,
         enabled: true,
-        tlsPinnedCaPem: true,
       },
     });
     // Defensive: the enabled filter in the scheduler's query and claim should make
@@ -159,7 +158,10 @@ export class VsphereJobRunner implements JobRunner {
       port: connection.port,
       username: connection.username,
       password,
-      pinnedRootPem: connection.tlsPinnedCaPem,
+      // Leaf-fingerprint pinning (2026-07-21) no longer writes a PEM, so no root PEM
+      // is sourced here. The credential-path fingerprint gate is a follow-up task;
+      // until it lands, the transport verifies against the system trust store.
+      pinnedRootPem: null,
     };
 
     // 1 + 2. Sync (and, when the snapshot is due, the snapshot it forces). The
