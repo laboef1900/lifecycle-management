@@ -21,7 +21,9 @@ const idempotencyCleanupPluginFn: FastifyPluginAsync<IdempotencyCleanupPluginOpt
   fastify,
   opts,
 ) => {
-  const cleanup = new IdempotencyCleanup(fastify.prisma);
+  const cleanup = new IdempotencyCleanup(fastify.prisma, {
+    warn: (details, message) => fastify.log.warn(details, message),
+  });
   fastify.decorate('idempotencyCleanup', cleanup);
 
   if (opts.autostart) {

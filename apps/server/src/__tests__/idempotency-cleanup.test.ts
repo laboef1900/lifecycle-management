@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { idempotencyCleanupPlugin } from '../plugins/idempotency-cleanup.js';
 import { prismaPlugin } from '../plugins/prisma.js';
@@ -39,6 +39,25 @@ describe('IdempotencyCleanup', () => {
 
     const remaining = await prisma.idempotencyKey.findMany({ select: { key: true } });
     expect(remaining.map((r) => r.key)).toEqual(['still-valid-1']);
+  });
+
+  it('sweep logs a warning and resolves to 0 instead of throwing when the delete fails', async () => {
+    const warn = vi.fn();
+    const cleanup = new IdempotencyCleanup(prisma, { warn });
+    const deleteManySpy = vi
+      .spyOn(prisma.idempotencyKey, 'deleteMany')
+      .mockRejectedValueOnce(new Error('connection lost'));
+
+    const deleted = await cleanup.sweep();
+
+    expect(deleted).toBe(0);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      { err: expect.any(Error) },
+      'idempotency-key cleanup sweep failed',
+    );
+
+    deleteManySpy.mockRestore();
   });
 });
 

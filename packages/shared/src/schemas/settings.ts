@@ -5,10 +5,20 @@ export const percentSchema = z.number().min(0.01).max(0.99);
 export const procurementLeadTimeWeeksSchema = z.number().int().min(0).max(104);
 
 /**
+ * Default idempotency-key retention when no `tenant_settings` row exists yet.
+ * Single source of truth for the "24" mirrored by the Prisma column's own
+ * `@default(24)` (a separate literal baked into the migration SQL, which a JS
+ * constant can't reach) — server code should import this rather than
+ * re-hardcoding the number.
+ */
+export const DEFAULT_IDEMPOTENCY_KEY_RETENTION_HOURS = 24;
+
+/**
  * How long a stored idempotency-key record survives before cleanup — also the
  * bound on how stale a replayed response may be, since one TTL serves both
- * purposes (design doc §Invariants). 1–168h (1 hour to 7 days); 24 is the
- * default, matching the DB column's own default.
+ * purposes (design doc §Invariants). 1–168h (1 hour to 7 days);
+ * `DEFAULT_IDEMPOTENCY_KEY_RETENTION_HOURS` is the default, matching the DB
+ * column's own default.
  */
 export const idempotencyKeyRetentionHoursSchema = z.number().int().min(1).max(168);
 

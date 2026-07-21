@@ -1,3 +1,4 @@
+import { DEFAULT_IDEMPOTENCY_KEY_RETENTION_HOURS } from '@lcm/shared';
 import type { Prisma, PrismaClient } from '@prisma/client';
 
 export interface IdempotencyHit {
@@ -51,12 +52,14 @@ export class IdempotencyService {
       where: { tenantId: params.tenantId },
       select: { idempotencyKeyRetentionHours: true },
     });
-    // Falls back to the schema's own @default(24) when no tenant_settings row
-    // exists yet — record() must never WRITE tenant_settings (a plain read
-    // avoids taking a row lock on the shared settings singleton inside this
-    // Serializable transaction, which would otherwise make unrelated
-    // concurrent bulk-shifts contend with each other for no reason).
-    const retentionHours = settings?.idempotencyKeyRetentionHours ?? 24;
+    // Falls back to DEFAULT_IDEMPOTENCY_KEY_RETENTION_HOURS (mirroring the
+    // schema's own @default(24)) when no tenant_settings row exists yet —
+    // record() must never WRITE tenant_settings (a plain read avoids taking a
+    // row lock on the shared settings singleton inside this Serializable
+    // transaction, which would otherwise make unrelated concurrent
+    // bulk-shifts contend with each other for no reason).
+    const retentionHours =
+      settings?.idempotencyKeyRetentionHours ?? DEFAULT_IDEMPOTENCY_KEY_RETENTION_HOURS;
     const now = Date.now();
     await tx.idempotencyKey.create({
       data: {
