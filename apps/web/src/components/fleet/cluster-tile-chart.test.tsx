@@ -106,18 +106,36 @@ vi.mock('recharts', () => {
         data-sample={tickFormatter ? tickFormatter(100) : ''}
       />
     ),
-    // Invoke the content render fn with a synthetic active payload so the tile's
-    // tooltip logic (which must report the TRUE utilization) is exercised.
+    // Invoke the content render fn with synthetic active payloads so the tile's
+    // tooltip logic is exercised directly. Two payloads, two branches: one with
+    // a numeric util (must report the TRUE value, not the clamped plot value)
+    // and one with util:null (a capacity-0 month — must say "unknown", never a
+    // number). Without the null case the `: 'unknown'` branch is uncovered,
+    // since the payload is the mock's, not the component's.
     Tooltip: ({ content }: { content: (props: TooltipRenderProps) => React.ReactNode }) => (
-      <div data-testid="tooltip">
-        {content({
-          active: true,
-          label: '2026-07-01',
-          payload: [
-            { payload: { month: '2026-07-01', util: 12.5, actual: 40, forecast: 40 }, value: 40 },
-          ],
-        })}
-      </div>
+      <>
+        <div data-testid="tooltip">
+          {content({
+            active: true,
+            label: '2026-07-01',
+            payload: [
+              { payload: { month: '2026-07-01', util: 12.5, actual: 40, forecast: 40 }, value: 40 },
+            ],
+          })}
+        </div>
+        <div data-testid="tooltip-unknown">
+          {content({
+            active: true,
+            label: '2026-08-01',
+            payload: [
+              {
+                payload: { month: '2026-08-01', util: null, actual: null, forecast: null },
+                value: 0,
+              },
+            ],
+          })}
+        </div>
+      </>
     ),
     Area: ({ dataKey }: { dataKey: string }) => <div data-testid={`area-${dataKey}`} />,
     Line: ({ dataKey, strokeDasharray }: { dataKey: string; strokeDasharray?: string }) => (
@@ -431,6 +449,12 @@ describe('<ClusterTileChart>', () => {
       expect(label).toContain('utilization unknown');
       expect(label).toContain('no capacity recorded');
       expect(label).not.toContain('own range');
+      // The 0-100 fallback still DRAWS the three hairlines (they are config, not
+      // data), so a screen-reader user must hear the same references a sighted
+      // one sees — all in-window here, so no "outside the visible range".
+      expect(label).toContain('Warn threshold 70 percent.');
+      expect(label).toContain('Critical threshold 90 percent.');
+      expect(label).toContain('Capacity ceiling 100 percent.');
     });
 
     it('drops only the unmeasurable months when capacity is recorded for some', () => {
@@ -454,12 +478,32 @@ describe('<ClusterTileChart>', () => {
       // measured months only.
       const [min] = JSON.parse(screen.getByTestId('y-axis').dataset.domain ?? '[]') as [number];
       expect(min).toBeGreaterThan(60);
+      // Singular grammar for exactly one gap month ("1 month has", not
+      // "1 months have") — the copy is baked into the accessible name.
       expect(screen.getByRole('img').getAttribute('aria-label')).toContain(
-        '1 months have no recorded capacity',
+        '1 month has no recorded capacity and is not plotted',
       );
     });
 
-    it('reports unknown in the tooltip rather than a number', () => {
+    it('pluralizes the gap-months clause for more than one', () => {
+      const mixed: ForecastMonthPoint[] = [
+        { month: '2026-07-01', consumption: 700, capacity: 1000, utilization: 0.7 },
+        { month: '2026-08-01', consumption: 0, capacity: 0, utilization: null },
+        { month: '2026-09-01', consumption: 0, capacity: 0, utilization: null },
+      ];
+      render(
+        <ClusterTileChart
+          months={mixed}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+          orderByDate={null}
+        />,
+      );
+      expect(screen.getByRole('img').getAttribute('aria-label')).toContain(
+        '2 months have no recorded capacity and are not plotted',
+      );
+    });
+
+    it('renders "unknown" in the tooltip for a capacity-0 month, never a number', () => {
       render(
         <ClusterTileChart
           months={zeroMonths}
@@ -467,12 +511,13 @@ describe('<ClusterTileChart>', () => {
           orderByDate={null}
         />,
       );
-      // The mock feeds a payload whose util is 12.5, so a plain render proves
-      // nothing; assert the null path via a row the component itself produced.
-      const rows = JSON.parse(screen.getByTestId('chart').dataset.rows ?? '[]') as Array<{
-        util: number | null;
-      }>;
-      expect(rows[0]?.util).toBeNull();
+      // The mock re-invokes the tooltip content fn with a util:null payload —
+      // the shape this chart produces for a capacity-0 month — so this exercises
+      // the component's own `: 'unknown'` branch.
+      const unknown = screen.getByTestId('tooltip-unknown');
+      expect(unknown).toHaveTextContent('unknown');
+      // No percentage — a "0.0%" here would be the exact Q9d lie in the tooltip.
+      expect(unknown.textContent).not.toContain('%');
     });
   });
 

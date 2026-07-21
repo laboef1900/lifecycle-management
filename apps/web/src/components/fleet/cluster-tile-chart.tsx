@@ -455,10 +455,31 @@ function chartAriaLabel({
   capacityOffScale: boolean;
   knownCount: number;
 }): string {
-  // Nothing measurable: describing a scale and a breach state would dress an
-  // empty plot up as a reading. Say what it is and stop.
+  // The warn/crit/capacity hairlines are configuration, not data, so they are
+  // drawn in EVERY state — including the no-data fallback below, which still
+  // renders all three on its 0-100 axis. The spoken description must name them
+  // wherever they appear, or a screen-reader user sees fewer references than a
+  // sighted one. `, outside the visible range` is appended when the hairline
+  // had to be pinned to an edge, since the pinned position is no longer its
+  // true value.
+  const thresholdParts = [
+    `Warn threshold ${Math.round(thresholds.warn * 100)} percent${
+      warnOffScale ? ', outside the visible range' : ''
+    }.`,
+    `Critical threshold ${Math.round(thresholds.crit * 100)} percent${
+      critOffScale ? ', outside the visible range' : ''
+    }.`,
+    `Capacity ceiling 100 percent${capacityOffScale ? ', outside the visible range' : ''}.`,
+  ];
+
+  // Nothing measurable: describing a per-tile scale and a breach state would
+  // dress an empty plot up as a reading, so lead with what it is. The
+  // thresholds are still drawn, so they are still announced.
   if (knownCount === 0) {
-    return `${months.length}-month forecast, utilization unknown — no capacity recorded, so no line is plotted.`;
+    return [
+      `${months.length}-month forecast, utilization unknown — no capacity recorded, so no line is plotted.`,
+      ...thresholdParts,
+    ].join(' ');
   }
 
   const parts = [
@@ -467,9 +488,12 @@ function chartAriaLabel({
     // a non-sighted reader knows the axis differs from the tile next to it.
     `${months.length}-month forecast as percent of capacity, scaled to this cluster's own range, ${Math.round(scale.min)} to ${Math.round(scale.max)} percent.`,
   ];
-  if (knownCount < months.length) {
+  const unplotted = months.length - knownCount;
+  if (unplotted > 0) {
     parts.push(
-      `${months.length - knownCount} months have no recorded capacity and are not plotted.`,
+      `${unplotted} ${unplotted === 1 ? 'month has' : 'months have'} no recorded capacity and ${
+        unplotted === 1 ? 'is' : 'are'
+      } not plotted.`,
     );
   }
   parts.push(
@@ -478,25 +502,6 @@ function chartAriaLabel({
       : 'No breach within the window.',
   );
   if (orderByDate) parts.push(`Order by ${orderByDate}.`);
-  // The visible hairline for an off-scale threshold is pinned to a window edge,
-  // so the spoken percentage is the only place its true value survives.
-  parts.push(
-    `Warn threshold ${Math.round(thresholds.warn * 100)} percent${
-      warnOffScale ? ', outside the visible range' : ''
-    }.`,
-  );
-  parts.push(
-    `Critical threshold ${Math.round(thresholds.crit * 100)} percent${
-      critOffScale ? ', outside the visible range' : ''
-    }.`,
-  );
-  // The 100 % ceiling is drawn like the thresholds and clamps like them, so it
-  // needs the same spoken treatment — on a healthy tile it is routinely pinned
-  // to an edge or merged away entirely, and was previously never mentioned.
-  parts.push(
-    capacityOffScale
-      ? 'Capacity ceiling 100 percent, outside the visible range.'
-      : 'Capacity ceiling 100 percent.',
-  );
+  parts.push(...thresholdParts);
   return parts.join(' ');
 }

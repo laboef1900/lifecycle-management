@@ -217,6 +217,60 @@ describe('<ClusterTile>', () => {
       expect(container.querySelector('.flex.flex-wrap.gap-1')).not.toBeNull();
       expect(screen.getByText(/BASELINE/)).toBeInTheDocument();
     });
+
+    it('names events in the tile aria-label so the moved EVENT chip is not silent to AT', () => {
+      // The tile's aria-label OVERRIDES its visible content, so the visible
+      // EVENT chip is invisible to assistive tech unless the label names it —
+      // more so after #268 moved the chip up to the prominent runway row.
+      render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(screen.getByRole('link').getAttribute('aria-label')).toContain(
+        '1 event in the forecast window',
+      );
+    });
+
+    it('pluralizes the event count in the aria-label', () => {
+      const twoEvents = forecast({
+        events: [
+          {
+            id: 'e1',
+            effectiveDate: '2026-09-01',
+            category: 'hardware',
+            title: 'Decommission',
+            description: null,
+            consumptionDelta: null,
+            capacityDelta: -2000,
+          },
+          {
+            id: 'e2',
+            effectiveDate: '2026-10-01',
+            category: 'hardware',
+            title: 'Expansion',
+            description: null,
+            consumptionDelta: 500,
+            capacityDelta: null,
+          },
+        ],
+      });
+      render(
+        <ClusterTile entry={entry()} forecast={twoEvents} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      expect(screen.getByRole('link').getAttribute('aria-label')).toContain(
+        '2 events in the forecast window',
+      );
+    });
+
+    it('names no events in the aria-label when there are none', () => {
+      render(
+        <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      expect(screen.getByRole('link').getAttribute('aria-label')).not.toContain('event');
+    });
   });
 
   it('aligns the runway sub-line with the numeral unit instead of nudging it up (#268)', () => {
