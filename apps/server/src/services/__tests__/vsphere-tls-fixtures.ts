@@ -141,6 +141,39 @@ RW2xDtFtmoHs6irIdabU77UsvvYtz48BKNbqE8/aplFvQwLhO/LomKHWTGz0FKV9
 -----END CERTIFICATE-----
 `;
 
+/**
+ * {@link ROOT_CA_PEM} with its own self-signature bytes corrupted — still
+ * self-ISSUED (subject == issuer) but its self-signature does NOT verify.
+ *
+ * This locks the anchor semantics: OpenSSL does NOT re-verify a supplied trust
+ * anchor's self-signature (`X509_V_FLAG_CHECK_SS_SIGNATURE` is off by default —
+ * empirically confirmed on Node 26.5.0: pinning this cert as `ca:` still validates
+ * a real chain). The pin gate must therefore accept it (checking self-ISSUED, not
+ * self-signature), or it would refuse a root that works at sync time — a
+ * regression. If anyone re-adds a `verify()` check to the gate, the test that
+ * pins this fixture fails.
+ */
+export const ROOT_CA_BAD_SIG_PEM = `-----BEGIN CERTIFICATE-----
+MIIDFzCCAf+gAwIBAgIUOa4mcq8XBPN/0o5MUvsAYgM6O+MwDQYJKoZIhvcNAQEL
+BQAwGzEZMBcGA1UEAwwQTENNIFRlc3QgUm9vdCBDQTAeFw0yNjA3MjExMTQ5MzBa
+Fw00NjA3MTYxMTQ5MzBaMBsxGTAXBgNVBAMMEExDTSBUZXN0IFJvb3QgQ0EwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCdtdVg0Jp5hzlk1Ag+IBMXMpau
+FHpTPbX91HnIRiv0v10wwbVaYnBlv0amYztWBbxVCCk/JxSsifSyABLl5HrVSazW
+p9FWxu86iBhm2/okYruDm2e+ViiU578O/WHET+te87ltEWEGwcE2EzAsmH0zQLpJ
+Ii1HxUCq9tW7zYNdndrUc0baB1DkjZKIJWoIIGELia5XSm+piJ9psyygrua8zp3l
+QYIvYfx4vWWQDx20/g8yKUepBi/Qyx2GPo8yiYMHCGjehGyrkyFMDZESNeKJgmLt
+E//9AI8gqm/OmCiMScK6bSjubyMebtSackj7apqfelLuKJb3WYajH2zrxDzbAgMB
+AAGjUzBRMB0GA1UdDgQWBBTOKZaht6aC1GtvrZTO8AzJsdMvRDAfBgNVHSMEGDAW
+gBTOKZaht6aC1GtvrZTO8AzJsdMvRDAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3
+DQEBCwUAA4IBAQAkLMiHxjNFiDS+EBF4dKomTM+4/NiUFeOI29qfUAlszBNuLaht
+XZWuvtTOVeR4QnbKXnSoyKx+e0AiKFHvNg9TboZ2cKydvk7MCmmeRpsqEIqvl2bd
+ohVa9aUg5yIjF6XGvSRCNAqR9zL524NfxepQmM2Ly5k0OlcQXhqReBejEkQvlzm4
+6LyzHAJC0mO4+vq3lVLGmKne+Lv4+SD765ST+nxeoeceJ84m7S9LJ2CawMCTWiju
+RW2xDtFtmoHs6irIdabU77UsvvYtz48BKNbqE8/aplFvQwLhO/LomKHWTGz0FKV9
+5xbeIJU40ONCmfE7aer5QQgX3eWVxP4R+3GN
+-----END CERTIFICATE-----
+`;
+
 /** Intermediate CA — CA-signed, NOT self-signed: must never be pinned as an anchor. */
 export const INTERMEDIATE_CA_PEM = `-----BEGIN CERTIFICATE-----
 MIIDLzCCAhegAwIBAgIUW/hKo0cehjwHjKhrJkhqs/mJtzYwDQYJKoZIhvcNAQEL

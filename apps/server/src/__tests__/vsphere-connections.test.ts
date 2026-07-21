@@ -218,6 +218,20 @@ describe('vCenter connections — re-pointing resets trust', () => {
   });
 });
 
+describe('vCenter connections — trustCa refuses an empty pin (#272)', () => {
+  it('throws rather than storing an empty CA certificate', async () => {
+    // Defense-in-depth: an empty `tlsPinnedCaPem` would silently fall back to the
+    // system trust store (no pin), so the storage boundary refuses it even though
+    // the route never supplies one.
+    const id = await makeConnection(uniqueName('empty-pin'));
+    await expect(service().trustCa('default', id, '   ', 'AB'.repeat(32))).rejects.toThrow(
+      /empty CA/i,
+    );
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id } });
+    expect(row.tlsPinnedCaPem).toBeNull();
+  });
+});
+
 describe('vCenter connections — duplicate protection', () => {
   it('rejects a second connection with the same name', async () => {
     const name = uniqueName('dupe');

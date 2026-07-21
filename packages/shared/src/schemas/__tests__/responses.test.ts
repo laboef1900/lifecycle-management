@@ -7,6 +7,7 @@ import type {
   ItemResponse,
   TenantSettings,
   VsphereConnectionResponse,
+  VsphereProbeResult,
 } from '../../index.js';
 import {
   clusterResponseSchema,
@@ -15,6 +16,7 @@ import {
   itemResponseSchema,
   tenantSettingsResponseSchema,
   vsphereConnectionResponseSchema,
+  vsphereProbeResultSchema,
 } from '../responses.js';
 
 describe('clusterResponseSchema', () => {
@@ -411,5 +413,34 @@ describe('tenantSettingsResponseSchema', () => {
   it('rejects a non-numeric warnThreshold', () => {
     const bad = { ...literal, warnThreshold: 'high' };
     expect(tenantSettingsResponseSchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe('vsphereProbeResultSchema', () => {
+  const base = {
+    reachable: false,
+    trustedBySystemRoots: false,
+    rootFingerprintSha256: null,
+    validFrom: null,
+    validTo: null,
+  };
+
+  // @ai-warning This RUNTIME validator is the web client's boundary — `request()`
+  // rejects any response it does not accept with `RESPONSE_VALIDATION`. Its
+  // `outcome` enum MUST stay in lockstep with the `VsphereProbeResult.outcome`
+  // union in `vsphere.ts`; the `z.ZodType<VsphereProbeResult>` annotation does NOT
+  // enforce exhaustiveness (a narrower enum is still assignable), so only a test
+  // catches drift. #272 shipped `chain_incomplete` on the interface first and this
+  // enum was the missing half — without it the whole incomplete-chain UX 500s.
+  it.each(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter', 'chain_incomplete'] as const)(
+    'accepts every VsphereProbeResult outcome the server can send: %s',
+    (outcome) => {
+      const value: VsphereProbeResult = { ...base, outcome };
+      expect(vsphereProbeResultSchema.safeParse(value).success).toBe(true);
+    },
+  );
+
+  it('rejects an unknown outcome', () => {
+    expect(vsphereProbeResultSchema.safeParse({ ...base, outcome: 'bogus' }).success).toBe(false);
   });
 });

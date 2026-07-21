@@ -263,6 +263,15 @@ export class VsphereConnectionsService {
     caPem: string,
     fingerprintSha256: string,
   ): Promise<VsphereConnectionResponse> {
+    // Defense-in-depth at the storage boundary (#272): never persist an empty pin.
+    // The caller always supplies a server-computed root PEM from a fresh re-probe,
+    // so this cannot fire today — but a `tlsPinnedCaPem: ''` would silently disable
+    // pinning (an empty `ca:` list falls back to the system store), so refuse it
+    // here rather than trust the upstream gate to be the only safeguard.
+    if (caPem.trim() === '') {
+      throw new Error('refusing to pin an empty CA certificate');
+    }
+
     const existing = await this.prisma.vsphereConnection.findFirst({ where: { id, tenantId } });
     if (!existing) throw new NotFoundError('VsphereConnection', id);
 

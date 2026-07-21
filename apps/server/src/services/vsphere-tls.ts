@@ -166,46 +166,56 @@ function cn(value: string | string[] | undefined): string | null {
 }
 
 /**
- * Is this certificate a genuine self-signed trust anchor? (#272)
+ * Is this certificate a trust anchor OpenSSL would accept when pinned? (#272)
  *
  * The authoritative gate for "may we pin this?". It runs on the ACTUAL
- * certificate bytes via `X509Certificate`, independent of Node's
- * `issuerCertificate` chain reconstruction, so no chain-walk quirk can fool it.
+ * certificate bytes via `X509Certificate` (canonical RFC2253 DN strings),
+ * independent of Node's `issuerCertificate` chain reconstruction, so no chain-walk
+ * quirk can fool it.
  *
- * `subject === issuer && verify(publicKey)` is exactly OpenSSL's own trust-anchor
- * test: self-issued (subject DN equals issuer DN) AND its self-signature verifies
- * under its own key. This makes probe-time trust identical to sync-time
- * verification — the gap #272 fell through.
+ * The test is **self-ISSUED**: `subject === issuer`. That is exactly and only what
+ * OpenSSL requires of a supplied trust anchor. A leaf/intermediate always has
+ * `subject !== issuer`, so it can never pass — which is the #272 defect (pinning a
+ * non-anchor whose credentialed handshake then fails at sync).
  *
- * @ai-warning Fails CLOSED: empty, malformed, or unverifiable input returns
- * `false` (refuse to pin), never throws. Accepts a PEM string or a DER `Buffer`
- * (`cert.raw`); verification needs only the cert's own embedded public key, so no
- * private key is involved.
+ * @ai-warning Do NOT also require the self-signature to verify (`cert.verify(
+ * cert.publicKey)`). OpenSSL does NOT re-verify a supplied anchor's self-signature
+ * — `X509_V_FLAG_CHECK_SS_SIGNATURE` is off by default. Empirically confirmed on
+ * Node 26.5.0: a root with a corrupted self-signature still validates a real chain
+ * when pinned as `ca:` (see `ROOT_CA_BAD_SIG_PEM`). Requiring `verify()` here would
+ * make this gate STRICTER than sync-time verification and refuse a root that works
+ * today — a regression, and it would break the "probe-time trust == sync-time
+ * verification" property this fix exists to guarantee. The TOFU model already
+ * decides trust by the admin-confirmed fingerprint, not the self-signature.
+ *
+ * Fails CLOSED: empty or malformed input returns `false` (refuse to pin), never
+ * throws. Accepts a PEM string or a DER `Buffer` (`cert.raw`) — no key involved.
  */
 export function isSelfSignedAnchorPem(certData: string | Buffer): boolean {
   if (typeof certData === 'string' && certData.trim() === '') return false;
   if (Buffer.isBuffer(certData) && certData.length === 0) return false;
   try {
     const cert = new X509Certificate(certData);
-    return cert.subject === cert.issuer && cert.verify(cert.publicKey);
+    return cert.subject === cert.issuer;
   } catch {
     return false;
   }
 }
 
 /**
- * Is the terminal cert `rootOf` reached a genuine anchor we may pin? (#272)
+ * Is the terminal cert `rootOf` reached an anchor we may pin? (#272)
  *
- * `subject === issuer` (the parsed DN objects) is the necessary condition — a
- * leaf or intermediate always has `subject !== issuer`, so it can never pass. When
- * the raw bytes are present (always, in production) the self-signature is verified
- * too via {@link isSelfSignedAnchorPem}, matching OpenSSL exactly. Shaped test
- * certificates carry no `raw`; for those the subject/issuer check governs.
+ * Self-issued (subject DN == issuer DN) is the whole test — see
+ * {@link isSelfSignedAnchorPem} for why the self-signature is deliberately NOT
+ * re-verified. In production the raw bytes are present, so the canonical
+ * `X509Certificate` DN comparison governs; shaped test certificates carry no
+ * `raw`, so the parsed subject/issuer objects are compared instead. Both branches
+ * check the identical property — self-issued — so neither is weaker than the other.
  */
 export function isSelfSignedAnchor(cert: DetailedPeerCertificate): boolean {
+  if (cert.raw) return isSelfSignedAnchorPem(cert.raw);
   if (!cert.subject || !cert.issuer) return false;
-  if (JSON.stringify(cert.subject) !== JSON.stringify(cert.issuer)) return false;
-  return cert.raw ? isSelfSignedAnchorPem(cert.raw) : true;
+  return JSON.stringify(cert.subject) === JSON.stringify(cert.issuer);
 }
 
 /**

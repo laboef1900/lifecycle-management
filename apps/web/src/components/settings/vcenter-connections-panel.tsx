@@ -405,6 +405,19 @@ function describeSyncOutcome(outcome: VsphereSyncOutcome): string {
  * network with.
  */
 function ProbeResult({ probe }: { probe: VsphereProbeResult }): React.JSX.Element {
+  if (probe.outcome === 'chain_incomplete') {
+    // #272: reachable but no self-signed root to pin. Fixed on the vCenter side,
+    // so point there rather than the generic "could not reach" copy below (which
+    // would be wrong — the host answered).
+    return (
+      <p className="text-muted-foreground flex items-center gap-2 text-sm" role="alert">
+        <ShieldAlert className="text-warning size-4 shrink-0" aria-hidden />
+        vCenter did not present its root CA, so there is no certificate to pin. Add the issuing or
+        root CA to vCenter&rsquo;s certificate chain, then check again.
+      </p>
+    );
+  }
+
   if (!probe.reachable) {
     return (
       <p className="text-muted-foreground flex items-center gap-2 text-sm">

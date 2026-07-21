@@ -29,15 +29,18 @@ Correction to an earlier note: on Node 26.5.0 an incomplete chain's terminal has
 
 ## 2. The fix (Part A)
 
-**One security property:** _pin X as the trust anchor **iff** X is an anchor OpenSSL will accept_ — i.e. a self-signed certificate whose self-signature verifies. This makes probe-time trust identical to sync-time verification, closing the gap that let a pin succeed and then fail 6h later.
+**One security property:** _pin X as the trust anchor **iff** X is an anchor OpenSSL will accept_ — i.e. a **self-issued** certificate (`subject DN == issuer DN`). This makes probe-time trust identical to sync-time verification, closing the gap that let a pin succeed and then fail 6h later.
 
-- Add `isSelfSignedAnchorPem(certData)` — authoritative, operates on the **actual certificate bytes** (PEM or DER) via `node:crypto` `X509Certificate`: `subject === issuer && x.verify(x.publicKey)`. Independent of Node's `issuerCertificate` chain reconstruction, so it cannot be fooled by any chain-walk quirk. Fails closed (returns `false`) on empty/malformed input or an unverifiable signature.
-- Add `isSelfSignedAnchor(cert)` — the gate on a probed terminal: `subject === issuer` on the parsed DN (the necessary condition a leaf/intermediate can never meet) and, when the raw bytes are present (always in production), the self-signature check above. Shaped test certs carry no `raw`; the DN check governs them.
+> **Empirically settled (Node 26.5.0), and it is why the check is self-ISSUED, not self-SIGNED:** OpenSSL does **not** re-verify a supplied trust anchor's own self-signature — `X509_V_FLAG_CHECK_SS_SIGNATURE` is off by default. Pinning a root whose self-signature bytes were corrupted (so `X509Certificate.verify(publicKey)` returns `false`) as `ca:` still validates a real chain in a live handshake. So the gate must **not** require `verify()`: doing so would make it _stricter_ than sync-time verification and refuse a self-issued root that works today — a regression that breaks invariant #3. The TOFU model already decides trust by the admin-confirmed fingerprint, not the self-signature. Locked by the `ROOT_CA_BAD_SIG_PEM` fixture + test.
+
+- Add `isSelfSignedAnchorPem(certData)` — authoritative, operates on the **actual certificate bytes** (PEM or DER) via `node:crypto` `X509Certificate`, comparing the canonical DN strings: `subject === issuer`. Independent of Node's `issuerCertificate` chain reconstruction, so it cannot be fooled by any chain-walk quirk. Fails closed (returns `false`) on empty/malformed input.
+- Add `isSelfSignedAnchor(cert)` — the gate on a probed terminal. When the raw bytes are present (always in production) it compares the canonical `X509Certificate` DN strings; shaped test certs carry no `raw`, so the parsed subject/issuer objects are compared. Both branches check the identical property — self-issued — so neither is weaker than the other; a leaf/intermediate always has `subject !== issuer` and can never pass.
 - Extract `evaluateProbedChain(detailed, trustedBySystemRoots)` — the pure pin/refuse decision `probeCertificate` makes on the peer chain. It pins the root only when `isSelfSignedAnchor` passes; otherwise it returns the new outcome `chain_incomplete` with `chain: null` (**refuse to pin**) and the existing server-log `diagnostics`. `probeCertificate` is now a thin socket wrapper around it, which is what makes the decision unit-testable without a live server.
-- New probe outcome `chain_incomplete` added to the server `TlsProbeOutcome` and the shared `VsphereProbeResult.outcome` contract (contract-first). It is a probe/trust-flow value only — **not** a persisted connection status, so **no Prisma migration**.
+- New probe outcome `chain_incomplete` added to the server `TlsProbeOutcome` and to **both** halves of the shared contract: the TS interface `VsphereProbeResult.outcome` (`vsphere.ts`) **and** the runtime validator `vsphereProbeResultSchema.outcome` (`responses.ts`) that the web client parses every response against. The `z.ZodType<…>` annotation does not enforce exhaustiveness, so the two must be kept in lockstep by hand (guarded by a `responses.test.ts` round-trip test); omitting the runtime half makes the client reject the response with `RESPONSE_VALIDATION`. It is a probe/trust-flow value only — **not** a persisted connection status, so **no Prisma migration**.
+- Defense-in-depth at the storage boundary: `VsphereConnectionsService.trustCa` refuses to persist an empty `caPem` (an empty `ca:` list silently falls back to the system trust store). Cannot fire via the route today, but it stops the upstream gate from being the _only_ safeguard.
 - Probe route passes `chain_incomplete` through (instead of collapsing it to `tls_untrusted`). Trust-ca route maps it to a distinct `CHAIN_INCOMPLETE` 422 with operator guidance ("vCenter did not present its root CA…") — the route already failed closed on any non-`ok` outcome, so this only improves the message; it does not change whether a bad pin is stored.
 - Web trust dialog renders a dedicated `chain_incomplete` guidance branch and keeps the Trust button disabled (there is no fingerprint to confirm).
-- The `rootOf` `@ai-warning` is updated from "pending follow-up" to "the gate now lives in `probeCertificate`".
+- The `rootOf` `@ai-warning` is updated from "pending follow-up" to "the gate now lives in `evaluateProbedChain`".
 
 Deliberately **out of scope** (Part B): letting the operator paste the root CA PEM. `rejectUnauthorized: false` and moving trust into `checkServerIdentity` remain forbidden (they fail open — see the existing `@ai-warning`s and the `checkServerIdentity` unit tests).
 
@@ -64,9 +67,11 @@ Deliberately **out of scope** (Part B): letting the operator paste the root CA P
 
 ## 6. Test matrix (failing-first; no Testcontainers, no real vCenter)
 
-**No private key is committed.** The security predicate is asserted on real
-**public** certificate bytes (verifying a self-signature needs only the cert's own
-embedded public key), and the pin/refuse decision is driven by `fakeChain` shaped
+**No new private key is committed for this change** (the pre-existing
+`TEST_KEY_PEM` throwaway self-signed key, which the existing real-TLS-server tests
+already use, is untouched). The security predicate is asserted on real **public**
+certificate bytes (verifying a self-signature needs only the cert's own embedded
+public key), and the pin/refuse decision is driven by `fakeChain` shaped
 literals — whose incomplete shape (`issuerCertificate: undefined`, `subject !=
 issuer`) was verified during the investigation to match real Node 26.5.0 (§1
 table), so it is a faithful model, not a mock that lies. That combination avoids
@@ -76,6 +81,7 @@ private key) while still covering every decision path.
 | Layer / test                                                                     | Assertion                                                     | Before fix           |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------- |
 | `isSelfSignedAnchorPem`: `ROOT_CA_PEM` / `TEST_CERT_PEM` / `OTHER_CERT_PEM`      | `true`                                                        | n/a (new)            |
+| `isSelfSignedAnchorPem`: **`ROOT_CA_BAD_SIG_PEM`** (self-issued, self-sig fails) | `true` (matches OpenSSL — locks "no `verify()`")              | n/a (new)            |
 | `isSelfSignedAnchorPem`: `INTERMEDIATE_CA_PEM` / `CHAIN_LEAF_PEM` / '' / garbage | `false`                                                       | n/a (new)            |
 | `isSelfSignedAnchor` (shaped): self-issued terminal / subject≠issuer terminal    | `true` / `false`                                              | n/a (new)            |
 | `evaluateProbedChain` (fakeChain): full chain / self-signed leaf                 | `ok`, `chain` populated, `terminalSelfSigned: true`           | passes (guard)       |
@@ -84,7 +90,9 @@ private key) while still covering every decision path.
 | `probeCertificate` (real self-signed `tls.createServer`)                         | `ok`, real fingerprint, `terminalSelfSigned: true`            | passes (guard)       |
 | `toProbeResponse`: `chain_incomplete` / `unreachable` / `tls_untrusted` / `ok`   | outcome passthrough / collapse; `ok`→fingerprint              | RED (passthrough)    |
 | `trustReprobeError`: `chain_incomplete` / `unreachable` / `tls_untrusted` / `ok` | `CHAIN_INCOMPLETE` / `VCENTER_UNREACHABLE` / null             | RED                  |
-| web dialog: probe `chain_incomplete`                                             | shows root-CA guidance, Trust disabled                        | RED                  |
+| `vsphereProbeResultSchema` round-trip: every `VsphereProbeResult.outcome`        | accepts all (incl. `chain_incomplete`); rejects unknown       | RED (schema drift)   |
+| `trustCa` with an empty `caPem` (storage-boundary guard)                         | throws, nothing pinned                                        | n/a (new)            |
+| web dialog + add-connection panel: probe `chain_incomplete`                      | both show root-CA guidance (Trust disabled in the dialog)     | RED                  |
 
 **Documented residual (accepted):** no test stands up a _real_ TLS server
 presenting an incomplete chain (that needs a committed leaf private key, which the

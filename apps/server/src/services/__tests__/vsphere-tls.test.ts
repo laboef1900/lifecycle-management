@@ -10,6 +10,7 @@ import {
   CHAIN_LEAF_PEM,
   INTERMEDIATE_CA_PEM,
   OTHER_CERT_PEM,
+  ROOT_CA_BAD_SIG_PEM,
   ROOT_CA_PEM,
   TEST_CERT_PEM,
   TEST_KEY_PEM,
@@ -344,11 +345,14 @@ describe('probeCertificate dials the configured port (#199)', () => {
  * The #272 fix (Part A): refuse to pin an anchor OpenSSL would not accept.
  *
  * `isSelfSignedAnchorPem` is the authoritative gate — it runs on the actual
- * certificate bytes (subject == issuer AND the self-signature verifies), so it
- * cannot be fooled by any `issuerCertificate` chain-walk quirk. It is exercised
- * here against a REAL 3-level chain: only the self-signed root is an anchor; the
- * intermediate and leaf are not. This is the case vcsim (self-signed leaf == root)
- * could never express, which is why #272 shipped with no regression test.
+ * certificate bytes and checks the ONE thing OpenSSL requires of a supplied trust
+ * anchor: that it is SELF-ISSUED (subject DN == issuer DN). OpenSSL does NOT
+ * re-verify the anchor's own self-signature (`X509_V_FLAG_CHECK_SS_SIGNATURE` is
+ * off by default — see `ROOT_CA_BAD_SIG_PEM`), so the gate must not either, or it
+ * would refuse a root that validates fine at sync time. Exercised against a REAL
+ * 3-level chain: only the self-issued root is an anchor; the intermediate and leaf
+ * are not — the case vcsim (self-signed leaf == root) could never express, which
+ * is why #272 shipped with no regression test.
  */
 describe('isSelfSignedAnchorPem (#272 pin gate)', () => {
   it('accepts a genuine self-signed root', () => {
@@ -358,6 +362,14 @@ describe('isSelfSignedAnchorPem (#272 pin gate)', () => {
   it('accepts a self-signed leaf (vCenter out-of-box / vcsim default)', () => {
     expect(isSelfSignedAnchorPem(TEST_CERT_PEM)).toBe(true);
     expect(isSelfSignedAnchorPem(OTHER_CERT_PEM)).toBe(true);
+  });
+
+  it('accepts a self-ISSUED root even when its self-signature does not verify', () => {
+    // OpenSSL trusts a supplied anchor without re-checking its self-signature, so
+    // requiring a valid self-signature here would refuse a root that works at sync
+    // (a regression). Gate on self-issued, not self-signed. Guards against anyone
+    // re-adding a verify() check.
+    expect(isSelfSignedAnchorPem(ROOT_CA_BAD_SIG_PEM)).toBe(true);
   });
 
   it('REFUSES an intermediate CA — subject != issuer, so it is not an anchor', () => {
