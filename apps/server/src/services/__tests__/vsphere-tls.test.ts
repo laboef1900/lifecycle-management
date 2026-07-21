@@ -4,8 +4,43 @@ import { connect as tlsConnect, createServer, type TlsOptions } from 'node:tls';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
+import type { DetailedPeerCertificate } from 'node:tls';
+
 import { OTHER_CERT_PEM, TEST_CERT_PEM, TEST_KEY_PEM } from './vsphere-tls-fixtures.js';
-import { normalizeFingerprint, probeCertificate, verifiedTlsOptions } from '../vsphere-tls.js';
+import {
+  describeChain,
+  extractTlsErrorCode,
+  normalizeFingerprint,
+  probeCertificate,
+  verifiedTlsOptions,
+} from '../vsphere-tls.js';
+
+/**
+ * Build a fake chain of `DetailedPeerCertificate`s from leaf to terminal.
+ *
+ * `describeChain` reads only `issuerCertificate`, `subject.CN`, `issuer.CN`, and
+ * `fingerprint256`, so a shaped literal exercises the real logic without a real
+ * cert. `selfSignedTop` controls the ONE thing #272 turns on: whether the top of
+ * the built chain points at itself (a genuine root) or leaves its issuer missing
+ * (an incomplete chain, the failure mode).
+ */
+function fakeChain(cns: string[], selfSignedTop: boolean): DetailedPeerCertificate {
+  const nodes = cns.map(
+    (name, i) =>
+      ({
+        subject: { CN: name },
+        issuer: { CN: cns[i + 1] ?? (selfSignedTop ? name : `${name}-issuer`) },
+        fingerprint256: `FP:${name}`,
+      }) as unknown as DetailedPeerCertificate,
+  );
+  for (let i = 0; i < nodes.length - 1; i += 1) {
+    (nodes[i] as { issuerCertificate: unknown }).issuerCertificate = nodes[i + 1];
+  }
+  const top = nodes[nodes.length - 1]!;
+  // A real root self-references; an incomplete chain leaves the issuer missing.
+  (top as { issuerCertificate: unknown }).issuerCertificate = selfSignedTop ? top : undefined;
+  return nodes[0]!;
+}
 
 /**
  * TLS trust behaviour for vCenter connections (#175, epic #172).
@@ -160,6 +195,93 @@ describe('fingerprints', () => {
   });
 });
 
+describe('extractTlsErrorCode (#272 diagnostics)', () => {
+  it('reads the nested undici/fetch cause.code', () => {
+    expect(extractTlsErrorCode({ cause: { code: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' } })).toBe(
+      'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+    );
+  });
+
+  it('reads the top-level code on a raw tls/https error', () => {
+    expect(extractTlsErrorCode({ code: 'SELF_SIGNED_CERT_IN_CHAIN' })).toBe(
+      'SELF_SIGNED_CERT_IN_CHAIN',
+    );
+  });
+
+  it('prefers the nested cause.code over a top-level one', () => {
+    expect(extractTlsErrorCode({ code: 'OUTER', cause: { code: 'INNER' } })).toBe('INNER');
+  });
+
+  it('returns null when there is no code, rather than an empty or bogus string', () => {
+    expect(extractTlsErrorCode(new Error('boom'))).toBeNull();
+    expect(extractTlsErrorCode({ code: '' })).toBeNull();
+    expect(extractTlsErrorCode({ code: 42 })).toBeNull();
+    expect(extractTlsErrorCode(null)).toBeNull();
+  });
+});
+
+describe('describeChain (#272 diagnostics)', () => {
+  it('reports a single self-signed leaf as depth 0, self-signed', () => {
+    const d = describeChain(fakeChain(['vcenter.local'], true));
+    expect(d).toMatchObject({
+      depth: 0,
+      terminalSelfSigned: true,
+      leafSubjectCn: 'vcenter.local',
+      terminalSubjectCn: 'vcenter.local',
+    });
+  });
+
+  it('reports a full leaf→intermediate→root chain as depth 2, self-signed', () => {
+    const d = describeChain(fakeChain(['leaf', 'intermediate', 'root'], true));
+    expect(d).toMatchObject({
+      depth: 2,
+      terminalSelfSigned: true,
+      leafSubjectCn: 'leaf',
+      terminalSubjectCn: 'root',
+    });
+  });
+
+  it('flags a leaf-only incomplete chain as NOT self-signed (the #272 smoking gun)', () => {
+    // Terminal is the leaf, whose issuer was never presented — the walk stops but
+    // the anchor is not a root. This is the state that pins a non-root and makes
+    // the credentialed handshake fail later.
+    const d = describeChain(fakeChain(['leaf'], false));
+    expect(d).toMatchObject({ depth: 0, terminalSelfSigned: false, terminalSubjectCn: 'leaf' });
+  });
+
+  it('flags a leaf+intermediate incomplete chain as NOT self-signed', () => {
+    const d = describeChain(fakeChain(['leaf', 'intermediate'], false));
+    expect(d).toMatchObject({
+      depth: 1,
+      terminalSelfSigned: false,
+      terminalSubjectCn: 'intermediate',
+    });
+  });
+
+  it('does not mistake a missing issuer for self-signed even when fingerprints are absent', () => {
+    const leaf = {
+      subject: { CN: 'leaf' },
+      issuer: { CN: 'some-ca' },
+      // No fingerprint256, no issuerCertificate — the empty-ish shape Node can
+      // leave for an unpresented issuer. Must read as incomplete, not self-signed.
+      issuerCertificate: undefined,
+    } as unknown as DetailedPeerCertificate;
+    expect(describeChain(leaf).terminalSelfSigned).toBe(false);
+  });
+
+  it('collapses a multi-valued CN (string[]) to a single string', () => {
+    const leaf = {
+      subject: { CN: ['primary.local', 'alt.local'] },
+      issuer: { CN: 'primary.local' },
+      fingerprint256: 'FP',
+      issuerCertificate: undefined,
+    } as unknown as DetailedPeerCertificate;
+    // issuer===undefined so it self-terminates; but fingerprint present and
+    // issuer object is missing → not genuinely self-signed.
+    expect(describeChain(leaf).leafSubjectCn).toBe('primary.local');
+  });
+});
+
 describe('probeCertificate dials the configured port (#199)', () => {
   it('captures a certificate from a non-443 port', async () => {
     // Bind to and dial `localhost` (a valid SNI name — an IP is not) on an ephemeral
@@ -178,5 +300,8 @@ describe('probeCertificate dials the configured port (#199)', () => {
 
     expect(result.outcome).toBe('ok');
     expect(result.chain?.rootFingerprintSha256).toMatch(/^[A-F0-9]{2}(:[A-F0-9]{2}){31}$/);
+    // A real single self-signed cert must read as a genuine self-signed terminal
+    // (#272) — the healthy case the incomplete-chain signal is measured against.
+    expect(result.diagnostics).toMatchObject({ depth: 0, terminalSelfSigned: true });
   });
 });

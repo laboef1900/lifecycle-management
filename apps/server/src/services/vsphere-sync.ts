@@ -1,11 +1,15 @@
 import { startOfUtcMonth, type VsphereSyncResult } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
+import type { CollectorLogger } from './vsphere-collector.js';
 import type {
   CollectedCluster,
   CollectedInventory,
   VsphereInventoryCollector,
 } from './vsphere-inventory.js';
+import { extractTlsErrorCode } from './vsphere-tls.js';
+
+const noopLogger: CollectorLogger = { warn: () => undefined };
 
 /**
  * Reconciles vCenter inventory into LCM (#176, epic #172).
@@ -30,10 +34,20 @@ import type {
  *    the wrong one's capacity with plausible-looking numbers.
  */
 export class VsphereSyncService {
+  private readonly logger: CollectorLogger;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly collector: VsphereInventoryCollector,
-  ) {}
+    /**
+     * Structured sink for the TLS-failure diagnostic (#272). Optional so the
+     * many `new VsphereSyncService(prisma, collector)` call sites (tests
+     * included) keep working; defaults to no-op.
+     */
+    logger?: CollectorLogger,
+  ) {
+    this.logger = logger ?? noopLogger;
+  }
 
   /**
    * Sync one connection.
@@ -86,6 +100,16 @@ export class VsphereSyncService {
       // Degrade, never crash: the last known inventory keeps serving and the
       // connection is marked. A failure on THIS vCenter must not affect any other.
       const outcome = classify(err);
+      // Server-log the raw OpenSSL/Node code (#272) — the one fact `sanitize`
+      // and `lastError` throw away. It is what separates an incomplete-chain pin
+      // (`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`/`SELF_SIGNED_CERT_IN_CHAIN`) from a
+      // rotation. Code only, never the message/stack: a driver error can carry
+      // the credential, and `lastError` is UI-rendered and stored, so it keeps
+      // the sanitized string untouched below.
+      this.logger.warn(
+        { event: 'vsphere.sync.failed', connectionId, outcome, tlsCode: extractTlsErrorCode(err) },
+        'vCenter sync failed',
+      );
       await this.prisma.vsphereConnection.update({
         where: { id: connectionId },
         data: { status: outcome, lastError: sanitize(err) },
