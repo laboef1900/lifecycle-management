@@ -372,8 +372,6 @@ export interface MakeVsphereConnectionOptions {
   tenantId?: string;
   instanceUuid?: string;
   lastConnectedAt?: Date | null;
-  /** The PEM pinned as the trust anchor; null (default) verifies against system roots. */
-  tlsPinnedCaPem?: string | null;
   /**
    * The AES-GCM key the password is encrypted under — must match the service that
    * reveals it. Supply it to write a REAL encrypted `passwordEnc` (so
@@ -418,7 +416,6 @@ export async function makeVsphereConnection(
       ...(options.lastConnectedAt !== undefined
         ? { lastConnectedAt: options.lastConnectedAt }
         : {}),
-      ...(options.tlsPinnedCaPem !== undefined ? { tlsPinnedCaPem: options.tlsPinnedCaPem } : {}),
     },
   });
   return { id: connection.id, name: connection.name, tenantId: connection.tenantId };

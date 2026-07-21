@@ -2,7 +2,7 @@ import { request as httpsRequest } from 'node:https';
 
 import { XMLParser } from 'fast-xml-parser';
 
-import { verifiedTlsOptions } from './vsphere-tls.js';
+import { fingerprintPinnedConnection, VCENTER_PORT } from './vsphere-tls.js';
 
 /**
  * A minimal vim25 SOAP client — just enough to prove a credential works and to
@@ -79,8 +79,9 @@ export interface SoapCallOptions {
   signal?: AbortSignal;
   /**
    * Destination TCP port. Configurable per connection (#199), defaulting to 443.
-   * This is a port number, not a TLS relaxation: `verifiedTlsOptions` keeps
-   * `rejectUnauthorized: true` and the `ca:` root pin regardless of port.
+   * This is a port number, not a TLS relaxation: the fingerprint gate in
+   * `fingerprintPinnedConnection` runs regardless of port, and a null pin keeps
+   * the system-trust path (`rejectUnauthorized: true`).
    */
   port?: number;
 }
@@ -88,39 +89,44 @@ export interface SoapCallOptions {
 /**
  * One vim25 SOAP call.
  *
- * Uses `node:https` rather than `fetch`/undici for one reason: it takes `ca` and
- * `rejectUnauthorized` per-request natively, so the trust anchor travels with the
- * call and no extra dependency is needed to express it.
+ * Uses `node:https` rather than `fetch`/undici for one reason: it takes a per-request
+ * `createConnection` factory natively, so the fingerprint gate travels with the call
+ * and no extra dependency is needed to express it.
  *
- * @ai-warning `verifiedTlsOptions` always sets `rejectUnauthorized: true` and has
- * no branch that relaxes it. Do not add an options parameter that could. The
- * `options.port` value (configurable per connection, #199) is a destination port
- * only — it cannot weaken trust. See `vsphere-tls.ts` for why the intuitive
- * `checkServerIdentity` alternative fails open.
+ * @ai-warning A pinned connection routes through `fingerprintPinnedConnection`, which
+ * is the ONLY place `rejectUnauthorized: false` is allowed on this path: the presented
+ * leaf's SHA-256 is compared to the pin on `secureConnect` and the socket is destroyed
+ * before any request byte is written on a mismatch. That `rejectUnauthorized: false`
+ * is confined to the factory — do NOT hoist it here. A null pin keeps the system-trust
+ * path (`rejectUnauthorized: true`). The `options.port` value (configurable per
+ * connection, #199) is a destination port only — it cannot weaken the gate. Do NOT
+ * move the check into `checkServerIdentity`: with `rejectUnauthorized: false` it never
+ * fires (see `vsphere-tls.ts`, design D10).
  */
 export async function soapCall(
   hostname: string,
-  pinnedRootPem: string | null,
+  pinnedLeafSha256: string | null,
   action: string,
   body: string,
   cookie: string | null,
   options: SoapCallOptions = {},
 ): Promise<SoapCallResult> {
-  const tls = verifiedTlsOptions(hostname, pinnedRootPem, options.port);
+  const port = options.port ?? VCENTER_PORT;
   const payload = envelope(body);
 
   return new Promise((resolve, reject) => {
     const req = httpsRequest(
       {
-        host: tls.host,
-        port: tls.port,
-        servername: tls.servername,
-        rejectUnauthorized: tls.rejectUnauthorized,
-        ...(tls.ca ? { ca: tls.ca } : {}),
+        host: hostname,
+        port,
+        servername: hostname,
         path: '/sdk',
-        method: 'POST',
+        method: 'POST' as const,
         timeout: REQUEST_TIMEOUT_MS,
         ...(options.signal ? { signal: options.signal } : {}),
+        ...(pinnedLeafSha256
+          ? { createConnection: fingerprintPinnedConnection(hostname, port, pinnedLeafSha256) }
+          : { rejectUnauthorized: true as const }),
         headers: {
           'Content-Type': 'text/xml; charset=utf-8',
           'Content-Length': Buffer.byteLength(payload),
@@ -183,7 +189,7 @@ export async function verifyLogin(input: {
   port?: number;
   username: string;
   password: string;
-  pinnedRootPem: string | null;
+  pinnedLeafSha256: string | null;
 }): Promise<VsphereLoginResult> {
   // Scoped to this call by construction: login, use, logout. No session outlives
   // the function, so there is nothing to leak across a restart and nothing to
@@ -199,7 +205,7 @@ export async function verifyLogin(input: {
     //    a vCenter?" check before any credential is sent.
     const contentRes = await soapCall(
       input.hostname,
-      input.pinnedRootPem,
+      input.pinnedLeafSha256,
       'RetrieveServiceContent',
       `<urn:RetrieveServiceContent><urn:_this type="ServiceInstance">${SERVICE_INSTANCE}</urn:_this></urn:RetrieveServiceContent>`,
       null,
@@ -218,7 +224,7 @@ export async function verifyLogin(input: {
     //    nothing.
     const loginRes = await soapCall(
       input.hostname,
-      input.pinnedRootPem,
+      input.pinnedLeafSha256,
       'Login',
       `<urn:Login><urn:_this type="SessionManager">${escapeXml(sessionManager)}</urn:_this><urn:userName>${escapeXml(input.username)}</urn:userName><urn:password>${escapeXml(input.password)}</urn:password></urn:Login>`,
       cookie,
@@ -230,7 +236,7 @@ export async function verifyLogin(input: {
     // 3. Log out immediately — no session is kept.
     await soapCall(
       input.hostname,
-      input.pinnedRootPem,
+      input.pinnedLeafSha256,
       'Logout',
       `<urn:Logout><urn:_this type="SessionManager">${escapeXml(sessionManager)}</urn:_this></urn:Logout>`,
       cookie,

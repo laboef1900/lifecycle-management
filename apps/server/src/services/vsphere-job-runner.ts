@@ -15,7 +15,7 @@ interface VsphereCredentials {
   port: number;
   username: string;
   password: string;
-  pinnedRootPem: string | null;
+  pinnedLeafSha256: string | null;
 }
 
 /**
@@ -122,7 +122,7 @@ export class VsphereJobRunner implements JobRunner {
         port: true,
         username: true,
         enabled: true,
-        tlsPinnedCaPem: true,
+        tlsPinnedSha256: true,
       },
     });
     // Defensive: the enabled filter in the scheduler's query and claim should make
@@ -159,7 +159,12 @@ export class VsphereJobRunner implements JobRunner {
       port: connection.port,
       username: connection.username,
       password,
-      pinnedRootPem: connection.tlsPinnedCaPem,
+      // The stored leaf fingerprint (captured and pinned at connect time) arms the
+      // credential-path gate: `soapCall` opens the pinned connection through
+      // `fingerprintPinnedConnection`, which destroys the socket before any request
+      // byte is written if the presented leaf does not match this pin. A null pin
+      // (no capture) falls back to the system trust store.
+      pinnedLeafSha256: connection.tlsPinnedSha256,
     };
 
     // 1 + 2. Sync (and, when the snapshot is due, the snapshot it forces). The

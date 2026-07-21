@@ -299,7 +299,7 @@ describe('PUT /api/settings/vsphere/connections/:id — the password gate', () =
     const id = await createConnection(uniqueName('port-right-pw'), 'correct-horse');
     await prisma.vsphereConnection.update({
       where: { id },
-      data: { tlsPinnedCaPem: 'PEM-ROOT', instanceUuid: 'uuid-1' },
+      data: { tlsPinnedSha256: 'AB:CD', instanceUuid: 'uuid-1' },
     });
     const res = await server.inject({
       method: 'PUT',
@@ -308,9 +308,9 @@ describe('PUT /api/settings/vsphere/connections/:id — the password gate', () =
     });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { port: number }).port).toBe(8443);
-    // A port change is not a host change: the pinned CA and identity survive.
+    // A port change is not a host change: the pinned certificate and identity survive.
     const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id } });
-    expect(row.tlsPinnedCaPem).toBe('PEM-ROOT');
+    expect(row.tlsPinnedSha256).toBe('AB:CD');
     expect(row.instanceUuid).toBe('uuid-1');
   });
 
@@ -358,15 +358,15 @@ describe('POST /api/settings/vsphere/probe — carries no credential', () => {
   });
 });
 
-describe('POST /api/settings/vsphere/connections/:id/trust-ca', () => {
+describe('POST /api/settings/vsphere/connections/:id/trust-cert', () => {
   it('requires the password — a re-pin plus a DNS spoof is full exfiltration', async () => {
     const id = await createConnection(uniqueName('trust'));
     const fingerprint = Array.from({ length: 32 }, () => 'AB').join(':');
 
     const res = await server.inject({
       method: 'POST',
-      url: `/api/settings/vsphere/connections/${id}/trust-ca`,
-      payload: { rootFingerprintSha256: fingerprint, password: 'wrong' },
+      url: `/api/settings/vsphere/connections/${id}/trust-cert`,
+      payload: { leafFingerprintSha256: fingerprint, password: 'wrong' },
     });
     expect(res.statusCode).toBe(422);
     expect(res.json()).toMatchObject({ error: { code: 'PASSWORD_MISMATCH' } });

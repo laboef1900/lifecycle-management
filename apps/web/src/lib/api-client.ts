@@ -2,7 +2,7 @@ import type {
   VsphereConnectionCreate,
   VsphereConnectionUpdate,
   VsphereProbe,
-  VsphereTrustCa,
+  VsphereTrustCert,
   VsphereVerify,
   ApiErrorBody,
   AuthConfigTest,
@@ -389,9 +389,9 @@ export const api = {
             { method: 'POST' },
             vsphereSyncNowResponseSchema,
           ),
-        trustCa: (id: string, input: VsphereTrustCa) =>
+        trustCert: (id: string, input: VsphereTrustCert) =>
           request(
-            `/api/settings/vsphere/connections/${id}/trust-ca`,
+            `/api/settings/vsphere/connections/${id}/trust-cert`,
             { method: 'POST', body: JSON.stringify(input) },
             vsphereConnectionResponseSchema,
           ),

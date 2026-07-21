@@ -1,4 +1,4 @@
-import { X509Certificate } from 'node:crypto';
+import type { Socket } from 'node:net';
 import {
   connect as tlsConnect,
   type DetailedPeerCertificate,
@@ -7,8 +7,8 @@ import {
 
 /**
  * The default vCenter HTTPS port. Overridable per connection since #199 — the port
- * is a destination only and never relaxes trust (`verifiedTlsOptions` keeps
- * `rejectUnauthorized: true` and the `ca:` pin regardless). Still the default for
+ * is a destination only and never relaxes trust (the fingerprint gate in
+ * `fingerprintPinnedConnection` runs regardless of port). Still the default for
  * the schema column, the shared `.default(443)`, and the params below.
  */
 export const VCENTER_PORT = 443;
@@ -16,10 +16,8 @@ export const VCENTER_PORT = 443;
 const CONNECT_TIMEOUT_MS = 10_000;
 
 export interface CapturedChain {
-  /** PEM of the chain's ROOT — the anchor to pin. */
-  rootPem: string;
-  /** Uppercase colon-separated SHA-256 of the root, as `govc about.cert` prints it. */
-  rootFingerprintSha256: string;
+  /** Uppercase colon-separated SHA-256 of the presented LEAF, as `govc about.cert` prints. */
+  leafFingerprintSha256: string;
   /** Did the chain already validate against the system trust store? */
   trustedBySystemRoots: boolean;
   validFrom: string | null;
@@ -27,14 +25,12 @@ export interface CapturedChain {
 }
 
 /**
- * `chain_incomplete` (#272) is the fix's new outcome: the peer presented a
- * certificate but its chain does not terminate at a self-signed anchor we can pin
- * (leaf-only, or leaf+intermediate with the root withheld). It is distinct from
- * `tls_untrusted` so the operator gets actionable guidance ("vCenter did not
- * present its root CA") instead of a generic failure. It is a probe/trust-flow
- * value only — never a persisted connection status — so it needs no migration.
+ * A probe/trust-flow value only — never a persisted connection status, so it needs
+ * no migration. `tls_untrusted` covers a peer that answered but presented no
+ * usable certificate; `unreachable` merges every connection-level failure so the
+ * endpoint cannot be used to tell "refused" from "filtered" from "no route".
  */
-export type TlsProbeOutcome = 'ok' | 'unreachable' | 'tls_untrusted' | 'chain_incomplete';
+export type TlsProbeOutcome = 'ok' | 'unreachable' | 'tls_untrusted';
 
 /**
  * Server-log-only description of the chain a probe observed (#272). This is the
@@ -76,16 +72,10 @@ export interface TlsProbeResult {
   diagnostics: ChainDiagnostics | null;
 }
 
-function derToPem(der: Buffer): string {
-  const b64 = der.toString('base64').replace(/(.{64})/g, '$1\n');
-  return `-----BEGIN CERTIFICATE-----\n${b64}${b64.endsWith('\n') ? '' : '\n'}-----END CERTIFICATE-----\n`;
-}
-
 /**
- * The walk's stop condition: Node makes a self-signed root's `issuerCertificate`
- * point at itself, and leaves it missing/empty when the issuer was NOT presented
- * (an incomplete chain). BOTH end the walk — this is `rootOf`'s original break
- * predicate, preserved verbatim so pinning behaviour is unchanged.
+ * The walk's stop condition for {@link describeChain}: Node makes a self-signed
+ * root's `issuerCertificate` point at itself, and leaves it missing/empty when the
+ * issuer was NOT presented (an incomplete chain). BOTH end the walk.
  */
 function chainTerminates(cert: DetailedPeerCertificate): boolean {
   const issuer = cert.issuerCertificate;
@@ -109,39 +99,13 @@ function isGenuinelySelfSigned(cert: DetailedPeerCertificate): boolean {
 }
 
 /**
- * Walk `issuerCertificate` to the chain's root.
- *
- * Node terminates the chain by making the root's `issuerCertificate` point at
- * itself, so the self-reference is the stop condition — not a bug. The depth cap
- * is belt-and-braces against a malformed chain that never self-references.
- *
- * @ai-warning The terminal cert this returns is NOT guaranteed to be self-signed:
- * if the server presents an incomplete chain (leaf-only or leaf+intermediate),
- * the walk runs out of `issuerCertificate` links and returns the last hop, which
- * is not a root. Pinning that terminal makes the credentialed handshake fail with
- * `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`/`SELF_SIGNED_CERT_IN_CHAIN` — this was #272.
- * The gate now lives in {@link evaluateProbedChain}: it pins the terminal ONLY
- * when {@link isSelfSignedAnchor} confirms it is a genuine anchor, and returns
- * `chain_incomplete` otherwise. `rootOf` itself is unchanged — it still just walks
- * to the terminal; callers must vet what it returns before pinning.
- */
-function rootOf(leaf: DetailedPeerCertificate): DetailedPeerCertificate {
-  let current = leaf;
-  for (let depth = 0; depth < 16; depth += 1) {
-    if (chainTerminates(current)) break;
-    current = current.issuerCertificate;
-  }
-  return current;
-}
-
-/**
  * Read-only description of the presented chain, for the server log (#272).
  *
- * Pure: walks the same `issuerCertificate` links as {@link rootOf} (same stop
- * condition, so `depth` and the terminal match what gets pinned) but only reports
- * what it sees — it changes nothing. `terminalSelfSigned` uses the STRICTER
- * {@link isGenuinelySelfSigned} test, so an incomplete chain whose walk merely
- * ran out of issuers reads as `false`, not a spurious `true`.
+ * Pure: walks the `issuerCertificate` links from the leaf to the chain's terminal
+ * and only reports what it sees — it changes nothing. `terminalSelfSigned` uses the
+ * STRICTER {@link isGenuinelySelfSigned} test, so an incomplete chain whose walk
+ * merely ran out of issuers reads as `false`, not a spurious `true`. This is
+ * diagnostic evidence only: the pin is the presented LEAF, not this terminal.
  */
 export function describeChain(leaf: DetailedPeerCertificate): ChainDiagnostics {
   let current = leaf;
@@ -163,97 +127,6 @@ export function describeChain(leaf: DetailedPeerCertificate): ChainDiagnostics {
 function cn(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
-}
-
-/**
- * Is this certificate a trust anchor OpenSSL would accept when pinned? (#272)
- *
- * The authoritative gate for "may we pin this?". It runs on the ACTUAL
- * certificate bytes via `X509Certificate` (canonical RFC2253 DN strings),
- * independent of Node's `issuerCertificate` chain reconstruction, so no chain-walk
- * quirk can fool it.
- *
- * The test is **self-ISSUED**: `subject === issuer`. That is exactly and only what
- * OpenSSL requires of a supplied trust anchor. A leaf/intermediate always has
- * `subject !== issuer`, so it can never pass — which is the #272 defect (pinning a
- * non-anchor whose credentialed handshake then fails at sync).
- *
- * @ai-warning Do NOT also require the self-signature to verify (`cert.verify(
- * cert.publicKey)`). OpenSSL does NOT re-verify a supplied anchor's self-signature
- * — `X509_V_FLAG_CHECK_SS_SIGNATURE` is off by default. Empirically confirmed on
- * Node 26.5.0: a root with a corrupted self-signature still validates a real chain
- * when pinned as `ca:` (see `ROOT_CA_BAD_SIG_PEM`). Requiring `verify()` here would
- * make this gate STRICTER than sync-time verification and refuse a root that works
- * today — a regression, and it would break the "probe-time trust == sync-time
- * verification" property this fix exists to guarantee. The TOFU model already
- * decides trust by the admin-confirmed fingerprint, not the self-signature.
- *
- * Fails CLOSED: empty or malformed input returns `false` (refuse to pin), never
- * throws. Accepts a PEM string or a DER `Buffer` (`cert.raw`) — no key involved.
- */
-export function isSelfSignedAnchorPem(certData: string | Buffer): boolean {
-  if (typeof certData === 'string' && certData.trim() === '') return false;
-  if (Buffer.isBuffer(certData) && certData.length === 0) return false;
-  try {
-    const cert = new X509Certificate(certData);
-    return cert.subject === cert.issuer;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Is the terminal cert `rootOf` reached an anchor we may pin? (#272)
- *
- * Self-issued (subject DN == issuer DN) is the whole test — see
- * {@link isSelfSignedAnchorPem} for why the self-signature is deliberately NOT
- * re-verified. In production the raw bytes are present, so the canonical
- * `X509Certificate` DN comparison governs; shaped test certificates carry no
- * `raw`, so the parsed subject/issuer objects are compared instead. Both branches
- * check the identical property — self-issued — so neither is weaker than the other.
- */
-export function isSelfSignedAnchor(cert: DetailedPeerCertificate): boolean {
-  if (cert.raw) return isSelfSignedAnchorPem(cert.raw);
-  if (!cert.subject || !cert.issuer) return false;
-  return JSON.stringify(cert.subject) === JSON.stringify(cert.issuer);
-}
-
-/**
- * The pure decision `probeCertificate` makes once it holds the peer chain (#272).
- *
- * Pin the chain's root as the trust anchor ONLY when {@link isSelfSignedAnchor}
- * confirms it is genuine; otherwise return `chain_incomplete` and pin **nothing**
- * — an incomplete chain (leaf-only, or leaf+intermediate with the root withheld)
- * leaves `rootOf` on a leaf/intermediate whose credentialed handshake fails every
- * scheduled sync. Refusing here converts that silent, ~6h-delayed failure into an
- * immediate, correct diagnosis at trust time. The server-log {@link
- * ChainDiagnostics} is populated in every branch so the operator can see why.
- *
- * Extracted from the socket handler so the pin/refuse decision is unit-testable
- * without a live TLS server.
- */
-export function evaluateProbedChain(
-  detailed: DetailedPeerCertificate,
-  trustedBySystemRoots: boolean,
-): TlsProbeResult {
-  const diagnostics = describeChain(detailed);
-  const root = rootOf(detailed);
-  if (!isSelfSignedAnchor(root)) {
-    return { outcome: 'chain_incomplete', chain: null, diagnostics };
-  }
-  return {
-    outcome: 'ok',
-    chain: {
-      rootPem: root.raw ? derToPem(root.raw) : '',
-      rootFingerprintSha256: (root.fingerprint256 ?? '').toUpperCase(),
-      // `authorized` is the honest answer to "would this have worked without
-      // pinning?" — i.e. whether the operator needs the TOFU step at all.
-      trustedBySystemRoots,
-      validFrom: detailed.valid_from ?? null,
-      validTo: detailed.valid_to ?? null,
-    },
-    diagnostics,
-  };
 }
 
 /**
@@ -288,8 +161,9 @@ export function extractTlsErrorCode(err: unknown): string | null {
  * @ai-warning This is the ONLY place `rejectUnauthorized: false` is permitted in
  * this codebase, and it is safe here for exactly one reason: **nothing is sent.**
  * No credential, no request body — the socket is opened, the chain is read, and
- * the socket is destroyed. Every credential-bearing path MUST instead use
- * `ca: [pinnedRootPem]` with `rejectUnauthorized: true` (see `verifiedTlsOptions`).
+ * the socket is destroyed. Every credential-bearing path MUST instead gate the
+ * presented leaf's fingerprint against the stored pin (see
+ * `fingerprintPinnedConnection`).
  *
  * @ai-warning Do NOT "improve" this by moving the trust check into
  * `checkServerIdentity`. That callback fires **only when OpenSSL chain
@@ -330,11 +204,23 @@ export async function probeCertificate(
         finish({ outcome: 'tls_untrusted', chain: null, diagnostics: null });
         return;
       }
-      // #272: pin the root only when it is a genuine self-signed anchor; an
-      // incomplete chain yields `chain_incomplete` and pins nothing. `diagnostics`
-      // (server-log only) still records the terminal's self-signed status either
-      // way. See {@link evaluateProbedChain}.
-      finish(evaluateProbedChain(detailed, socket.authorized));
+      // Pin the presented LEAF directly — the exact certificate `govc about.cert
+      // -thumbprint` and the vSphere Client display, so the admin compares
+      // like-for-like. Pinning the leaf works against a self-signed cert, an
+      // incomplete chain (the #272 dead-end that had no root to pin), and a full
+      // chain alike; it supersedes the #278 root-walk. `authorized` is the honest
+      // answer to "would this have worked without pinning?". `diagnostics` stays
+      // server-log-only evidence of the chain shape (#272) — never a response field.
+      finish({
+        outcome: 'ok',
+        chain: {
+          leafFingerprintSha256: normalizeFingerprint(detailed.fingerprint256 ?? ''),
+          trustedBySystemRoots: socket.authorized,
+          validFrom: detailed.valid_from ?? null,
+          validTo: detailed.valid_to ?? null,
+        },
+        diagnostics: describeChain(detailed),
+      });
     });
 
     // Every failure collapses to `unreachable`. Distinguishing refused from
@@ -348,47 +234,56 @@ export async function probeCertificate(
 }
 
 /**
- * TLS options for every credential-bearing connection.
+ * The credential-path connection factory for a PINNED connection.
  *
- * @ai-warning There is no insecure branch here, and there must never be one. With
- * verification off, the stored hostname identifies a *name*, not a *host* —
- * anyone able to spoof DNS or sit on the path harvests the vCenter
- * service-account password on **every scheduled poll**, on the happy path, with
- * no anomaly to detect and no interaction with our API.
- *
- * Pin the chain's ROOT as a `ca:` anchor rather than checking a leaf thumbprint
- * in application code:
- *   - it fails closed **in OpenSSL**, so there is no app-layer check to forget,
- *     skip, or refactor away;
- *   - hostname verification comes back for free, because the chain now validates,
- *     so the binding is "a cert for THIS host, issued by THIS CA" rather than a
- *     bare fingerprint;
- *   - it survives vCenter's unattended leaf auto-renewal (~2 years), whereas a
- *     leaf pin breaks by itself on a timer and trains admins to click through
- *     mismatches — which is how pinning dies in practice.
- *
- * @ai-warning Pinning the LEAF via `ca:` does not work against a chain-presenting
- * server: OpenSSL must terminate at a self-signed anchor it trusts, and a trusted
- * leaf mid-chain does not terminate it (`SELF_SIGNED_CERT_IN_CHAIN`; Node does not
- * expose `X509_V_FLAG_PARTIAL_CHAIN`). An implementer who tries `ca: [leafPem]`
- * will watch it fail against real vCenter and be tempted to "fix" it with
- * `rejectUnauthorized: false`. Pin the root.
+ * @ai-warning The ONLY place `rejectUnauthorized: false` is allowed on a
+ * credential-bearing path. Safe for one reason: the fingerprint gate runs on
+ * `secureConnect` and destroys the socket — and only then hands it to the HTTP
+ * layer via `oncreate` — so NO request byte reaches a peer whose leaf != the pin.
+ * Do NOT return the socket synchronously: `http` would use it before `secureConnect`
+ * and defeat the gate. Do NOT move the check into `checkServerIdentity` — with
+ * `rejectUnauthorized: false` it never fires (design D10). The `port` is a
+ * destination only (#199) and cannot relax the gate, which runs regardless.
  */
-export function verifiedTlsOptions(
+export function fingerprintPinnedConnection(
   hostname: string,
-  pinnedRootPem: string | null,
-  port: number = VCENTER_PORT,
-): { host: string; port: number; servername: string; rejectUnauthorized: true; ca?: string[] } {
-  // @ai-warning `port` is configurable per connection (#199), defaulting to 443. It
-  // changes the destination socket ONLY: `rejectUnauthorized: true` and the `ca:`
-  // root pin are unaffected, so no port value can relax trust. This is why widening
-  // the port range is safe — the pin, not the port, is the gate.
-  return {
-    host: hostname,
-    port,
-    servername: hostname,
-    rejectUnauthorized: true,
-    ...(pinnedRootPem ? { ca: [pinnedRootPem] } : {}),
+  port: number,
+  pinnedSha256: string,
+): (options: unknown, oncreate: (err: Error | null, socket: Socket) => void) => Socket {
+  // `oncreate`'s socket param is non-optional (`socket: Socket`, a `net.Duplex`) so
+  // the factory is assignable to `https` `createConnection`; on the error paths the
+  // socket is passed but ignored by `http` (it reads only the error).
+  return (_options, oncreate) => {
+    const socket = tlsConnect({
+      host: hostname,
+      port,
+      servername: hostname,
+      rejectUnauthorized: false, // gated below — see @ai-warning
+      timeout: CONNECT_TIMEOUT_MS,
+    });
+    socket.once('secureConnect', () => {
+      const presented = normalizeFingerprint(socket.getPeerCertificate(false).fingerprint256 ?? '');
+      if (!presented || presented !== pinnedSha256) {
+        const err = Object.assign(
+          new Error('vCenter presented a certificate that does not match the pinned fingerprint'),
+          { code: 'CERT_FINGERPRINT_MISMATCH' },
+        );
+        socket.destroy(err);
+        oncreate(err, socket);
+        return;
+      }
+      oncreate(null, socket);
+    });
+    socket.once('timeout', () => {
+      const err = Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' });
+      socket.destroy(err);
+      oncreate(err, socket);
+    });
+    socket.once('error', (err) => oncreate(err, socket));
+    // @ai-warning Return `undefined`, not the socket: `http` must AWAIT `oncreate`
+    // so the fingerprint gate above runs before any request byte is written. A
+    // synchronously-returned socket is used immediately and defeats the gate.
+    return undefined as unknown as Socket;
   };
 }
 

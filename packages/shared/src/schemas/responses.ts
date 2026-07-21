@@ -274,7 +274,7 @@ export const vsphereConnectionResponseSchema: z.ZodType<VsphereConnectionRespons
   port: z.number(),
   username: z.string(),
   tlsMode: vsphereTlsModeSchema,
-  pinnedRootFingerprintSha256: z.string().nullable(),
+  pinnedLeafFingerprintSha256: z.string().nullable(),
   instanceUuid: z.string().nullable(),
   apiVersion: z.string().nullable(),
   enabled: z.boolean(),
@@ -299,15 +299,15 @@ export const vsphereConnectionResponseSchema: z.ZodType<VsphereConnectionRespons
 export const vsphereProbeResultSchema: z.ZodType<VsphereProbeResult> = z.object({
   reachable: z.boolean(),
   trustedBySystemRoots: z.boolean(),
-  rootFingerprintSha256: z.string().nullable(),
+  leafFingerprintSha256: z.string().nullable(),
   validFrom: z.string().nullable(),
   validTo: z.string().nullable(),
   // @ai-warning Keep this enum in lockstep with `VsphereProbeResult.outcome` in
   // `vsphere.ts`. The `z.ZodType<…>` annotation does NOT enforce exhaustiveness —
   // a missing member compiles fine but makes the web client reject that response
   // with `RESPONSE_VALIDATION` (this is the runtime boundary `request()` parses
-  // against). `chain_incomplete` was #272. Covered by `responses.test.ts`.
-  outcome: z.enum(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter', 'chain_incomplete']),
+  // against). Covered by `responses.test.ts`.
+  outcome: z.enum(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter']),
 });
 
 export const vsphereVerifyResultSchema: z.ZodType<VsphereVerifyResult> = z.object({

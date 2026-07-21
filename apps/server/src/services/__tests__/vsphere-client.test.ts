@@ -89,7 +89,7 @@ describe('vim25 client — credential handling', () => {
       hostname: '127.0.0.1',
       username: 'svc-lcm',
       password: 'must-never-be-sent',
-      pinnedRootPem: null,
+      pinnedLeafSha256: null,
     });
 
     expect(result.outcome).not.toBe('ok');

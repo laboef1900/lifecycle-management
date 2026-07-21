@@ -154,7 +154,6 @@ export class VsphereConnectionsService {
     if (input.hostname !== undefined && input.hostname !== existing.hostname) {
       data.hostname = input.hostname;
       data.tlsMode = 'pinned';
-      data.tlsPinnedCaPem = null;
       data.tlsPinnedSha256 = null;
       data.instanceUuid = null;
       data.apiVersion = null;
@@ -251,38 +250,21 @@ export class VsphereConnectionsService {
   }
 
   /**
-   * Pin a confirmed root as this connection's trust anchor.
-   *
-   * The fingerprint the admin confirmed is checked against the PEM the server is
-   * about to store, so a mismatch between what was displayed and what gets pinned
-   * is impossible.
+   * Pin a confirmed LEAF fingerprint as this connection's trust anchor (TOFU). The
+   * route guarantees the admin-confirmed fingerprint equals the value re-probed here.
    */
-  async trustCa(
+  async trustCert(
     tenantId: string,
     id: string,
-    caPem: string,
-    fingerprintSha256: string,
+    leafFingerprintSha256: string,
   ): Promise<VsphereConnectionResponse> {
-    // Defense-in-depth at the storage boundary (#272): never persist an empty pin.
-    // The caller always supplies a server-computed root PEM from a fresh re-probe,
-    // so this cannot fire today — but a `tlsPinnedCaPem: ''` would silently disable
-    // pinning (an empty `ca:` list falls back to the system store), so refuse it
-    // here rather than trust the upstream gate to be the only safeguard. A bare
-    // Error (→ sanitized 500) is intentional: this is an unreachable-invariant
-    // assertion, not a user-input error, so it must not read as an expected 4xx.
-    if (caPem.trim() === '') {
-      throw new Error('refusing to pin an empty CA certificate');
-    }
-
     const existing = await this.prisma.vsphereConnection.findFirst({ where: { id, tenantId } });
     if (!existing) throw new NotFoundError('VsphereConnection', id);
-
     const row = await this.prisma.vsphereConnection.update({
       where: { id },
       data: {
         tlsMode: 'pinned',
-        tlsPinnedCaPem: caPem,
-        tlsPinnedSha256: fingerprintSha256.toUpperCase(),
+        tlsPinnedSha256: leafFingerprintSha256.toUpperCase(),
         status: 'never_connected',
         lastError: null,
       },
@@ -386,7 +368,7 @@ export class VsphereConnectionsService {
       port: row.port,
       username: row.username,
       tlsMode: (row.tlsMode === 'system' ? 'system' : 'pinned') satisfies VsphereTlsMode,
-      pinnedRootFingerprintSha256: row.tlsPinnedSha256,
+      pinnedLeafFingerprintSha256: row.tlsPinnedSha256,
       instanceUuid: row.instanceUuid,
       apiVersion: row.apiVersion,
       enabled: row.enabled,

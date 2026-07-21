@@ -1,4 +1,4 @@
-import { startOfUtcMonth, type VsphereSyncResult } from '@lcm/shared';
+import { startOfUtcMonth, type VsphereSyncOutcome, type VsphereSyncResult } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
 import type {
@@ -78,7 +78,7 @@ export class VsphereSyncService {
       port?: number;
       username: string;
       password: string;
-      pinnedRootPem: string | null;
+      pinnedLeafSha256: string | null;
     },
     /**
      * Graceful-shutdown cancellation (design §D21). Threaded into the vCenter
@@ -133,7 +133,13 @@ export class VsphereSyncService {
         where: { id: connectionId },
         data: { status: outcome, lastError: sanitize(err) },
       });
-      return { ...empty, outcome, error: sanitize(err) };
+      // VsphereSyncOutcome (the job-result vocabulary) has no cert_mismatch value
+      // — the connection row above gets the more specific status (routing the
+      // operator to the "Replace the trusted certificate" dialog), but the
+      // returned result stays within the vocabulary the scheduler understands.
+      const syncOutcome: VsphereSyncOutcome =
+        outcome === 'cert_mismatch' ? 'tls_untrusted' : outcome;
+      return { ...empty, outcome: syncOutcome, error: sanitize(err) };
     }
 
     // ⚠️ The identity guard. If this hostname now answers as a different vCenter —
@@ -500,8 +506,15 @@ function startOfUtcDay(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
-function classify(err: unknown): 'unreachable' | 'auth_failed' | 'tls_untrusted' {
+function classify(err: unknown): 'unreachable' | 'auth_failed' | 'tls_untrusted' | 'cert_mismatch' {
+  const code = extractTlsErrorCode(err);
   const msg = err instanceof Error ? err.message : String(err);
+  // Checked BEFORE the generic /cert|tls/ branch below: that regex would
+  // otherwise swallow the Task 3 leaf-pin mismatch into tls_untrusted, losing
+  // the distinction that routes the operator to the replace-cert dialog.
+  if (code === 'CERT_FINGERPRINT_MISMATCH' || /CERT_FINGERPRINT_MISMATCH/.test(msg)) {
+    return 'cert_mismatch';
+  }
   if (/auth|login|credential/i.test(msg)) return 'auth_failed';
   if (/cert|tls|self.signed/i.test(msg)) return 'tls_untrusted';
   return 'unreachable';
@@ -515,6 +528,9 @@ function classify(err: unknown): 'unreachable' | 'auth_failed' | 'tls_untrusted'
 function sanitize(err: unknown): string {
   const outcome = classify(err);
   if (outcome === 'auth_failed') return 'vCenter rejected the credentials.';
+  if (outcome === 'cert_mismatch') {
+    return 'vCenter is presenting a different certificate than the one you trusted.';
+  }
   if (outcome === 'tls_untrusted') return 'vCenter presented an untrusted certificate.';
   return 'Could not reach vCenter.';
 }

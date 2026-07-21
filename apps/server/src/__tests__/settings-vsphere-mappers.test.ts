@@ -22,14 +22,6 @@ const diagnostics = {
 };
 
 describe('toProbeResponse (#272)', () => {
-  it('passes chain_incomplete through — NOT collapsed into tls_untrusted', () => {
-    const r = toProbeResponse({ outcome: 'chain_incomplete', chain: null, diagnostics });
-    expect(r.outcome).toBe('chain_incomplete');
-    expect(r.reachable).toBe(false);
-    // No anchor was pinned, so no fingerprint leaves the server.
-    expect(r.rootFingerprintSha256).toBeNull();
-  });
-
   it('passes unreachable through', () => {
     const r = toProbeResponse({ outcome: 'unreachable', chain: null, diagnostics: null });
     expect(r.outcome).toBe('unreachable');
@@ -45,8 +37,7 @@ describe('toProbeResponse (#272)', () => {
     const result: TlsProbeResult = {
       outcome: 'ok',
       chain: {
-        rootPem: '-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----',
-        rootFingerprintSha256: 'AB:CD',
+        leafFingerprintSha256: 'AB:CD',
         trustedBySystemRoots: true,
         validFrom: 'Jul 1 2026',
         validTo: 'Jul 1 2028',
@@ -56,7 +47,7 @@ describe('toProbeResponse (#272)', () => {
     expect(toProbeResponse(result)).toEqual({
       reachable: true,
       trustedBySystemRoots: true,
-      rootFingerprintSha256: 'AB:CD',
+      leafFingerprintSha256: 'AB:CD',
       validFrom: 'Jul 1 2026',
       validTo: 'Jul 1 2028',
       outcome: 'ok',
@@ -65,14 +56,8 @@ describe('toProbeResponse (#272)', () => {
 });
 
 describe('trustReprobeError (#272)', () => {
-  it('returns null when the re-probe pinned a genuine anchor', () => {
+  it('returns null when the re-probe pinned a genuine certificate', () => {
     expect(trustReprobeError('ok')).toBeNull();
-  });
-
-  it('reports chain_incomplete distinctly as CHAIN_INCOMPLETE', () => {
-    const err = trustReprobeError('chain_incomplete');
-    expect(err?.code).toBe('CHAIN_INCOMPLETE');
-    expect(err?.message).toMatch(/did not present its root CA/i);
   });
 
   it('keeps every other non-ok outcome as VCENTER_UNREACHABLE (fail closed)', () => {

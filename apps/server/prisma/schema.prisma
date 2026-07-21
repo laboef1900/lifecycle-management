@@ -483,10 +483,9 @@ enum UserRole {
 /// job every few minutes, so decrypt-on-use is affordable and keeps plaintext out
 /// of the long-lived heap.
 ///
-/// @ai-warning `passwordEnc` is the ONLY secret here. `tlsPinnedCaPem` and its
-/// fingerprint are PUBLIC certificate data — vCenter serves the CA unauthenticated
-/// and presents it in every handshake — so encrypting them would protect a secret
-/// that does not exist.
+/// @ai-warning `passwordEnc` is the ONLY secret here. `tlsPinnedSha256` is PUBLIC
+/// certificate data — vCenter presents its leaf certificate unauthenticated in
+/// every handshake — so encrypting it would protect a secret that does not exist.
 model VsphereConnection {
   id          String @id @default(cuid())
   tenantId    String @default("default") @map("tenant_id")
@@ -496,11 +495,11 @@ model VsphereConnection {
   /// its own column (#199).
   hostname    String
   /// vCenter's HTTPS port. Defaults to 443; configurable per connection (#199).
-  /// Full 1-65535 is allowed — TOFU root-pinning (tls_pinned_ca_pem) is the trust
-  /// gate, not a port allow-list, and the port only changes the destination socket,
-  /// never whether the certificate is verified. Not part of connection identity
-  /// ((tenantId,name) + the discovered instanceUuid), so a port change never resets
-  /// the pin.
+  /// Full 1-65535 is allowed — TOFU leaf-fingerprint pinning (tls_pinned_sha256)
+  /// is the trust gate, not a port allow-list, and the port only changes the
+  /// destination socket, never whether the certificate is verified. Not part of
+  /// connection identity ((tenantId,name) + the discovered instanceUuid), so a
+  /// port change never resets the pin.
   port        Int    @default(443)
   username    String
   /// AES-GCM under CONFIG_ENCRYPTION_KEY via crypto/secret-box.ts — reused as-is,
@@ -509,13 +508,13 @@ model VsphereConnection {
   /// and same reasoning as AuthConfig (plugins/auth-config.ts).
   passwordEnc String @map("password_enc")
 
-  /// 'system' | 'pinned'. Exactly two values, both fail closed. There is no
-  /// insecure mode and there must never be one — see the shared contract.
+  /// 'system' | 'pinned', both fail closed. 'pinned' verifies the leaf fingerprint;
+  /// 'system' verifies against the system trust store. No insecure value, ever.
   tlsMode         String  @default("pinned") @map("tls_mode")
-  /// The pinned trust anchor: the ROOT of the presented chain, not the leaf.
-  /// vCenter auto-renews its leaf unattended, so a leaf pin would break by itself
-  /// on a ~2-year timer. Public data, stored in plaintext.
-  tlsPinnedCaPem  String? @map("tls_pinned_ca_pem")
+  /// The pinned trust anchor: SHA-256 of the presented LEAF certificate (govc
+  /// form). Public data, plaintext. Does not survive vCenter leaf renewal — a
+  /// mismatch then surfaces as cert_mismatch for re-confirm. See the 2026-07-21
+  /// design (supersedes D11 and #278).
   tlsPinnedSha256 String? @map("tls_pinned_sha256")
 
   /// ServiceContent.about.instanceUuid, discovered on connect — never entered by
