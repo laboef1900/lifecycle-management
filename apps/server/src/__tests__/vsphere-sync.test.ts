@@ -44,7 +44,12 @@ function fakeCollector(
   return { collect: typeof inv === 'function' ? inv : async () => inv };
 }
 
-const CREDS = { hostname: 'vcenter.corp.local', username: 'u', password: 'p', pinnedRootPem: null };
+const CREDS = {
+  hostname: 'vcenter.corp.local',
+  username: 'u',
+  password: 'p',
+  pinnedLeafSha256: null,
+};
 
 function inventory(overrides: Partial<CollectedInventory> = {}): CollectedInventory {
   return {

@@ -68,7 +68,7 @@ async function setup(inv: CollectedInventory): Promise<{ conn: string; clusterId
       hostname: 'vcenter.corp.local',
       username: 'u',
       password: 'p',
-      pinnedRootPem: null,
+      pinnedLeafSha256: null,
     },
   );
   const cluster = await prisma.cluster.findFirstOrThrow({ where: { connectionId: c.id } });

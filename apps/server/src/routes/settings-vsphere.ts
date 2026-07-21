@@ -244,16 +244,16 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
       const body = vsphereVerifySchema.parse(request.body);
       guardTarget(body.hostname);
 
-      // No pinned root is available for an unsaved connection, so this verifies
-      // against the system trust store. A self-signed vCenter therefore reports
-      // `tls_untrusted` until its CA is confirmed and pinned — which is the intended
+      // No pin is available for an unsaved connection, so this verifies against the
+      // system trust store. A self-signed vCenter therefore reports `tls_untrusted`
+      // until its leaf fingerprint is confirmed and pinned — which is the intended
       // order: vet the certificate, THEN send the credential.
       const result = await verifyLogin({
         hostname: body.hostname,
         port: body.port,
         username: body.username,
         password: body.password,
-        pinnedRootPem: null,
+        pinnedLeafSha256: null,
       });
 
       // @ai-warning The log line carries the OUTCOME only. Never the password, never

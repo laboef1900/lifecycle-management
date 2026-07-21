@@ -1,3 +1,4 @@
+import type { Socket } from 'node:net';
 import {
   connect as tlsConnect,
   type DetailedPeerCertificate,
@@ -6,8 +7,8 @@ import {
 
 /**
  * The default vCenter HTTPS port. Overridable per connection since #199 — the port
- * is a destination only and never relaxes trust (`verifiedTlsOptions` keeps
- * `rejectUnauthorized: true` and the `ca:` pin regardless). Still the default for
+ * is a destination only and never relaxes trust (the fingerprint gate in
+ * `fingerprintPinnedConnection` runs regardless of port). Still the default for
  * the schema column, the shared `.default(443)`, and the params below.
  */
 export const VCENTER_PORT = 443;
@@ -160,8 +161,9 @@ export function extractTlsErrorCode(err: unknown): string | null {
  * @ai-warning This is the ONLY place `rejectUnauthorized: false` is permitted in
  * this codebase, and it is safe here for exactly one reason: **nothing is sent.**
  * No credential, no request body — the socket is opened, the chain is read, and
- * the socket is destroyed. Every credential-bearing path MUST instead use
- * `ca: [pinnedRootPem]` with `rejectUnauthorized: true` (see `verifiedTlsOptions`).
+ * the socket is destroyed. Every credential-bearing path MUST instead gate the
+ * presented leaf's fingerprint against the stored pin (see
+ * `fingerprintPinnedConnection`).
  *
  * @ai-warning Do NOT "improve" this by moving the trust check into
  * `checkServerIdentity`. That callback fires **only when OpenSSL chain
@@ -232,47 +234,56 @@ export async function probeCertificate(
 }
 
 /**
- * TLS options for every credential-bearing connection.
+ * The credential-path connection factory for a PINNED connection.
  *
- * @ai-warning There is no insecure branch here, and there must never be one. With
- * verification off, the stored hostname identifies a *name*, not a *host* —
- * anyone able to spoof DNS or sit on the path harvests the vCenter
- * service-account password on **every scheduled poll**, on the happy path, with
- * no anomaly to detect and no interaction with our API.
- *
- * Pin the chain's ROOT as a `ca:` anchor rather than checking a leaf thumbprint
- * in application code:
- *   - it fails closed **in OpenSSL**, so there is no app-layer check to forget,
- *     skip, or refactor away;
- *   - hostname verification comes back for free, because the chain now validates,
- *     so the binding is "a cert for THIS host, issued by THIS CA" rather than a
- *     bare fingerprint;
- *   - it survives vCenter's unattended leaf auto-renewal (~2 years), whereas a
- *     leaf pin breaks by itself on a timer and trains admins to click through
- *     mismatches — which is how pinning dies in practice.
- *
- * @ai-warning Pinning the LEAF via `ca:` does not work against a chain-presenting
- * server: OpenSSL must terminate at a self-signed anchor it trusts, and a trusted
- * leaf mid-chain does not terminate it (`SELF_SIGNED_CERT_IN_CHAIN`; Node does not
- * expose `X509_V_FLAG_PARTIAL_CHAIN`). An implementer who tries `ca: [leafPem]`
- * will watch it fail against real vCenter and be tempted to "fix" it with
- * `rejectUnauthorized: false`. Pin the root.
+ * @ai-warning The ONLY place `rejectUnauthorized: false` is allowed on a
+ * credential-bearing path. Safe for one reason: the fingerprint gate runs on
+ * `secureConnect` and destroys the socket — and only then hands it to the HTTP
+ * layer via `oncreate` — so NO request byte reaches a peer whose leaf != the pin.
+ * Do NOT return the socket synchronously: `http` would use it before `secureConnect`
+ * and defeat the gate. Do NOT move the check into `checkServerIdentity` — with
+ * `rejectUnauthorized: false` it never fires (design D10). The `port` is a
+ * destination only (#199) and cannot relax the gate, which runs regardless.
  */
-export function verifiedTlsOptions(
+export function fingerprintPinnedConnection(
   hostname: string,
-  pinnedRootPem: string | null,
-  port: number = VCENTER_PORT,
-): { host: string; port: number; servername: string; rejectUnauthorized: true; ca?: string[] } {
-  // @ai-warning `port` is configurable per connection (#199), defaulting to 443. It
-  // changes the destination socket ONLY: `rejectUnauthorized: true` and the `ca:`
-  // root pin are unaffected, so no port value can relax trust. This is why widening
-  // the port range is safe — the pin, not the port, is the gate.
-  return {
-    host: hostname,
-    port,
-    servername: hostname,
-    rejectUnauthorized: true,
-    ...(pinnedRootPem ? { ca: [pinnedRootPem] } : {}),
+  port: number,
+  pinnedSha256: string,
+): (options: unknown, oncreate: (err: Error | null, socket: Socket) => void) => Socket {
+  // `oncreate`'s socket param is non-optional (`socket: Socket`, a `net.Duplex`) so
+  // the factory is assignable to `https` `createConnection`; on the error paths the
+  // socket is passed but ignored by `http` (it reads only the error).
+  return (_options, oncreate) => {
+    const socket = tlsConnect({
+      host: hostname,
+      port,
+      servername: hostname,
+      rejectUnauthorized: false, // gated below — see @ai-warning
+      timeout: CONNECT_TIMEOUT_MS,
+    });
+    socket.once('secureConnect', () => {
+      const presented = normalizeFingerprint(socket.getPeerCertificate(false).fingerprint256 ?? '');
+      if (!presented || presented !== pinnedSha256) {
+        const err = Object.assign(
+          new Error('vCenter presented a certificate that does not match the pinned fingerprint'),
+          { code: 'CERT_FINGERPRINT_MISMATCH' },
+        );
+        socket.destroy(err);
+        oncreate(err, socket);
+        return;
+      }
+      oncreate(null, socket);
+    });
+    socket.once('timeout', () => {
+      const err = Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' });
+      socket.destroy(err);
+      oncreate(err, socket);
+    });
+    socket.once('error', (err) => oncreate(err, socket));
+    // @ai-warning Return `undefined`, not the socket: `http` must AWAIT `oncreate`
+    // so the fingerprint gate above runs before any request byte is written. A
+    // synchronously-returned socket is used immediately and defeats the gate.
+    return undefined as unknown as Socket;
   };
 }
 

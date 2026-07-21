@@ -340,7 +340,7 @@ describe('⚠️ re-sync NEVER overwrites an operator-confirmed commissionedAt',
     hostname: 'vcenter.corp.local',
     username: 'u',
     password: 'p',
-    pinnedRootPem: null,
+    pinnedLeafSha256: null,
   };
 
   function inventory(): CollectedInventory {

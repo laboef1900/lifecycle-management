@@ -12,7 +12,6 @@ import {
   extractTlsErrorCode,
   normalizeFingerprint,
   probeCertificate,
-  verifiedTlsOptions,
 } from '../vsphere-tls.js';
 
 /**
@@ -158,29 +157,6 @@ describe('TLS trust — why checkServerIdentity cannot implement pinning', () =>
     // The negative control. There is no app-layer check to forget or refactor
     // away: get the anchor wrong and the handshake simply does not complete.
     expect(r.connected).toBe(false);
-  });
-});
-
-describe('verifiedTlsOptions — the credential-bearing path', () => {
-  it('always demands verification and never exposes an insecure branch', () => {
-    const pinned = verifiedTlsOptions(
-      'vcenter.corp.local',
-      '-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----',
-    );
-    expect(pinned.rejectUnauthorized).toBe(true);
-    expect(pinned.ca).toHaveLength(1);
-
-    const system = verifiedTlsOptions('vcenter.corp.local', null);
-    expect(system.rejectUnauthorized).toBe(true);
-    // No pin: fall back to the system trust store, still verifying. There is no
-    // third state — with verification off, the stored hostname would identify a
-    // name rather than a host, and the credential would go to whoever spoofed DNS
-    // on every scheduled poll.
-    expect(system.ca).toBeUndefined();
-  });
-
-  it('pins SNI to the configured hostname', () => {
-    expect(verifiedTlsOptions('vcenter.corp.local', null).servername).toBe('vcenter.corp.local');
   });
 });
 

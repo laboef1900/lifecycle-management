@@ -30,7 +30,12 @@ afterEach(async () => {
   }
 });
 
-const CREDS = { hostname: 'vcenter.corp.local', username: 'u', password: 'p', pinnedRootPem: null };
+const CREDS = {
+  hostname: 'vcenter.corp.local',
+  username: 'u',
+  password: 'p',
+  pinnedLeafSha256: null,
+};
 
 function inventory(usage: Array<number | null> = [300, 200]): CollectedInventory {
   return {

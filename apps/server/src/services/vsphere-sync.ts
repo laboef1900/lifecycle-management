@@ -78,7 +78,7 @@ export class VsphereSyncService {
       port?: number;
       username: string;
       password: string;
-      pinnedRootPem: string | null;
+      pinnedLeafSha256: string | null;
     },
     /**
      * Graceful-shutdown cancellation (design §D21). Threaded into the vCenter
