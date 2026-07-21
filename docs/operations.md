@@ -710,8 +710,10 @@ disclosure" — data LCM already serves from its own API in the default auth mod
 2. **Check certificate** — this contacts the host and reads its certificate. **No
    credential is sent at this step**, deliberately: the certificate is vetted
    _before_ the password is ever transmitted.
-3. If the certificate is self-signed (the VMCA default), LCM shows its SHA-256
-   fingerprint. **Confirm it against vCenter before saving.** On a host with `govc`:
+3. If the certificate is self-signed (the VMCA default) or otherwise not in your
+   system trust store, LCM shows the SHA-256 fingerprint of the presented **leaf**
+   certificate — the exact certificate LCM pins, not a chain root. **Confirm it
+   against vCenter before saving.** On a host with `govc`:
    ```bash
    govc about.cert -k -thumbprint -u <vcenter-host>
    ```
@@ -850,10 +852,23 @@ internal DNS collects the service-account password on **every poll**, silently, 
 the happy path. Self-service internal DNS is common and needs no network position at
 all.
 
-If a connection reports **Certificate changed**, LCM has stopped talking to it on
-purpose. Either the VMCA root was deliberately regenerated — in which case confirm
-the new fingerprint and re-pin — or something is wrong. LCM will not decide which,
-and will not re-pin by itself.
+LCM pins the **leaf** certificate's SHA-256, not a chain root — the exact certificate
+shown in step 3 above, not something derived from it. That works whether vCenter
+presents a self-signed leaf, an incomplete chain (the common case: just the Machine
+SSL leaf, no VMCA root), or a full chain, and it is what `govc about.cert -thumbprint`
+prints, so the confirmation step always compares like-for-like.
+
+The trade-off is that a leaf pin does not survive vCenter's own certificate
+lifecycle: the Machine SSL leaf **auto-renews on its own roughly every two years**,
+and an admin can also regenerate it deliberately. Either way, once the presented
+certificate stops matching the pinned fingerprint, the connection reports
+**Certificate changed** and LCM stops syncing that connection **on purpose** — it
+will not decide whether the change is expected and will not re-pin itself. Open
+**Settings → vCenter connections** and use **Replace the trusted certificate**:
+compare the newly shown fingerprint against `govc about.cert -thumbprint` (or the
+vSphere Client) exactly as when the connection was first added, then confirm once.
+On vCenter's normal renewal cadence this is a one-time expected step, not a sign
+that something is broken.
 
 ### Troubleshooting
 
@@ -861,7 +876,7 @@ and will not re-pin by itself.
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Not yet connected**       | Saved, never contacted.                                                                                                                                                                                              |
 | **Certificate not trusted** | Self-signed and not yet confirmed. Use _Check certificate_.                                                                                                                                                          |
-| **Certificate changed**     | The presented CA differs from the pinned one. Confirm and re-pin, or investigate.                                                                                                                                    |
+| **Certificate changed**     | The presented certificate no longer matches the pinned leaf fingerprint — commonly routine renewal (~2 yrs). Use _Replace the trusted certificate_ to confirm and re-pin, or investigate.                            |
 | **Sign-in failed**          | Host reachable, credentials rejected.                                                                                                                                                                                |
 | **Different vCenter**       | The hostname now answers as a _different_ vCenter instance. Sync is blocked deliberately: cluster ids are only unique within one vCenter, so syncing would overwrite the wrong clusters' capacity.                   |
 | **Credential unreadable**   | `CONFIG_ENCRYPTION_KEY` is missing, wrong, or rotated. The encrypted password is **preserved** — restore the correct key and the connection recovers. Never re-enter it as a "fix" until you have ruled the key out. |

@@ -48,6 +48,11 @@ one and **will recur**:
 > **`@ai-warning` this at the TLS implementation site.** A future contributor meeting a handshake failure
 > will reach for `rejectUnauthorized: false` on day one. The answer is the trust flow, not the flag.
 
+> **Amendment 2026-07-21:** root-pinning (D11) and its #278 refuse-to-pin fallback are replaced by
+> leaf-fingerprint pinning (`docs/superpowers/specs/2026-07-21-vsphere-leaf-fingerprint-pinning-design.md`).
+> This is **not** the "ignore TLS" flag rejected above — verification stays on; the predicate is exact-cert
+> identity rather than chain-to-a-trusted-root. The rejection of an insecure/ignore flag stands.
+
 ### 0.2 — Q1 (GiB): proceeding on evidence, owner confirmation still welcome
 
 The research is conclusive that the chain is **base-2 end to end** (§D3a: govmomi's `units` defines `GB` as
@@ -442,6 +447,15 @@ servers on the installed stack (**Node v26.5.0, undici 8.6.0/8.7.0, `@types/node
 > govmomi model does not port. This is exactly the cross-language API assumption that needs testing, not
 > recall.)_
 
+> **⚠️ SUPERSEDED 2026-07-21** — replaced by leaf-fingerprint pinning
+> (`docs/superpowers/specs/2026-07-21-vsphere-leaf-fingerprint-pinning-design.md`), which also removes PR
+> #278's `chain_incomplete`/`isSelfSignedAnchor` gate. Real vCenters present the leaf **without** the VMCA
+> root in the handshake, so root-pinning had nothing to pin (#272). Leaf-fingerprint pinning verifies the
+> exact certificate at the socket before any credential byte is written; it is verification-equivalent, not
+> the §0.1-rejected "ignore TLS" flag, and **D10 (no `checkServerIdentity`) still holds.** The rest of this
+> section is kept for the historical record — it documents why root-pinning was chosen and, per the spec
+> above, why it doesn't survive contact with a real vCenter.
+
 ### D11 — **Pin the root of the presented chain as a `ca:` trust anchor.** No insecure flag on the credential path.
 
 Verified end-to-end (`probe4.mjs`) across **both** real-world vCenter cert shapes with **one uniform code
@@ -488,6 +502,11 @@ fallback considered):
 emits **SHA-256 by default** — so SHA-256 is both correct _and_ what the admin's out-of-band confirmation
 command actually prints. _(vCenter's own `HostConnectSpec.sslThumbprint` remains SHA-1 for legacy reasons —
 do not let that pull the design back.)_
+
+> **⚠️ SUPERSEDED 2026-07-21** — see the note at D11 above: root-pinning is replaced by leaf-fingerprint
+> pinning (`docs/superpowers/specs/2026-07-21-vsphere-leaf-fingerprint-pinning-design.md`). The
+> `checkServerIdentity` prohibition below still holds verbatim under the new design (it isn't used there
+> either); the `ca:`/root-pin specifics are historical.
 
 ### D11a — The corrected rule, for code and docs, verbatim
 

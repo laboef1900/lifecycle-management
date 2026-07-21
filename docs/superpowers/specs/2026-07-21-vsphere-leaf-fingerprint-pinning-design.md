@@ -4,7 +4,7 @@
 - **Supersedes:** **D11** of `docs/vsphere-integration-design.md` (pin the chain root as a `ca:` anchor) **and PR #278** (merged to `dev` 2026-07-21, `a0509c7`: `evaluateProbedChain`/`isSelfSignedAnchor` refuse to pin a non-self-signed anchor and return `chain_incomplete`). #278 made the failure explicit and actionable but did **not** fix it; leaf-fingerprint pinning does, so its `chain_incomplete` outcome and self-signed-anchor gate are removed. **Amends** the reasoning in **§0.1** (does _not_ re-introduce a rejected "ignore TLS" flag) and **honors D10** (the `checkServerIdentity` trap) in full.
 - **Date:** 2026-07-21
 - **Risk:** **High** — the vCenter credential-bearing TLS trust path, a `@lcm/shared` contract change, and a Prisma migration (see CLAUDE.md Change Risk table). Requires the Automated high-risk approval controls (written design + two independent AI reviews + green CI) or a human sign-off.
-- **Status:** Design — owner approved the direction (2026-07-21); pending owner review of this written spec.
+- **Status:** Implemented via docs/superpowers/plans/2026-07-21-vsphere-leaf-fingerprint-pinning.md.
 - **Owner decisions (2026-07-21):** (1) **Replace** root-pinning entirely with leaf-fingerprint pinning — one trust path, "works everywhere". (2) The vSphere feature is **dev-only, not in production**, so the migration may reset any existing pinned rows to require a one-time re-confirm.
 
 ## Problem
