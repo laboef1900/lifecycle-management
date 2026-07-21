@@ -92,3 +92,100 @@ qlmi0Rqj50DnqgL7KIdKKVguO5R8vcZm8BbnpsRbInhbDm7Z7cT1WDNuX7Q2OIMS
 PUPl7vXoYag=
 -----END CERTIFICATE-----
 `;
+
+/**
+ * A real 3-level chain — root CA → intermediate CA → leaf — for the #272
+ * incomplete-chain tests. Unlike the single self-signed fixtures above (leaf ==
+ * root, which is exactly why vcsim/CI never reproduced #272), this has a distinct
+ * self-signed root, an intermediate, and a CA-signed leaf. That lets a test assert
+ * the security predicate on REAL certificate bytes: only the self-signed root is a
+ * genuine anchor; the intermediate and the leaf are not, so pinning either (which
+ * is what an incomplete chain makes `rootOf` do) must be refused.
+ *
+ * @ai-warning TEST FIXTURES. These are throwaway PUBLIC certificates only — no
+ * private keys. Verifying a self-signature needs only the cert's own embedded
+ * public key, so no key material is required (or committed) for these tests. All
+ * three signing keys were discarded at generation time.
+ *
+ * Generated (2026-07-21) with:
+ *   openssl req -x509 -newkey rsa:2048 -nodes -days 7300 -keyout root.key -out root.crt \
+ *     -subj "/CN=LCM Test Root CA" -addext "basicConstraints=critical,CA:TRUE"
+ *   openssl req -newkey rsa:2048 -nodes -keyout int.key -out int.csr \
+ *     -subj "/CN=LCM Test Intermediate CA"
+ *   openssl x509 -req -in int.csr -CA root.crt -CAkey root.key -CAcreateserial -days 3650 \
+ *     -extfile <(printf "basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n") -out int.crt
+ *   openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr -subj "/CN=vcenter.test.local"
+ *   openssl x509 -req -in leaf.csr -CA int.crt -CAkey int.key -CAcreateserial -days 3650 \
+ *     -extfile <(printf "subjectAltName=DNS:vcenter.test.local,DNS:localhost,IP:127.0.0.1\nbasicConstraints=CA:FALSE\n") -out leaf.crt
+ */
+
+/** Self-signed root of the 3-level chain — a genuine anchor. */
+export const ROOT_CA_PEM = `-----BEGIN CERTIFICATE-----
+MIIDFzCCAf+gAwIBAgIUOa4mcq8XBPN/0o5MUvsAYgM6O+MwDQYJKoZIhvcNAQEL
+BQAwGzEZMBcGA1UEAwwQTENNIFRlc3QgUm9vdCBDQTAeFw0yNjA3MjExMTQ5MzBa
+Fw00NjA3MTYxMTQ5MzBaMBsxGTAXBgNVBAMMEExDTSBUZXN0IFJvb3QgQ0EwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCdtdVg0Jp5hzlk1Ag+IBMXMpau
+FHpTPbX91HnIRiv0v10wwbVaYnBlv0amYztWBbxVCCk/JxSsifSyABLl5HrVSazW
+p9FWxu86iBhm2/okYruDm2e+ViiU578O/WHET+te87ltEWEGwcE2EzAsmH0zQLpJ
+Ii1HxUCq9tW7zYNdndrUc0baB1DkjZKIJWoIIGELia5XSm+piJ9psyygrua8zp3l
+QYIvYfx4vWWQDx20/g8yKUepBi/Qyx2GPo8yiYMHCGjehGyrkyFMDZESNeKJgmLt
+E//9AI8gqm/OmCiMScK6bSjubyMebtSackj7apqfelLuKJb3WYajH2zrxDzbAgMB
+AAGjUzBRMB0GA1UdDgQWBBTOKZaht6aC1GtvrZTO8AzJsdMvRDAfBgNVHSMEGDAW
+gBTOKZaht6aC1GtvrZTO8AzJsdMvRDAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3
+DQEBCwUAA4IBAQAkLMiHxjNFiDS+EBF4dKomTM+4/NiUFeOI29qfUAlszBNuLaht
+XZWuvtTOVeR4QnbKXnSoyKx+e0AiKFHvNg9TboZ2cKydvk7MCmmeRpsqEIqvl2bd
+ohVa9aUg5yIjF6XGvSRCNAqR9zL524NfxepQmM2Ly5k0OlcQXhqReBejEkQvlzm4
+6LyzHAJC0mO4+vq3lVLGmKne+Lv4+SD765ST+nxeoeceJ84m7S9LJ2CawMCTWiju
+RW2xDtFtmoHs6irIdabU77UsvvYtz48BKNbqE8/aplFvQwLhO/LomKHWTGz0FKV9
+5xbeIJU40ONCmfE7aer5QQjoIhpqOwHuBHGN
+-----END CERTIFICATE-----
+`;
+
+/** Intermediate CA — CA-signed, NOT self-signed: must never be pinned as an anchor. */
+export const INTERMEDIATE_CA_PEM = `-----BEGIN CERTIFICATE-----
+MIIDLzCCAhegAwIBAgIUW/hKo0cehjwHjKhrJkhqs/mJtzYwDQYJKoZIhvcNAQEL
+BQAwGzEZMBcGA1UEAwwQTENNIFRlc3QgUm9vdCBDQTAeFw0yNjA3MjExMTQ5MzBa
+Fw0zNjA3MTgxMTQ5MzBaMCMxITAfBgNVBAMMGExDTSBUZXN0IEludGVybWVkaWF0
+ZSBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALqHgUbEMKd8bQM2
+xgwV4cTVxxeItb6ksKrGSuKFkOiTpVzQeN6qiI6L+zT50mujonahhb3JDpK3yure
+wKxvtLCKSHg/ZrSdB/4vTvf11WAKGp1TF5LgGwyuRodadZVgoN8v0TzidSTxjQKZ
+77CnC77J6dGhe8s3Pphv+4wNxnPH629jtQRAj+4jDn8TtqgnuUMB+D/FUKYpg/T5
+PCHJeRSrMZ5H5wZCCMm4l6gPPt9OXwmHizSBLUPBRU7J2VwoZDw/797UHiiGrvk1
+o/eDb3UxFlp1JfCsSVQRbhnxMkSSWpkS4fbSxKyXubZ8s2DWWJ+J9nexJcS3bhwB
+CRUb0rUCAwEAAaNjMGEwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYw
+HQYDVR0OBBYEFC24Xl55NL1jeu+xgTEJbXKrTIgrMB8GA1UdIwQYMBaAFM4plqG3
+poLUa2+tlM7wDMmx0y9EMA0GCSqGSIb3DQEBCwUAA4IBAQBUYe5Lz5ieC7DUoZzj
+9ZSdCJptkp2LCxJbDH7j6HQdcMEDJLxaxOJlm+nNUilP/EX+rV0S/zFjdjk/0H/L
+xYYJLWsr27e8acjmmn1K6NcpPPkvPXO/uTJdhDRstsi66kMT9kmbW4htn+tCMZsy
+j8vLf7rGXkbKMBLwrdJWczsXqUVL8iHSTcz3qzhNgNQtnrl3vRftwbFpuyA4+CwY
+V75FJEhjFlaynKt9sLia8CUhrseRpq9cLM0LaEuBULuw9MZuA4sDTjoKmDqreMG9
+08junpikAg6+cxanwYnmQwhr2fYpD0lhcNWhww8YrBBVefBEkVWTvmSsFjlpY3Ar
+CgXX
+-----END CERTIFICATE-----
+`;
+
+/**
+ * Leaf, CN=vcenter.test.local, SAN DNS:vcenter.test.local,DNS:localhost,IP:127.0.0.1,
+ * signed by the intermediate — a CA-signed end-entity cert, never a valid anchor.
+ */
+export const CHAIN_LEAF_PEM = `-----BEGIN CERTIFICATE-----
+MIIDSzCCAjOgAwIBAgIUGLk1AuGaf5bAXYoqmLXiJ7JwX+UwDQYJKoZIhvcNAQEL
+BQAwIzEhMB8GA1UEAwwYTENNIFRlc3QgSW50ZXJtZWRpYXRlIENBMB4XDTI2MDcy
+MTExNDkzMFoXDTM2MDcxODExNDkzMFowHTEbMBkGA1UEAwwSdmNlbnRlci50ZXN0
+LmxvY2FsMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2s//gDz4P6zh
+dZ7coH85b7ehnevldq2qsBUKWD5+T+NgAaCnbJgCdi1EGK8hxPLFrONulQIIyReV
+V2arEIYnZww2BkmihGZKseeZjbvaVEpT8kaLsokGBgEr/e1hE0NVNWgw5B9xA/Ae
+vML/BJc/ESak/Aj6V9TIQdvz7Oq6AbynYHxzrxCda9T6+R0LzdYzR4ZPDmZ2LT+I
+CXvZAbkObjZejchsfMm4Ibbx7JaHnf/njSqynLIIQGXVQ3Z8CW+3AmhNgAGzZK7j
+N1PsEJou14rfN8WRd2HPX5JJpC6aOY8Cv6zCrVU5boOUPHfCd6zU0XGDJ+AjalMD
+unfXqWd/uwIDAQABo30wezAuBgNVHREEJzAlghJ2Y2VudGVyLnRlc3QubG9jYWyC
+CWxvY2FsaG9zdIcEfwAAATAJBgNVHRMEAjAAMB0GA1UdDgQWBBQejaGhCKpgb0oc
+eQvkODnHdmg5XzAfBgNVHSMEGDAWgBQtuF5eeTS9Y3rvsYExCW1yq0yIKzANBgkq
+hkiG9w0BAQsFAAOCAQEAq94Y/zR8K2wAiqgfI+sMERdj4sba3xHB5XYZbhXAHZOH
+rGxvm0/gG3Dhuaq/aO1oXfJ5mNhs2/WJN2oAoGXA+oSMlefWVyKWNLjmdFK9y+TM
+Qkm8wHsL4n+DrC4efqLAoqePfaqj2Lwd4H93x4S4Y5GlY7lLPN9YcbvuWGOBuDA2
+I0Ie4Kd4wYbmfi33xPZBcuNNF52vYmtl7im5EWlnsG6sGCTASZBI3wrfgy43ipWe
+D+OqLtEdnNGw6iP5JiZiarpLkRGLLscg3UpA4n/TSRxkgwB2UUzNgBhxUv/kYybD
+oI0FOSORWErix4FBSX/fHw3lt+FzL6fDvTbHGpYOYg==
+-----END CERTIFICATE-----
+`;
