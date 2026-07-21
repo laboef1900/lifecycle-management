@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dialog';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { api, describeApiError, type ItemBulkShiftDatesInputWire } from '@/lib/api-client';
+import { generateUuidV4 } from '@/lib/uuid';
 
 import { useItemMutations, type CommonDialogProps } from './shared';
 
@@ -133,6 +134,13 @@ export function BulkShiftDatesDialog({
   const [unit, setUnit] = useState<DateShiftUnit>('months');
   const [rawAmount, setRawAmount] = useState('1');
 
+  // One key per dialog instance: `items-tab.tsx` only mounts this dialog
+  // while `shiftOpen` is true, so a fresh open is a fresh mount and a fresh
+  // key — while a double-click on Apply, or a client-side retry, reuses the
+  // SAME key across attempts of the SAME action, which is exactly what
+  // makes the request safe to retry (#263).
+  const [idempotencyKey] = useState(() => generateUuidV4());
+
   const magnitude = Number.parseInt(rawAmount, 10);
   const max = MAX_SHIFT_BY_UNIT[unit];
   const amountError =
@@ -149,7 +157,8 @@ export function BulkShiftDatesDialog({
   const blockedRows = outOfRange.length + colliding.length;
 
   const mutation = useMutation({
-    mutationFn: (payload: ItemBulkShiftDatesInputWire) => api.items.bulkShiftDates(payload),
+    mutationFn: (payload: ItemBulkShiftDatesInputWire) =>
+      api.items.bulkShiftDates(payload, idempotencyKey),
     onSuccess: (result) => {
       invalidate();
       toast.success(

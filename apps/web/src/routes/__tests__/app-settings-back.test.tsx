@@ -88,6 +88,7 @@ describe('/_app/settings Back button + Esc', () => {
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
+      idempotencyKeyRetentionHours: 24,
     });
     vi.spyOn(api.settings.categories, 'list').mockResolvedValue([]);
     vi.spyOn(api.settings.auth, 'get').mockResolvedValue({ ...baseAuthConfig });

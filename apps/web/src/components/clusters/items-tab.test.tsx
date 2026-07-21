@@ -372,10 +372,13 @@ describe('ItemsTab — bulk date shift (#256)', () => {
     await user.click(screen.getByRole('button', { name: 'Shift 2 entries' }));
 
     await waitFor(() =>
-      expect(bulkShift).toHaveBeenCalledWith({
-        itemIds: ['app-1', 'evt-1'],
-        shift: { amount: -3, unit: 'months' },
-      }),
+      expect(bulkShift).toHaveBeenCalledWith(
+        {
+          itemIds: ['app-1', 'evt-1'],
+          shift: { amount: -3, unit: 'months' },
+        },
+        expect.stringMatching(/^[0-9a-f-]{36}$/i),
+      ),
     );
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /Shift dates/ })).not.toBeInTheDocument(),

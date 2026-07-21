@@ -1,5 +1,6 @@
 import {
   clusterIdItemsParamsSchema,
+  idempotencyKeyHeaderSchema,
   itemAllocationRowInputSchema,
   itemBulkShiftDatesInputSchema,
   itemCreateInputSchema,
@@ -38,8 +39,9 @@ export const itemsRoutes: FastifyPluginAsync = async (fastify) => {
   // Admin-gated automatically: a mutating /api route outside the read-only
   // exemption list (see `requiresAdmin` in plugins/auth.ts).
   fastify.post('/items/bulk-shift-dates', async (request) => {
+    const idempotencyKey = idempotencyKeyHeaderSchema.parse(request.headers['idempotency-key']);
     const input = itemBulkShiftDatesInputSchema.parse(request.body);
-    return service.bulkShiftDates(request.tenantId, input);
+    return service.bulkShiftDates(request.tenantId, input, idempotencyKey);
   });
 
   fastify.post('/items/:id/allocations', async (request, reply) => {

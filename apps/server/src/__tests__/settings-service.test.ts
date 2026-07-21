@@ -43,6 +43,7 @@ describe('SettingsService.updateTenant', () => {
       warnThreshold: 0.65,
       critThreshold: 0.85,
       procurementLeadTimeWeeks: 6,
+      idempotencyKeyRetentionHours: 24,
     });
     expect(result.warnThreshold).toBeCloseTo(0.65);
     expect(result.critThreshold).toBeCloseTo(0.85);
@@ -55,6 +56,7 @@ describe('SettingsService.updateTenant', () => {
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 12,
+      idempotencyKeyRetentionHours: 24,
     });
     const result = await svc.getTenant(TENANT_ID);
     expect(result.procurementLeadTimeWeeks).toBe(12);
@@ -95,6 +97,7 @@ describe('SettingsService.updateCluster', () => {
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
+      idempotencyKeyRetentionHours: 24,
     });
     await expect(
       svc.updateCluster(TENANT_ID, clusterId, {

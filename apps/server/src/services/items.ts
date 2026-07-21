@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type {
   ItemAllocationResponseRow,
   ItemAllocationRowInput,
@@ -15,7 +17,8 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { formatDate } from '../lib/dates.js';
 
 import { CategoriesService } from './categories.js';
-import { NotFoundError, UnprocessableError } from './errors.js';
+import { ConflictError, NotFoundError, UnprocessableError } from './errors.js';
+import { IdempotencyService } from './idempotency.js';
 import { translatePrismaError, type UniqueConstraintMapping } from './prisma-errors.js';
 
 const ALLOCATION_DUPLICATE: UniqueConstraintMapping = {
@@ -44,6 +47,9 @@ const MAX_SHIFT_ALLOCATION_ROWS = 1000;
 /** How long the bulk-shift transaction may run before Prisma aborts it. */
 const BULK_SHIFT_TIMEOUT_MS = 15_000;
 
+/** Recorded on every idempotency-key row this endpoint writes (#263). */
+const BULK_SHIFT_ROUTE = 'POST /items/bulk-shift-dates';
+
 interface ShiftedAllocation {
   id: string;
   effectiveFrom: Date;
@@ -55,6 +61,19 @@ interface ShiftPlan {
   endedAt: Date | null;
   /** Ordered so no intermediate state violates the allocation unique index. */
   allocations: ShiftedAllocation[];
+}
+
+/**
+ * Hashes the LOGICAL request — deduped and sorted `itemIds` paired with
+ * `shift` — not the raw payload. `bulkShiftDates` already dedupes itemIds via
+ * `Set`, which preserves first-occurrence order; without sorting here, the
+ * same set of items submitted in a different order (e.g. a re-rendered
+ * selection) would hash differently and a legitimate replay would be
+ * misread as a conflict.
+ */
+function hashBulkShiftRequest(uniqueIds: string[], shift: ItemDateShift): string {
+  const normalized = { itemIds: [...uniqueIds].sort(), shift };
+  return createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
 }
 
 /**
@@ -128,9 +147,11 @@ function planItemShift(row: ItemRow, shift: ItemDateShift): ShiftPlan {
 
 export class ItemsService {
   private readonly categories: CategoriesService;
+  private readonly idempotency: IdempotencyService;
 
   constructor(private readonly prisma: PrismaClient) {
     this.categories = new CategoriesService(this.prisma);
+    this.idempotency = new IdempotencyService(this.prisma);
   }
 
   async listByCluster(
@@ -352,8 +373,11 @@ export class ItemsService {
    * `effectiveDate` could push an application's start past its own first
    * allocation, which `update()` already refuses to do one entry at a time.
    *
-   * @ai-warning Not idempotent: applying the same request twice moves the
-   * entries twice. Callers must re-read before retrying an ambiguous failure.
+   * @ai-note Idempotent via `idempotencyKey` (#263): a replay with an
+   * unchanged payload returns the original response and applies nothing; the
+   * same key with a different payload is rejected as a 409 conflict and also
+   * applies nothing. The idempotency record is written inside this SAME
+   * transaction, so it commits or rolls back atomically with the shift.
    *
    * @ai-note A genuine serialization conflict (Postgres 40001) is deliberately
    * NOT retried — it aborts the transaction and surfaces as a sanitized 500,
@@ -364,11 +388,28 @@ export class ItemsService {
   async bulkShiftDates(
     tenantId: string,
     input: ItemBulkShiftDatesInput,
+    idempotencyKey: string,
   ): Promise<ItemBulkShiftDatesResponse> {
     const uniqueIds = Array.from(new Set(input.itemIds));
+    const requestHash = hashBulkShiftRequest(uniqueIds, input.shift);
 
-    const rows = await this.prisma.$transaction(
+    return this.prisma.$transaction(
       async (tx) => {
+        const cached = await this.idempotency.lookup(idempotencyKey, requestHash, tx);
+        if (cached === 'conflict') {
+          throw new ConflictError(
+            'IDEMPOTENCY_KEY_CONFLICT',
+            'This Idempotency-Key was already used for a different request',
+          );
+        }
+        if (cached !== null) {
+          // `cached.status` (always 200 today) is intentionally unused here —
+          // Fastify defaults the reply to 200. A future second consumer of
+          // IdempotencyService that records a non-200 status would need to
+          // set the reply code from `cached.status` explicitly.
+          return cached.body as ItemBulkShiftDatesResponse;
+        }
+
         const existing = await tx.item.findMany({
           where: { id: { in: uniqueIds }, tenantId },
           include: itemInclude,
@@ -405,16 +446,32 @@ export class ItemsService {
           }
         }
 
-        return tx.item.findMany({
+        const rows = await tx.item.findMany({
           where: { id: { in: uniqueIds }, tenantId },
           include: itemInclude,
           orderBy: [{ effectiveDate: 'asc' }, { createdAt: 'asc' }],
         });
+        const response: ItemBulkShiftDatesResponse = {
+          shifted: rows.length,
+          items: rows.map((row) => this.toResponse(row)),
+        };
+
+        await this.idempotency.record(
+          {
+            key: idempotencyKey,
+            route: BULK_SHIFT_ROUTE,
+            requestHash,
+            status: 200,
+            body: response,
+            tenantId,
+          },
+          tx,
+        );
+
+        return response;
       },
       { isolationLevel: 'Serializable', timeout: BULK_SHIFT_TIMEOUT_MS },
     );
-
-    return { shifted: rows.length, items: rows.map((row) => this.toResponse(row)) };
   }
 
   async appendAllocation(

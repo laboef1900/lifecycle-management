@@ -8,6 +8,7 @@ export * from './schemas/host.js';
 export * from './schemas/host-commissioning.js';
 export * from './schemas/host-lifecycle.js';
 export * from './schemas/host-replacement.js';
+export * from './schemas/idempotency.js';
 export * from './schemas/item.js';
 export * from './schemas/category.js';
 export * from './schemas/forecast.js';

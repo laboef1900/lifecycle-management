@@ -22,11 +22,17 @@ test.describe('configurable thresholds', () => {
     // lead time and echo it back — omitting it fails validation (400) and
     // would silently leak 65/85 into subsequent runs.
     const current = await request.get(`${API_BASE}/api/settings/tenant`);
-    const { procurementLeadTimeWeeks } = (await current.json()) as {
+    const { procurementLeadTimeWeeks, idempotencyKeyRetentionHours } = (await current.json()) as {
       procurementLeadTimeWeeks: number;
+      idempotencyKeyRetentionHours: number;
     };
     const reset = await request.put(`${API_BASE}/api/settings/tenant`, {
-      data: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks },
+      data: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks,
+        idempotencyKeyRetentionHours,
+      },
     });
     expect(reset.ok()).toBe(true);
   });

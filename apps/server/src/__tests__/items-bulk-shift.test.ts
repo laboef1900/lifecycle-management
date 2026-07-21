@@ -1,4 +1,5 @@
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { SESSION_COOKIE } from '../plugins/auth.js';
@@ -38,7 +39,12 @@ interface ShiftBody {
 }
 
 const shift = (payload: Record<string, unknown>): Promise<LightMyRequestResponse> =>
-  server.inject({ method: 'POST', url: '/api/items/bulk-shift-dates', payload });
+  server.inject({
+    method: 'POST',
+    url: '/api/items/bulk-shift-dates',
+    payload,
+    headers: { 'idempotency-key': randomUUID() },
+  });
 
 const readItem = async (id: string): Promise<ShiftBody['items'][number]> => {
   const response = await server.inject({ method: 'GET', url: `/api/clusters/${clusterId}/items` });
@@ -366,6 +372,7 @@ describe('POST /api/items/bulk-shift-dates — RBAC', () => {
       url: '/api/items/bulk-shift-dates',
       cookies: { [SESSION_COOKIE]: token },
       payload: { itemIds: [event.id], shift: { amount: 1, unit: 'months' } },
+      headers: { 'idempotency-key': randomUUID() },
     });
 
     expect(response.statusCode).toBe(200);

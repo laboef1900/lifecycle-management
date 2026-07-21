@@ -43,10 +43,12 @@ describe('GET /api/settings/tenant', () => {
       warnThreshold: number;
       critThreshold: number;
       procurementLeadTimeWeeks: number;
+      idempotencyKeyRetentionHours: number;
     };
     expect(body.warnThreshold).toBeCloseTo(0.7);
     expect(body.critThreshold).toBeCloseTo(0.9);
     expect(body.procurementLeadTimeWeeks).toBe(8);
+    expect(body.idempotencyKeyRetentionHours).toBe(24);
   });
 });
 
@@ -55,7 +57,12 @@ describe('PUT /api/settings/tenant', () => {
     const res = await server.inject({
       method: 'PUT',
       url: '/api/settings/tenant',
-      payload: { warnThreshold: 0.65, critThreshold: 0.85, procurementLeadTimeWeeks: 10 },
+      payload: {
+        warnThreshold: 0.65,
+        critThreshold: 0.85,
+        procurementLeadTimeWeeks: 10,
+        idempotencyKeyRetentionHours: 24,
+      },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { warnThreshold: number; procurementLeadTimeWeeks: number };
@@ -67,7 +74,12 @@ describe('PUT /api/settings/tenant', () => {
     const res = await server.inject({
       method: 'PUT',
       url: '/api/settings/tenant',
-      payload: { warnThreshold: 0.9, critThreshold: 0.7, procurementLeadTimeWeeks: 8 },
+      payload: {
+        warnThreshold: 0.9,
+        critThreshold: 0.7,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
+      },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -76,7 +88,12 @@ describe('PUT /api/settings/tenant', () => {
     const res = await server.inject({
       method: 'PUT',
       url: '/api/settings/tenant',
-      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 0 },
+      payload: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 0,
+        idempotencyKeyRetentionHours: 24,
+      },
     });
     expect(res.statusCode).toBe(200);
   });
@@ -85,7 +102,12 @@ describe('PUT /api/settings/tenant', () => {
     const res = await server.inject({
       method: 'PUT',
       url: '/api/settings/tenant',
-      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 104 },
+      payload: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 104,
+        idempotencyKeyRetentionHours: 24,
+      },
     });
     expect(res.statusCode).toBe(200);
   });
@@ -94,7 +116,12 @@ describe('PUT /api/settings/tenant', () => {
     const res = await server.inject({
       method: 'PUT',
       url: '/api/settings/tenant',
-      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 105 },
+      payload: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 105,
+        idempotencyKeyRetentionHours: 24,
+      },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -103,7 +130,12 @@ describe('PUT /api/settings/tenant', () => {
     const res = await server.inject({
       method: 'PUT',
       url: '/api/settings/tenant',
-      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: -1 },
+      payload: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: -1,
+        idempotencyKeyRetentionHours: 24,
+      },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -112,9 +144,72 @@ describe('PUT /api/settings/tenant', () => {
     const res = await server.inject({
       method: 'PUT',
       url: '/api/settings/tenant',
-      payload: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 4.5 },
+      payload: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 4.5,
+        idempotencyKeyRetentionHours: 24,
+      },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts idempotencyKeyRetentionHours at the 1 and 168 boundaries', async () => {
+    const low = await server.inject({
+      method: 'PUT',
+      url: '/api/settings/tenant',
+      payload: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 1,
+      },
+    });
+    expect(low.statusCode).toBe(200);
+    expect(
+      (low.json() as { idempotencyKeyRetentionHours: number }).idempotencyKeyRetentionHours,
+    ).toBe(1);
+
+    const high = await server.inject({
+      method: 'PUT',
+      url: '/api/settings/tenant',
+      payload: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 168,
+      },
+    });
+    expect(high.statusCode).toBe(200);
+    expect(
+      (high.json() as { idempotencyKeyRetentionHours: number }).idempotencyKeyRetentionHours,
+    ).toBe(168);
+  });
+
+  it('rejects idempotencyKeyRetentionHours outside 1..168', async () => {
+    const tooLow = await server.inject({
+      method: 'PUT',
+      url: '/api/settings/tenant',
+      payload: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 0,
+      },
+    });
+    expect(tooLow.statusCode).toBe(400);
+
+    const tooHigh = await server.inject({
+      method: 'PUT',
+      url: '/api/settings/tenant',
+      payload: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 169,
+      },
+    });
+    expect(tooHigh.statusCode).toBe(400);
   });
 });
 
