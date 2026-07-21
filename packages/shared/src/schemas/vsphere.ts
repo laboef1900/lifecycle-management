@@ -12,7 +12,7 @@ import { cuid } from './common.js';
  *   MUST carry the current password. Reads and probes MUST NOT require it.**
  *
  * Trust material = where credentials go (`hostname`, `port`, `username`) + what
- * proves the destination's identity (`tlsMode`, `pinnedCaPem`).
+ * proves the destination's identity (`tlsMode`, `tlsPinnedSha256`).
  *
  * Why this is not paranoia: the default auth mode is `disabled`, in which every
  * anonymous caller is an ADMIN principal. The only asymmetry between the real
@@ -57,8 +57,9 @@ const vcenterPort = z.number().int().min(1).max(65535);
  * and both fail closed. There is no third "off" state, and there must never be.**
  *
  * - `system` — the cert validates against the system trust store (a real CA).
- * - `pinned` — the cert chain's root was confirmed out-of-band by an admin and
- *   is pinned as the only trust anchor.
+ * - `pinned` — the presented leaf certificate's SHA-256 was confirmed out-of-band
+ *   by an admin and is pinned; the credential is only sent to a cert with that
+ *   exact fingerprint.
  *
  * An `insecure` flag would be trust material wearing a convenience flag's
  * clothing: in `disabled` mode a `PATCH {"insecure": true}` sails through any
@@ -163,15 +164,14 @@ export interface VsphereProbeResult {
   /** True when the chain already validates against the system trust store. */
   trustedBySystemRoots: boolean;
   /**
-   * SHA-256 of the chain's ROOT — the anchor to pin, not the leaf.
-   *
-   * The leaf is the wrong thing to pin: vCenter auto-renews its Machine SSL
-   * certificate unattended (~2 years by default), so a leaf pin breaks by itself,
-   * on a timer, with nobody to explain why — and admins learn to click through
-   * mismatches, which is how pinning dies. The VMCA root changes only when a human
-   * deliberately regenerates it, which is exactly when re-confirmation is wanted.
+   * SHA-256 of the presented LEAF certificate — the exact cert to pin. This is what
+   * `govc about.cert -thumbprint` and the vSphere Client print, so the admin compares
+   * like-for-like. Pinning the leaf works against a self-signed cert, an incomplete
+   * chain, and a full chain alike. It does not survive vCenter's unattended leaf
+   * renewal (~2 yrs); on renewal the connection reports `cert_mismatch` and the admin
+   * re-confirms once. See the 2026-07-21 design (supersedes D11 and #278).
    */
-  rootFingerprintSha256: string | null;
+  leafFingerprintSha256: string | null;
   validFrom: string | null;
   validTo: string | null;
   /**
@@ -179,16 +179,8 @@ export interface VsphereProbeResult {
    * id. `unreachable` merges connection-refused, timed-out, and no-route so the
    * endpoint cannot be used to tell "port closed" from "filtered" from "no route"
    * — the distinctions that make a scan oracle useful.
-   *
-   * `chain_incomplete` (#272) is distinct from `tls_untrusted` on purpose: vCenter
-   * WAS reachable and presented a certificate, but its chain does not terminate at
-   * a self-signed root we can pin (leaf-only, or leaf+intermediate with the root
-   * withheld). The fix is on the vCenter side (add the issuing/root CA to its
-   * chain), so the operator needs that specific guidance, not a generic failure.
-   * It carries no subject/issuer/SAN — only the outcome — so it discloses nothing
-   * a fingerprint would not.
    */
-  outcome: 'ok' | 'unreachable' | 'tls_untrusted' | 'not_a_vcenter' | 'chain_incomplete';
+  outcome: 'ok' | 'unreachable' | 'tls_untrusted' | 'not_a_vcenter';
 }
 
 /**
@@ -213,21 +205,21 @@ export interface VsphereVerifyResult {
 }
 
 /**
- * Pin a certificate root as this connection's trust anchor (TOFU).
+ * Pin a certificate as this connection's trust anchor (TOFU) by its leaf fingerprint.
  *
  * Requires the password because it mutates **trust material**: re-pinning to an
- * attacker's root plus a DNS spoof delivers the credential on the next poll. The
- * bar is lower than it looks — self-service internal DNS is common, and needs no
+ * attacker's certificate plus a DNS spoof delivers the credential on the next poll.
+ * The bar is lower than it looks — self-service internal DNS is common, and needs no
  * network position at all.
  */
-export const vsphereTrustCaSchema = z.strictObject({
+export const vsphereTrustCertSchema = z.strictObject({
   /** Echoed back from the probe, so the admin confirms what the server saw. */
-  rootFingerprintSha256: z
+  leafFingerprintSha256: z
     .string()
     .regex(/^[A-F0-9]{2}(:[A-F0-9]{2}){31}$/i, 'Expected a SHA-256 fingerprint'),
   password: z.string().min(1).max(1000),
 });
-export type VsphereTrustCa = z.infer<typeof vsphereTrustCaSchema>;
+export type VsphereTrustCert = z.infer<typeof vsphereTrustCertSchema>;
 
 export const vsphereConnectionIdParamsSchema = z.object({ id: cuid });
 
@@ -265,8 +257,8 @@ export interface VsphereConnectionResponse {
   port: number;
   username: string;
   tlsMode: VsphereTlsMode;
-  /** Fingerprint of the pinned root, for display. Public data — never a secret. */
-  pinnedRootFingerprintSha256: string | null;
+  /** Fingerprint of the pinned leaf certificate, for display. Public data — never a secret. */
+  pinnedLeafFingerprintSha256: string | null;
   instanceUuid: string | null;
   apiVersion: string | null;
   enabled: boolean;

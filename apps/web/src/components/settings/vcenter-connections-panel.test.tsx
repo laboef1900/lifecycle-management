@@ -33,7 +33,7 @@ const connection = (
   port: 443,
   username: 'svc-lcm',
   tlsMode: 'pinned',
-  pinnedRootFingerprintSha256: null,
+  pinnedLeafFingerprintSha256: null,
   instanceUuid: null,
   apiVersion: '8.0.3.0',
   enabled: true,
@@ -64,7 +64,7 @@ describe('<VcenterConnectionsPanel>', () => {
     const probe = vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
       reachable: true,
       trustedBySystemRoots: false,
-      rootFingerprintSha256: 'AB:CD',
+      leafFingerprintSha256: 'AB:CD',
       validFrom: null,
       validTo: null,
       outcome: 'ok',
@@ -87,7 +87,7 @@ describe('<VcenterConnectionsPanel>', () => {
     const probe = vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
       reachable: true,
       trustedBySystemRoots: false,
-      rootFingerprintSha256: 'AB:CD',
+      leafFingerprintSha256: 'AB:CD',
       validFrom: null,
       validTo: null,
       outcome: 'ok',
@@ -137,7 +137,7 @@ describe('<VcenterConnectionsPanel>', () => {
     vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
       reachable: true,
       trustedBySystemRoots: false,
-      rootFingerprintSha256: 'AB:CD:EF:01',
+      leafFingerprintSha256: 'AB:CD:EF:01',
       validFrom: null,
       validTo: null,
       outcome: 'ok',
@@ -157,7 +157,7 @@ describe('<VcenterConnectionsPanel>', () => {
     vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
       reachable: true,
       trustedBySystemRoots: false,
-      rootFingerprintSha256: 'AB:CD:EF:01',
+      leafFingerprintSha256: 'AB:CD:EF:01',
       validFrom: null,
       validTo: 'Jul 19 08:06:40 2036 GMT',
       outcome: 'ok',
@@ -172,31 +172,11 @@ describe('<VcenterConnectionsPanel>', () => {
     expect(screen.getByText(/govc about.cert -thumbprint/)).toBeInTheDocument();
   });
 
-  it('guides the operator to fix the vCenter chain on an incomplete chain (#272)', async () => {
-    vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
-      reachable: false,
-      trustedBySystemRoots: false,
-      rootFingerprintSha256: null,
-      validFrom: null,
-      validTo: null,
-      outcome: 'chain_incomplete',
-    });
-    renderWithClient(<VcenterConnectionsPanel />);
-
-    await userEvent.type(await screen.findByLabelText(/hostname/i), 'vcenter.corp.local');
-    await userEvent.click(screen.getByRole('button', { name: /check certificate/i }));
-
-    // The actionable, vCenter-side message — not the misleading "could not reach"
-    // copy (the host DID answer).
-    expect(await screen.findByText(/did not present its root CA/i)).toBeInTheDocument();
-    expect(screen.queryByText(/could not reach that host/i)).not.toBeInTheDocument();
-  });
-
   it('says nothing to confirm when a public CA already vouches for the host', async () => {
     vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
       reachable: true,
       trustedBySystemRoots: true,
-      rootFingerprintSha256: 'AB:CD',
+      leafFingerprintSha256: 'AB:CD',
       validFrom: null,
       validTo: null,
       outcome: 'ok',
@@ -215,7 +195,7 @@ describe('<VcenterConnectionsPanel>', () => {
     vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
       reachable: true,
       trustedBySystemRoots: false,
-      rootFingerprintSha256: 'AB:CD:EF:01',
+      leafFingerprintSha256: 'AB:CD:EF:01',
       validFrom: null,
       validTo: null,
       outcome: 'ok',
@@ -316,7 +296,7 @@ function mockProbe(overrides: Partial<VsphereProbeResult> = {}) {
   return vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
     reachable: true,
     trustedBySystemRoots: false,
-    rootFingerprintSha256: PROBED_FINGERPRINT,
+    leafFingerprintSha256: PROBED_FINGERPRINT,
     validFrom: null,
     validTo: 'Jul 19 08:06:40 2036 GMT',
     outcome: 'ok',
@@ -330,10 +310,10 @@ async function openTrustDialog(): Promise<void> {
   expect(await screen.findByText(PROBED_FINGERPRINT)).toBeInTheDocument();
 }
 
-/** Fails `trustCa` with a real ApiError so `describeApiError` reads its message. */
-function mockTrustCaFailure(code: string, message: string) {
+/** Fails `trustCert` with a real ApiError so `describeApiError` reads its message. */
+function mockTrustCertFailure(code: string, message: string) {
   return vi
-    .spyOn(api.settings.vsphere.connections, 'trustCa')
+    .spyOn(api.settings.vsphere.connections, 'trustCert')
     .mockRejectedValue(new ApiError(422, { error: { code, message } }));
 }
 
@@ -452,8 +432,8 @@ describe('<VcenterConnectionsPanel> — trust certificate (#259)', () => {
       .spyOn(api.settings.vsphere.connections, 'list')
       .mockResolvedValue([connection({ status: 'tls_untrusted' })]);
     mockProbe();
-    const trustCa = vi
-      .spyOn(api.settings.vsphere.connections, 'trustCa')
+    const trustCert = vi
+      .spyOn(api.settings.vsphere.connections, 'trustCert')
       .mockResolvedValue(connection({ status: 'never_connected' }));
     renderWithClient(<VcenterConnectionsPanel />);
     await openTrustDialog();
@@ -464,8 +444,8 @@ describe('<VcenterConnectionsPanel> — trust certificate (#259)', () => {
     // The fingerprint is echoed from the probe, never typed: the server re-probes
     // and refuses to pin unless what it sees matches what the admin confirmed.
     await waitFor(() =>
-      expect(trustCa).toHaveBeenCalledWith('c1', {
-        rootFingerprintSha256: PROBED_FINGERPRINT,
+      expect(trustCert).toHaveBeenCalledWith('c1', {
+        leafFingerprintSha256: PROBED_FINGERPRINT,
         password: 'pw',
       }),
     );
@@ -489,7 +469,7 @@ describe('<VcenterConnectionsPanel> — trust certificate (#259)', () => {
       connection({ status: 'tls_untrusted' }),
     ]);
     mockProbe();
-    mockTrustCaFailure(code, message);
+    mockTrustCertFailure(code, message);
     renderWithClient(<VcenterConnectionsPanel />);
     await openTrustDialog();
 
@@ -508,7 +488,7 @@ describe('<VcenterConnectionsPanel> — trust certificate (#259)', () => {
     ]);
     mockProbe();
     // Never settles: the mutation stays pending for the whole test.
-    vi.spyOn(api.settings.vsphere.connections, 'trustCa').mockReturnValue(
+    vi.spyOn(api.settings.vsphere.connections, 'trustCert').mockReturnValue(
       new Promise(() => undefined),
     );
     renderWithClient(<VcenterConnectionsPanel />);
@@ -560,7 +540,7 @@ describe('<VcenterConnectionsPanel> — trust certificate (#259)', () => {
     vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([
       connection({ status: 'tls_untrusted' }),
     ]);
-    mockProbe({ reachable: false, rootFingerprintSha256: null, outcome: 'unreachable' });
+    mockProbe({ reachable: false, leafFingerprintSha256: null, outcome: 'unreachable' });
     renderWithClient(<VcenterConnectionsPanel />);
 
     await userEvent.click(

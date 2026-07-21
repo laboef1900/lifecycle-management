@@ -305,7 +305,7 @@ describe('vsphereConnectionResponseSchema', () => {
     port: 443,
     username: 'svc-lcm',
     tlsMode: 'pinned',
-    pinnedRootFingerprintSha256: Array.from({ length: 32 }, () => 'AB').join(':'),
+    pinnedLeafFingerprintSha256: Array.from({ length: 32 }, () => 'AB').join(':'),
     instanceUuid: '4c4c4544-0000-0000-0000-000000000000',
     apiVersion: '8.0.2.0',
     enabled: true,
@@ -420,7 +420,7 @@ describe('vsphereProbeResultSchema', () => {
   const base = {
     reachable: false,
     trustedBySystemRoots: false,
-    rootFingerprintSha256: null,
+    leafFingerprintSha256: null,
     validFrom: null,
     validTo: null,
   };
@@ -430,9 +430,8 @@ describe('vsphereProbeResultSchema', () => {
   // `outcome` enum MUST stay in lockstep with the `VsphereProbeResult.outcome`
   // union in `vsphere.ts`; the `z.ZodType<VsphereProbeResult>` annotation does NOT
   // enforce exhaustiveness (a narrower enum is still assignable), so only a test
-  // catches drift. #272 shipped `chain_incomplete` on the interface first and this
-  // enum was the missing half — without it the whole incomplete-chain UX 500s.
-  it.each(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter', 'chain_incomplete'] as const)(
+  // catches drift.
+  it.each(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter'] as const)(
     'accepts every VsphereProbeResult outcome the server can send: %s',
     (outcome) => {
       const value: VsphereProbeResult = { ...base, outcome };
@@ -441,6 +440,9 @@ describe('vsphereProbeResultSchema', () => {
   );
 
   it('rejects an unknown outcome', () => {
+    // Also guards the retired #272 chain-incomplete outcome: any value outside the
+    // enum (a stale server sending one) is refused, so the web client never receives
+    // an outcome it has no branch for.
     expect(vsphereProbeResultSchema.safeParse({ ...base, outcome: 'bogus' }).success).toBe(false);
   });
 });

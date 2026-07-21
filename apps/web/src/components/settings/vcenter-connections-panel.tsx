@@ -405,19 +405,6 @@ function describeSyncOutcome(outcome: VsphereSyncOutcome): string {
  * network with.
  */
 function ProbeResult({ probe }: { probe: VsphereProbeResult }): React.JSX.Element {
-  if (probe.outcome === 'chain_incomplete') {
-    // #272: reachable but no self-signed root to pin. Fixed on the vCenter side,
-    // so point there rather than the generic "could not reach" copy below (which
-    // would be wrong — the host answered).
-    return (
-      <p className="text-muted-foreground flex items-center gap-2 text-sm" role="alert">
-        <ShieldAlert className="text-warning size-4 shrink-0" aria-hidden />
-        vCenter did not present its root CA, so there is no certificate to pin. Add the issuing or
-        root CA to vCenter&rsquo;s certificate chain, then check again.
-      </p>
-    );
-  }
-
   if (!probe.reachable) {
     return (
       <p className="text-muted-foreground flex items-center gap-2 text-sm">
@@ -438,7 +425,7 @@ function ProbeResult({ probe }: { probe: VsphereProbeResult }): React.JSX.Elemen
 
   // Reachable, not publicly trusted, yet no readable chain — nothing to confirm,
   // and inventing a blank fingerprint box would invite confirming nothing at all.
-  if (probe.rootFingerprintSha256 === null) {
+  if (probe.leafFingerprintSha256 === null) {
     return (
       <p className="text-muted-foreground flex items-center gap-2 text-sm">
         <ShieldAlert className="text-warning size-4" aria-hidden />
@@ -458,7 +445,7 @@ function ProbeResult({ probe }: { probe: VsphereProbeResult }): React.JSX.Elemen
         <code className="font-mono text-xs">govc about.cert -thumbprint</code> prints the same
         value.
       </p>
-      <CertificateFingerprint fingerprint={probe.rootFingerprintSha256} validTo={probe.validTo} />
+      <CertificateFingerprint fingerprint={probe.leafFingerprintSha256} validTo={probe.validTo} />
     </div>
   );
 }

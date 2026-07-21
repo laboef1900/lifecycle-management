@@ -36,7 +36,7 @@ const COPY: Record<TrustableStatus, { title: string; description: string; confir
   tls_untrusted: {
     title: 'Trust this certificate',
     description:
-      'LCM will pin this certificate root as the trust anchor for this connection. Compare the fingerprint against your vCenter before you confirm.',
+      'LCM will pin this exact certificate as the trust anchor for this connection. Compare the fingerprint against your vCenter before you confirm.',
     confirm: 'Trust certificate',
   },
   cert_mismatch: {
@@ -85,15 +85,15 @@ export function TrustCertificateDialog({
 
   const trustMutation = useMutation({
     mutationFn: (fingerprint: string) =>
-      api.settings.vsphere.connections.trustCa(connection.id, {
-        rootFingerprintSha256: fingerprint,
+      api.settings.vsphere.connections.trustCert(connection.id, {
+        leafFingerprintSha256: fingerprint,
         password,
       }),
     onSuccess: onTrusted,
   });
 
   const probe = probeMutation.data;
-  const fingerprint = probe?.reachable ? probe.rootFingerprintSha256 : null;
+  const fingerprint = probe?.reachable ? probe.leafFingerprintSha256 : null;
   const trustError = trustMutation.error;
 
   // Every close path is sealed while the trust submission is in flight, matching
@@ -134,16 +134,6 @@ export function TrustCertificateDialog({
 
         {probeMutation.isPending ? (
           <p className="text-muted-foreground text-sm">Reading the certificate…</p>
-        ) : probe?.outcome === 'chain_incomplete' ? (
-          // #272: vCenter was reachable but did not present its root CA, so there
-          // is no anchor to pin. This is fixed on the vCenter side, so the copy
-          // points there rather than showing the generic "could not reach" message
-          // (fingerprint is null here, so the Trust button stays disabled below).
-          <p className="text-destructive flex items-center gap-2 text-sm" role="alert">
-            <ShieldAlert className="size-4 shrink-0" aria-hidden />
-            vCenter did not present its root CA, so there is no certificate to pin. Add the issuing
-            or root CA to vCenter&rsquo;s certificate chain, then try again.
-          </p>
         ) : fingerprint === null ? (
           <p className="text-destructive flex items-center gap-2 text-sm">
             <ShieldAlert className="size-4" aria-hidden />
