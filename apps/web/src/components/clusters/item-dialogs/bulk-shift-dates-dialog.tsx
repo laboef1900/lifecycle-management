@@ -191,7 +191,14 @@ export function BulkShiftDatesDialog({
             before applying — this rewrites the forecast.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        {/* min-w-0: DialogContent is a CSS grid, whose items default to
+            min-width:auto and so refuse to shrink below their content's
+            min-content. The preview name is `truncate` (white-space:nowrap), so
+            a long app name would otherwise set a huge min-content, blow the grid
+            column past max-w-xl, and push the old→new dates off the right edge
+            instead of truncating (#264). min-w-0 lets the column shrink so the
+            row's own truncate engages. */}
+        <form onSubmit={onSubmit} className="min-w-0 space-y-4">
           <div className="flex flex-wrap items-end gap-4">
             <div className="space-y-1.5">
               <span className="block text-sm font-medium">Direction</span>
