@@ -136,6 +136,154 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText(/IN /)).toBeInTheDocument();
   });
 
+  // Spec §4.4 amendment (2026-07-20, #268): two chips move up a row each so the
+  // bottom flag row can collapse and give its height to the chart. These assert
+  // DOM ADJACENCY rather than mere presence — every content assertion in this
+  // file passes wherever a chip happens to sit, so nothing else in the suite
+  // would catch a silent revert to the old arrangement.
+  describe('chip placement (#268)', () => {
+    const eventForecast = forecast({
+      events: [
+        {
+          id: 'e1',
+          effectiveDate: '2026-09-01',
+          category: 'hardware',
+          title: 'Decommission',
+          description: null,
+          consumptionDelta: null,
+          capacityDelta: -2000,
+        },
+      ],
+    });
+
+    it('places the ORDER BY chip on the cluster-name row', () => {
+      render(
+        <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      const name = screen.getByText('CL-Prod-P1');
+      const chip = screen.getByText(/ORDER BY DEC 28/);
+      expect(chip.parentElement).toBe(name.parentElement);
+    });
+
+    it('places the EVENT chip on the runway row, where the order chip used to sit', () => {
+      render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      // The runway row is the numeral's parent — 'mo' is nested inside the
+      // numeral span, so step up twice to reach the row itself.
+      const runwayRow = screen.getByText('mo', { exact: true }).parentElement?.parentElement;
+      expect(screen.getByText(/EVENT/).parentElement).toBe(runwayRow);
+    });
+
+    it('keeps ORDER BY and EVENT on different rows', () => {
+      render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(screen.getByText(/ORDER BY DEC 28/).parentElement).not.toBe(
+        screen.getByText(/EVENT/).parentElement,
+      );
+    });
+
+    it('drops the bottom flag row entirely when nothing is left to put in it', () => {
+      // A fresh baseline and no provisional hosts leave the row empty. Rendering
+      // it anyway would keep its `gap` height — the space the chart is meant to
+      // reclaim — so absence, not emptiness, is the requirement.
+      const { container } = render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(container.querySelector('.flex.flex-wrap.gap-1')).toBeNull();
+    });
+
+    it('still renders the flag row when a stale baseline needs it', () => {
+      const { container } = render(
+        <ClusterTile
+          entry={entry({ cluster: cluster({ baselineDate: '2026-03-10' }) })}
+          forecast={forecast()}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(container.querySelector('.flex.flex-wrap.gap-1')).not.toBeNull();
+      expect(screen.getByText(/BASELINE/)).toBeInTheDocument();
+    });
+
+    it('names events in the tile aria-label so the moved EVENT chip is not silent to AT', () => {
+      // The tile's aria-label OVERRIDES its visible content, so the visible
+      // EVENT chip is invisible to assistive tech unless the label names it —
+      // more so after #268 moved the chip up to the prominent runway row.
+      render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(screen.getByRole('link').getAttribute('aria-label')).toContain(
+        '1 event in the forecast window',
+      );
+    });
+
+    it('pluralizes the event count in the aria-label', () => {
+      const twoEvents = forecast({
+        events: [
+          {
+            id: 'e1',
+            effectiveDate: '2026-09-01',
+            category: 'hardware',
+            title: 'Decommission',
+            description: null,
+            consumptionDelta: null,
+            capacityDelta: -2000,
+          },
+          {
+            id: 'e2',
+            effectiveDate: '2026-10-01',
+            category: 'hardware',
+            title: 'Expansion',
+            description: null,
+            consumptionDelta: 500,
+            capacityDelta: null,
+          },
+        ],
+      });
+      render(
+        <ClusterTile entry={entry()} forecast={twoEvents} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      expect(screen.getByRole('link').getAttribute('aria-label')).toContain(
+        '2 events in the forecast window',
+      );
+    });
+
+    it('names no events in the aria-label when there are none', () => {
+      render(
+        <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      expect(screen.getByRole('link').getAttribute('aria-label')).not.toContain('event');
+    });
+  });
+
+  it('aligns the runway sub-line with the numeral unit instead of nudging it up (#268)', () => {
+    render(
+      <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+    );
+    const sub = screen.getByText(/past warn 70%/);
+    // `pb-1` on an `items-end` row is what left the sub-line visibly stepped
+    // above the 'mo' it qualifies; baseline alignment on the row replaces it.
+    expect(sub.className).not.toMatch(/pb-1/);
+    expect(sub.parentElement?.className).toMatch(/items-baseline/);
+  });
+
   it('labels the runway numeral unit in lowercase "mo", matching RunwayPill and the fleet verdict (#243 Part B copy item 2)', () => {
     render(
       <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,

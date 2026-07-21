@@ -15,6 +15,7 @@ import {
 } from 'recharts';
 
 import { Card } from '@/components/ui/card';
+import { niceNumber } from '@/lib/chart-scale';
 import { todayIso } from '@/lib/format';
 import { formatMonthShort } from '@/lib/format-month';
 import { eventColor, useChartColors } from '@/lib/use-chart-colors';
@@ -625,30 +626,6 @@ function formatDelta(consumption: number | null, capacity: number | null): strin
     parts.push(`${capacity >= 0 ? '+' : ''}${numberFormat.format(capacity)} cap`);
   }
   return parts.length === 0 ? '—' : parts.join(' · ');
-}
-
-/**
- * A "nice" round number near `value` (the classic Heckbert graph-labeling
- * algorithm): `round` picks the nearest nice fraction (for a tick step);
- * unset rounds UP to the next nice fraction (for a headroom-safe range).
- */
-function niceNumber(value: number, round: boolean): number {
-  if (value <= 0) return 0;
-  const exponent = Math.floor(Math.log10(value));
-  const fraction = value / 10 ** exponent;
-  let niceFraction: number;
-  if (round) {
-    if (fraction < 1.5) niceFraction = 1;
-    else if (fraction < 3) niceFraction = 2;
-    else if (fraction < 7) niceFraction = 5;
-    else niceFraction = 10;
-  } else {
-    if (fraction <= 1) niceFraction = 1;
-    else if (fraction <= 2) niceFraction = 2;
-    else if (fraction <= 5) niceFraction = 5;
-    else niceFraction = 10;
-  }
-  return niceFraction * 10 ** exponent;
 }
 
 /**
