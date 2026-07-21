@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
 
-import { FleetConsole, sortClustersByUrgency } from './fleet-console';
+import { FleetConsole, sortClusters, sortClustersByUrgency } from './fleet-console';
 
 vi.mock('@tanstack/react-router', () => ({
   Link: ({
@@ -93,6 +93,23 @@ function procurement(orderByDate: string | null): ProcurementInfo {
   return { leadTimeWeeks: 13, orderByDate, breachMonth: orderByDate ? '2027-01-01' : null };
 }
 
+function memoryMetric(capacity: number): ClusterResponse['metrics'][number] {
+  return {
+    metricTypeKey: 'memory_gb',
+    metricTypeDisplayName: 'Memory',
+    unit: 'GB',
+    baselineConsumption: 0,
+    baselineCapacity: capacity,
+    currentConsumption: 0,
+    currentCapacity: capacity,
+    utilization: 0,
+  };
+}
+
+function sizedCluster(id: string, name: string, capacity: number): ClusterResponse {
+  return { ...cluster(id, name), metrics: [memoryMetric(capacity)] };
+}
+
 describe('sortClustersByUrgency', () => {
   it('orders by ascending order-by date, with null order-bys last', () => {
     const entries = [
@@ -141,6 +158,70 @@ describe('sortClustersByUrgency', () => {
     ];
     const original = [...entries];
     sortClustersByUrgency(entries);
+    expect(entries).toEqual(original);
+  });
+});
+
+describe('sortClusters', () => {
+  it('orderBy delegates to urgency ordering (earliest order-by first)', () => {
+    const entries = [
+      { cluster: cluster('a', 'A'), procurement: procurement('2026-12-01'), runwayMonths: 1 },
+      { cluster: cluster('b', 'B'), procurement: procurement('2026-09-01'), runwayMonths: 1 },
+    ];
+    expect(sortClusters(entries, 'orderBy').map((e) => e.cluster.id)).toEqual(['b', 'a']);
+  });
+
+  it('name sorts alphabetically by cluster name, ignoring order-by and size', () => {
+    const entries = [
+      {
+        cluster: sizedCluster('c', 'CL-Charlie', 99000),
+        procurement: procurement('2026-09-01'),
+        runwayMonths: 1,
+      },
+      {
+        cluster: sizedCluster('a', 'CL-Alpha', 1000),
+        procurement: procurement('2026-12-01'),
+        runwayMonths: 9,
+      },
+      { cluster: sizedCluster('b', 'CL-Bravo', 50000), procurement: undefined, runwayMonths: null },
+    ];
+    expect(sortClusters(entries, 'name').map((e) => e.cluster.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('size sorts by total memory capacity, largest first', () => {
+    const entries = [
+      {
+        cluster: sizedCluster('small', 'CL-Small', 5000),
+        procurement: undefined,
+        runwayMonths: null,
+      },
+      { cluster: sizedCluster('big', 'CL-Big', 30000), procurement: undefined, runwayMonths: null },
+      { cluster: sizedCluster('mid', 'CL-Mid', 15000), procurement: undefined, runwayMonths: null },
+    ];
+    expect(sortClusters(entries, 'size').map((e) => e.cluster.id)).toEqual(['big', 'mid', 'small']);
+  });
+
+  it('size sums every metric and breaks capacity ties by name', () => {
+    const multi: ClusterResponse = {
+      ...cluster('multi', 'CL-Multi'),
+      metrics: [memoryMetric(6000), memoryMetric(4000)],
+    };
+    // Same 10 000 total as `multi`, but an earlier name → wins the tie.
+    const single = sizedCluster('single', 'CL-Aaa', 10000);
+    const entries = [
+      { cluster: multi, procurement: undefined, runwayMonths: null },
+      { cluster: single, procurement: undefined, runwayMonths: null },
+    ];
+    expect(sortClusters(entries, 'size').map((e) => e.cluster.id)).toEqual(['single', 'multi']);
+  });
+
+  it('does not mutate the input array', () => {
+    const entries = [
+      { cluster: sizedCluster('a', 'A', 100), procurement: undefined, runwayMonths: null },
+      { cluster: sizedCluster('b', 'B', 200), procurement: undefined, runwayMonths: null },
+    ];
+    const original = [...entries];
+    sortClusters(entries, 'size');
     expect(entries).toEqual(original);
   });
 });
@@ -367,6 +448,97 @@ describe('<FleetConsole> (render)', () => {
       ),
     );
     expect(screen.queryByTestId('fleet-filter-count')).toBeNull();
+  });
+});
+
+describe('<FleetConsole> Clusters pane + sort (#267)', () => {
+  beforeEach(() => {
+    vi.spyOn(api.clusters, 'liveUsage').mockResolvedValue({ items: [] });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useIsAdminMock.mockReset();
+    useIsAdminMock.mockReturnValue(false);
+  });
+
+  it('groups tiles in a titled "Clusters" pane and re-sorts when the sort changes', async () => {
+    const clusters = [
+      makeCluster({ id: 'a', name: 'CL-Alpha', metrics: [memoryMetric(30000)] }),
+      makeCluster({ id: 'b', name: 'CL-Bravo', metrics: [memoryMetric(5000)] }),
+      makeCluster({ id: 'c', name: 'CL-Charlie', metrics: [memoryMetric(15000)] }),
+    ];
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: clusters,
+      total: 3,
+      limit: 100,
+      offset: 0,
+    });
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+    // Distinct order-by dates so urgency, name, and size each yield a different
+    // order — a sort that silently no-ops would fail at least one assertion.
+    const orderByDates: Record<string, string> = {
+      a: '2026-12-01',
+      b: '2026-09-01',
+      c: '2026-10-01',
+    };
+    vi.spyOn(api.clusters, 'forecast').mockImplementation((id) =>
+      Promise.resolve(
+        makeForecast({
+          procurement: {
+            leadTimeWeeks: 13,
+            orderByDate: orderByDates[id] ?? null,
+            breachMonth: '2027-06-01',
+          },
+        }),
+      ),
+    );
+
+    const user = userEvent.setup();
+    const { container } = renderConsole();
+
+    // Tiles are grouped under a titled "Clusters" pane heading.
+    expect(await screen.findByRole('heading', { level: 2, name: 'Clusters' })).toBeInTheDocument();
+
+    const tileOrder = () =>
+      Array.from(container.querySelectorAll('a[data-cluster-id]')).map((el) =>
+        el.getAttribute('data-cluster-id'),
+      );
+
+    // Default: procurement urgency — earliest order-by date first.
+    await waitFor(() => expect(tileOrder()).toEqual(['b', 'c', 'a']));
+
+    // Sort by Name → alphabetical.
+    await user.click(screen.getByTestId('fleet-sort-trigger'));
+    await user.click(await screen.findByRole('option', { name: 'Name' }));
+    await waitFor(() => expect(tileOrder()).toEqual(['a', 'b', 'c']));
+
+    // Sort by Size → largest total memory capacity first.
+    await user.click(screen.getByTestId('fleet-sort-trigger'));
+    await user.click(await screen.findByRole('option', { name: 'Size' }));
+    await waitFor(() => expect(tileOrder()).toEqual(['a', 'c', 'b']));
+  });
+
+  it('exposes the sort control with an accessible name and all three options', async () => {
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [makeCluster({ id: 'a', name: 'CL-A' })],
+      total: 1,
+      limit: 100,
+      offset: 0,
+    });
+    vi.spyOn(api.settings.tenant, 'get').mockResolvedValue(makeTenantSettings());
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(makeForecast());
+
+    const user = userEvent.setup();
+    renderConsole();
+
+    const trigger = await screen.findByRole('combobox', { name: 'Sort clusters' });
+    // Default value is shown on the trigger.
+    expect(trigger).toHaveTextContent('Order-by date');
+
+    await user.click(trigger);
+    expect(await screen.findByRole('option', { name: 'Order-by date' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Name' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Size' })).toBeInTheDocument();
   });
 });
 
