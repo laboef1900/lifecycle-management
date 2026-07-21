@@ -7,7 +7,7 @@ import { useCallback, useState } from 'react';
 import { AdminOnly } from '@/components/auth/admin-only';
 import { resolveWindow } from '@/components/clusters/window-controls';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ADD_CLUSTER_HASH } from '@/lib/anchors';
@@ -18,6 +18,7 @@ import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 
 import { ClusterTile } from './cluster-tile';
 import { FleetFilter } from './fleet-filter';
+import { FleetSort, type ClusterSortMode } from './fleet-sort';
 import { FleetVerdict } from './fleet-verdict';
 import { OrderByRail, orderByUrgency, type OrderByRailItem } from './order-by-rail';
 import { isBaselineStale } from './stale-baseline';
@@ -53,6 +54,30 @@ export function sortClustersByUrgency(entries: SortEntry[]): SortEntry[] {
   });
 }
 
+/** A cluster's total tracked memory capacity — the "Size" sort key. */
+function clusterTotalCapacity(cluster: ClusterResponse): number {
+  return cluster.metrics.reduce((sum, m) => sum + m.currentCapacity, 0);
+}
+
+/**
+ * Sorts cluster entries by the selected mode (#267). `orderBy` is procurement
+ * urgency (the default, delegated to {@link sortClustersByUrgency}); `name` is
+ * alphabetical; `size` is total memory capacity, largest first. Name and size
+ * both fall back to name for a stable, deterministic order. Never mutates the
+ * input. Exported for direct unit testing.
+ */
+export function sortClusters(entries: SortEntry[], mode: ClusterSortMode): SortEntry[] {
+  if (mode === 'orderBy') return sortClustersByUrgency(entries);
+  if (mode === 'name') {
+    return [...entries].sort((a, b) => a.cluster.name.localeCompare(b.cluster.name));
+  }
+  return [...entries].sort((a, b) => {
+    const sizeDelta = clusterTotalCapacity(b.cluster) - clusterTotalCapacity(a.cluster);
+    if (sizeDelta !== 0) return sizeDelta;
+    return a.cluster.name.localeCompare(b.cluster.name);
+  });
+}
+
 /**
  * Fleet console (spec §4): the `/` page. Merges the old Overview + Clusters
  * pages into one screen — order-by rail, fleet verdict, and a uniform cluster
@@ -60,6 +85,7 @@ export function sortClustersByUrgency(entries: SortEntry[]): SortEntry[] {
  */
 export function FleetConsole(): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false);
+  const [sortMode, setSortMode] = useState<ClusterSortMode>('orderBy');
   // Whether the user has operated the archived filter at least once this
   // mount: gates the sr-only announcement below so the status region never
   // "announces" the default state on load.
@@ -150,7 +176,7 @@ export function FleetConsole(): React.JSX.Element {
     procurement: procurementByClusterId[e.cluster.id],
     runwayMonths: e.summary.months,
   }));
-  const sortedEntries = sortClustersByUrgency(sortInput)
+  const sortedEntries = sortClusters(sortInput, sortMode)
     .map((s) => entryById.get(s.cluster.id))
     .filter((e): e is ClusterForecastEntry => e !== undefined);
 
@@ -265,88 +291,88 @@ export function FleetConsole(): React.JSX.Element {
             onTickHover={setLinkedClusterId}
           />
 
-          <div className="grid grid-cols-12 gap-3">
-            <div className="col-span-12">
-              <FleetVerdict
-                summary={summary}
-                earliest={earliest}
-                staleCount={staleCount}
-                openOrderCount={openOrderCount}
-                hostCount={hostCount}
-              />
-            </div>
+          <FleetVerdict
+            summary={summary}
+            earliest={earliest}
+            staleCount={staleCount}
+            openOrderCount={openOrderCount}
+            hostCount={hostCount}
+          />
 
-            {/* Toolbar row directly above the tile grid (#243): the sort note
-                and the Filter control that owns the archived toggle — a
-                visible control attached to the list it filters, not a
-                stranded row of its own. */}
-            <div className="col-span-12 -mt-1 mb-[-4px] flex items-center justify-end gap-3">
-              <p
-                role="note"
-                className="text-[9px] font-semibold uppercase tracking-[0.14em] text-fg-subtle"
-              >
-                Sorted by order-by date
-              </p>
-              <FleetFilter
-                showArchived={showArchived}
-                onShowArchivedChange={handleShowArchivedChange}
-                archivedCount={archivedCount}
-                open={filterOpen}
-                onOpenChange={setFilterOpen}
-              />
-            </div>
-
-            {sortedEntries.map((entry) => (
-              <div
-                key={entry.cluster.id}
-                className="col-span-12 min-[820px]:col-span-6 min-[1280px]:col-span-4"
-                onMouseEnter={() => handleTileLinkStart(entry.cluster.id)}
-                onMouseLeave={handleTileLinkEnd}
-                onFocus={() => handleTileLinkStart(entry.cluster.id)}
-                onBlur={handleTileLinkEnd}
-              >
-                <ClusterTile
-                  entry={entry}
-                  forecast={forecastsByClusterId.get(entry.cluster.id)}
-                  thresholds={entry.thresholds}
-                  linked={linkedClusterId === entry.cluster.id}
-                  live={liveUsageById.get(entry.cluster.id)}
-                  liveUsagePending={liveUsagePending}
+          {/* The cluster tiles live in a single titled pane (#267). The
+              Order-by rail and Fleet verdict above stay outside it. The pane
+              header carries the Sort selector and the Filter popover — controls
+              attached to the list they act on, replacing the old stranded
+              toolbar row and its static "sorted by" note. */}
+          <Card>
+            <CardHeader className="flex-row items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold leading-none tracking-tight">Clusters</h2>
+              <div className="flex items-center gap-2">
+                <FleetSort value={sortMode} onValueChange={setSortMode} />
+                <FleetFilter
+                  showArchived={showArchived}
+                  onShowArchivedChange={handleShowArchivedChange}
+                  archivedCount={archivedCount}
+                  open={filterOpen}
+                  onOpenChange={setFilterOpen}
                 />
               </div>
-            ))}
-
-            {forecastsLoading
-              ? Array.from({ length: Math.max(0, pendingCount) }).map((_, i) => (
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-12 gap-3">
+                {sortedEntries.map((entry) => (
                   <div
-                    key={`skeleton-${i}`}
+                    key={entry.cluster.id}
                     className="col-span-12 min-[820px]:col-span-6 min-[1280px]:col-span-4"
-                  >
-                    <Skeleton className="h-[260px] w-full" />
-                  </div>
-                ))
-              : null}
-
-            {showArchived
-              ? archivedOnly.map((cluster) => (
-                  <div
-                    key={cluster.id}
-                    className="col-span-12 min-[820px]:col-span-6 min-[1280px]:col-span-4"
+                    onMouseEnter={() => handleTileLinkStart(entry.cluster.id)}
+                    onMouseLeave={handleTileLinkEnd}
+                    onFocus={() => handleTileLinkStart(entry.cluster.id)}
+                    onBlur={handleTileLinkEnd}
                   >
                     <ClusterTile
-                      entry={{
-                        cluster,
-                        months: [],
-                        thresholds,
-                        summary: { months: null, alreadyBreached: false },
-                      }}
-                      forecast={undefined}
-                      thresholds={thresholds}
+                      entry={entry}
+                      forecast={forecastsByClusterId.get(entry.cluster.id)}
+                      thresholds={entry.thresholds}
+                      linked={linkedClusterId === entry.cluster.id}
+                      live={liveUsageById.get(entry.cluster.id)}
+                      liveUsagePending={liveUsagePending}
                     />
                   </div>
-                ))
-              : null}
-          </div>
+                ))}
+
+                {forecastsLoading
+                  ? Array.from({ length: Math.max(0, pendingCount) }).map((_, i) => (
+                      <div
+                        key={`skeleton-${i}`}
+                        className="col-span-12 min-[820px]:col-span-6 min-[1280px]:col-span-4"
+                      >
+                        <Skeleton className="h-[260px] w-full" />
+                      </div>
+                    ))
+                  : null}
+
+                {showArchived
+                  ? archivedOnly.map((cluster) => (
+                      <div
+                        key={cluster.id}
+                        className="col-span-12 min-[820px]:col-span-6 min-[1280px]:col-span-4"
+                      >
+                        <ClusterTile
+                          entry={{
+                            cluster,
+                            months: [],
+                            thresholds,
+                            summary: { months: null, alreadyBreached: false },
+                          }}
+                          forecast={undefined}
+                          thresholds={thresholds}
+                        />
+                      </div>
+                    ))
+                  : null}
+              </div>
+            </CardContent>
+          </Card>
         </>
       ) : null}
     </div>
