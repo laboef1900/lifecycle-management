@@ -745,8 +745,8 @@ to confirm and the panel says so.
 > private). Stored credentials are never sent to a request-supplied host, and
 > changing a saved connection's hostname or port requires re-entering the
 > vCenter password; an untrusted certificate is pinned to an
-> out-of-band-confirmed root and a change fails rather than silently
-> trusting. Keep the deployment on a trusted network — behind a firewall/VPN,
+> out-of-band-confirmed leaf certificate (its SHA-256 fingerprint) and a change
+> fails rather than silently trusting. Keep the deployment on a trusted network — behind a firewall/VPN,
 > not exposed to the open internet — during setup or while any break-glass
 > override is active, and use a read-only vCenter service account.
 

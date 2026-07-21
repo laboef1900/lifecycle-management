@@ -571,6 +571,11 @@ A CA certificate is public by construction — vCenter serves it unauthenticated
 handshake; a fingerprint is a hash of public data. Encrypting either protects a secret that does not exist.
 Only `passwordEnc` is encrypted.
 
+> **⚠️ AMENDED 2026-07-21** — see the note at D11 above: root-pinning is replaced by leaf-fingerprint
+> pinning. `tls_pinned_ca_pem` was **dropped** (commit `81f1329`); only the leaf fingerprint
+> (`tls_pinned_sha256`) is stored now. The "public cert data, not a secret" rationale above is unchanged and
+> applies to the fingerprint alone — there is no CA PEM column left to reason about.
+
 ---
 
 ## 6. Threat model — the connection-test endpoint and the scheduled poll
