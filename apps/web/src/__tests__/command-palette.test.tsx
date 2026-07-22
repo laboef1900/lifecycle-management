@@ -149,6 +149,26 @@ describe('CommandPalette', () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: '/' });
   });
 
+  // #293: Settings split into sub-routes; the palette now targets the default
+  // sub-route directly rather than the bare `/settings` index it used to
+  // navigate to pre-split.
+  test('selecting "Go to settings" navigates to /settings/forecasting', async () => {
+    vi.spyOn(api.clusters, 'list').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    const user = userEvent.setup();
+    render(wrap(<CommandPalette />));
+
+    window.dispatchEvent(new CustomEvent('lcm:open-command-palette'));
+    await screen.findByPlaceholderText(/search/i);
+    await user.click(screen.getByText('Go to settings'));
+
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/settings/forecasting' });
+  });
+
   test('admins get an Add-cluster action deep-linked to the Settings panel (#223)', async () => {
     useIsAdminMock.mockReturnValue(true);
     vi.spyOn(api.clusters, 'list').mockResolvedValue({
@@ -164,9 +184,11 @@ describe('CommandPalette', () => {
     await screen.findByPlaceholderText(/search/i);
     await user.click(screen.getByText('Add cluster — Settings'));
 
-    // The hash is what makes the label honest: /settings alone lands above the
-    // fold with focus on <body>; the hash scrolls and focuses the panel.
-    expect(navigateMock).toHaveBeenCalledWith({ to: '/settings', hash: 'add-cluster' });
+    // The hash is what makes the label honest: /settings/inventory alone
+    // lands above the fold with focus on <body>; the hash scrolls and
+    // focuses the panel. #293 moved the Add-cluster panel to its own
+    // Inventory sub-route (was `/settings` pre-split).
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/settings/inventory', hash: 'add-cluster' });
   });
 
   test('the Add-cluster action names its destination, not the retired dialog (#223)', async () => {

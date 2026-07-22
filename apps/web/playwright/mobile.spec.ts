@@ -101,7 +101,8 @@ test.describe('mobile layout at 390x844', () => {
     await expect(settingsLink).toBeVisible();
     await settingsLink.click();
 
-    await expect(page).toHaveURL(/\/settings$/);
+    // #293: the topbar link points at the default sub-route directly.
+    await expect(page).toHaveURL(/\/settings\/forecasting$/);
     await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
   });
 
@@ -116,7 +117,9 @@ test.describe('mobile layout at 390x844', () => {
     let clusterId: string | null = null;
 
     try {
-      await page.goto('/settings');
+      // #293: the Add-cluster panel lives on the Inventory sub-route now, not
+      // bare `/settings` (which redirects to Forecasting by default).
+      await page.goto('/settings/inventory');
       await page.getByRole('button', { name: '+ Add cluster' }).click();
       const createDialog = page.getByRole('dialog', { name: 'New cluster' });
       await createDialog.getByRole('textbox', { name: 'Name' }).fill(clusterName);
