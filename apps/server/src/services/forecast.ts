@@ -8,6 +8,18 @@ export interface ForecastCapacityRow {
   amount: number;
 }
 
+/**
+ * A half-open `[from, to)` window during which a host belonged to the cluster
+ * being forecast (#289). `to === null` is the current (open) membership. The
+ * loader supplies one entry per membership row `WHERE clusterId = <cluster>`, so
+ * a host that moved away still carries its pre-move interval and a host that
+ * moved in carries only its post-move interval.
+ */
+export interface HostMembershipInterval {
+  from: Date;
+  to: Date | null;
+}
+
 export interface ForecastHost {
   id: string;
   name: string;
@@ -15,6 +27,16 @@ export interface ForecastHost {
   decommissionedAt: Date | null;
   projectedDecommissionAt: Date | null;
   capacities: ForecastCapacityRow[];
+  /**
+   * The intervals during which this host is attributed to the cluster being
+   * forecast (#289). **Omitted (`undefined`) means "no time-scoping": the host is
+   * attributed for its whole life** — which is exactly the pre-#289 behaviour, so
+   * every caller that does not resolve a membership timeline (the pure-function
+   * unit tests, and `clusters.ts`, which computes only the current month from
+   * hosts already filtered to the current `clusterId`) is unchanged. The
+   * projecting forecast (`forecast-loader.ts`) always supplies this.
+   */
+  membershipIntervals?: HostMembershipInterval[];
 }
 
 export interface ForecastApplication {
@@ -323,7 +345,22 @@ function absorbed(effectiveDate: Date, input: ForecastInput): boolean {
   return effectiveDate <= boundary;
 }
 
+/**
+ * Is the host attributed to the cluster being forecast in the month at `date`
+ * (#289)? Half-open `[from, to)` per interval, matching the month gating that
+ * `effectiveCapacityAt` already applies to `commissionedAt`/decommission dates:
+ * for a move on the first of a month, that month belongs to the NEW cluster and
+ * the previous month to the OLD one. `undefined` intervals mean no time-scoping,
+ * i.e. always a member (pre-#289 behaviour — see {@link ForecastHost.membershipIntervals}).
+ */
+function isMemberAt(host: ForecastHost, date: Date): boolean {
+  const intervals = host.membershipIntervals;
+  if (intervals === undefined) return true;
+  return intervals.some((iv) => iv.from <= date && (iv.to === null || date < iv.to));
+}
+
 function effectiveCapacityAt(host: ForecastHost, date: Date): number {
+  if (!isMemberAt(host, date)) return 0;
   if (date < host.commissionedAt) return 0;
   const realDecom = host.decommissionedAt;
   const projDecom = host.projectedDecommissionAt;

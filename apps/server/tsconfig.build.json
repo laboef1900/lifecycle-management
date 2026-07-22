@@ -7,6 +7,6 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src/**/*", "prisma/seed.ts"],
+  "include": ["src/**/*", "prisma/seed.ts", "prisma/seed-reference-data.ts"],
   "exclude": []
 }

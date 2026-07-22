@@ -24,18 +24,19 @@ model Tenant {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  clusters            Cluster[]
-  baselineHistory     ClusterBaselineHistory[]
-  vsphereConnections  VsphereConnection[]
-  hosts               Host[]
-  hostCapacities      HostMetricCapacity[]
-  hostLifecycleEvents HostLifecycleEvent[]
-  hostReplacements    HostReplacement[]
-  items               Item[]
-  itemAllocations     ItemAllocation[]
-  categories          Category[]
-  settings            TenantSettings?
-  users               User[]
+  clusters               Cluster[]
+  baselineHistory        ClusterBaselineHistory[]
+  vsphereConnections     VsphereConnection[]
+  hosts                  Host[]
+  hostCapacities         HostMetricCapacity[]
+  hostClusterMemberships HostClusterMembership[]
+  hostLifecycleEvents    HostLifecycleEvent[]
+  hostReplacements       HostReplacement[]
+  items                  Item[]
+  itemAllocations        ItemAllocation[]
+  categories             Category[]
+  settings               TenantSettings?
+  users                  User[]
 
   @@map("tenants")
 }
@@ -112,6 +113,7 @@ model Cluster {
   connection      VsphereConnection?       @relation(fields: [connectionId], references: [id], onDelete: Restrict)
   baselineHistory ClusterBaselineHistory[]
   hosts           Host[]
+  hostMemberships HostClusterMembership[]
   items           Item[]
   settings        ClusterSettings?
   usageSample     VsphereUsageSample?
@@ -229,16 +231,17 @@ model Host {
   createdAt                 DateTime  @default(now()) @map("created_at")
   updatedAt                 DateTime  @updatedAt @map("updated_at")
 
-  tenant          Tenant               @relation(fields: [tenantId], references: [id])
-  cluster         Cluster              @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  tenant          Tenant                  @relation(fields: [tenantId], references: [id])
+  cluster         Cluster                 @relation(fields: [clusterId], references: [id], onDelete: Cascade)
   capacities      HostMetricCapacity[]
+  memberships     HostClusterMembership[]
   lifecycleEvents HostLifecycleEvent[]
-  replacedByLinks HostReplacement[]    @relation("HostReplacementOld")
-  replacesLinks   HostReplacement[]    @relation("HostReplacementNew")
+  replacedByLinks HostReplacement[]       @relation("HostReplacementOld")
+  replacesLinks   HostReplacement[]       @relation("HostReplacementNew")
   /// @ai-warning onDelete: Restrict, NEVER Cascade — same reasoning as the Cluster
   /// relation. A synced host carries HostMetricCapacity rows that feed the forecast;
   /// cascading a connection delete into them would silently change fleet capacity.
-  connection      VsphereConnection?   @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  connection      VsphereConnection?      @relation(fields: [connectionId], references: [id], onDelete: Restrict)
 
   /// Per-tenant uniqueness of serial numbers. Declared as a full unique index
   /// (not the historical partial `WHERE serial_number IS NOT NULL`): Postgres
@@ -315,6 +318,49 @@ model HostMetricCapacity {
 
   @@unique([hostId, metricTypeId, effectiveFrom])
   @@map("host_metric_capacities")
+}
+
+/// Time-scoped host↔cluster membership (#289). Records WHICH cluster a host
+/// belonged to over time, so a host move attributes capacity to the OLD cluster
+/// before the move and the NEW cluster on/after it — the forecast is never
+/// retroactively rewritten (owner decision 2026-07-22).
+///
+/// The interval is half-open `[effectiveFrom, effectiveTo)`: `effectiveTo = NULL`
+/// is the CURRENT (open) membership. A move closes the open row
+/// (`effectiveTo = moveDate`) and inserts a new open row
+/// (`effectiveFrom = moveDate`), so intervals are contiguous and non-overlapping.
+///
+/// `HostMetricCapacity` stays FK'd to `hostId`, NOT to a membership: capacity rows
+/// are never moved: attribution is resolved through this timeline at forecast time
+/// (`forecast-loader.ts` loads by `clusterId`, `forecast.ts` gates each month on
+/// the covering interval).
+///
+/// @ai-warning INVARIANTS enforced in application code, NOT by a DB constraint —
+/// deliberately, matching `hosts_tenant_serial_unique` (#123: partial indexes
+/// desync from Prisma and cause `migrate dev` drift) and the app-enforced
+/// `source='vsphere' => observed_at NOT NULL` precedent:
+///   1. exactly ONE open membership (`effectiveTo IS NULL`) per host;
+///   2. intervals per host are contiguous and non-overlapping;
+///   3. `hosts.cluster_id` ALWAYS equals the host's open membership `cluster_id`.
+/// Every writer maintains 1-3 inside a Serializable transaction: the migration
+/// backfill, `HostsService.create`/`move`, and `VsphereSyncService.reconcileHosts`.
+model HostClusterMembership {
+  id            String    @id @default(cuid())
+  tenantId      String    @default("default") @map("tenant_id")
+  hostId        String    @map("host_id")
+  clusterId     String    @map("cluster_id")
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  host    Host    @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  cluster Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+
+  @@index([hostId])
+  @@index([clusterId])
+  @@index([tenantId, clusterId])
+  @@map("host_cluster_memberships")
 }
 
 // ---------- Items (unified applications + events) ----------
