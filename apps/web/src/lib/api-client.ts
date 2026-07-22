@@ -38,6 +38,8 @@ import {
   hostUpdateInputSchema,
   isApiErrorBody,
   itemAllocationRowInputSchema,
+  itemBulkCreateQuarterlyGrowthInputSchema,
+  itemBulkCreateQuarterlyGrowthResponseSchema,
   itemBulkShiftDatesInputSchema,
   itemBulkShiftDatesResponseSchema,
   itemCreateInputSchema,
@@ -159,6 +161,9 @@ export type ItemCreateInputWire = z.input<typeof itemCreateInputSchema>;
 export type ItemUpdateInputWire = z.input<typeof itemUpdateInputSchema>;
 export type ItemAllocationAppendInputWire = z.input<typeof itemAllocationRowInputSchema>;
 export type ItemBulkShiftDatesInputWire = z.input<typeof itemBulkShiftDatesInputSchema>;
+export type ItemBulkCreateQuarterlyGrowthInputWire = z.input<
+  typeof itemBulkCreateQuarterlyGrowthInputSchema
+>;
 export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
 export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
 export type HostCommissioningConfirmInputWire = z.input<typeof hostCommissioningConfirmInputSchema>;
@@ -318,6 +323,12 @@ export const api = {
           headers: { 'Idempotency-Key': idempotencyKey },
         },
         itemBulkShiftDatesResponseSchema,
+      ),
+    bulkCreateQuarterlyGrowth: (clusterId: string, input: ItemBulkCreateQuarterlyGrowthInputWire) =>
+      request(
+        `/api/clusters/${clusterId}/items/bulk-quarterly-growth`,
+        { method: 'POST', body: JSON.stringify(input) },
+        itemBulkCreateQuarterlyGrowthResponseSchema,
       ),
   },
   settings: {

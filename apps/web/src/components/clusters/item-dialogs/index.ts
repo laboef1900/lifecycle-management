@@ -1,3 +1,4 @@
+export { BulkQuarterlyGrowthDialog } from './bulk-quarterly-growth-dialog';
 export { CreateItemDialog } from './create-item-dialog';
 export { EditItemDialog } from './edit-item-dialog';
 export { ResizeItemDialog } from './resize-item-dialog';

@@ -2,6 +2,7 @@ import {
   clusterIdItemsParamsSchema,
   idempotencyKeyHeaderSchema,
   itemAllocationRowInputSchema,
+  itemBulkCreateQuarterlyGrowthInputSchema,
   itemBulkShiftDatesInputSchema,
   itemCreateInputSchema,
   itemIdParamsSchema,
@@ -25,6 +26,16 @@ export const itemsRoutes: FastifyPluginAsync = async (fastify) => {
     const { clusterId } = clusterIdItemsParamsSchema.parse(request.params);
     const input = itemCreateInputSchema.parse(request.body);
     const created = await service.create(request.tenantId, clusterId, input);
+    reply.status(201);
+    return created;
+  });
+
+  // Static segment, so it never shadows (or is shadowed by) a future
+  // `/clusters/:clusterId/items/:id` route.
+  fastify.post('/clusters/:clusterId/items/bulk-quarterly-growth', async (request, reply) => {
+    const { clusterId } = clusterIdItemsParamsSchema.parse(request.params);
+    const input = itemBulkCreateQuarterlyGrowthInputSchema.parse(request.body);
+    const created = await service.createQuarterlyGrowthBatch(request.tenantId, clusterId, input);
     reply.status(201);
     return created;
   });

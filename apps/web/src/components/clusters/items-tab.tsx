@@ -10,6 +10,7 @@ import {
   Pencil,
   Plus,
   Trash2,
+  TrendingUp,
 } from 'lucide-react';
 import { Fragment, useState } from 'react';
 
@@ -31,6 +32,7 @@ import { formatGb, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 import {
+  BulkQuarterlyGrowthDialog,
   BulkShiftDatesDialog,
   CreateItemDialog,
   DeleteItemDialog,
@@ -72,6 +74,7 @@ function categoryBadgeVariant(category: string): 'default' | 'outline' | 'succes
 
 export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
+  const [quarterlyGrowthOpen, setQuarterlyGrowthOpen] = useState(false);
   const [shiftOpen, setShiftOpen] = useState(false);
   const [target, setTarget] = useState<{ item: ItemResponse; kind: DialogKind } | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -136,10 +139,16 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
               from "Add item" — the domain never calls these "items", only
               apps and events (copy-only; no schema/route/field changes). */}
           {canManage && items.length > 0 ? (
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4" />
-              Add app or event
-            </Button>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setQuarterlyGrowthOpen(true)}>
+                <TrendingUp className="h-4 w-4" />
+                Add quarterly growth…
+              </Button>
+              <Button size="sm" onClick={() => setCreateOpen(true)}>
+                <Plus className="h-4 w-4" />
+                Add app or event
+              </Button>
+            </div>
           ) : null}
         </header>
 
@@ -314,6 +323,12 @@ export function ItemsTab({ clusterId, canManage = true }: ItemsTabProps): React.
       </Card>
 
       <CreateItemDialog open={createOpen} onOpenChange={setCreateOpen} clusterId={clusterId} />
+
+      <BulkQuarterlyGrowthDialog
+        open={quarterlyGrowthOpen}
+        onOpenChange={setQuarterlyGrowthOpen}
+        clusterId={clusterId}
+      />
 
       {shiftOpen && selectedItems.length > 0 ? (
         <BulkShiftDatesDialog
