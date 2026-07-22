@@ -12,6 +12,11 @@
 @import '@fontsource/jetbrains-mono/600.css';
 @import '@fontsource/jetbrains-mono/700.css';
 
+/* Theme is class-driven (html.dark via ThemeProvider), so the `dark:` variant
+   must key off that class — Tailwind's default is the prefers-color-scheme
+   media query, which desyncs whenever the user overrides the system theme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #f4f6fa;
   --foreground: #171c2c;
