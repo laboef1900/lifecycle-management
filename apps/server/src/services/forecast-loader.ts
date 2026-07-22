@@ -107,18 +107,28 @@ export class ForecastService {
    * window the recommendation chip reads. The web chip requests a TODAY-anchored
    * window (`resolveWindow` in `apps/web/src/components/clusters/window-controls.tsx`
    * — `from = firstOfMonth(today)` for the 12/24-mo views), so under a stale
-   * baseline anchor the write and read windows diverge. This is deliberate and
-   * FAILS SAFE, NOT "exactly what the chip shows": the baseline-anchored window
-   * starts no later than any chip window, so the snapshotted `orderByDate` is
-   * never later than the live one — the ≥ T supersede rule (INV-5) can therefore
-   * never *falsely* supersede on any view (a genuine worsening reads as
-   * improving/unchanged, so an acknowledgment can only linger, never vanish), and
-   * live chip urgency escalates independently regardless. The one visible-but-safe
-   * symptom is a 422 on Approve for a breach that sits past this window's `to`
-   * (anchor + horizon) yet within the chip's `to` (today + horizon). Aligning the
-   * write window to `today` would fix that 422 but REGRESS the "all" view (whose
-   * `from` is the baseline) into false supersedes — see DESIGN.md §3 "Window
-   * divergence".
+   * baseline anchor the write and read windows diverge. This is deliberate and,
+   * NOT "exactly what the chip shows", FAILS SAFE **only while the newest
+   * baseline's `capturedAt` is not later than today** (the normal case): then the
+   * baseline-anchored window starts no later than any chip window, so the
+   * snapshotted `orderByDate` is never later than the live one — the ≥ T supersede
+   * rule (INV-5) can never *falsely* supersede on any view (a genuine worsening
+   * reads as improving/unchanged, so an acknowledgment can only linger, never
+   * vanish), and live chip urgency escalates independently regardless. The one
+   * visible-but-safe symptom in that case is a 422 on Approve for a breach past
+   * this window's `to` (anchor + horizon) yet within the chip's (today + horizon).
+   *
+   * KNOWN LIMITATION — future-dated baseline (behavioral fix tracked as #303):
+   * future-dated baselines are accepted with no upper bound (see the anchor
+   * @ai-warning in `prepare` — `capturedAt <= today` is deliberately NOT enforced).
+   * When `capturedAt` is LATER than today this write window starts LATER than the
+   * today-anchored chip window, so the snapshotted `orderByDate` can be later than
+   * the live one and the ≥ T rule then FALSELY supersedes the approval the instant
+   * it is created (the acknowledgment never appears). The fails-safe reasoning
+   * above does NOT cover this; it is a genuine defect fixed under #303, not here.
+   * Aligning the write window to `today` would fix the 422 but REGRESS the "all"
+   * view (whose `from` is the baseline) into false supersedes — see DESIGN.md §3
+   * "Window divergence" for both edges.
    */
   async liveBreachContext(
     tenantId: string,
