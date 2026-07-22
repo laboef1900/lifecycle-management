@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import type {
   ItemAllocationResponseRow,
   ItemAllocationRowInput,
+  ItemBulkCreateQuarterlyGrowthInput,
+  ItemBulkCreateQuarterlyGrowthResponse,
   ItemBulkShiftDatesInput,
   ItemBulkShiftDatesResponse,
   ItemCreateInput,
@@ -278,6 +280,55 @@ export class ItemsService {
     });
 
     return this.toResponse(created);
+  }
+
+  /**
+   * Creates 1-4 `event`-kind items in one request — the "set a year of
+   * growth assumptions in one form" flow (#284). All entries share the same
+   * category, description, and metric type and are validated up front, then
+   * created inside a single transaction so the whole batch commits or none
+   * of it does.
+   */
+  async createQuarterlyGrowthBatch(
+    tenantId: string,
+    clusterId: string,
+    input: ItemBulkCreateQuarterlyGrowthInput,
+  ): Promise<ItemBulkCreateQuarterlyGrowthResponse> {
+    await this.assertClusterExists(tenantId, clusterId);
+    const metricType = await this.resolveMetricType(input.metricTypeKey);
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const rows: ItemRow[] = [];
+      for (const entry of input.entries) {
+        rows.push(
+          await tx.item.create({
+            data: {
+              tenantId,
+              clusterId,
+              kind: 'event',
+              name: entry.name,
+              category: input.category,
+              description: input.description ?? null,
+              effectiveDate: entry.effectiveDate,
+              metricTypeId: metricType.id,
+              consumptionDelta:
+                entry.consumptionDelta !== null && entry.consumptionDelta !== undefined
+                  ? new Prisma.Decimal(entry.consumptionDelta)
+                  : null,
+              capacityDelta:
+                entry.capacityDelta !== null && entry.capacityDelta !== undefined
+                  ? new Prisma.Decimal(entry.capacityDelta)
+                  : null,
+            },
+            include: itemInclude,
+          }),
+        );
+      }
+      await this.categories.ensure(tenantId, input.category, tx);
+      return rows;
+    });
+
+    return { created: created.length, items: created.map((row) => this.toResponse(row)) };
   }
 
   async update(tenantId: string, id: string, input: ItemUpdateInput): Promise<ItemResponse> {

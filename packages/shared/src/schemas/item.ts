@@ -124,6 +124,48 @@ export const itemBulkShiftDatesInputSchema = z.strictObject({
   shift: itemDateShiftSchema,
 });
 
+// ---------- Bulk quarterly growth create ----------
+
+/**
+ * A batch covers at most one calendar year of quarterly growth entries.
+ * Partial years (e.g. only Q3/Q4) are legitimate, so the floor is 1, not 4.
+ */
+export const MIN_QUARTERLY_GROWTH_ITEMS = 1;
+export const MAX_QUARTERLY_GROWTH_ITEMS = 4;
+
+export const quarterlyGrowthEntryInputSchema = z.strictObject({
+  name: z.string().trim().min(1).max(200),
+  effectiveDate: dateOnly,
+  consumptionDelta: deltaNumber.nullable().optional(),
+  capacityDelta: deltaNumber.nullable().optional(),
+});
+
+/**
+ * Creates 1-4 `event`-kind items in one request, sharing a category,
+ * description, and metric type — the "set a year of growth assumptions in
+ * one form" flow (#284). All entries commit together or not at all.
+ */
+export const itemBulkCreateQuarterlyGrowthInputSchema = z.strictObject({
+  category: z.string().trim().min(1).max(60),
+  description: z.string().trim().max(2000).nullish(),
+  metricTypeKey: z.string().min(1),
+  entries: z
+    .array(quarterlyGrowthEntryInputSchema)
+    .min(MIN_QUARTERLY_GROWTH_ITEMS)
+    .max(MAX_QUARTERLY_GROWTH_ITEMS),
+});
+
+export type QuarterlyGrowthEntryInput = z.infer<typeof quarterlyGrowthEntryInputSchema>;
+export type ItemBulkCreateQuarterlyGrowthInput = z.infer<
+  typeof itemBulkCreateQuarterlyGrowthInputSchema
+>;
+
+export interface ItemBulkCreateQuarterlyGrowthResponse {
+  /** How many entries were created — always `items.length`, stated for the toast. */
+  created: number;
+  items: ItemResponse[];
+}
+
 export type ItemCreateInput = z.infer<typeof itemCreateInputSchema>;
 export type ItemUpdateInput = z.infer<typeof itemUpdateInputSchema>;
 export type ItemAllocationRowInput = z.infer<typeof itemAllocationRowInputSchema>;

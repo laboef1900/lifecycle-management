@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   categoryCreateInputSchema,
+  itemBulkCreateQuarterlyGrowthInputSchema,
   itemBulkShiftDatesInputSchema,
   itemCreateInputSchema,
   itemUpdateInputSchema,
   MAX_BULK_SHIFT_ITEMS,
+  MAX_QUARTERLY_GROWTH_ITEMS,
   MAX_SHIFT_BY_UNIT,
 } from '../../index.js';
 
@@ -117,6 +119,83 @@ describe('itemBulkShiftDatesInputSchema', () => {
     expect(
       itemBulkShiftDatesInputSchema.safeParse({ itemIds: ['a'], shift, setTo: '2027-01-01' })
         .success,
+    ).toBe(false);
+  });
+});
+
+describe('itemBulkCreateQuarterlyGrowthInputSchema', () => {
+  const entry = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: 'Wachstum Q1',
+    effectiveDate: '2027-01-01',
+    consumptionDelta: 750,
+    ...overrides,
+  });
+
+  it('accepts a full year of four quarterly entries', () => {
+    const parsed = itemBulkCreateQuarterlyGrowthInputSchema.safeParse({
+      category: 'Growth',
+      metricTypeKey: 'memory_gb',
+      entries: [
+        entry({ name: 'Wachstum Q1', effectiveDate: '2027-01-01' }),
+        entry({ name: 'Wachstum Q2', effectiveDate: '2027-04-01' }),
+        entry({ name: 'Wachstum Q3', effectiveDate: '2027-07-01' }),
+        entry({ name: 'Wachstum Q4', effectiveDate: '2027-10-01' }),
+      ],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts a partial year (e.g. only Q3/Q4)', () => {
+    expect(
+      itemBulkCreateQuarterlyGrowthInputSchema.safeParse({
+        category: 'Growth',
+        metricTypeKey: 'memory_gb',
+        entries: [entry()],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects an empty batch', () => {
+    expect(
+      itemBulkCreateQuarterlyGrowthInputSchema.safeParse({
+        category: 'Growth',
+        metricTypeKey: 'memory_gb',
+        entries: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects more than the quarterly cap', () => {
+    const tooMany = Array.from({ length: MAX_QUARTERLY_GROWTH_ITEMS + 1 }, (_, i) =>
+      entry({ name: `Wachstum ${i}`, effectiveDate: '2027-01-01' }),
+    );
+    expect(
+      itemBulkCreateQuarterlyGrowthInputSchema.safeParse({
+        category: 'Growth',
+        metricTypeKey: 'memory_gb',
+        entries: tooMany,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts an entry with no deltas (pure annotation)', () => {
+    expect(
+      itemBulkCreateQuarterlyGrowthInputSchema.safeParse({
+        category: 'Growth',
+        metricTypeKey: 'memory_gb',
+        entries: [entry({ consumptionDelta: null })],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects an unknown top-level field', () => {
+    expect(
+      itemBulkCreateQuarterlyGrowthInputSchema.safeParse({
+        category: 'Growth',
+        metricTypeKey: 'memory_gb',
+        entries: [entry()],
+        year: 2027,
+      }).success,
     ).toBe(false);
   });
 });

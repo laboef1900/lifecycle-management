@@ -17,6 +17,7 @@ import type { CapacityResponseRow, HostResponse } from './host.js';
 import { itemKindSchema } from './item.js';
 import type {
   ItemAllocationResponseRow,
+  ItemBulkCreateQuarterlyGrowthResponse,
   ItemBulkShiftDatesResponse,
   ItemResponse,
 } from './item.js';
@@ -153,6 +154,12 @@ export const itemBulkShiftDatesResponseSchema: z.ZodType<ItemBulkShiftDatesRespo
   shifted: z.number().int().nonnegative(),
   items: z.array(itemResponseSchema),
 });
+
+export const itemBulkCreateQuarterlyGrowthResponseSchema: z.ZodType<ItemBulkCreateQuarterlyGrowthResponse> =
+  z.object({
+    created: z.number().int().nonnegative(),
+    items: z.array(itemResponseSchema),
+  });
 
 // ---------- Forecast ----------
 
