@@ -1,6 +1,6 @@
 import { itemBulkCreateQuarterlyGrowthInputSchema, MAX_QUARTERLY_GROWTH_ITEMS } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { useRef, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
 import { Field, useFocusFirstInvalidField } from '@/components/form/field';
@@ -77,14 +77,23 @@ export function BulkQuarterlyGrowthDialog({
   const [formError, setFormError] = useState<string | undefined>();
   const [rowErrors, setRowErrors] = useState<Partial<Record<Quarter, RowErrors>>>({});
   const formRef = useRef<HTMLFormElement>(null);
-  useFocusFirstInvalidField(formRef, {
-    category: categoryError,
-    ...Object.fromEntries(
-      Object.entries(rowErrors).flatMap(([quarter, errors]) =>
-        Object.entries(errors ?? {}).map(([field, message]) => [`${quarter}-${field}`, message]),
+  // Memoized so the merged map only gets a new reference when an error
+  // actually changes — `useFocusFirstInvalidField` re-focuses the first
+  // invalid field on every reference change, and an object literal rebuilt
+  // on every render would refire that on each keystroke, yanking focus away
+  // from whichever field the operator is actively fixing.
+  const focusErrors = useMemo(
+    () => ({
+      category: categoryError,
+      ...Object.fromEntries(
+        Object.entries(rowErrors).flatMap(([quarter, errors]) =>
+          Object.entries(errors ?? {}).map(([field, message]) => [`${quarter}-${field}`, message]),
+        ),
       ),
-    ),
-  });
+    }),
+    [categoryError, rowErrors],
+  );
+  useFocusFirstInvalidField(formRef, focusErrors);
 
   const reset = (): void => {
     const year0 = currentYear();

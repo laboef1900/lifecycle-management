@@ -210,4 +210,32 @@ describe('<BulkQuarterlyGrowthDialog>', () => {
     expect(screen.getByRole('button', { name: /add 0 entries/i })).toBeDisabled();
     expect(api.items.bulkCreateQuarterlyGrowth).not.toHaveBeenCalled();
   });
+
+  it('keeps focus on the field being edited after a failed submit with multiple invalid rows', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    const titles = screen.getAllByRole('textbox', { name: 'Title' });
+    const [q1Title, q2Title] = titles;
+    if (!q1Title || !q2Title) throw new Error('expected four Title fields');
+    // Drop `required` so the Zod-driven validation path runs instead of the
+    // browser's native constraint validation (same reason other dialogs'
+    // tests do this — see <EditItemDialog> above).
+    q1Title.removeAttribute('required');
+    q2Title.removeAttribute('required');
+    await user.clear(q1Title);
+    await user.clear(q2Title);
+
+    await user.click(screen.getByRole('button', { name: /add 4 entries/i }));
+    await waitFor(() => expect(q1Title).toHaveAttribute('aria-invalid', 'true'));
+    expect(q2Title).toHaveAttribute('aria-invalid', 'true');
+
+    // Q1 is the first invalid field in DOM order, so it takes focus right
+    // after the failed submit. Editing the SECOND invalid field (Q2) must not
+    // get yanked back to Q1 on every keystroke.
+    await user.click(q2Title);
+    await user.type(q2Title, 'Wachstum Q2 fixed');
+
+    expect(q2Title).toHaveFocus();
+  });
 });
