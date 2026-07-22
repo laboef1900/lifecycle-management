@@ -12,6 +12,7 @@ export * from './schemas/idempotency.js';
 export * from './schemas/item.js';
 export * from './schemas/category.js';
 export * from './schemas/forecast.js';
+export * from './schemas/order-approval.js';
 export * from './schemas/settings.js';
 export * from './schemas/vsphere.js';
 export * from './schemas/responses.js';

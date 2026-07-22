@@ -1,5 +1,6 @@
 import type {
   ClusterResponse,
+  ForecastAcknowledgment,
   ForecastResponse,
   MetricStateResponse,
   ProcurementInfo,
@@ -21,6 +22,7 @@ import {
   WindowControls,
   type ForecastWindow,
 } from '@/components/clusters/window-controls';
+import { ApproveOrderDialog } from '@/components/detail/approve-order-dialog';
 import { RecommendationChip } from '@/components/detail/recommendation-chip';
 import { BulletMeter } from '@/components/fleet/bullet-meter';
 import { LiveUsageSection } from '@/components/fleet/live-usage';
@@ -236,6 +238,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const [windowSelection, setWindowSelection] = useState<ForecastWindow>('24mo');
   const [scenario, setScenario] = useState<ScenarioWire | null>(null);
   const [activeTab, setActiveTab] = useState<PanelTab>('hosts');
+  const [approveOpen, setApproveOpen] = useState(false);
   const isWide = useMediaQuery('(min-width: 640px)');
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
   const paneIsSideBySide = useMediaQuery(PANE_SIDE_BY_SIDE_QUERY);
@@ -644,6 +647,11 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                   cluster={clusterQuery.data}
                   procurement={activeForecast?.procurement}
                   capacityKnown={activeCapacityKnown}
+                  // Acknowledgment reflects the REAL forecast, never a what-if:
+                  // suppressed while a scenario is active (as is the approve
+                  // action — you cannot approve a hypothetical order).
+                  acknowledgment={scenario ? null : (forecastQuery.data?.acknowledgment ?? null)}
+                  onApprove={canManage && !scenario ? () => setApproveOpen(true) : undefined}
                 />
               )}
               <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -800,6 +808,20 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
           </m.aside>
         ) : null}
       </AnimatePresence>
+      {/* Approve-order flow (#292). Keyed on the cluster so state resets across
+          clusters; only mounted for admins with a resolved base forecast. The
+          server re-derives the breach, so a stale open dialog cannot approve a
+          gone breach — it 422s, surfaced inline. */}
+      {canManage && clusterQuery.data && forecastQuery.data ? (
+        <ApproveOrderDialog
+          key={clusterId}
+          open={approveOpen}
+          onOpenChange={setApproveOpen}
+          clusterId={clusterId}
+          clusterName={clusterQuery.data.name}
+          procurement={forecastQuery.data.procurement}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1005,10 +1027,14 @@ function PanelTitle({
   cluster,
   procurement,
   capacityKnown,
+  acknowledgment,
+  onApprove,
 }: {
   cluster: ClusterResponse;
   procurement: ProcurementInfo | undefined;
   capacityKnown: boolean;
+  acknowledgment: ForecastAcknowledgment | null;
+  onApprove: (() => void) | undefined;
 }): React.JSX.Element {
   const stale = isBaselineStale(cluster.baselineDate);
   const ageDays = baselineAgeDays(cluster.baselineDate);
@@ -1017,7 +1043,12 @@ function PanelTitle({
       <h1 className="min-w-0 font-display text-h1 [overflow-wrap:anywhere]">{cluster.name}</h1>
       <div className="flex flex-wrap items-center gap-1.5">
         {procurement ? (
-          <RecommendationChip procurement={procurement} capacityKnown={capacityKnown} />
+          <RecommendationChip
+            procurement={procurement}
+            capacityKnown={capacityKnown}
+            acknowledgment={acknowledgment}
+            {...(onApprove ? { onApprove } : {})}
+          />
         ) : null}
         {stale ? (
           <FlagChip tone="warn">⚠ BASELINE {ageDays} D OLD</FlagChip>

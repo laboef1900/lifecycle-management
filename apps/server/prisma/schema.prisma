@@ -36,6 +36,7 @@ model Tenant {
   categories          Category[]
   settings            TenantSettings?
   users               User[]
+  orderApprovals      OrderApproval[]
 
   @@map("tenants")
 }
@@ -115,6 +116,7 @@ model Cluster {
   items           Item[]
   settings        ClusterSettings?
   usageSample     VsphereUsageSample?
+  orderApprovals  OrderApproval[]
 
   @@unique([tenantId, name], map: "clusters_tenant_name_unique")
   /// Cluster identity WITHIN a vCenter. A MoRef (`domain-c123`) is unique only
@@ -189,6 +191,46 @@ model ClusterBaselineHistory {
 
   @@unique([clusterId, metricTypeId, capturedAt], map: "cluster_baseline_history_period_unique")
   @@map("cluster_baseline_history")
+}
+
+/// Per-breach-episode order approval / acknowledgment (#292). An immutable,
+/// append-only SNAPSHOT of a procurement recommendation an admin has approved.
+///
+/// @ai-warning ANNOTATION ONLY (INV-1). Nothing in the forecast engine, the
+/// procurement math, or the baseline anchor reads this table. It exists purely
+/// to record "an admin has seen this order and here is our plan" and to suppress
+/// the "unacknowledged" state on the fleet/detail recommendation chip. A breach
+/// has no durable identity — `computeProcurementInfo` recomputes `breachMonth`
+/// every request and the anchor advances every recompute — so an approval keys
+/// off OPERATOR-CONTROLLED inputs it snapshots here, never off the drifting
+/// month. The latest row per cluster is authoritative for coverage; older rows
+/// are the audit trail ("an approval for each event").
+///
+/// @ai-note `approvedByUserId` is nullable and carries NO foreign key on
+/// purpose: in `AUTH_MODE=disabled` the anonymous ADMIN principal has no `users`
+/// row, so the audit identity lives in `approvedByLabel`. A hard FK would break
+/// approvals on disabled deployments (DESIGN.md §7).
+model OrderApproval {
+  id                String   @id @default(cuid())
+  tenantId          String   @default("default") @map("tenant_id")
+  clusterId         String   @map("cluster_id")
+  // Snapshot of the acknowledged episode (immutable — never updated, INV-4):
+  breachMonth       DateTime @map("breach_month") @db.Date
+  orderByDate       DateTime @map("order_by_date") @db.Date
+  leadTimeWeeks     Int      @map("lead_time_weeks")
+  warnThreshold     Float    @map("warn_threshold")
+  capacitySignature Float    @map("capacity_signature")
+  // Audit:
+  approvedByUserId  String?  @map("approved_by_user_id")
+  approvedByLabel   String   @map("approved_by_label")
+  note              String?
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  cluster Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+
+  @@index([clusterId, createdAt])
+  @@map("order_approvals")
 }
 
 // ---------- Hosts (capacity providers) ----------

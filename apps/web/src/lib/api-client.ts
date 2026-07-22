@@ -46,6 +46,8 @@ import {
   itemResponseSchema,
   itemUpdateInputSchema,
   localUserSummarySchema,
+  orderApprovalCreateInputSchema,
+  orderApprovalResponseSchema,
   paginatedSchema,
   rotateSigningSecretResponseSchema,
   scenarioSchema,
@@ -167,6 +169,7 @@ export type ItemBulkCreateQuarterlyGrowthInputWire = z.input<
 export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
 export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
 export type HostCommissioningConfirmInputWire = z.input<typeof hostCommissioningConfirmInputSchema>;
+export type OrderApprovalCreateInputWire = z.input<typeof orderApprovalCreateInputSchema>;
 
 // ---------- Query string helper ----------
 
@@ -287,6 +290,16 @@ export const api = {
         hostReplacementResponseSchema,
       ),
     delete: (id: string) => request<void>(`/api/host-replacements/${id}`, { method: 'DELETE' }),
+  },
+  orderApprovals: {
+    // Approve the current procurement recommendation for a cluster (#292). The
+    // server derives and snapshots the breach; the only input is an optional note.
+    create: (clusterId: string, input: OrderApprovalCreateInputWire) =>
+      request(
+        `/api/clusters/${clusterId}/order-approvals`,
+        { method: 'POST', body: JSON.stringify(input) },
+        orderApprovalResponseSchema,
+      ),
   },
   items: {
     listByCluster: (clusterId: string, params?: { limit?: number; offset?: number }) =>
