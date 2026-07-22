@@ -70,7 +70,30 @@ function SettingsLayout(): React.JSX.Element {
   // started from, e.g. `/settings/inventory#add-cluster` → back →
   // `/settings/inventory` — releases the latch, because this layout is
   // provably still mounted to receive the next Back/Esc.
+  //
+  // @ai-warning (#297 review fix) `firedFromRef` used to only ever be
+  // OVERWRITTEN, never cleared, once a pop had actually landed on a sibling
+  // sub-route — the "release" above was implicit, produced by `firedFrom !==
+  // href` comparing against a now-stale value, not by resetting the latch.
+  // That is indistinguishable from a fresh in-flight fire if the user later
+  // returns to that exact href: Inventory → Esc (→ Forecasting, ref now holds
+  // '/settings/inventory') → click the Inventory tab again (→ href equals the
+  // stale ref again) → Esc silently no-ops, mistaking a brand-new activation
+  // for the tail end of the first one. The effect below clears the ref once
+  // the location actually settles somewhere else WITHIN Settings (mirroring
+  // case 2's own carve-out: settling OUTSIDE Settings must NOT clear it, or
+  // the transient extra render before unmount would let a stray
+  // double-activation eject the user with a second pop).
   const firedFromRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      firedFromRef.current !== null &&
+      firedFromRef.current !== href &&
+      isSettingsPathname(pathname)
+    ) {
+      firedFromRef.current = null;
+    }
+  }, [href, pathname]);
   const goBack = useCallback((): void => {
     const firedFrom = firedFromRef.current;
     if (firedFrom !== null && (firedFrom === href || !isSettingsPathname(pathname))) return;

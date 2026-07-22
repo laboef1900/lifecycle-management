@@ -464,6 +464,39 @@ describe('/_app/settings Back button + Esc', () => {
     expect(back).toHaveBeenCalledTimes(1);
   });
 
+  // #297 review fix — WARNING finding #1: `firedFromRef` used to only ever be
+  // overwritten, never cleared, so returning to the exact href a PRIOR pop
+  // fired from re-triggers the in-flight guard and silently no-ops. Distinct
+  // from the two tests above: those exercise a single fire-and-release; this
+  // one exercises firing TWICE from the same href across an intervening
+  // sibling-tab visit, which is the reproduction the review actually filed.
+  it('does not dead-latch on Inventory → Esc → Inventory (tab click) → Esc', async () => {
+    const { router } = renderSettingsRoute(disabledAuth, [
+      '/',
+      '/settings/forecasting',
+      '/settings/inventory',
+    ]);
+    await screen.findByRole('heading', { name: 'Settings' });
+    const back = vi.spyOn(router.history, 'back');
+
+    // On Inventory, Esc → Forecasting. `firedFromRef` now holds
+    // '/settings/inventory'.
+    document.dispatchEvent(escapeEvent());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/forecasting'));
+
+    // Click the Inventory tab again: an everyday forward navigation lands
+    // back on the exact href the first Esc fired from.
+    await userEvent.click(screen.getByRole('link', { name: 'Inventory' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/inventory'));
+
+    // Esc again is a brand-new activation, not a double-pop of the first one.
+    // Without clearing the stale ref once the first pop settled, this would
+    // silently no-op (`back` stuck at 1 call, pathname stuck on Inventory).
+    document.dispatchEvent(escapeEvent());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/forecasting'));
+    expect(back).toHaveBeenCalledTimes(2);
+  });
+
   it('exposes the Esc shortcut to assistive tech without polluting the name', async () => {
     renderSettingsRoute(disabledAuth, ['/', '/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
