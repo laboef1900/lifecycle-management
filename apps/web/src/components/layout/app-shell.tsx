@@ -48,15 +48,17 @@ function Header(): React.JSX.Element {
 }
 
 function SettingsLink(): React.JSX.Element {
+  // Points at the default sub-route (#293) rather than bare `/settings`, so
+  // the topbar's persistent entry point skips the index route's redirect hop.
   return (
     <>
       <Button asChild type="button" variant="ghost" size="icon" className="sm:hidden">
-        <Link to="/settings" aria-label="Settings">
+        <Link to="/settings/forecasting" aria-label="Settings">
           <Settings className="h-4 w-4" />
         </Link>
       </Button>
       <Button asChild type="button" variant="ghost" size="sm" className="hidden sm:inline-flex">
-        <Link to="/settings">
+        <Link to="/settings/forecasting">
           <Settings className="h-4 w-4" />
           <span>Settings</span>
         </Link>

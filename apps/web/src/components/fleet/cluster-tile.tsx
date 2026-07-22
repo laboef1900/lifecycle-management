@@ -48,10 +48,10 @@ const STATUS_BADGE: Record<
   unknown: { variant: 'outline', label: 'UNKNOWN' },
 };
 
-const ORDER_CHIP_TONE: Record<'now' | 'soon' | 'planned', string> = {
-  now: 'border-destructive/40 bg-destructive/10 text-destructive',
-  soon: 'border-warning/40 bg-warning/10 text-warning',
-  planned: 'border-border text-fg-muted',
+const ORDER_BADGE_VARIANT: Record<'now' | 'soon' | 'planned', 'danger' | 'warning' | 'outline'> = {
+  now: 'danger',
+  soon: 'warning',
+  planned: 'outline',
 };
 
 interface RunwayInfo {
@@ -340,20 +340,26 @@ export const ClusterTile = memo(function ClusterTile({
           unknown-capacity case (still an information-bearing state, unlike
           the old "— · NO ORDER NEEDED" placeholder, which just repeated the
           all-clear a tile had already stated three other ways).
+
+          #290: restyled onto the shared `Badge` (matching the status and
+          vSphere badges) and moved into their cluster instead of being
+          pushed to the row's far edge via `ml-auto`. The relative-days
+          suffix (`· 12 D OVERDUE`) is dropped from the visible label — the
+          badge's color tone already conveys urgency, and the aria-label
+          below still carries the relative-days detail for assistive tech.
         */}
         {orderByDate || orderUnknown ? (
-          <span
-            className={cn(
-              'ml-auto shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold tracking-[0.08em]',
+          <Badge
+            variant={
               orderByDate
-                ? ORDER_CHIP_TONE[urgency === 'none' ? 'planned' : urgency]
-                : 'border-border text-fg-muted',
-            )}
+                ? ORDER_BADGE_VARIANT[urgency === 'none' ? 'planned' : urgency]
+                : 'outline'
+            }
           >
             {orderByDate
-              ? `ORDER BY ${formatDateShort(orderByDate).toUpperCase()} · ${formatRelativeDays(orderByDate).toUpperCase()}`
-              : '— · ORDER STATUS UNKNOWN'}
-          </span>
+              ? `ORDER BY ${formatDateShort(orderByDate).toUpperCase()}`
+              : 'ORDER STATUS UNKNOWN'}
+          </Badge>
         ) : null}
       </div>
 

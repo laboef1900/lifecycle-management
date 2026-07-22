@@ -7,7 +7,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { FORECASTING_SECTION_HASH } from '@/lib/anchors';
 import { api, describeApiError } from '@/lib/api-client';
 
 interface ThresholdOverridesFormProps {
@@ -103,8 +102,7 @@ export function ThresholdOverridesForm({
           <p className="text-sm text-fg-muted">
             Override{' '}
             <Link
-              to="/settings"
-              hash={FORECASTING_SECTION_HASH}
+              to="/settings/forecasting"
               className="text-steel underline underline-offset-2 hover:text-foreground"
             >
               global defaults

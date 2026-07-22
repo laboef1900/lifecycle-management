@@ -4,18 +4,30 @@ import { useRouteContext } from '@tanstack/react-router';
 export type AuthState = AuthMeResponse;
 
 /**
- * True when the current principal may perform mutations. In AUTH_MODE=disabled
+ * True when `auth` may perform mutations. In AUTH_MODE=disabled
  * (authRequired=false) there is no session user and everyone is treated as
  * ADMIN, matching the server's anonymous-ADMIN principal. In oidc mode it
  * reflects the signed-in user's role.
  *
  * UX affordance only: the server is the real enforcement point — mutations 403
- * for non-admins regardless of what the UI shows.
+ * for non-admins regardless of what the UI shows. Exported (rather than kept
+ * private to `useIsAdmin`) so route `beforeLoad` guards — which run outside
+ * React and cannot call hooks — can apply the identical predicate against
+ * `context.auth` (see `routes/_app.settings.access.tsx`).
+ */
+export function isAdmin(auth: AuthState): boolean {
+  if (!auth.authRequired) return true;
+  return auth.user?.role === 'ADMIN';
+}
+
+/**
+ * True when the current principal may perform mutations. See `isAdmin` for
+ * the predicate itself; this hook just supplies it with the router's `auth`
+ * context.
  */
 export function useIsAdmin(): boolean {
   const { auth } = useRouteContext({ from: '__root__' });
-  if (!auth.authRequired) return true;
-  return auth.user?.role === 'ADMIN';
+  return isAdmin(auth);
 }
 
 /**

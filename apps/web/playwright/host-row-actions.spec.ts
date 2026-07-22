@@ -24,7 +24,9 @@ test('host row overflow menu opens via keyboard; its destructive item still conf
   let clusterId: string | null = null;
 
   try {
-    await page.goto('/settings');
+    // #293: the Add-cluster panel lives on the Inventory sub-route now, not
+    // bare `/settings` (which redirects to Forecasting by default).
+    await page.goto('/settings/inventory');
     await page.getByRole('button', { name: '+ Add cluster' }).click();
     const createDialog = page.getByRole('dialog', { name: 'New cluster' });
     await createDialog.getByRole('textbox', { name: 'Name' }).fill(clusterName);
