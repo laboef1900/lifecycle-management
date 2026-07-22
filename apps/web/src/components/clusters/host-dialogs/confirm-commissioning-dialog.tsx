@@ -43,9 +43,23 @@ export function ConfirmCommissioningDialog({
   const [dates, setDates] = useState<Record<string, string>>(() =>
     Object.fromEntries(hosts.map((h) => [h.id, h.commissionedAt])),
   );
+  const [bulkDate, setBulkDate] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const formRef = useRef<HTMLFormElement>(null);
   useFocusFirstInvalidField(formRef, errors);
+
+  // Set the same date on every host in one action (#283). A fleet vCenter
+  // import is typically commissioned on a single day, so filling each row by
+  // hand is repetitive; this applies one date to all rows while leaving each
+  // row editable afterward for the exceptions. An empty value is ignored so
+  // clearing this convenience field never blanks every row (which would only
+  // block submit). Overwriting the rows also clears their now-stale errors.
+  const applyToAll = (value: string): void => {
+    setBulkDate(value);
+    if (value.length === 0) return;
+    setDates(Object.fromEntries(hosts.map((h) => [h.id, value])));
+    setErrors({});
+  };
 
   const mutation = useMutation({
     mutationFn: (payload: HostCommissioningConfirmInputWire) =>
@@ -103,6 +117,21 @@ export function ConfirmCommissioningDialog({
           </DialogDescription>
         </DialogHeader>
         <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
+          {/* Bulk shortcut (#283) — only meaningful with 2+ hosts; a single
+              host is edited directly in its own row below, where a separate
+              "set all" control would just duplicate that field. */}
+          {count > 1 ? (
+            <div className="rounded-[var(--radius)] border border-border bg-muted/30 p-3">
+              <Field
+                label="Set all dates"
+                name="bulk-commissioned-at"
+                type="date"
+                value={bulkDate}
+                onChange={(e) => applyToAll(e.target.value)}
+                hint="Applies this date to every host below. Adjust individual hosts afterward if needed."
+              />
+            </div>
+          ) : null}
           <div className="space-y-3">
             {hosts.map((host) => (
               <Field
