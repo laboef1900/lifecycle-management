@@ -3,7 +3,7 @@ import {
   vsphereConnectionIdParamsSchema,
   vsphereConnectionUpdateSchema,
   vsphereProbeSchema,
-  vsphereTrustCaSchema,
+  vsphereTrustCertSchema,
   vsphereVerifySchema,
 } from '@lcm/shared';
 import type {
@@ -19,6 +19,48 @@ import { verifyLogin } from '../services/vsphere-client.js';
 import { VsphereConnectionsService } from '../services/vsphere-connections.js';
 import { isDeniedTarget } from '../services/vsphere-guard.js';
 import { probeCertificate } from '../services/vsphere-tls.js';
+import type { TlsProbeOutcome, TlsProbeResult } from '../services/vsphere-tls.js';
+
+/**
+ * Map an internal probe result to the client DTO.
+ *
+ * @ai-warning Everything the probe cannot pin, other than `unreachable`, collapses
+ * to `tls_untrusted`. Only the leaf fingerprint and validity ever leave the server
+ * — never subject, issuer, or SANs.
+ */
+export function toProbeResponse(result: TlsProbeResult): VsphereProbeResult {
+  if (result.outcome !== 'ok' || !result.chain) {
+    return {
+      reachable: false,
+      trustedBySystemRoots: false,
+      leafFingerprintSha256: null,
+      validFrom: null,
+      validTo: null,
+      outcome: result.outcome === 'unreachable' ? 'unreachable' : 'tls_untrusted',
+    };
+  }
+  return {
+    reachable: true,
+    trustedBySystemRoots: result.chain.trustedBySystemRoots,
+    leafFingerprintSha256: result.chain.leafFingerprintSha256,
+    validFrom: result.chain.validFrom,
+    validTo: result.chain.validTo,
+    outcome: 'ok',
+  };
+}
+
+/**
+ * The error to fail a trust re-probe with when it did not yield a pinnable
+ * certificate, or `null` when the outcome is `ok`. The route fails CLOSED either
+ * way; this only makes the reason accurate.
+ */
+export function trustReprobeError(outcome: TlsProbeOutcome): UnprocessableError | null {
+  if (outcome === 'ok') return null;
+  return new UnprocessableError(
+    'VCENTER_UNREACHABLE',
+    'Could not reach vCenter to read its certificate',
+  );
+}
 
 /**
  * `/api/settings/vsphere` — vCenter connections (#175, epic #172).
@@ -176,32 +218,18 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
       guardTarget(body.hostname);
 
       const result = await probeCertificate(body.hostname, body.port);
-      if (result.outcome !== 'ok' || !result.chain) {
-        request.log.info(
-          { event: 'vsphere.probe', outcome: result.outcome },
-          'vCenter probe failed',
-        );
-        return {
-          reachable: false,
-          trustedBySystemRoots: false,
-          rootFingerprintSha256: null,
-          validFrom: null,
-          validTo: null,
-          outcome: result.outcome === 'unreachable' ? 'unreachable' : 'tls_untrusted',
-        };
-      }
-
+      // Server-log only (#272): the chain shape never leaves the server (the
+      // response below carries only the leaf fingerprint). `diagnostics` records the
+      // chain shape as evidence and carries subject/issuer CNs, so it stays out of
+      // the response.
+      request.log.info(
+        { event: 'vsphere.probe', outcome: result.outcome, ...(result.diagnostics ?? {}) },
+        result.outcome === 'ok' ? 'vCenter probe captured leaf' : 'vCenter probe failed',
+      );
       // Only the fingerprint and validity leave the server — never subject, issuer,
-      // or SANs. A fingerprint is a hash: useless for enumerating a network, and
-      // exactly what an admin compares against `govc about.cert -thumbprint`.
-      return {
-        reachable: true,
-        trustedBySystemRoots: result.chain.trustedBySystemRoots,
-        rootFingerprintSha256: result.chain.rootFingerprintSha256,
-        validFrom: result.chain.validFrom,
-        validTo: result.chain.validTo,
-        outcome: 'ok',
-      };
+      // or SANs (a fingerprint is a hash: useless for enumerating a network, and
+      // exactly what an admin compares against `govc about.cert -thumbprint`).
+      return toProbeResponse(result);
     },
   );
 
@@ -216,16 +244,16 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
       const body = vsphereVerifySchema.parse(request.body);
       guardTarget(body.hostname);
 
-      // No pinned root is available for an unsaved connection, so this verifies
-      // against the system trust store. A self-signed vCenter therefore reports
-      // `tls_untrusted` until its CA is confirmed and pinned — which is the intended
+      // No pin is available for an unsaved connection, so this verifies against the
+      // system trust store. A self-signed vCenter therefore reports `tls_untrusted`
+      // until its leaf fingerprint is confirmed and pinned — which is the intended
       // order: vet the certificate, THEN send the credential.
       const result = await verifyLogin({
         hostname: body.hostname,
         port: body.port,
         username: body.username,
         password: body.password,
-        pinnedRootPem: null,
+        pinnedLeafSha256: null,
       });
 
       // @ai-warning The log line carries the OUTCOME only. Never the password, never
@@ -242,15 +270,15 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
   );
 
   /**
-   * Pin a confirmed CA root. Requires the password: this mutates trust material,
-   * and a re-pin plus a DNS spoof delivers the credential on the next poll.
+   * Pin a confirmed leaf certificate. Requires the password: this mutates trust
+   * material, and a re-pin plus a DNS spoof delivers the credential on the next poll.
    */
   fastify.post(
-    '/settings/vsphere/connections/:id/trust-ca',
+    '/settings/vsphere/connections/:id/trust-cert',
     { config: outboundWorkRateLimit },
     async (request): Promise<VsphereConnectionResponse> => {
       const { id } = vsphereConnectionIdParamsSchema.parse(request.params);
-      const body = vsphereTrustCaSchema.parse(request.body);
+      const body = vsphereTrustCertSchema.parse(request.body);
 
       const ok = await service.passwordMatches(request.tenantId, id, body.password);
       if (!ok) {
@@ -261,17 +289,34 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
       }
 
       const connection = await service.getById(request.tenantId, id);
-      // Re-probe rather than trusting a client-supplied PEM: the server pins what IT
-      // observes, and the admin's fingerprint only has to agree. A client-supplied
-      // certificate would let a caller pin an anchor the server never saw.
+      // Re-probe rather than trusting a client-supplied fingerprint: the server pins
+      // what IT observes, and the admin's fingerprint only has to agree. A
+      // client-supplied value would let a caller pin a certificate the server never saw.
       const probe = await probeCertificate(connection.hostname, connection.port);
+      // Server-log only (#272): capture the chain shape at the exact moment trust is
+      // being granted. `diagnostics` carries subject/issuer CNs, so it stays out of
+      // the response.
+      request.log.info(
+        {
+          event: 'vsphere.trust',
+          connectionId: id,
+          outcome: probe.outcome,
+          ...(probe.diagnostics ?? {}),
+        },
+        'vCenter trust re-probe',
+      );
       if (probe.outcome !== 'ok' || !probe.chain) {
-        throw new UnprocessableError(
-          'VCENTER_UNREACHABLE',
-          'Could not reach vCenter to read its certificate',
+        // Fail closed: never pin from a re-probe that yielded no certificate. Any
+        // non-ok outcome (or a missing chain) surfaces as `VCENTER_UNREACHABLE`.
+        throw (
+          trustReprobeError(probe.outcome) ??
+          new UnprocessableError(
+            'VCENTER_UNREACHABLE',
+            'Could not reach vCenter to read its certificate',
+          )
         );
       }
-      if (probe.chain.rootFingerprintSha256 !== body.rootFingerprintSha256.toUpperCase()) {
+      if (probe.chain.leafFingerprintSha256 !== body.leafFingerprintSha256.toUpperCase()) {
         // The presented certificate is not the one the admin confirmed. Fail rather
         // than pin: this is either a rotation the admin has not seen, or an attack.
         throw new UnprocessableError(
@@ -280,12 +325,7 @@ export const settingsVsphereRoutes: FastifyPluginAsync<SettingsVsphereRoutesOpti
         );
       }
 
-      return service.trustCa(
-        request.tenantId,
-        id,
-        probe.chain.rootPem,
-        probe.chain.rootFingerprintSha256,
-      );
+      return service.trustCert(request.tenantId, id, probe.chain.leafFingerprintSha256);
     },
   );
 };

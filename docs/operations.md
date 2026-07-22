@@ -187,7 +187,12 @@ docker compose exec -T db pg_restore -U lcm -d lcm_verify --no-owner --no-acl \
 # 3. Row counts must match the live database EXACTLY for the purchasing-critical
 #    tables. A dump that restores without error but is short a table is precisely
 #    the failure this step exists to catch.
-for t in clusters cluster_metric_baselines cluster_baseline_history hosts host_metric_capacities items item_allocations; do
+#
+#    NOTE: `cluster_metric_baselines` was dropped by #195 and is absent from this
+#    list. When verifying a dump taken from a database that PREDATES that
+#    migration, add it back for that run — the table exists in the dump, and
+#    leaving it unchecked skips the very rows the migration is about to remove.
+for t in clusters cluster_baseline_history hosts host_metric_capacities items item_allocations; do
   live=$(docker compose exec -T db psql -U lcm -d lcm        -tAc "SELECT COUNT(*) FROM $t")
   copy=$(docker compose exec -T db psql -U lcm -d lcm_verify -tAc "SELECT COUNT(*) FROM $t")
   printf '%-28s live=%-8s restored=%-8s %s\n' "$t" "$live" "$copy" \
@@ -198,47 +203,491 @@ done
 docker compose exec -T db psql -U lcm -d postgres -c 'DROP DATABASE lcm_verify WITH (FORCE);'
 ```
 
-## Baseline history migration (#177) — rollback
+## Baseline history migration (#177/#195) — rollback
 
-The baseline-history migration is **expand + migrate only**: it creates
-`cluster_baseline_history`, backfills it from `cluster_metric_baselines`, and
-**drops nothing**. The application dual-writes both tables (and
-`clusters.baseline_date`) for this release, so:
+**The contract migration has landed.** `20260719120000_drop_legacy_cluster_baselines`
+dropped `cluster_metric_baselines` and `clusters.baseline_date`, and the application
+no longer dual-writes. `cluster_baseline_history` is the only baseline store: it
+anchors the forecast, it is what `ClusterResponse.metrics` is built from, and
+`ClusterResponse.baselineDate` is derived from it as the MIN of the newest
+`captured_at` per metric.
 
-> **Rolling back is an ordinary image rollback, at any time, with no data loss:**
+> **An image rollback to a pre-#177 tag is NO LONGER POSSIBLE.** The old code
+> `SELECT`s `cluster_metric_baselines` and `clusters.baseline_date`, which no longer
+> exist, so it cannot boot. **Restore-from-dump is the only recovery** — see
+> "Verifying a dump is actually restorable" above, and take the dump _before_
+> deploying the image that carries this migration.
+
+Until this migration, rolling back was an ordinary image rollback with no data loss,
+and that property was the entire reason for the dual-write: migrating in place would
+have made a rollback safe only until the first appended baseline, after which the old
+code would pair an _arbitrary_ baseline value with a _fresh_ date — a years-old
+capacity number displayed as current, tripping no staleness check, on the number that
+drives hardware purchasing. That window is now deliberately closed.
+
+**If the migration itself fails, it fails safe — but it does not fix itself.** Prisma
+runs each migration in a transaction, so a failure rolls the whole thing back: no
+table is dropped, no `captured_at` is rewritten, and the database is left exactly as
+the previous release left it. `prisma migrate deploy` then exits non-zero and
+**Fastify never starts**, so the service serves nothing rather than serving wrong
+numbers. Your data is intact: this is a **blocked deploy, not corruption**.
+
+> ⚠️ **It is still a full outage, and rolling the image back does not end it.**
+> Prisma writes the failed attempt into `_prisma_migrations` _outside_ the
+> migration's transaction, so Postgres rolling the migration back does not clear it —
+> the row survives with `finished_at` and `rolled_back_at` both NULL. Every
+> subsequent `prisma migrate deploy` then stops at **P3009**
+> (`migrate found failed migrations in the target database`) and exits 1. That
+> includes the **previous image**: Prisma's failed-migration check reads the database
+> records only and never intersects them with the migrations on disk, so an image
+> whose migrations directory does not even contain this migration still refuses.
+> `entrypoint.ts` exits on that non-zero status, Fastify never starts,
+> `restart: unless-stopped` restart-loops `server`, and `web`'s
+> `depends_on: condition: service_healthy` keeps the whole stack down.
 >
-> ```bash
-> # Pin the previous image in .env, then:
-> docker compose up -d
-> ```
+> **Clearing the record is therefore part of restoring service, not only part of
+> rolling forward** — see "Clearing the failed-migration record" below. Roll forward
+> (the normal path): fix the data per the guard you hit, clear the record, redeploy.
+> Need the previous image serving _now_: clear the record first, then deploy the old
+> tag — the schema still matches it, because the migration did roll back. The
+> `migrate resolve` command works from either image; it addresses the record by
+> migration name and does not need that migration present on disk.
 >
-> The old code reads `cluster_metric_baselines`, which the new code has kept
-> current. The worst case is a baseline that is _stale_ — which the fleet tile's
-> existing staleness flag already surfaces — never one that is silently wrong.
+> _Verified end to end against PostgreSQL 18 with Prisma 7.8: guard RAISE → P3018 and
+> exit 1, DDL rolled back and rows intact; `migrate deploy` from a migrations directory
+> lacking the migration → P3009 and exit 1; `migrate resolve --rolled-back` from that
+> same directory → exit 0, and `migrate deploy` then boots clean._
 
-That property is the whole reason for the dual-write, and it is why the old table
-must **not** be tidied away before the contract migration. Migrating in place would
-have made an image rollback safe only until the first appended baseline, after
-which the old code would pair an _arbitrary_ baseline value with a _fresh_ date — a
-years-old capacity number displayed as current, tripping no staleness check, on the
-number that drives hardware purchasing.
+Three guards can stop it, and they call for different responses. Read the RAISE
+message in `docker compose logs server` to tell them apart.
 
-**If the migration itself fails, it fails safe with no action required.** Prisma
-runs each migration in a transaction, so the DDL and the backfill roll back
-together; the backfill's row-count assertion aborts the whole thing if it did not
-copy every row; and the container's `prisma migrate deploy` then exits non-zero, so
-**Fastify never starts**. The service serves nothing rather than serving wrong
-numbers. Fix forward and redeploy.
+#### Guard 1 — orphaned legacy baselines
+
+> `Refusing to drop cluster_metric_baselines: N baseline(s) have no cluster_baseline_history row. Backfill is incomplete.`
+
+The #177 expand migration did not copy every legacy row. It asserts its own row
+counts, so reaching this state means that assertion was bypassed (a hand-applied
+migration, or a restore that mixed schema versions). **Remedy: complete the backfill**
+— re-run the expand migration's `INSERT ... SELECT` for the missing pairs — then
+resume at "Clearing the failed-migration record" below.
+
+#### Guard 2 — a `captured_at` collision
+
+> `Refusing to normalise cluster_baseline_history.captured_at: N (cluster, metric, month) group(s) hold more than one row, so snapping to the first of the month would destroy a measurement. Reconcile them by hand first.`
+
+**This is the one you are likely to actually hit, and "complete the backfill" is a
+dead end for it — the backfill is already complete.** It arises from ordinary use of
+the previous release:
+
+1. A pre-#177 cluster carries `baseline_date = 2026-01-15`. Nothing forbade the day:
+   `dateOnly` in `@lcm/shared` is a bare `YYYY-MM-DD` regex with no first-of-month
+   refinement, and the create dialog is a free `<input type="date">`.
+2. The expand migration backfilled `captured_at = 2026-01-15` **verbatim**.
+3. During the dual-write release an operator edited a baseline **value** without
+   touching the date. That path snapped through `startOfUtcMonth` and appended
+   `2026-01-01`, while `clusters.baseline_date` stayed `2026-01-15`.
+
+Both rows now sit in January, so snapping the first onto the second would silently
+destroy one. The guard refuses instead.
+
+It is **deterministically resolvable**, and the discriminator is structural rather
+than value-based: **the mid-month row is always the stale backfill.**
+
+Every application writer snaps to the first of the month —
+`ClustersService.create` and `update` through `startOfUtcMonth`,
+`VsphereSnapshotService` through `startOfUtcMonth(measuredAt)`, and `seed.ts`
+likewise. The expand migration's `SELECT c."baseline_date"` is the only writer that
+ever stored a mid-month `captured_at`, and it wrote at most **one** row per
+`(cluster, metric)` because that was the legacy table's primary key. So a colliding
+group is always exactly one backfill row plus one snapped row written by the app, and
+the row to drop is the one whose day is not `01`.
+
+> Do **not** resolve this by matching the two rows against
+> `cluster_metric_baselines` to see which one "was being served". That table is
+> last-write-wins across **all** periods — `clusterMetricBaseline.upsert` is
+> unconditional — so if the metric's most recent edit targeted a different month, the
+> row it matches is the stale backfill and the value-based rule deletes the
+> operator's correction. The day-of-month rule has no such failure mode.
+
+```bash
+# 1. Look at every colliding group, with what clients were being served alongside.
+docker compose exec -T db psql -U lcm -d lcm <<'SQL'
+SELECT c.name AS cluster, mt.key AS metric, h.captured_at, h.source,
+       h.baseline_consumption, h.baseline_capacity,
+       b.baseline_consumption AS served_consumption,
+       b.baseline_capacity    AS served_capacity,
+       ((h.baseline_consumption, h.baseline_capacity)
+        IS NOT DISTINCT FROM (b.baseline_consumption, b.baseline_capacity)) AS was_served
+FROM "cluster_baseline_history" h
+JOIN "clusters" c      ON c.id  = h.cluster_id
+JOIN "metric_types" mt ON mt.id = h.metric_type_id
+LEFT JOIN "cluster_metric_baselines" b
+       ON b.cluster_id = h.cluster_id AND b.metric_type_id = h.metric_type_id
+WHERE (h.cluster_id, h.metric_type_id, date_trunc('month', h.captured_at)) IN (
+        SELECT cluster_id, metric_type_id, date_trunc('month', captured_at)
+        FROM "cluster_baseline_history"
+        GROUP BY 1, 2, 3
+        HAVING COUNT(*) > 1)
+ORDER BY c.name, mt.key, h.captured_at;
+SQL
+```
+
+```bash
+# 2. Drop the mid-month backfill row in every colliding group. Self-verifying: the
+#    guard at the end RAISEs if any collision survives, which rolls the whole
+#    transaction back — there is no "remember to ROLLBACK" step to get wrong.
+docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+
+DELETE FROM "cluster_baseline_history" h
+WHERE h."captured_at" <> date_trunc('month', h."captured_at")::date
+  AND EXISTS (
+        SELECT 1
+        FROM "cluster_baseline_history" o
+        WHERE o."cluster_id"     = h."cluster_id"
+          AND o."metric_type_id" = h."metric_type_id"
+          AND o."id"            <> h."id"
+          -- The surviving sibling must be the SNAPPED row. Without this line a
+          -- group of two MID-month rows satisfies the EXISTS in both directions
+          -- and loses both, leaving no collision for the guard below to catch —
+          -- so the transaction commits an emptied group.
+          AND o."captured_at"    = date_trunc('month', o."captured_at")::date
+          AND date_trunc('month', o."captured_at")
+              = date_trunc('month', h."captured_at"));
+
+-- Refuse to commit unless every group is now single-rowed, so an unanticipated
+-- shape aborts instead of half-resolving.
+DO $$
+DECLARE
+    remaining BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO remaining FROM (
+        SELECT 1 FROM "cluster_baseline_history"
+        GROUP BY "cluster_id", "metric_type_id", date_trunc('month', "captured_at")
+        HAVING COUNT(*) > 1) t;
+    IF remaining <> 0 THEN
+        RAISE EXCEPTION
+            'Rolled back: % group(s) still collide after dropping mid-month rows. Two snapped rows cannot occur in one month (the period unique index forbids it) — stop and inspect before touching anything.',
+            remaining;
+    END IF;
+END $$;
+
+COMMIT;
+SQL
+```
+
+The `EXISTS` clause is the safety property, and **both** of its conditions carry
+weight: a mid-month row is dropped only when a row that is already snapped to the
+first of the month shares its `(cluster, metric, month)`. Requiring the survivor to
+be the snapped one is what makes "this statement cannot empty a group" true. Matching
+merely "some other row in the same month" reads equivalent — the documented shape is
+always one backfill row plus one snapped row — but on a group of **two mid-month
+rows** each is the other's sibling, both are deleted, and the final `RAISE` then finds
+no collision to complain about and commits the emptied group. An isolated mid-month
+row is a legitimate lone measurement, which the migration's normalisation `UPDATE`
+snaps without losing anything, so it is left alone either way.
+
+If the final `RAISE` fires, the transaction is rolled back and nothing was changed.
+Two cases reach it, and neither is resolved by deleting more rows:
+
+- **Two mid-month rows in one group.** The `EXISTS` deliberately leaves them, because
+  there is no structural rule saying which one to keep — the day-of-month
+  discriminator only tells a backfill row from an application row, and here both look
+  like backfill rows. The expand migration wrote at most one row per
+  `(cluster, metric)`, so this should not arise from the dual-write history; treat it
+  as a hand-edited or partially restored database and reconcile the two values with
+  whoever recorded them.
+- **Two _snapped_ rows sharing a month**, which the
+  `cluster_baseline_history_period_unique` index makes impossible — so it likewise
+  indicates corruption rather than the dual-write history this procedure covers.
+
+Stop and investigate; do not delete rows to make the guard pass.
+
+#### Guard 3 — the served value would change
+
+> `Refusing to drop cluster_metric_baselines: N (cluster, metric) pair(s) disagree between the legacy baseline and the newest cluster_baseline_history row, so dropping the legacy table would silently change the value served for them. Affected (up to 20 shown): ...`
+
+The other case ordinary use of the previous release produces, and the one Guard 2
+cannot see because **nothing collides** — the two rows are in different months:
+
+1. A pre-#177 cluster carries `baseline_date = 2026-06-20`, so the expand migration
+   backfilled `captured_at = 2026-06-20` with that cluster's value (say `100`).
+2. During the dual-write release an operator corrected the baseline and re-anchored
+   it **backwards**, to `2026-03-01` with the corrected value (say `250`). That wrote
+   history `2026-03-01 = 250` and, by dual-write, `cluster_metric_baselines = 250`.
+3. `250` is what the fleet console, the cluster panel and the forecast have been
+   serving ever since, because the legacy table was the read side.
+
+After the drop, the read side is newest-per-metric = `MAX(captured_at)` — the
+normalised `2026-06-01` backfill row, `100`. The served value would flip `250 → 100`
+with no error raised, and the correct row would be unreachable through the API.
+Guard 3 refuses instead, because it runs **before** the `DROP` with the legacy table
+still holding exactly what clients were served.
+
+A second shape reaches this guard, and it is why the guard carries **no source
+filter**: the legacy table was last-write-wins in **wall-clock** order, while
+"newest" is computed in **period** order. An operator correction that was the most
+recent _write_ but is anchored to an _earlier_ period than an existing vCenter
+snapshot leaves the snapshot holding `MAX(captured_at)`, so the served value flips
+the other way (`500 → 900` in the reproduced case). A newest row with
+`source = 'vsphere'` is therefore reported too — earlier releases excluded it, which
+is exactly how this case escaped.
+
+Unlike Guard 2 there is no structural rule to apply mechanically. **Decide, per
+pair, which number is right**, then apply the matching remediation below. The
+question the guard asks is only "does the served value change?" — it deliberately
+does not guess which side is correct.
+
+- **(a) The legacy value is stale and should yield to the newer measurement.**
+  Typical when the newest row is a genuine vCenter snapshot taken after the last
+  manual entry: the sync superseded it and the history row is what you want served.
+- **(b) The legacy value is a correction that must be promoted.** Typical when the
+  newest row is the expand migration's own backfill (`source = 'manual'`) and the
+  operator's correction sits at an earlier period. The legacy value is by definition
+  what clients were being served.
+
+Step 1 below shows both sides plus the newest row's period and source, which is what
+tells the two shapes apart.
+
+```bash
+# 1. See every disagreeing pair, with both sides side by side.
+docker compose exec -T db psql -U lcm -d lcm <<'SQL'
+WITH newest AS (
+    SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
+           h.cluster_id, h.metric_type_id, h.captured_at, h.source,
+           h.baseline_consumption, h.baseline_capacity
+    FROM "cluster_baseline_history" h
+    ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
+)
+SELECT c.name AS cluster, mt.key AS metric,
+       n.captured_at AS newest_period, n.source AS newest_source,
+       n.baseline_consumption AS newest_consumption,
+       n.baseline_capacity    AS newest_capacity,
+       b.baseline_consumption AS served_consumption,
+       b.baseline_capacity    AS served_capacity
+FROM "cluster_metric_baselines" b
+JOIN newest n         ON n.cluster_id = b.cluster_id
+                     AND n.metric_type_id = b.metric_type_id
+JOIN "clusters" c     ON c.id  = b.cluster_id
+JOIN "metric_types" mt ON mt.id = b.metric_type_id
+WHERE (n.baseline_consumption, n.baseline_capacity)
+      IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity)
+ORDER BY c.name, mt.key;
+SQL
+```
+
+Both remediations below take an explicit list of `(cluster name, metric key)` pairs,
+so you opt in **per pair** after reading step 1. Run either, both, or neither — but
+every reported pair must appear in exactly one of them before the deploy will pass.
+
+```bash
+# 2a. SHAPE (a): accept the newer measurement, discarding the stale legacy value.
+#     This writes ONLY to cluster_metric_baselines — the table the migration drops
+#     moments later — so it records your decision without touching a single
+#     measurement. History is left exactly as it is, and the value served after the
+#     drop is the history row you just confirmed.
+docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+
+WITH reviewed (cluster_name, metric_key) AS (
+    VALUES ('prod-cluster-01', 'memory_gb')   -- <<< EDIT: one row per accepted pair
+),
+newest AS (
+    SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
+           h.cluster_id, h.metric_type_id,
+           h.baseline_consumption, h.baseline_capacity
+    FROM "cluster_baseline_history" h
+    ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
+)
+UPDATE "cluster_metric_baselines" b
+SET baseline_consumption = n.baseline_consumption,
+    baseline_capacity    = n.baseline_capacity
+FROM newest n
+JOIN "clusters" c      ON c.id  = n.cluster_id
+JOIN "metric_types" mt ON mt.id = n.metric_type_id
+JOIN reviewed r        ON r.cluster_name = c.name AND r.metric_key = mt.key
+WHERE b.cluster_id = n.cluster_id
+  AND b.metric_type_id = n.metric_type_id;
+
+COMMIT;
+SQL
+```
+
+```bash
+# 2b. SHAPE (b): promote the served value onto the newest period, in place.
+#     This re-values the newest history row and RE-DATES NOTHING — the period the
+#     operator recorded is left alone and only the numbers move onto it.
+docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+
+WITH reviewed (cluster_name, metric_key) AS (
+    VALUES ('prod-cluster-02', 'memory_gb')   -- <<< EDIT: one row per promoted pair
+),
+newest AS (
+    SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
+           h.id, h.cluster_id, h.metric_type_id
+    FROM "cluster_baseline_history" h
+    ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
+)
+UPDATE "cluster_baseline_history" t
+SET baseline_consumption = b.baseline_consumption,
+    baseline_capacity    = b.baseline_capacity
+FROM newest n
+JOIN "cluster_metric_baselines" b
+  ON b.cluster_id = n.cluster_id AND b.metric_type_id = n.metric_type_id
+JOIN "clusters" c      ON c.id  = n.cluster_id
+JOIN "metric_types" mt ON mt.id = n.metric_type_id
+JOIN reviewed r        ON r.cluster_name = c.name AND r.metric_key = mt.key
+WHERE t.id = n.id;
+
+COMMIT;
+SQL
+```
+
+Shape (b) deliberately re-values rather than deleting. The alternative — deleting the
+stale backfill row so the correction becomes newest again — also clears the guard but
+throws away a measurement, and it back-dates the cluster's `ClusterResponse.baselineDate`
+by however far the correction reached, which can flip a healthy cluster to stale.
+
+```bash
+# 3. Verify. This is the guard's own predicate, so a clean run here means the deploy
+#    will get past it. Non-zero output means at least one pair is still unreviewed.
+docker compose exec -T db psql -U lcm -d lcm -v ON_ERROR_STOP=1 <<'SQL'
+WITH newest AS (
+    SELECT DISTINCT ON (h.cluster_id, h.metric_type_id)
+           h.cluster_id, h.metric_type_id,
+           h.baseline_consumption, h.baseline_capacity
+    FROM "cluster_baseline_history" h
+    ORDER BY h.cluster_id, h.metric_type_id, h.captured_at DESC
+)
+SELECT c.name AS cluster, mt.key AS metric
+FROM "cluster_metric_baselines" b
+JOIN newest n          ON n.cluster_id = b.cluster_id
+                      AND n.metric_type_id = b.metric_type_id
+JOIN "clusters" c      ON c.id  = b.cluster_id
+JOIN "metric_types" mt ON mt.id = b.metric_type_id
+WHERE (n.baseline_consumption, n.baseline_capacity)
+      IS DISTINCT FROM (b.baseline_consumption, b.baseline_capacity)
+ORDER BY c.name, mt.key;
+SQL
+```
+
+> **Every disagreeing pair is reported, whatever the newest row's `source`.** An
+> earlier release excluded pairs whose newest row was `source = 'vsphere'`, on the
+> argument that a manual cluster later connected to vCenter holds a newer,
+> authoritative snapshot diverging from a legacy value "nobody has written since".
+> That exclusion hid a real silent flip: the legacy table was last-write-wins in
+> wall-clock order, so an operator correction anchored to an earlier period than an
+> existing snapshot **was** written after it, and the pair was dropped anyway. Do
+> not reinstate the filter. Use shape (a) to accept the snapshot — it is one
+> `UPDATE` against a table that is dropped seconds later, and it overwrites no
+> measurement.
+
+#### Clearing the failed-migration record
+
+**Not optional, and not only a roll-forward step.** Prisma recorded the failed
+attempt outside the migration's transaction, so the record outlived the rollback and
+now refuses **every** `deploy` with **P3009**
+(`migrate found failed migrations in the target database`) instead of retrying —
+including a `deploy` run by an older image that never shipped this migration, which
+is why an image rollback alone leaves the stack down (see the callout under "Baseline
+history migration (#177/#195) — rollback"). Fixing the data is necessary but not
+sufficient. Clear the record, then redeploy:
+
+```bash
+docker compose run --rm server node_modules/prisma/build/index.js migrate resolve \
+  --rolled-back 20260719120000_drop_legacy_cluster_baselines
+docker compose up -d
+```
 
 > **`prisma migrate resolve --rolled-back` does NOT undo any DDL.** It only edits
 > the `_prisma_migrations` bookkeeping table so a failed migration stops blocking
 > the next `deploy`. Reading the flag name as "undo" leaves a database whose actual
 > shape and whose recorded history disagree — worse than either problem alone.
-> Prisma's documented recovery is roll **forward**.
+> Prisma's documented recovery is roll **forward**. It is honest _here_ only because
+> Postgres genuinely did roll the whole migration back inside its transaction, so
+> the recorded history and the actual schema already agree.
 
-**Before the later contract migration** (which drops `cluster_metric_baselines` and
-`clusters.baseline_date`), take and _verify_ a dump as above: after it, an image
-rollback is no longer possible and restore-from-dump becomes the only recovery.
+**Prerequisite record.** A `pg_dump` taken and verified per the row-count procedure
+above is a hard prerequisite for deploying this migration, because it is the only
+recovery path that survives it. Verify the dump using the **pre-migration** table
+list — one that still includes `cluster_metric_baselines` — since that table exists
+in the dump being checked and not in the schema afterwards.
+
+### After this migration: what changed for operators
+
+- **Baseline dates may read up to 30 days earlier.** `clusters.baseline_date` stored
+  whatever day was typed; every `captured_at` is snapped to the first of its month.
+  Baseline ages grow by up to 30 days accordingly, which can move a cluster across
+  the 90-day staleness threshold with no code change on the web side.
+- **Synced clusters now show metrics.** They previously showed "No metric configured"
+  on the fleet console, because metrics came from a table the sync never wrote.
+- **Synced clusters report utilization as unknown** where their baseline capacity is
+  0 and their hosts carry the capacity — the documented Q9d/#200 intent, now visible.
+- **A cluster re-dated backwards during the dual-write release now blocks the
+  deploy instead of silently changing value.** Where such an edit anchored the
+  baseline to a period _older_ than the backfilled `baseline_date`,
+  `ClusterResponse.metrics` would follow the newest period rather than the last
+  write, so the older correction stops outranking the stale backfill row and the
+  displayed numbers revert to the backfill's. Guards 1 and 2 do not see it — the
+  two rows are in different months, so nothing collides — but **Guard 3** does,
+  by comparing the legacy value against the newest history row while both are
+  still present. You will hit a refused migration rather than a wrong number; see
+  "Guard 3 — the served value would change" for the fix.
+- **A date-only baseline edit can now be refused.** Changing only the date re-dates
+  an existing measurement, so it can move a baseline _backwards_ only. Submitting a
+  later date alone returns 422 `BASELINE_PERIOD_NOT_MEASURED`, because there is no
+  measurement for that period to move onto it, and inventing one would shadow the
+  month's vCenter snapshot and clear the staleness flag without measuring anything.
+  To record a baseline for a later period, submit its values — that appends a new
+  measurement.
+
+  The same 422 now answers a date-only edit on a cluster with **no baseline history
+  at all** — a synced cluster imported but not yet snapshotted. That request used to
+  return 200 with the date silently discarded. Submit the values to open the
+  cluster's first baseline at the period you want.
+
+  **A rename submitted together with a rejected date is rejected too.** Requests are
+  applied whole or not at all; nothing in the UI sends both fields in one request.
+
+- **Correcting an already-recorded period works, and does not echo your date back.**
+  Submitting a past `baselineDate` together with values corrects the measurement
+  recorded at that period, in place. The baseline date shown afterwards is still the
+  cluster's **stalest metric's newest period**, which on a multi-metric cluster — or
+  after correcting anything but the newest period — is not the date you submitted. So
+  the form's date field can appear to reset. That is inherent to the MIN semantics
+  the staleness flag depends on (`ClusterResponse.baselineDate` is MIN over
+  newest-per-metric, so it reports the metric that stopped being measured), not a
+  failed save. Re-open the cluster to confirm the value landed.
+- **Re-dating a synced cluster's baseline backwards leaves its forecast unchanged.**
+  This is what a re-date does now — **not** something that changes numbers you are
+  already storing; see the last paragraph of this bullet.
+
+  On a cluster whose baseline came from vCenter, the forecast decides which tracked
+  events are already inside the measurement by looking at **when the measurement was
+  taken**, not at the date shown on the baseline. That date is a label you can
+  correct; the measurement period is not, and correcting a label does not un-measure
+  anything. So a backward re-date moves the displayed baseline date and moves no
+  number.
+
+  Concretely: a cluster measured by vCenter in June 2026 (consumption 1000, baseline
+  capacity 0, one 2000 GB host) with a May event adding 500 GB of capacity reads
+  utilization 0.50 both before and after you re-date its baseline to April. Under the
+  older rule the same edit produced 0.90, because the boundary followed the label and
+  threw the already-measured May event back into the forecast — inventing capacity,
+  lowering utilization, and deferring a purchase with nothing measured and no value
+  submitted.
+
+  **Nothing already stored moves when you deploy this.** Re-anchoring a history row
+  is new in this release: on the previous version a date-only edit wrote the
+  `clusters.baseline_date` scalar and never touched a history row. No stored vCenter
+  measurement can therefore be labelled with a period other than the one it was taken
+  in — every existing synced row still satisfies
+  `date_trunc('month', observed_at) = captured_at`, where the old and new rules agree
+  exactly. The difference only becomes reachable once someone uses the new re-date.
+
+  If you want the forecast to change, submit the **values**. That is a measurement
+  and is treated as one; a date alone never is.
 
 ## vCenter connections
 
@@ -261,8 +710,10 @@ disclosure" — data LCM already serves from its own API in the default auth mod
 2. **Check certificate** — this contacts the host and reads its certificate. **No
    credential is sent at this step**, deliberately: the certificate is vetted
    _before_ the password is ever transmitted.
-3. If the certificate is self-signed (the VMCA default), LCM shows its SHA-256
-   fingerprint. **Confirm it against vCenter before saving.** On a host with `govc`:
+3. If the certificate is self-signed (the VMCA default) or otherwise not in your
+   system trust store, LCM shows the SHA-256 fingerprint of the presented **leaf**
+   certificate — the exact certificate LCM pins, not a chain root. **Confirm it
+   against vCenter before saving.** On a host with `govc`:
    ```bash
    govc about.cert -k -thumbprint -u <vcenter-host>
    ```
@@ -294,8 +745,8 @@ to confirm and the panel says so.
 > private). Stored credentials are never sent to a request-supplied host, and
 > changing a saved connection's hostname or port requires re-entering the
 > vCenter password; an untrusted certificate is pinned to an
-> out-of-band-confirmed root and a change fails rather than silently
-> trusting. Keep the deployment on a trusted network — behind a firewall/VPN,
+> out-of-band-confirmed leaf certificate (its SHA-256 fingerprint) and a change
+> fails rather than silently trusting. Keep the deployment on a trusted network — behind a firewall/VPN,
 > not exposed to the open internet — during setup or while any break-glass
 > override is active, and use a read-only vCenter service account.
 
@@ -337,6 +788,18 @@ sync stays due and retries under capped exponential backoff, so a transient vCen
 outage self-heals without operator action. A failure never silently becomes a
 success: the connection's status and last-error reflect the real outcome (see
 _Troubleshooting_).
+
+**A connection with no established certificate pin never syncs unattended — it fails
+closed.** The scheduler only runs a connection whose leaf certificate has been
+confirmed and pinned (step 3 above). A connection that is saved but not yet pinned —
+including one whose pin was cleared by a hostname change, or reset by the
+leaf-fingerprint pinning upgrade — is held out of every scheduled poll, sync, and
+snapshot and reports **Certificate not trusted**. This is deliberate: the stored
+service-account credential is only ever transmitted to a peer whose leaf matches the
+pin, so an unpinned connection must not hand it to whatever the network resolves the
+hostname to. Confirm and pin the certificate (Check certificate → confirm → Save, or
+_Replace the trusted certificate_) and the connection resumes on the next tick. No
+stored configuration is touched while it waits, so nothing is lost.
 
 The connection panel shows **last synced**, the **sync status**, and a **live-usage**
 reading per synced cluster. "No sample yet" and a stale reading are shown as exactly
@@ -401,22 +864,35 @@ internal DNS collects the service-account password on **every poll**, silently, 
 the happy path. Self-service internal DNS is common and needs no network position at
 all.
 
-If a connection reports **Certificate changed**, LCM has stopped talking to it on
-purpose. Either the VMCA root was deliberately regenerated — in which case confirm
-the new fingerprint and re-pin — or something is wrong. LCM will not decide which,
-and will not re-pin by itself.
+LCM pins the **leaf** certificate's SHA-256, not a chain root — the exact certificate
+shown in step 3 above, not something derived from it. That works whether vCenter
+presents a self-signed leaf, an incomplete chain (the common case: just the Machine
+SSL leaf, no VMCA root), or a full chain, and it is what `govc about.cert -thumbprint`
+prints, so the confirmation step always compares like-for-like.
+
+The trade-off is that a leaf pin does not survive vCenter's own certificate
+lifecycle: the Machine SSL leaf **auto-renews on its own roughly every two years**,
+and an admin can also regenerate it deliberately. Either way, once the presented
+certificate stops matching the pinned fingerprint, the connection reports
+**Certificate changed** and LCM stops syncing that connection **on purpose** — it
+will not decide whether the change is expected and will not re-pin itself. Open
+**Settings → vCenter connections** and use **Replace the trusted certificate**:
+compare the newly shown fingerprint against `govc about.cert -thumbprint` (or the
+vSphere Client) exactly as when the connection was first added, then confirm once.
+On vCenter's normal renewal cadence this is a one-time expected step, not a sign
+that something is broken.
 
 ### Troubleshooting
 
-| Status                      | Meaning                                                                                                                                                                                                              |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Not yet connected**       | Saved, never contacted.                                                                                                                                                                                              |
-| **Certificate not trusted** | Self-signed and not yet confirmed. Use _Check certificate_.                                                                                                                                                          |
-| **Certificate changed**     | The presented CA differs from the pinned one. Confirm and re-pin, or investigate.                                                                                                                                    |
-| **Sign-in failed**          | Host reachable, credentials rejected.                                                                                                                                                                                |
-| **Different vCenter**       | The hostname now answers as a _different_ vCenter instance. Sync is blocked deliberately: cluster ids are only unique within one vCenter, so syncing would overwrite the wrong clusters' capacity.                   |
-| **Credential unreadable**   | `CONFIG_ENCRYPTION_KEY` is missing, wrong, or rotated. The encrypted password is **preserved** — restore the correct key and the connection recovers. Never re-enter it as a "fix" until you have ruled the key out. |
-| **Unreachable**             | No answer. Detail is in the server log, correlated by request id — the API response is deliberately coarse, because a precise one would let anyone reachable use this endpoint to map your internal network.         |
+| Status                      | Meaning                                                                                                                                                                                                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Not yet connected**       | Saved, never contacted. No certificate is pinned yet, so it **will not sync** until you confirm and pin the leaf certificate (fails closed — the credential is never sent to an unpinned peer).                                                                                 |
+| **Certificate not trusted** | No confirmed leaf pin — self-signed and not yet confirmed, or the pin was cleared (hostname change) or reset (leaf-pinning upgrade). Scheduled sync/poll/snapshot is **held closed** until you confirm and pin. Use _Check certificate_ (or _Replace the trusted certificate_). |
+| **Certificate changed**     | The presented certificate no longer matches the pinned leaf fingerprint — commonly routine renewal (~2 yrs). Use _Replace the trusted certificate_ to confirm and re-pin, or investigate.                                                                                       |
+| **Sign-in failed**          | Host reachable, credentials rejected.                                                                                                                                                                                                                                           |
+| **Different vCenter**       | The hostname now answers as a _different_ vCenter instance. Sync is blocked deliberately: cluster ids are only unique within one vCenter, so syncing would overwrite the wrong clusters' capacity.                                                                              |
+| **Credential unreadable**   | `CONFIG_ENCRYPTION_KEY` is missing, wrong, or rotated. The encrypted password is **preserved** — restore the correct key and the connection recovers. Never re-enter it as a "fix" until you have ruled the key out.                                                            |
+| **Unreachable**             | No answer. Detail is in the server log, correlated by request id — the API response is deliberately coarse, because a precise one would let anyone reachable use this endpoint to map your internal network.                                                                    |
 
 ## Upgrade
 
@@ -555,13 +1031,16 @@ required to enable OIDC at all — without it, `auth_config` seeds (and
 stays) disabled, and the settings UI can't persist a client secret either.
 This is a fail-safe, not a crash: a missing or invalid key never takes the
 server down. Read "fail-safe" precisely, though — it means the server stays
-_up_, not that the deployment stays _secured_. An unreadable key degrades
-authentication to `disabled`, which leaves the API open until the key is
-fixed. See the first bullet below before treating this as a low-severity
-incident.
+_up_, not that the deployment stays _secured_. On a deployment storing
+`mode: oidc`, an unreadable key degrades authentication to `disabled`, which
+leaves the API open until the key is fixed. Decryption is gated on the stored
+mode, so `local` and `disabled` rows never touch the encrypted columns and are
+not degraded by an unreadable key at all. See the first bullet below before
+treating this as a low-severity incident.
 
-- **Losing the key, or booting with the wrong one** (unset, or changed to a
-  value that can't decrypt what's already stored — e.g. mid-rotation,
+- **Losing the key, or booting with the wrong one, on a deployment storing
+  `mode: oidc`** (unset, or changed to a value that can't decrypt what's
+  already stored — e.g. mid-rotation,
   before the secret has been re-entered): the server detects it can't
   decrypt the stored secret at boot, logs an error, and forces
   `mode=disabled` automatically — it does **not** wipe the encrypted
@@ -572,15 +1051,28 @@ incident.
   `mode` still says `oidc`, so nothing has to be re-selected in Settings
   once the key is back.
 
+  A stored `local` or `disabled` row is unaffected: its encrypted columns are
+  never read, so an unreadable key changes nothing about how it boots. Such a
+  row keeps enforcing exactly what it says.
+
   **Treat this as a security incident, not just an outage.** For as long as
-  the server runs with an unreadable key, the effective mode is `disabled`:
-  every `/api/*` route is reachable **without a session**, and every request
+  an **OIDC** deployment runs with an unreadable key, the effective mode is
+  `disabled`: every `/api/*` route is reachable **without a session**, and every request
   is served as an anonymous **ADMIN** — exactly the exposure described under
   "Break-glass: RECOVERY_DISABLE_AUTH" below, including the SSRF-adjacent
   settings endpoints. The stored `oidc` mode being preserved does **not**
-  mean authentication is being enforced. The window closes only when the key
-  is fixed (or rolled back) **and the server is restarted** — the degrade is
-  decided at boot, so repairing `.env` alone changes nothing until then.
+  mean authentication is being enforced. The degrade is decided at boot, so
+  repairing `.env` alone changes nothing until the server is restarted — but a
+  restart is not the only way out. **A successful save in Settings →
+  Authentication closes the window immediately**: the degrade is recorded once
+  at boot and never re-applied, so the reload that follows the write re-derives
+  the enforced mode from it. Re-entering the client secret restores `oidc`
+  enforcement on the spot (the save re-encrypts under whatever key is set now,
+  so a rotated key works and only a missing one blocks it); saving `local`
+  closes the API without needing a key. Saving `disabled` applies just as
+  immediately but leaves the API open by design, and both non-`oidc` saves
+  permanently delete the stored client secret (see "Switching away from OIDC
+  deletes the stored client secret" below).
 
   Two signals make the state visible. In the logs, an `error`
   (`auth_config.open_despite_configuration`) is emitted on every boot where
@@ -598,28 +1090,36 @@ incident.
   break-glass episode" below — the exposure was identical, so the review
   is too.
 
-- **Caveat for `AUTH_STRICT_BOOT=true` deployments.** Because the stored
+- **Caveat for `AUTH_STRICT_BOOT=true` deployments** (OIDC deployments only —
+  see "Which stored modes refuse to boot" just below). Because the stored
   mode survives the degrade, the _next_ boot sees the same configured row
   it still can't decrypt and, under strict boot, **refuses to start**
   rather than fail open. That is what strict boot is for, but it changes
   "restart to resume normal operation" into "the server will not start
   until the key is fixed".
 
-  **Which stored modes refuse to boot.** Every mode that is not
-  `disabled` — both `oidc` **and** `local`. Degrading either of them to
-  `mode=disabled` turns a closed deployment into an open, unauthenticated
-  one, which is exactly what strict boot exists to prevent. (Earlier
-  versions scoped the refusal to `oidc` only, so a `local` deployment with
-  an unreadable key booted wide open despite `AUTH_STRICT_BOOT=true`.)
+  **Which stored modes refuse to boot.** Only `oidc` — it is the only mode
+  whose secrets are decrypted at boot, so it is the only mode a key failure
+  can degrade. A stored `local` row no longer reaches this path: since
+  decryption is gated on the stored mode, its leftover ciphertext is never
+  read, the deployment keeps enforcing `local`, and there is nothing for
+  strict boot to refuse.
 
-  A stored mode of `disabled` still boots normally, even under strict
-  boot. Such a row is already open by the operator's own choice, so
-  refusing it would be an outage with no security benefit — and it is a
-  realistic state: switching OIDC → disabled from Settings leaves the
-  encrypted client secret in the row, so a later key rotation produces a
-  decrypt failure on a deployment that was never enforcing
-  authentication in the first place. Strict boot must not crash-loop on
-  that stale ciphertext.
+  (This is **not** a return to the earlier `oidc`-only _scoping_ bug, where a
+  `local` deployment with an unreadable key degraded to an open API despite
+  `AUTH_STRICT_BOOT=true`. That fail-open is closed at the source now:
+  `local` does not degrade, so it does not need refusing. The strict-boot
+  predicate itself remains the divergence test `!== 'disabled'`, not a mode
+  enumeration — what narrowed is which modes can reach it, not the test.)
+
+  A stored mode of `disabled` still boots normally, even under strict boot,
+  and now does so **structurally** rather than by exemption: its encrypted
+  columns are never read, so no decrypt failure is raised in the first place.
+  Such a row is also already open by the operator's own choice, so refusing it
+  would be an outage with no security benefit. Rows carrying stale ciphertext
+  still exist — switching OIDC → disabled used to leave the encrypted client
+  secret behind — but saving a non-oidc mode now clears both secret columns,
+  so that state stops accumulating on any deployment kept up to date.
 
   **Two recovery paths**, both requiring a restart:
 
@@ -650,6 +1150,43 @@ incident.
   crash-looping — either finish the re-entry step above, or roll
   `CONFIG_ENCRYPTION_KEY` back to the previous value to recover the
   existing configuration without re-entering anything.
+- **Switching away from OIDC deletes the stored client secret.** Saving
+  `local` or `disabled` in **Settings → Authentication** clears both encrypted
+  columns (client secret and login-state signing secret), so switching back to
+  `oidc` later requires **re-entering the client secret** — there is nothing
+  stored to fall back on. The attempt is refused with a clear
+  `INCOMPLETE_OIDC_CONFIG` error rather than silently enabling OIDC without a
+  secret, and the Settings panel shows an empty "Client secret" field instead
+  of "•••••••• configured" to signal it up front.
+
+  This reverses earlier behaviour, where the secret survived an
+  OIDC → disabled → OIDC round trip untouched. It is deliberate: that
+  surviving ciphertext is exactly what a later key rotation turned into a
+  decrypt failure on a row that never needed the secret, which degraded the
+  deployment to an open API. The same applies to first-boot seeding — supplying
+  `OIDC_*` env vars while `AUTH_MODE` is unset or `disabled` seeds a disabled
+  row and does not retain the client secret (logged as
+  `auth_config.seeded_client_secret_discarded`; boot never fails over it).
+
+  Because the deletion is irreversible — and specifically **not** undone by
+  restoring `CONFIG_ENCRYPTION_KEY`, which is the recovery every other failure
+  in this section relies on — **Settings → Authentication** asks for
+  confirmation before sending a save that switches away from `oidc`, naming
+  exactly what is deleted. The alert shown during a decrypt-degraded boot says
+  the same thing: its "the encrypted secrets are intact and are never wiped"
+  guarantee describes the **degrade**, not a save made from that screen.
+
+  Submitting a client secret **alongside** a non-oidc mode is refused with
+  `422 CLIENT_SECRET_NOT_APPLICABLE` rather than accepted and discarded — the
+  save would have thrown the value away, and answering `200` would have hidden
+  that until enabling OIDC later failed. Clear the field (or omit
+  `clientSecret`) and the save proceeds; clearing needs no encryption key, so
+  this never blocks a keyless deployment from leaving a broken OIDC config.
+
+  Note this affects **explicit saves only**. A degraded boot still writes
+  nothing at all, so the "fix the key and restart, with nothing to re-enter"
+  recovery above is unchanged.
+
 - Never commit `CONFIG_ENCRYPTION_KEY` or check it into version control —
   treat it like `POSTGRES_PASSWORD`.
 
@@ -688,8 +1225,8 @@ for the same reason.
 
 > **SECURITY NOTE — bootstrap/break-glass exposure.** Whenever auth is
 > disabled — the initial bootstrap window before any admin exists, or any
-> time `RECOVERY_DISABLE_AUTH` or the `CONFIG_ENCRYPTION_KEY` fail-safe has
-> forced it off — the Settings → Authentication API (`GET`/`PUT
+> time `RECOVERY_DISABLE_AUTH` or the `CONFIG_ENCRYPTION_KEY` fail-safe
+> (OIDC deployments only) has forced it off — the Settings → Authentication API (`GET`/`PUT
 /api/settings/auth`, `POST /api/settings/auth/test`) is reachable by
 > **anyone** who can reach the server, with no session required. The test
 > and save endpoints perform a live OIDC discovery request to whatever
@@ -741,7 +1278,7 @@ overridden one. Anyone who could reach the server during the window could
 have created an account or reset an existing password — and that access
 survives after authentication is correctly restored. Treat this as
 mandatory after **any** episode in which the API ran open, including past
-ones — that means break-glass windows _and_ any boot degraded by an
+ones — that means break-glass windows _and_ any **OIDC** boot degraded by an
 unreadable `CONFIG_ENCRYPTION_KEY` (see that section above), since the
 exposure is identical:
 
@@ -878,4 +1415,19 @@ After 5 consecutive failed login attempts, an account locks with exponential bac
 
 The existing break-glass path covers local accounts too — no new environment variable was introduced for them. Follow "Break-glass: RECOVERY_DISABLE_AUTH" above, including the verification probe and the post-episode account audit; resetting a password or creating a fresh admin from **Settings → Authentication** is exactly the recovery that section is written for.
 
-> `CONFIG_ENCRYPTION_KEY` is **not** required for `local` mode. The argon2id password hashes live directly on the `users` table, not in the AES-GCM-encrypted `auth_config` row — only `oidc` mode needs the encryption key, to store the OIDC client secret.
+> `CONFIG_ENCRYPTION_KEY` is **not** required for `local` mode. The argon2id password hashes live directly on the `users` table, not in the AES-GCM-encrypted `auth_config` row — only `oidc` mode needs the encryption key, to store the OIDC client secret, and only `oidc` reads it at boot. A `local` row that still carries leftover encrypted OIDC columns from an earlier configuration keeps them untouched and unread, so a missing, wrong, or rotated key leaves `local` enforcing exactly as configured. Saving `local` from Settings also clears those columns outright.
+
+## Change governance
+
+### High-risk change approval
+
+**Decision (2026-07-21, project owner `laboef1900`):** high-risk changes — authentication, cryptography, secrets handling, destructive data operations, Prisma migrations, compose/network exposure, `@lcm/shared` contracts, and forecast-engine correctness — MAY be approved by independent AI review instead of a human sign-off. This deliberately relaxes the previous "human approval required, AI does not replace it" rule.
+
+This is a relaxation of a safety control, recorded here for durability. It does **not** relax the accompanying rigor. When AI review is the approver, all of the following are mandatory and captured in the PR:
+
+- A written design (`DESIGN.md` or an equivalent PR section) covering trust boundaries, misuse cases, invariants, failure/recovery, rollback, and security/privacy impact.
+- Independent review by **two** AI reviewers (e.g. `critic` **and** `brahma-analyzer`) at a stricter bar than normal-risk work, with every finding resolved or recorded as explicitly accepted residual risk.
+- The standard gates still pass: `/review`, the full affected verification suite, and green CI (`verify` + `oidc-e2e`).
+- The approving review, its verdict, and the residual-risk record left in the PR so the decision is auditable.
+
+A human MAY still override or reclaim approval for any specific change. Prisma migrations and destructive/irreversible data operations keep their existing backup (`pg_dump`) and recovery-plan requirements on top of the above. The authoritative rule text lives in `CLAUDE.md` (Change Risk and Required Rigor → _Automated high-risk approval_).

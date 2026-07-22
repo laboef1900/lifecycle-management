@@ -44,7 +44,12 @@ function fakeCollector(
   return { collect: typeof inv === 'function' ? inv : async () => inv };
 }
 
-const CREDS = { hostname: 'vcenter.corp.local', username: 'u', password: 'p', pinnedRootPem: null };
+const CREDS = {
+  hostname: 'vcenter.corp.local',
+  username: 'u',
+  password: 'p',
+  pinnedLeafSha256: null,
+};
 
 function inventory(overrides: Partial<CollectedInventory> = {}): CollectedInventory {
   return {
@@ -279,6 +284,121 @@ describe('⚠️ sync degrades, never crashes', () => {
     const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id: conn } });
     // lastError is rendered in the UI and stored — it must never carry a secret.
     expect(row.lastError).not.toContain('hunter2');
+  });
+
+  it('WARNs the raw OpenSSL code on a TLS failure but keeps it out of lastError (#272)', async () => {
+    const conn = await makeConn();
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    // The undici/fetch shape: the real reason is nested under `cause.code`.
+    const err = Object.assign(new Error('unable to verify the first certificate'), {
+      cause: { code: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' },
+    });
+    const sync = new VsphereSyncService(
+      prisma,
+      fakeCollector(async () => {
+        throw err;
+      }),
+      logger,
+    );
+
+    const result = await sync.syncConnection('default', conn, CREDS);
+    expect(result.outcome).toBe('tls_untrusted');
+
+    // A persistent, actionable cert failure warns (the #272 state).
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'vsphere.sync.failed',
+        connectionId: conn,
+        outcome: 'tls_untrusted',
+        tlsCode: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+      }),
+      expect.any(String),
+    );
+    expect(logger.info).not.toHaveBeenCalled();
+
+    // …but the code never reaches the UI-rendered, stored lastError.
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id: conn } });
+    expect(row.lastError).toBe('vCenter presented an untrusted certificate.');
+    expect(row.lastError).not.toContain('UNABLE_TO_GET_ISSUER_CERT_LOCALLY');
+  });
+
+  it('a leaf-fingerprint mismatch (Task 3, #272) sets cert_mismatch on the connection while the returned outcome stays tls_untrusted', async () => {
+    const conn = await makeConn();
+    // Mirror how vsphere-job-runner builds credentials for a pinned connection:
+    // pinnedLeafSha256 comes from the row's tlsPinnedSha256.
+    await prisma.vsphereConnection.update({
+      where: { id: conn },
+      data: { tlsMode: 'pinned', tlsPinnedSha256: 'AA:BB:CC' },
+    });
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    // The Task 3 credential-path gate: a pinned connection whose presented leaf
+    // no longer matches throws this exact code (soapCall -> collector -> here).
+    const err = Object.assign(new Error('fp mismatch'), { code: 'CERT_FINGERPRINT_MISMATCH' });
+    const sync = new VsphereSyncService(
+      prisma,
+      fakeCollector(async () => {
+        throw err;
+      }),
+      logger,
+    );
+
+    const result = await sync.syncConnection('default', conn, {
+      ...CREDS,
+      pinnedLeafSha256: 'AA:BB:CC',
+    });
+
+    // VsphereSyncOutcome (the job vocabulary) has no cert_mismatch value, so the
+    // returned result maps it to tls_untrusted...
+    expect(result.outcome).toBe('tls_untrusted');
+    expect(result.error).toBe(
+      'vCenter is presenting a different certificate than the one you trusted.',
+    );
+
+    // ...while the connection row gets the more specific status that routes the
+    // operator to the "Replace the trusted certificate" dialog.
+    const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id: conn } });
+    expect(row.status).toBe('cert_mismatch');
+    expect(row.lastError).toBe(
+      'vCenter is presenting a different certificate than the one you trusted.',
+    );
+    expect(row.lastError).not.toContain('CERT_FINGERPRINT_MISMATCH');
+
+    // A fingerprint mismatch is persistent and actionable, so it warns (like
+    // tls_untrusted/auth_failed) — never the routine-unreachable INFO level.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'vsphere.sync.failed',
+        connectionId: conn,
+        outcome: 'cert_mismatch',
+        tlsCode: 'CERT_FINGERPRINT_MISMATCH',
+      }),
+      expect.any(String),
+    );
+    expect(logger.info).not.toHaveBeenCalled();
+  });
+
+  it('INFOs (not warns) a routine unreachable, with a null tlsCode and no crash', async () => {
+    const conn = await makeConn();
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const sync = new VsphereSyncService(
+      prisma,
+      fakeCollector(async () => {
+        throw new Error('connect ETIMEDOUT 10.0.0.1:443');
+      }),
+      logger,
+    );
+
+    await sync.syncConnection('default', conn, CREDS);
+    // A transient down-for-maintenance vCenter would warn every poll otherwise.
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'vsphere.sync.failed',
+        outcome: 'unreachable',
+        tlsCode: null,
+      }),
+      expect.any(String),
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('a disabled connection is skipped without contacting vCenter', async () => {
@@ -611,5 +731,147 @@ describe('sync writes host memory capacity (#198)', () => {
     expect(august!.capacity).toBe(512);
     // The point of #198: capacity is non-zero, so utilization is a real number, not null.
     expect(august!.utilization).not.toBeNull();
+  });
+});
+
+describe('sync maintains host cluster membership (#289)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('opens one membership on first import so the forecast attributes the host', async () => {
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+    const host = await prisma.host.findFirstOrThrow({ where: { connectionId: conn } });
+    const rows = await prisma.hostClusterMembership.findMany({ where: { hostId: host.id } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.clusterId).toBe(host.clusterId);
+    expect(rows[0]!.effectiveTo).toBeNull();
+    expect(rows[0]!.effectiveFrom.getTime()).toBe(host.commissionedAt.getTime());
+  });
+
+  it('a vCenter-side host move between clusters closes the old membership and opens a new one', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-15T00:00:00.000Z'));
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+    const host = await prisma.host.findFirstOrThrow({ where: { connectionId: conn } });
+    const c1 = host.clusterId;
+
+    // Same host (matched by moref) reappears under a DIFFERENT cluster.
+    vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
+    const moved = inventory({
+      clusters: [
+        {
+          moref: 'domain-c2',
+          name: 'Staging',
+          hosts: [
+            {
+              moref: 'host-1',
+              name: 'esx-01',
+              memoryGiB: 512,
+              usageGiB: 300,
+              inMaintenanceMode: false,
+              connected: true,
+            },
+          ],
+        },
+      ],
+    });
+    await new VsphereSyncService(prisma, fakeCollector(moved)).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    const after = await prisma.host.findFirstOrThrow({ where: { id: host.id } });
+    expect(after.clusterId).not.toBe(c1);
+
+    const rows = await prisma.hostClusterMembership.findMany({
+      where: { hostId: host.id },
+      orderBy: { effectiveFrom: 'asc' },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.clusterId).toBe(c1);
+    expect(rows[0]!.effectiveTo).not.toBeNull();
+    expect(rows[1]!.clusterId).toBe(after.clusterId);
+    expect(rows[1]!.effectiveTo).toBeNull();
+    // contiguous, non-retroactive (move attributed to the current month start)
+    expect(rows[0]!.effectiveTo!.getTime()).toBe(rows[1]!.effectiveFrom.getTime());
+    expect(rows[1]!.effectiveFrom.getTime()).toBe(new Date('2026-05-01T00:00:00.000Z').getTime());
+    // exactly one open membership survives
+    expect(rows.filter((r) => r.effectiveTo === null)).toHaveLength(1);
+  });
+
+  it('closes the old membership and opens the new one ATOMICALLY (one $transaction)', async () => {
+    // Regression for the WARNING review finding: the close+open were two separate
+    // autocommit writes, so a crash between them stranded the host with zero open
+    // memberships and the next sync seeded an OVERLAPPING interval in the
+    // destination, retroactively re-attributing pre-move months. They must run in a
+    // single transaction. `reconcileMembership`'s close+open is the ONLY
+    // $transaction on the whole sync path, so observing it proves the wrapping.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-15T00:00:00.000Z'));
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+    const host = await prisma.host.findFirstOrThrow({ where: { connectionId: conn } });
+
+    const txSpy = vi.spyOn(prisma, '$transaction');
+    try {
+      vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
+      const moved = inventory({
+        clusters: [
+          {
+            moref: 'domain-c2',
+            name: 'Staging',
+            hosts: [
+              {
+                moref: 'host-1',
+                name: 'esx-01',
+                memoryGiB: 512,
+                usageGiB: 300,
+                inMaintenanceMode: false,
+                connected: true,
+              },
+            ],
+          },
+        ],
+      });
+      await new VsphereSyncService(prisma, fakeCollector(moved)).syncConnection(
+        'default',
+        conn,
+        CREDS,
+      );
+
+      // The close+open ran as a single batched ($transaction([...])) write.
+      const batchedCalls = txSpy.mock.calls.filter(
+        (call) => Array.isArray(call[0]) && call[0].length === 2,
+      );
+      expect(batchedCalls.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      txSpy.mockRestore();
+    }
+
+    // And the committed state is the correct all-or-nothing result: two rows,
+    // exactly one open, contiguous — never a zero-open stranded state.
+    const rows = await prisma.hostClusterMembership.findMany({
+      where: { hostId: host.id },
+      orderBy: { effectiveFrom: 'asc' },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((r) => r.effectiveTo === null)).toHaveLength(1);
+    expect(rows[0]!.effectiveTo!.getTime()).toBe(rows[1]!.effectiveFrom.getTime());
   });
 });

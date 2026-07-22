@@ -36,14 +36,15 @@ function AddClusterCard(): React.JSX.Element {
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
 
   // Deep link from the ⌘K palette and the fleet empty-state CTA (#223 review
-  // follow-up): this panel is the fourth on the page, so arriving at the top of
-  // /settings left both the viewport and focus nowhere near the promised
-  // control.
+  // follow-up): this panel is the second on the Inventory sub-route (#293;
+  // was the fourth on the single flat `/settings` page pre-split), so arriving
+  // at the top of the route left both the viewport and focus nowhere near the
+  // promised control.
   //
   // @ai-note Division of labour with the router, measured against router-core
   // 1.171 rather than assumed: on a *committed* navigation whose target carries
-  // a hash — a cold load at /settings#add-cluster, or a cross-page link from
-  // the fleet console — TanStack's scroll restoration already runs
+  // a hash — a cold load at /settings/inventory#add-cluster, or a cross-page
+  // link from the fleet console — TanStack's scroll restoration already runs
   // `document.getElementById(hash).scrollIntoView(true)`, an instant jump
   // (`defaultHashScrollIntoView` is true and we don't override it). What it
   // never does is move focus, and it does nothing at all when the navigation
@@ -58,9 +59,9 @@ function AddClusterCard(): React.JSX.Element {
   //
   // Both dependencies are load-bearing. `hash` covers arriving from elsewhere
   // (reload, shared link, cold mount). `focusRequests` covers re-invoking the
-  // action while the URL is *already* /settings#add-cluster — that navigation
-  // produces an identical location, so a hash-only dependency never changes and
-  // the action would be a silent no-op. See lib/anchors.ts.
+  // action while the URL is *already* /settings/inventory#add-cluster — that
+  // navigation produces an identical location, so a hash-only dependency never
+  // changes and the action would be a silent no-op. See lib/anchors.ts.
   useEffect(() => {
     if (hash !== ADD_CLUSTER_HASH) return;
     // Read only to declare the dependency honestly: its *value* is meaningless,
@@ -77,7 +78,7 @@ function AddClusterCard(): React.JSX.Element {
   return (
     <Card ref={cardRef} id={ADD_CLUSTER_HASH} className="scroll-mt-24 p-6">
       <header className="mb-4">
-        <h2 className="font-display text-lg">Add cluster</h2>
+        <h3 className="font-display text-lg">Add cluster</h3>
         <p className="text-muted-foreground mt-1 text-sm">
           Manually track a vSphere cluster that isn&rsquo;t synced from a vCenter connection. You
           provide the memory baseline; the forecast builds from there.

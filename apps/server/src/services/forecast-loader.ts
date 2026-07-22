@@ -2,7 +2,10 @@ import {
   formatDateIso,
   MAX_FORECAST_SPAN_MONTHS,
   monthsBetweenUtc,
+  startOfUtcMonth,
   type BaselineHistoryPoint,
+  type ForecastAcknowledgment,
+  type ProcurementInfo,
   type Scenario,
 } from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
@@ -15,8 +18,14 @@ import {
   type ForecastHost,
   type ForecastInput,
   type ForecastResult,
+  type HostMembershipInterval,
 } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
+import {
+  computeCapacitySignature,
+  resolveAcknowledgment,
+  type StoredApprovalSnapshot,
+} from './order-approval-coverage.js';
 import { computeProcurementInfo } from './procurement.js';
 import { applyScenario } from './scenario.js';
 import { SettingsService } from './settings.js';
@@ -35,6 +44,20 @@ interface PreparedForecastInput {
   toMonth: Date;
   effectiveThresholds: Awaited<ReturnType<SettingsService['effectiveFor']>>;
   procurementLeadTimeWeeks: number;
+  /**
+   * Σ nameplate capacity across the cluster's active hosts for this metric (#292).
+   * Snapshotted at approval time and compared against the live value to decide
+   * whether an approval still covers the breach (DESIGN.md §3). Computed from the
+   * REAL loaded hosts, so it never reflects a scenario transform.
+   */
+  capacitySignature: number;
+}
+
+/** Live procurement context for the order-approval write path (#292). */
+export interface LiveBreachContext {
+  procurement: ProcurementInfo;
+  warnThreshold: number;
+  capacitySignature: number;
 }
 
 export class ForecastService {
@@ -47,13 +70,21 @@ export class ForecastService {
     options: LoadOptions = {},
   ): Promise<ForecastResult> {
     const prepared = await this.prepare(tenantId, clusterId, metricKey, options);
-    return this.finalize(prepared, prepared.input);
+    const result = this.finalize(prepared, prepared.input);
+    const acknowledgment = await this.resolveAcknowledgmentFor(tenantId, clusterId, {
+      orderByDate: result.procurement.orderByDate,
+      warnThreshold: result.effectiveThresholds.warn,
+      capacitySignature: prepared.capacitySignature,
+    });
+    return { ...result, acknowledgment };
   }
 
   /**
    * Same as forCluster but applies a what-if transform between loading and
    * computing. The baseline DB state is never modified — the scenario forecast
-   * lives only in this response.
+   * lives only in this response. `acknowledgment` stays `null`: a hypothetical is
+   * never an approved order (INV-1), and coverage would otherwise be evaluated
+   * against scenario-mutated capacity/order-by values.
    */
   async forClusterWithScenario(
     tenantId: string,
@@ -65,6 +96,82 @@ export class ForecastService {
     const prepared = await this.prepare(tenantId, clusterId, metricKey, options);
     const scenarioInput = applyScenario(prepared.input, scenario);
     return this.finalize(prepared, scenarioInput);
+  }
+
+  /**
+   * The live procurement facts the order-approval write path snapshots (#292):
+   * the current breach, the warn threshold, and the capacity signature — all from
+   * the REAL (non-scenario) forecast.
+   *
+   * @ai-warning This evaluates the SERVER DEFAULT window (baseline-anchored:
+   * `fromMonth = firstOfMonth(newest baseline)`), which is NOT identical to the
+   * window the recommendation chip reads. The web chip requests a TODAY-anchored
+   * window (`resolveWindow` in `apps/web/src/components/clusters/window-controls.tsx`
+   * — `from = firstOfMonth(today)` for the 12/24-mo views), so under a stale
+   * baseline anchor the write and read windows diverge. This is deliberate and,
+   * NOT "exactly what the chip shows", FAILS SAFE **only while the newest
+   * baseline's `capturedAt` is not later than today** (the normal case): then the
+   * baseline-anchored window starts no later than any chip window, so the
+   * snapshotted `orderByDate` is never later than the live one — the ≥ T supersede
+   * rule (INV-5) can never *falsely* supersede on any view (a genuine worsening
+   * reads as improving/unchanged, so an acknowledgment can only linger, never
+   * vanish), and live chip urgency escalates independently regardless. The one
+   * visible-but-safe symptom in that case is a 422 on Approve for a breach past
+   * this window's `to` (anchor + horizon) yet within the chip's (today + horizon).
+   *
+   * KNOWN LIMITATION — future-dated baseline (behavioral fix tracked as #303):
+   * future-dated baselines are accepted with no upper bound (see the anchor
+   * @ai-warning in `prepare` — `capturedAt <= today` is deliberately NOT enforced).
+   * When `capturedAt` is LATER than today this write window starts LATER than the
+   * today-anchored chip window, so the snapshotted `orderByDate` can be later than
+   * the live one and the ≥ T rule then FALSELY supersedes the approval the instant
+   * it is created (the acknowledgment never appears). The fails-safe reasoning
+   * above does NOT cover this; it is a genuine defect fixed under #303, not here.
+   * Aligning the write window to `today` would fix the 422 but REGRESS the "all"
+   * view (whose `from` is the baseline) into false supersedes — see DESIGN.md §3
+   * "Window divergence" for both edges.
+   */
+  async liveBreachContext(
+    tenantId: string,
+    clusterId: string,
+    metricKey: string,
+  ): Promise<LiveBreachContext> {
+    const prepared = await this.prepare(tenantId, clusterId, metricKey, {});
+    const result = this.finalize(prepared, prepared.input);
+    return {
+      procurement: result.procurement,
+      warnThreshold: result.effectiveThresholds.warn,
+      capacitySignature: prepared.capacitySignature,
+    };
+  }
+
+  /**
+   * Latest approval for the cluster vs the live breach → the coverage rule
+   * (DESIGN.md §3). Reads `order_approvals` only; never touches the forecast math
+   * (INV-1).
+   */
+  private async resolveAcknowledgmentFor(
+    tenantId: string,
+    clusterId: string,
+    live: { orderByDate: string | null; warnThreshold: number; capacitySignature: number },
+  ): Promise<ForecastAcknowledgment | null> {
+    // Cheap short-circuit: no breach ⇒ no acknowledgment (INV-3), skip the query.
+    if (live.orderByDate === null) return null;
+    const latest = await this.prisma.orderApproval.findFirst({
+      where: { tenantId, clusterId },
+      orderBy: { createdAt: 'desc' },
+    });
+    const snapshot: StoredApprovalSnapshot | null = latest
+      ? {
+          orderByDate: latest.orderByDate,
+          warnThreshold: latest.warnThreshold,
+          capacitySignature: latest.capacitySignature,
+          note: latest.note,
+          approvedByLabel: latest.approvedByLabel,
+          createdAt: latest.createdAt,
+        }
+      : null;
+    return resolveAcknowledgment(snapshot, live);
   }
 
   private async prepare(
@@ -81,18 +188,15 @@ export class ForecastService {
     const cluster = await this.prisma.cluster.findFirst({
       where: { id: clusterId, tenantId },
       include: {
-        baselines: { where: { metricTypeId: metricType.id } },
+        // `tenantId` is redundant with the parent cluster's own tenant filter, and
+        // is included anyway so this reader and `ClustersService.loadNewestBaselines`
+        // — which filters on it — cannot disagree about which rows exist. They must
+        // agree: both compute "the newest row", one for /forecast and one for
+        // ClusterResponse.metrics, and a divergence would show as the cluster panel
+        // and its own forecast chart quoting different numbers.
         baselineHistory: {
-          where: { metricTypeId: metricType.id },
+          where: { tenantId, metricTypeId: metricType.id },
           orderBy: { capturedAt: 'asc' },
-        },
-        hosts: {
-          include: {
-            capacities: { where: { metricTypeId: metricType.id } },
-            replacedByLinks: {
-              include: { new: { select: { commissionedAt: true, state: true } } },
-            },
-          },
         },
         items: {
           where: { OR: [{ metricTypeId: metricType.id }, { metricTypeId: null }] },
@@ -144,7 +248,47 @@ export class ForecastService {
       );
     }
 
-    const hosts: ForecastHost[] = cluster.hosts.map((host) => ({
+    // @ai-context #289 — time-scoped attribution. Hosts are loaded through the
+    // membership timeline (`HostClusterMembership WHERE clusterId`), NOT through
+    // `cluster.hosts` by the host's CURRENT `clusterId`. That is the whole point:
+    // a host that moved AWAY from this cluster still contributes to its pre-move
+    // months, and one that moved IN contributes only from its move date. Each
+    // month's attribution is resolved in `effectiveCapacityAt` from
+    // `membershipIntervals`. Ordered by host creation (then id) so the result's
+    // host list is deterministic — the characterization snapshot depends on it.
+    const memberships = await this.prisma.hostClusterMembership.findMany({
+      where: { tenantId, clusterId },
+      orderBy: [{ host: { createdAt: 'asc' } }, { hostId: 'asc' }],
+      include: {
+        host: {
+          include: {
+            capacities: { where: { metricTypeId: metricType.id } },
+            replacedByLinks: {
+              include: { new: { select: { commissionedAt: true, state: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    // A host can hold more than one interval in this cluster (moved A->B->A), so
+    // group all of a host's intervals under one ForecastHost.
+    type MembershipHost = (typeof memberships)[number]['host'];
+    const byHostId = new Map<
+      string,
+      { host: MembershipHost; intervals: HostMembershipInterval[] }
+    >();
+    for (const m of memberships) {
+      const entry = byHostId.get(m.hostId);
+      if (entry) entry.intervals.push({ from: m.effectiveFrom, to: m.effectiveTo });
+      else
+        byHostId.set(m.hostId, {
+          host: m.host,
+          intervals: [{ from: m.effectiveFrom, to: m.effectiveTo }],
+        });
+    }
+
+    const hosts: ForecastHost[] = [...byHostId.values()].map(({ host, intervals }) => ({
       id: host.id,
       name: host.name,
       commissionedAt: host.commissionedAt,
@@ -154,6 +298,7 @@ export class ForecastService {
         effectiveFrom: c.effectiveFrom,
         amount: c.amount.toNumber(),
       })),
+      membershipIntervals: intervals,
     }));
 
     const applications: ForecastApplication[] = cluster.items
@@ -189,9 +334,21 @@ export class ForecastService {
     return {
       input: {
         baselineDate: anchor.capturedAt,
-        // What the anchor MEANS decides whether tracked deltas dated at or before
-        // it are already inside its numbers. See `absorbed` in forecast.ts.
-        baselineSource: anchor.source === 'vsphere' ? 'vsphere' : 'manual',
+        // Whether tracked deltas dated at or before the anchor are already inside
+        // its numbers is decided by ONE fact: was this baseline measured, and
+        // when. See `absorbed` in forecast.ts — and note that `source` is
+        // deliberately NOT passed, because it is mutable by a value edit that says
+        // nothing about when the measurement was taken. `capturedAt` above is a
+        // period label a baseline edit can re-date; `observedAt` is the instant
+        // vCenter was polled and no edit path writes it, so the absorption
+        // boundary stops moving when an operator corrects a date or a value. A row
+        // that was never measured has `observedAt = null` and absorbs nothing,
+        // which is exactly Invariant 1 for a manual baseline. SNAPPED, never the
+        // raw instant:
+        // `VsphereSnapshotService` derives both columns from one `measuredAt`, so
+        // `startOfUtcMonth(observedAt) === capturedAt` for every row never
+        // re-dated — which is what makes this a provable no-op there.
+        baselineMeasuredAt: anchor.observedAt ? startOfUtcMonth(anchor.observedAt) : null,
         baselineConsumption: anchor.baselineConsumption.toNumber(),
         baselineCapacity: anchor.baselineCapacity.toNumber(),
         hosts,
@@ -213,6 +370,9 @@ export class ForecastService {
       toMonth,
       effectiveThresholds,
       procurementLeadTimeWeeks: tenantSettings.procurementLeadTimeWeeks,
+      // From the REAL loaded hosts (metric-filtered by the include above) — the
+      // change-detector an approval snapshots (#292). Never a scenario value.
+      capacitySignature: computeCapacitySignature(hosts),
     };
   }
 
@@ -228,6 +388,9 @@ export class ForecastService {
       effectiveThresholds: prepared.effectiveThresholds,
       procurement,
       baselineHistory: prepared.baselineHistory,
+      // Default; forCluster overrides with the resolved acknowledgment. Scenarios
+      // keep this null (INV-1).
+      acknowledgment: null,
     };
   }
 }

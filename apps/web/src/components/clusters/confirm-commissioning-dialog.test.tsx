@@ -130,4 +130,115 @@ describe('<ConfirmCommissioningDialog>', () => {
     expect(toast.error).not.toHaveBeenCalled();
     expect(api.hosts.confirmCommissioning).not.toHaveBeenCalled();
   });
+
+  it('moves focus to the invalid row on a blocked submit', async () => {
+    renderDialog([makeHost({ id: 'a', name: 'esx-01' }), makeHost({ id: 'b', name: 'esx-02' })]);
+
+    const input = screen.getByLabelText('esx-02');
+    input.removeAttribute('required');
+    fireEvent.change(input, { target: { value: '' } });
+    screen.getByRole('button', { name: 'Confirm 2 dates' }).focus();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Confirm 2 dates' }));
+
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
+  it('omits the "set all" field for a single host (redundant with its own row)', () => {
+    renderDialog([makeHost({ id: 'a', name: 'esx-01' })]);
+
+    expect(screen.queryByLabelText('Set all dates')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('esx-01')).toBeInTheDocument();
+  });
+
+  it('"set all" fills every host row with the chosen date', () => {
+    renderDialog([
+      makeHost({ id: 'a', name: 'esx-01', commissionedAt: '2026-07-01' }),
+      makeHost({ id: 'b', name: 'esx-02', commissionedAt: '2025-01-15' }),
+    ]);
+
+    fireEvent.change(screen.getByLabelText('Set all dates'), { target: { value: '2021-06-30' } });
+
+    expect(screen.getByLabelText('esx-01')).toHaveValue('2021-06-30');
+    expect(screen.getByLabelText('esx-02')).toHaveValue('2021-06-30');
+  });
+
+  it('submits a "set all" date applied to every host', async () => {
+    renderDialog([
+      makeHost({ id: 'a', name: 'esx-01', commissionedAt: '2026-07-01' }),
+      makeHost({ id: 'b', name: 'esx-02', commissionedAt: '2025-01-15' }),
+    ]);
+
+    fireEvent.change(screen.getByLabelText('Set all dates'), { target: { value: '2021-06-30' } });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Confirm 2 dates' }));
+
+    await waitFor(() => {
+      expect(api.hosts.confirmCommissioning).toHaveBeenCalledWith({
+        hosts: [
+          { hostId: 'a', commissionedAt: '2021-06-30' },
+          { hostId: 'b', commissionedAt: '2021-06-30' },
+        ],
+      });
+    });
+  });
+
+  it('keeps individual rows editable after a "set all" bulk apply', async () => {
+    renderDialog([
+      makeHost({ id: 'a', name: 'esx-01', commissionedAt: '2026-07-01' }),
+      makeHost({ id: 'b', name: 'esx-02', commissionedAt: '2025-01-15' }),
+    ]);
+
+    // Bulk-apply one date, then correct a single exception row.
+    fireEvent.change(screen.getByLabelText('Set all dates'), { target: { value: '2021-06-30' } });
+    fireEvent.change(screen.getByLabelText('esx-02'), { target: { value: '2019-11-05' } });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Confirm 2 dates' }));
+
+    await waitFor(() => {
+      expect(api.hosts.confirmCommissioning).toHaveBeenCalledWith({
+        hosts: [
+          { hostId: 'a', commissionedAt: '2021-06-30' },
+          { hostId: 'b', commissionedAt: '2019-11-05' },
+        ],
+      });
+    });
+  });
+
+  it('clearing the "set all" field does not blank the host rows', () => {
+    renderDialog([
+      makeHost({ id: 'a', name: 'esx-01', commissionedAt: '2026-07-01' }),
+      makeHost({ id: 'b', name: 'esx-02', commissionedAt: '2025-01-15' }),
+    ]);
+
+    const bulk = screen.getByLabelText('Set all dates');
+    fireEvent.change(bulk, { target: { value: '2021-06-30' } });
+    fireEvent.change(bulk, { target: { value: '' } });
+
+    // Rows keep the last applied value instead of being wiped to empty.
+    expect(screen.getByLabelText('esx-01')).toHaveValue('2021-06-30');
+    expect(screen.getByLabelText('esx-02')).toHaveValue('2021-06-30');
+  });
+
+  it('"set all" clears a stale inline error on the rows it overwrites', async () => {
+    renderDialog([makeHost({ id: 'a', name: 'esx-01' }), makeHost({ id: 'b', name: 'esx-02' })]);
+
+    // Force an inline error on one row via a blocked submit.
+    const rowA = screen.getByLabelText('esx-01');
+    rowA.removeAttribute('required');
+    fireEvent.change(rowA, { target: { value: '' } });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Confirm 2 dates' }));
+    await waitFor(() => expect(rowA).toHaveAttribute('aria-invalid', 'true'));
+
+    // Applying a bulk date overwrites every row and drops the stale error.
+    fireEvent.change(screen.getByLabelText('Set all dates'), { target: { value: '2021-06-30' } });
+
+    await waitFor(() => expect(rowA).not.toHaveAttribute('aria-invalid'));
+    expect(rowA).toHaveValue('2021-06-30');
+  });
 });

@@ -73,17 +73,32 @@ describe('baselineCapacity invariant on a synced cluster', () => {
     expect(history?.baselineCapacity.toNumber()).toBe(0);
   });
 
-  it('allows a baselineDate-only correction on a synced cluster (no baselines)', async () => {
+  it('allows a baselineDate-only correction on a synced cluster (no baselines IN THE PAYLOAD)', async () => {
+    // "no baselines" names the PAYLOAD, not the cluster: the request omits the
+    // `baselines` field entirely. The cluster itself does carry a baseline-history
+    // row — it has to, or the request would be refused for having no measurement to
+    // re-date.
+    //
+    // The factory anchors this cluster at 2026-05-01, and the correction re-dates
+    // it BACKWARDS. Direction matters since #195 made `baselineDate` derived from
+    // `cluster_baseline_history` rather than a cluster column: a date-only request
+    // carries no values, so it can only re-date an existing measurement, and a
+    // LATER period has no measurement to re-date onto it (422
+    // BASELINE_PERIOD_NOT_MEASURED — pinned in clusters.test.ts).
+    //
+    // That refusal is source-agnostic — it fires identically on a manual cluster —
+    // so the Q9a property this test exists for is intact: sync ownership does not
+    // constrain baselineDate, only baselineCapacity.
     const cluster = await makeCluster(prisma, { source: 'vsphere' });
 
     const res = await server.inject({
       method: 'PUT',
       url: `/api/clusters/${cluster.id}`,
-      payload: { baselineDate: '2026-06-01' },
+      payload: { baselineDate: '2026-04-01' },
     });
 
     expect(res.statusCode).toBe(200);
-    expect((res.json() as { baselineDate: string }).baselineDate).toBe('2026-06-01');
+    expect((res.json() as { baselineDate: string }).baselineDate).toBe('2026-04-01');
   });
 });
 

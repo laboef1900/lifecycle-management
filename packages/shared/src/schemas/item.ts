@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import type { DateShiftUnit } from '../dates.js';
+
 import { cuid, dateOnly, MAX_AMOUNT, positiveAmount } from './common.js';
 
 export const itemKindSchema = z.enum(['application', 'event']);
@@ -63,9 +65,112 @@ export const itemUpdateInputSchema = z
 export const itemIdParamsSchema = z.object({ id: cuid });
 export const clusterIdItemsParamsSchema = z.object({ clusterId: cuid });
 
+// ---------- Bulk relative date shift ----------
+
+/**
+ * Upper bound on one bulk shift. Each entry costs one row update plus one per
+ * allocation row, all inside a single serializable transaction, so this is a
+ * transaction-size bound as much as an abuse bound.
+ */
+export const MAX_BULK_SHIFT_ITEMS = 100;
+
+/** Per-unit magnitude caps — the same horizon expressed three ways (~10 years). */
+export const MAX_SHIFT_BY_UNIT: Readonly<Record<DateShiftUnit, number>> = {
+  days: 3650,
+  weeks: 520,
+  months: 120,
+};
+
+export const dateShiftUnitSchema = z.enum(['days', 'weeks', 'months']);
+
+/**
+ * A signed relative shift. Negative moves entries earlier, positive later; zero
+ * is rejected because it is always an operator mistake, never an intent.
+ *
+ * @ai-note There is deliberately no absolute "set every entry to this date"
+ * mode — relative shift is the whole contract for now (owner decision on #256).
+ */
+export const itemDateShiftSchema = z
+  .strictObject({
+    amount: z.number().int(),
+    unit: dateShiftUnitSchema,
+  })
+  .superRefine((shift, ctx) => {
+    if (shift.amount === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['amount'],
+        message: 'Shift amount must not be zero',
+      });
+      return;
+    }
+    const max = MAX_SHIFT_BY_UNIT[shift.unit];
+    if (Math.abs(shift.amount) > max) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['amount'],
+        message: `Shift amount must be between -${max} and ${max} ${shift.unit}`,
+      });
+    }
+  });
+
+/**
+ * @ai-warning NOT idempotent by construction: a relative shift applied twice
+ * moves the entries twice. A retry after an ambiguous failure must re-read the
+ * entries first. Deliberate — an idempotency key was out of scope for #256.
+ */
+export const itemBulkShiftDatesInputSchema = z.strictObject({
+  itemIds: z.array(cuid).min(1).max(MAX_BULK_SHIFT_ITEMS),
+  shift: itemDateShiftSchema,
+});
+
+// ---------- Bulk quarterly growth create ----------
+
+/**
+ * A batch covers at most one calendar year of quarterly growth entries.
+ * Partial years (e.g. only Q3/Q4) are legitimate, so the floor is 1, not 4.
+ */
+export const MIN_QUARTERLY_GROWTH_ITEMS = 1;
+export const MAX_QUARTERLY_GROWTH_ITEMS = 4;
+
+export const quarterlyGrowthEntryInputSchema = z.strictObject({
+  name: z.string().trim().min(1).max(200),
+  effectiveDate: dateOnly,
+  consumptionDelta: deltaNumber.nullable().optional(),
+  capacityDelta: deltaNumber.nullable().optional(),
+});
+
+/**
+ * Creates 1-4 `event`-kind items in one request, sharing a category,
+ * description, and metric type — the "set a year of growth assumptions in
+ * one form" flow (#284). All entries commit together or not at all.
+ */
+export const itemBulkCreateQuarterlyGrowthInputSchema = z.strictObject({
+  category: z.string().trim().min(1).max(60),
+  description: z.string().trim().max(2000).nullish(),
+  metricTypeKey: z.string().min(1),
+  entries: z
+    .array(quarterlyGrowthEntryInputSchema)
+    .min(MIN_QUARTERLY_GROWTH_ITEMS)
+    .max(MAX_QUARTERLY_GROWTH_ITEMS),
+});
+
+export type QuarterlyGrowthEntryInput = z.infer<typeof quarterlyGrowthEntryInputSchema>;
+export type ItemBulkCreateQuarterlyGrowthInput = z.infer<
+  typeof itemBulkCreateQuarterlyGrowthInputSchema
+>;
+
+export interface ItemBulkCreateQuarterlyGrowthResponse {
+  /** How many entries were created — always `items.length`, stated for the toast. */
+  created: number;
+  items: ItemResponse[];
+}
+
 export type ItemCreateInput = z.infer<typeof itemCreateInputSchema>;
 export type ItemUpdateInput = z.infer<typeof itemUpdateInputSchema>;
 export type ItemAllocationRowInput = z.infer<typeof itemAllocationRowInputSchema>;
+export type ItemDateShift = z.infer<typeof itemDateShiftSchema>;
+export type ItemBulkShiftDatesInput = z.infer<typeof itemBulkShiftDatesInputSchema>;
 
 export interface ItemAllocationResponseRow {
   id: string;
@@ -91,4 +196,11 @@ export interface ItemResponse {
   allocations: ItemAllocationResponseRow[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ItemBulkShiftDatesResponse {
+  /** How many entries were moved — always `items.length`, stated for the toast. */
+  shifted: number;
+  /** The entries as they now stand, in the order the server resolved them. */
+  items: ItemResponse[];
 }

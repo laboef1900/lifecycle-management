@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { RunwayPill } from './runway-pill';
+import { RunwayPill, deriveRunwayTone } from './runway-pill';
 
 describe('<RunwayPill>', () => {
   it('renders months until warn with an accent variant when >= 12', () => {
@@ -78,5 +78,31 @@ describe('<RunwayPill>', () => {
       render(<RunwayPill summary={{ months: 0, alreadyBreached: 'warn' }} thresholds={custom} />);
       expect(screen.getByText(/Over 45%/i)).toBeInTheDocument();
     });
+  });
+});
+
+describe('deriveRunwayTone (#243 Part B item 2 — shared with the KpiTile-based Runway tile)', () => {
+  it('is "unknown" when capacity is unknown, regardless of the summary', () => {
+    expect(deriveRunwayTone({ months: 5, alreadyBreached: false }, true)).toBe('unknown');
+    expect(deriveRunwayTone(undefined, true)).toBe('unknown');
+  });
+
+  it('is "unknown" when there is no summary at all, even if capacity is known', () => {
+    expect(deriveRunwayTone(undefined, false)).toBe('unknown');
+  });
+
+  it('is "crit" when already breached at crit, or breaching within 3 months', () => {
+    expect(deriveRunwayTone({ months: 0, alreadyBreached: 'crit' }, false)).toBe('crit');
+    expect(deriveRunwayTone({ months: 2, alreadyBreached: false }, false)).toBe('crit');
+  });
+
+  it('is "warn" when already breached at warn, or breaching within 3-11 months', () => {
+    expect(deriveRunwayTone({ months: 0, alreadyBreached: 'warn' }, false)).toBe('warn');
+    expect(deriveRunwayTone({ months: 5, alreadyBreached: false }, false)).toBe('warn');
+  });
+
+  it('is "ok" when no breach is projected in the horizon, or breach is 12+ months out', () => {
+    expect(deriveRunwayTone({ months: null, alreadyBreached: false }, false)).toBe('ok');
+    expect(deriveRunwayTone({ months: 18, alreadyBreached: false }, false)).toBe('ok');
   });
 });

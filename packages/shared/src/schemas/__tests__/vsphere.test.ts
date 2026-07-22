@@ -6,7 +6,7 @@ import {
   vsphereConnectionUpdateSchema,
   vsphereProbeSchema,
   vsphereSyncOutcomeSchema,
-  vsphereTrustCaSchema,
+  vsphereTrustCertSchema,
   vsphereVerifySchema,
 } from '../vsphere.js';
 import type { LiveUsage } from '../vsphere.js';
@@ -65,11 +65,11 @@ describe('vSphere contracts — the password gate on trust material', () => {
 
   it('requires the password to re-pin trust (a re-pin plus a DNS spoof is full exfiltration)', () => {
     const fingerprint = Array.from({ length: 32 }, () => 'AB').join(':');
-    expect(vsphereTrustCaSchema.safeParse({ rootFingerprintSha256: fingerprint }).success).toBe(
+    expect(vsphereTrustCertSchema.safeParse({ leafFingerprintSha256: fingerprint }).success).toBe(
       false,
     );
     expect(
-      vsphereTrustCaSchema.safeParse({ rootFingerprintSha256: fingerprint, password: 'pw' })
+      vsphereTrustCertSchema.safeParse({ leafFingerprintSha256: fingerprint, password: 'pw' })
         .success,
     ).toBe(true);
   });

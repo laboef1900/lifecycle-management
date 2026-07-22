@@ -4,21 +4,29 @@ import type { CategoryResponse } from './category.js';
 import type { ClusterResponse, MetricStateResponse } from './cluster.js';
 import type {
   BaselineHistoryPoint,
+  ForecastAcknowledgment,
   ForecastEntityContribution,
   ForecastEventMarker,
   ForecastMonthPoint,
   ForecastResponse,
   ProcurementInfo,
 } from './forecast.js';
+import type { OrderApprovalResponse } from './order-approval.js';
 import { hostStateSchema } from './host-lifecycle.js';
 import type { HostLifecycleEventResponse } from './host-lifecycle.js';
 import type { HostReplacementResponse } from './host-replacement.js';
 import type { CapacityResponseRow, HostResponse } from './host.js';
 import { itemKindSchema } from './item.js';
-import type { ItemAllocationResponseRow, ItemResponse } from './item.js';
+import type {
+  ItemAllocationResponseRow,
+  ItemBulkCreateQuarterlyGrowthResponse,
+  ItemBulkShiftDatesResponse,
+  ItemResponse,
+} from './item.js';
 import type { Paginated } from './pagination.js';
 import {
   effectiveThresholdsSchema,
+  idempotencyKeyRetentionHoursSchema,
   percentSchema,
   procurementLeadTimeWeeksSchema,
 } from './settings.js';
@@ -144,6 +152,17 @@ export const itemResponseSchema: z.ZodType<ItemResponse> = z.object({
   updatedAt: z.string(),
 });
 
+export const itemBulkShiftDatesResponseSchema: z.ZodType<ItemBulkShiftDatesResponse> = z.object({
+  shifted: z.number().int().nonnegative(),
+  items: z.array(itemResponseSchema),
+});
+
+export const itemBulkCreateQuarterlyGrowthResponseSchema: z.ZodType<ItemBulkCreateQuarterlyGrowthResponse> =
+  z.object({
+    created: z.number().int().nonnegative(),
+    items: z.array(itemResponseSchema),
+  });
+
 // ---------- Forecast ----------
 
 export const forecastMonthPointSchema: z.ZodType<ForecastMonthPoint> = z.object({
@@ -186,6 +205,12 @@ export const procurementInfoSchema: z.ZodType<ProcurementInfo> = z.object({
   breachMonth: z.string().nullable(),
 });
 
+export const forecastAcknowledgmentSchema: z.ZodType<ForecastAcknowledgment> = z.object({
+  note: z.string().nullable(),
+  approvedByLabel: z.string(),
+  approvedAt: z.string(),
+});
+
 export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   fromMonth: z.string(),
   toMonth: z.string(),
@@ -196,6 +221,10 @@ export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   effectiveThresholds: effectiveThresholdsSchema,
   procurement: procurementInfoSchema,
   baselineHistory: z.array(baselineHistoryPointSchema),
+  // Additive (#292): `.exactOptional()` keeps older payloads that omit it valid,
+  // while `.nullable()` carries the "no/ superseded acknowledgment" case the
+  // current server always emits.
+  acknowledgment: forecastAcknowledgmentSchema.nullable().exactOptional(),
 });
 
 // ---------- Categories ----------
@@ -228,6 +257,23 @@ export const hostReplacementResponseSchema: z.ZodType<HostReplacementResponse> =
   createdAt: z.string(),
 });
 
+// ---------- Order approvals (#292) ----------
+
+export const orderApprovalResponseSchema: z.ZodType<OrderApprovalResponse> = z.object({
+  id: z.string(),
+  clusterId: z.string(),
+  breachMonth: z.string(),
+  orderByDate: z.string(),
+  leadTimeWeeks: z.number(),
+  warnThreshold: z.number(),
+  capacitySignature: z.number(),
+  metricTypeId: z.string().nullable(),
+  approvedByUserId: z.string().nullable(),
+  approvedByLabel: z.string(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+});
+
 // ---------- Settings ----------
 
 // Non-strict on purpose: responses tolerate additive server fields
@@ -236,6 +282,7 @@ export const tenantSettingsResponseSchema: z.ZodType<TenantSettings> = z.object(
   warnThreshold: percentSchema,
   critThreshold: percentSchema,
   procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
+  idempotencyKeyRetentionHours: idempotencyKeyRetentionHoursSchema,
 });
 
 // ---------- Pagination envelope ----------
@@ -263,7 +310,7 @@ export const vsphereConnectionResponseSchema: z.ZodType<VsphereConnectionRespons
   port: z.number(),
   username: z.string(),
   tlsMode: vsphereTlsModeSchema,
-  pinnedRootFingerprintSha256: z.string().nullable(),
+  pinnedLeafFingerprintSha256: z.string().nullable(),
   instanceUuid: z.string().nullable(),
   apiVersion: z.string().nullable(),
   enabled: z.boolean(),
@@ -288,9 +335,14 @@ export const vsphereConnectionResponseSchema: z.ZodType<VsphereConnectionRespons
 export const vsphereProbeResultSchema: z.ZodType<VsphereProbeResult> = z.object({
   reachable: z.boolean(),
   trustedBySystemRoots: z.boolean(),
-  rootFingerprintSha256: z.string().nullable(),
+  leafFingerprintSha256: z.string().nullable(),
   validFrom: z.string().nullable(),
   validTo: z.string().nullable(),
+  // @ai-warning Keep this enum in lockstep with `VsphereProbeResult.outcome` in
+  // `vsphere.ts`. The `z.ZodType<…>` annotation does NOT enforce exhaustiveness —
+  // a missing member compiles fine but makes the web client reject that response
+  // with `RESPONSE_VALIDATION` (this is the runtime boundary `request()` parses
+  // against). Covered by `responses.test.ts`.
   outcome: z.enum(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter']),
 });
 

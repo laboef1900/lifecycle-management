@@ -185,3 +185,69 @@ describe('HostLifecycleGanttRow bar end date (MINOR #7)', () => {
     expect(screen.getByText('—')).toBeInTheDocument();
   });
 });
+
+describe('label legibility (#243 Part B High-2)', () => {
+  const DOMAIN = { min: new Date('2023-01-01T00:00:00Z'), max: new Date('2030-01-01T00:00:00Z') };
+
+  it('renders the end-date label at >=10 units with a surface halo so it survives the bar', () => {
+    // eolAt past ~82% of the domain → eolFlip → the label paints ON the bar.
+    const host = makeHost({ eolAt: '2029-11-01' });
+    render(<HostLifecycleGanttRow host={host} domain={DOMAIN} today={TODAY} />);
+    const label = screen.getByText('2029-11-01');
+    expect(Number(label.getAttribute('font-size'))).toBeGreaterThanOrEqual(10);
+    expect(label.getAttribute('style')).toContain('paint-order');
+    expect(label.getAttribute('style')).toContain('var(--card)');
+    // An ineffective 0-width halo would satisfy the two checks above.
+    expect(label.getAttribute('style')).toMatch(/stroke-width:\s*3/);
+  });
+
+  it('renders WTY EXPIRED at >=10 units with the same halo', () => {
+    const host = makeHost({ warrantyEndsAt: '2020-01-01' });
+    render(<HostLifecycleGanttRow host={host} domain={DOMAIN} today={TODAY} />);
+    const label = screen.getByText('WTY EXPIRED');
+    expect(Number(label.getAttribute('font-size'))).toBeGreaterThanOrEqual(10);
+    expect(label.getAttribute('style')).toContain('paint-order');
+    expect(label.getAttribute('style')).toContain('var(--card)');
+    expect(label.getAttribute('style')).toMatch(/stroke-width:\s*3/);
+  });
+
+  it('clamps the WTY EXPIRED label anchor into the viewBox at both edges (tick keeps the true x)', () => {
+    // The clamp output is deterministic in both cases below, so these are exact
+    // pins rather than one-sided bounds: a constant or inverted clamp would
+    // satisfy a >=/<= assertion, but only the exact anchor — plus the tick
+    // keeping its true edge-clamped x — catches such a break.
+
+    // Left edge: warranty expired before domain.min → pctToX clamps the tick to
+    // x=0; the centered label anchor clamps to exactly WTY_LABEL_HALF_WIDTH (34),
+    // inset by its half width rather than halved.
+    const left = makeHost({ warrantyEndsAt: '2020-01-01' });
+    const { container: leftContainer, unmount } = render(
+      <HostLifecycleGanttRow host={left} domain={DOMAIN} today={TODAY} />,
+    );
+    expect(Number(screen.getByText('WTY EXPIRED').getAttribute('x'))).toBe(34);
+    // The warranty tick keeps its true (edge-clamped) x. stroke-width 2 uniquely
+    // selects it — the NOW line is stroke-width 1.
+    const leftTick = leftContainer.querySelector('line[stroke-width="2"]');
+    expect(leftTick?.getAttribute('x1')).toBe('0');
+    unmount();
+
+    // Right edge: an expired warranty past domain.max (host decommissioned years
+    // ago) → tick clamps to x=600; the label anchor clamps to exactly 600 - 34.
+    const right = makeHost({
+      commissionedAt: '2020-01-01',
+      decommissionedAt: '2023-12-01',
+      eolAt: null,
+      warrantyEndsAt: '2025-06-01',
+    });
+    const pastDomain = {
+      min: new Date('2020-01-01T00:00:00Z'),
+      max: new Date('2024-01-01T00:00:00Z'),
+    };
+    const { container: rightContainer } = render(
+      <HostLifecycleGanttRow host={right} domain={pastDomain} today={TODAY} />,
+    );
+    expect(Number(screen.getByText('WTY EXPIRED').getAttribute('x'))).toBe(566);
+    const rightTick = rightContainer.querySelector('line[stroke-width="2"]');
+    expect(rightTick?.getAttribute('x1')).toBe('600');
+  });
+});

@@ -1,8 +1,17 @@
-# LCM — vSphere memory capacity forecasting
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logos/logo-dark.svg">
+    <img src="docs/logos/logo-light.svg" alt="LCM logo" width="120" height="120">
+  </picture>
+</p>
 
-Replace the spreadsheet that tracks vSphere memory capacity with a browser-based
-app that is the single source of truth for capacity planning. Built for a small
-internal infrastructure team; self-hosted via Docker Compose.
+<h1 align="center">LCM — vSphere memory capacity forecasting</h1>
+
+<p align="center">
+  Replace the capacity spreadsheet with a browser-based app that is the single
+  source of truth for vSphere memory capacity planning.<br>
+  Built for a small internal infrastructure team; self-hosted via Docker Compose.
+</p>
 
 See [`docs/vision.md`](docs/vision.md) for the full product context.
 
@@ -70,7 +79,7 @@ SEED_ON_BOOT=true docker compose up -d
 `docker/` without needing `-f`. Run all commands from the repo root.
 
 The compose file pulls `lcm-server` and `lcm-web` from GHCR; set
-`LCM_IMAGE_TAG=0.1` in `.env` to pin a release instead of `:latest`.
+`LCM_IMAGE_TAG=0.5` in `.env` to pin a release instead of `:latest`.
 
 The web container listens on `${HTTP_PORT:-80}` and serves both the SPA and a
 reverse proxy to the server at `/api/*`. After the first successful boot,
@@ -108,7 +117,7 @@ All three containers run on [Docker Hardened Images](https://www.docker.com/prod
 | `POSTGRES_PASSWORD`     | `— (required)`                            | db + server (compose)  | Postgres password (compose refuses to start if unset)                                                           |
 | `POSTGRES_DB`           | `lcm`                                     | db (compose)           | Postgres database name                                                                                          |
 | `HTTP_PORT`             | `80`                                      | web (compose)          | Host port mapped to nginx :8080                                                                                 |
-| `LCM_IMAGE_TAG`         | `latest`                                  | server + web (compose) | GHCR image tag (e.g. `0.1`, `dev`)                                                                              |
+| `LCM_IMAGE_TAG`         | `latest`                                  | server + web (compose) | GHCR image tag (e.g. `0.5`, `dev`)                                                                              |
 | `CONFIG_ENCRYPTION_KEY` | `— (required)`                            | server (compose)       | Encrypts the DB-backed OIDC config; compose refuses to start if unset — generate with `openssl rand -base64 32` |
 | `RECOVERY_DISABLE_AUTH` | `false`                                   | server (compose)       | Break-glass: forces auth off for that boot only, in memory — the stored auth config is left untouched           |
 

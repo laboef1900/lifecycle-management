@@ -58,7 +58,7 @@ export class VsphereSnapshotService {
       port?: number;
       username: string;
       password: string;
-      pinnedRootPem: string | null;
+      pinnedLeafSha256: string | null;
     },
     measuredAt: Date,
     /** Graceful-shutdown cancellation (design §D21); threaded into both collects. */

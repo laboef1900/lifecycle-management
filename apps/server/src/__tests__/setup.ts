@@ -14,4 +14,5 @@ beforeEach(async () => {
   await prisma.cluster.deleteMany({});
   await prisma.tenantSettings.deleteMany({});
   await prisma.authConfig.deleteMany({});
+  await prisma.idempotencyKey.deleteMany({});
 });

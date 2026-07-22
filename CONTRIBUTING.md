@@ -92,6 +92,15 @@ merge is clean.
   component.
 - The Playwright golden path in `apps/web/playwright/` covers the
   end-to-end smoke; extend it if a major user flow changes.
+- **The Vitest suites resolve `@lcm/shared` to its TypeScript source, not the
+  built `dist`.** Both `apps/web/vitest.config.ts` and
+  `apps/server/vitest.config.ts` alias `@lcm/shared` to `packages/shared/src`,
+  so a new or changed shared export is picked up by the tests immediately —
+  no `pnpm --filter @lcm/shared build` needed first. This closes the former
+  stale-`dist` footgun where web tests could pass against a _previous_
+  implementation. Note the **running dev servers and the production build still
+  use `dist`**: if you need a shared change reflected in a live `pnpm dev` app
+  (rather than in tests), rebuild shared. See issue #265.
 
 ## What lives where
 

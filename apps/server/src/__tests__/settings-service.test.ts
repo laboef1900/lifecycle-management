@@ -5,12 +5,16 @@ import { SettingsService } from '../services/settings.js';
 
 const TENANT_ID = 'default';
 
+/**
+ * A cluster with neither baselines nor history — the shape settings care about,
+ * and a shape `ClustersService.toResponse` must tolerate (metrics: [], with
+ * baselineDate falling back to createdAt).
+ */
 async function makeCluster(name: string): Promise<string> {
   const cluster = await prisma.cluster.create({
     data: {
       tenantId: TENANT_ID,
       name,
-      baselineDate: new Date('2026-05-01'),
     },
   });
   return cluster.id;
@@ -39,6 +43,7 @@ describe('SettingsService.updateTenant', () => {
       warnThreshold: 0.65,
       critThreshold: 0.85,
       procurementLeadTimeWeeks: 6,
+      idempotencyKeyRetentionHours: 24,
     });
     expect(result.warnThreshold).toBeCloseTo(0.65);
     expect(result.critThreshold).toBeCloseTo(0.85);
@@ -51,6 +56,7 @@ describe('SettingsService.updateTenant', () => {
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 12,
+      idempotencyKeyRetentionHours: 24,
     });
     const result = await svc.getTenant(TENANT_ID);
     expect(result.procurementLeadTimeWeeks).toBe(12);
@@ -91,6 +97,7 @@ describe('SettingsService.updateCluster', () => {
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
+      idempotencyKeyRetentionHours: 24,
     });
     await expect(
       svc.updateCluster(TENANT_ID, clusterId, {

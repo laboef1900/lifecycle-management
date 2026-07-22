@@ -61,11 +61,11 @@ export interface VsphereInventoryCollector {
       hostname: string;
       username: string;
       password: string;
-      pinnedRootPem: string | null;
+      pinnedLeafSha256: string | null;
       /**
        * Destination port. Configurable per connection (#199), defaulting to 443 —
-       * see `verifiedTlsOptions`. Changes the destination socket only; trust is
-       * unaffected.
+       * see `fingerprintPinnedConnection`. Changes the destination socket only; the
+       * fingerprint gate is unaffected.
        */
       port?: number;
     },

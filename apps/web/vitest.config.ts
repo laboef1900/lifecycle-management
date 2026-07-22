@@ -8,6 +8,13 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
+      // Resolve @lcm/shared to its TypeScript source, not the built dist, so
+      // web tests always compile the current source. Without this, a new or
+      // changed shared export is invisible to tests until
+      // `pnpm --filter @lcm/shared build` runs — a stale-dist footgun that can
+      // make tests pass against old code. The production `vite build`
+      // (vite.config.ts) still uses the package's dist entry. See issue #265.
+      '@lcm/shared': resolve(__dirname, '../../packages/shared/src'),
     },
     dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
   },

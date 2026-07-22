@@ -14,15 +14,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api-client';
 import type { AuthState } from '@/lib/auth';
-import { Route as SettingsRouteImport } from '@/routes/_app.settings';
+import { Route as SettingsAccessRouteImport } from '@/routes/_app.settings.access';
+import { Route as SettingsForecastingRouteImport } from '@/routes/_app.settings.forecasting';
+import { Route as SettingsIndexRouteImport } from '@/routes/_app.settings.index';
+import { Route as SettingsInventoryRouteImport } from '@/routes/_app.settings.inventory';
+import { Route as SettingsLayoutRouteImport } from '@/routes/_app.settings';
 import type { RouterContext } from '@/routes/__root';
 
-// Renders the real `/_app/settings` route file under a minimal two-route
-// memory router (an index `/` plus `/settings`) so the Back button's real
-// navigation — history-pop when there's a prior entry, `/` fallback otherwise —
-// can be observed on `router.state.location.pathname`. Mirrors the harness in
+// Renders the real `/_app/settings` layout route plus its real child routes
+// (not a re-implementation) under a minimal memory router (an index `/` plus
+// the Settings sub-tree) so the Back button's real navigation —
+// history-pop when there's a prior entry, `/` fallback otherwise — can be
+// observed on `router.state.location.pathname`. Mirrors the harness in
 // app-settings-auth-gate.test.tsx, extended with a real `/` route and a
 // configurable history so the fallback vs history-back branch is exercised.
+//
+// #293: Settings used to be one route (`/settings`); it is now this layout
+// plus four children (index-redirect, forecasting, inventory, access), so the
+// harness composes them the same way `routeTree.gen.ts` does — `.update()`
+// each imported Route with its id/path/parent, then `addChildren` the
+// sub-routes onto the layout before attaching the layout itself to root.
 function renderSettingsRoute(auth: AuthState, initialEntries: string[]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rootRoute = createRootRouteWithContext<RouterContext>()({ component: Outlet });
@@ -33,13 +44,43 @@ function renderSettingsRoute(auth: AuthState, initialEntries: string[]) {
   });
   // `.update()`'s public typings don't model reassigning id/path/parent —
   // routeTree.gen.ts casts the same way (`as any`) when composing file routes.
-  const settingsRoute = SettingsRouteImport.update({
+  const settingsLayoutRoute = SettingsLayoutRouteImport.update({
     id: '/settings',
     path: '/settings',
     getParentRoute: () => rootRoute,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
-  const routeTree = rootRoute.addChildren([indexRoute, settingsRoute]);
+  const settingsIndexRoute = SettingsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => settingsLayoutRoute,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any);
+  const settingsForecastingRoute = SettingsForecastingRouteImport.update({
+    id: '/forecasting',
+    path: '/forecasting',
+    getParentRoute: () => settingsLayoutRoute,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any);
+  const settingsInventoryRoute = SettingsInventoryRouteImport.update({
+    id: '/inventory',
+    path: '/inventory',
+    getParentRoute: () => settingsLayoutRoute,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any);
+  const settingsAccessRoute = SettingsAccessRouteImport.update({
+    id: '/access',
+    path: '/access',
+    getParentRoute: () => settingsLayoutRoute,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any);
+  const settingsRouteWithChildren = settingsLayoutRoute.addChildren([
+    settingsIndexRoute,
+    settingsForecastingRoute,
+    settingsInventoryRoute,
+    settingsAccessRoute,
+  ]);
+  const routeTree = rootRoute.addChildren([indexRoute, settingsRouteWithChildren]);
   const router = createRouter({
     routeTree,
     context: { queryClient, auth },
@@ -88,6 +129,7 @@ describe('/_app/settings Back button + Esc', () => {
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
+      idempotencyKeyRetentionHours: 24,
     });
     vi.spyOn(api.settings.categories, 'list').mockResolvedValue([]);
     vi.spyOn(api.settings.auth, 'get').mockResolvedValue({ ...baseAuthConfig });
@@ -99,7 +141,7 @@ describe('/_app/settings Back button + Esc', () => {
   });
 
   it('clicking Back pops history to the previous route', async () => {
-    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
 
     await userEvent.click(screen.getByRole('button', { name: 'Back' }));
@@ -108,7 +150,7 @@ describe('/_app/settings Back button + Esc', () => {
   });
 
   it('falls back to / when Settings was the entry point (no history to pop)', async () => {
-    const { router } = renderSettingsRoute(disabledAuth, ['/settings']);
+    const { router } = renderSettingsRoute(disabledAuth, ['/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
 
     await userEvent.click(screen.getByRole('button', { name: 'Back' }));
@@ -117,7 +159,7 @@ describe('/_app/settings Back button + Esc', () => {
   });
 
   it('Esc triggers Back (document-level listener fires with focus on body)', async () => {
-    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -126,7 +168,7 @@ describe('/_app/settings Back button + Esc', () => {
   });
 
   it('Esc is suppressed while a dismissible overlay is open', async () => {
-    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
 
     // Simulate a portaled Radix overlay (e.g. the vCenter remove ConfirmDialog)
@@ -139,14 +181,14 @@ describe('/_app/settings Back button + Esc', () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       // Give any (incorrect) navigation a chance to settle before asserting.
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(router.state.location.pathname).toBe('/settings');
+      expect(router.state.location.pathname).toBe('/settings/forecasting');
     } finally {
       document.body.removeChild(overlay);
     }
   });
 
   it('Esc is ignored while typing in a form field', async () => {
-    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
 
     const input = document.createElement('input');
@@ -155,14 +197,14 @@ describe('/_app/settings Back button + Esc', () => {
     try {
       await userEvent.keyboard('{Escape}');
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(router.state.location.pathname).toBe('/settings');
+      expect(router.state.location.pathname).toBe('/settings/forecasting');
     } finally {
       document.body.removeChild(input);
     }
   });
 
   it('ignores an Escape a nearer handler already consumed (defaultPrevented)', async () => {
-    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
 
     // Neither a typing target nor an overlay, so `defaultPrevented` is the only
@@ -174,14 +216,14 @@ describe('/_app/settings Back button + Esc', () => {
     try {
       consumer.dispatchEvent(escapeEvent());
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(router.state.location.pathname).toBe('/settings');
+      expect(router.state.location.pathname).toBe('/settings/forecasting');
     } finally {
       document.body.removeChild(consumer);
     }
   });
 
   it('ignores OS auto-repeat Escape keydowns (holding Esc is one intent)', async () => {
-    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    const { router } = renderSettingsRoute(disabledAuth, ['/', '/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
     const back = vi.spyOn(router.history, 'back');
 
@@ -196,7 +238,7 @@ describe('/_app/settings Back button + Esc', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(back).not.toHaveBeenCalled();
-    expect(router.state.location.pathname).toBe('/settings');
+    expect(router.state.location.pathname).toBe('/settings/forecasting');
   });
 
   it('removes the document listener on unmount (no stray Esc navigation)', async () => {
@@ -211,7 +253,7 @@ describe('/_app/settings Back button + Esc', () => {
     const addSpy = vi.spyOn(document, 'addEventListener');
     const removeSpy = vi.spyOn(document, 'removeEventListener');
 
-    const { router, unmount } = renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    const { router, unmount } = renderSettingsRoute(disabledAuth, ['/', '/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
 
     const registered = addSpy.mock.calls
@@ -246,8 +288,12 @@ describe('/_app/settings Back button + Esc', () => {
 
   it('pops exactly one history entry when Escape is pressed twice in a row', async () => {
     // Three entries so an over-pop is observable: index 2 → back → '/' (1),
-    // → back again → '/settings' (0).
-    const { router } = renderSettingsRoute(disabledAuth, ['/settings', '/', '/settings']);
+    // → back again → '/settings/forecasting' (0).
+    const { router } = renderSettingsRoute(disabledAuth, [
+      '/settings/forecasting',
+      '/',
+      '/settings/forecasting',
+    ]);
     await screen.findByRole('heading', { name: 'Settings' });
     const back = vi.spyOn(router.history, 'back');
 
@@ -264,7 +310,11 @@ describe('/_app/settings Back button + Esc', () => {
   });
 
   it('navigates once when Back is double-clicked', async () => {
-    const { router } = renderSettingsRoute(disabledAuth, ['/settings', '/', '/settings']);
+    const { router } = renderSettingsRoute(disabledAuth, [
+      '/settings/forecasting',
+      '/',
+      '/settings/forecasting',
+    ]);
     await screen.findByRole('heading', { name: 'Settings' });
     const back = vi.spyOn(router.history, 'back');
     const button = screen.getByRole('button', { name: 'Back' });
@@ -279,20 +329,20 @@ describe('/_app/settings Back button + Esc', () => {
   });
 
   it('recovers after a pop that lands on the same page (hash variant)', async () => {
-    // The ⌘K "Add cluster" action navigates to `/settings#add-cluster` while the
-    // user may already be on `/settings`, so Back/Esc pops to `/settings` — the
-    // SAME route, which does not remount. A latch that never released would stay
-    // set for the rest of the visit and kill Back and Esc silently, with no
-    // recovery short of a reload.
+    // The ⌘K "Add cluster" action navigates to `/settings/inventory#add-cluster`
+    // while the user may already be on `/settings/inventory`, so Back/Esc pops
+    // to `/settings/inventory` — the SAME route, which does not remount. A
+    // latch that never released would stay set for the rest of the visit and
+    // kill Back and Esc silently, with no recovery short of a reload.
     const { router } = renderSettingsRoute(disabledAuth, [
       '/',
-      '/settings',
-      '/settings#add-cluster',
+      '/settings/inventory',
+      '/settings/inventory#add-cluster',
     ]);
     const heading = await screen.findByRole('heading', { name: 'Settings' });
 
     document.dispatchEvent(escapeEvent());
-    await waitFor(() => expect(router.state.location.href).toBe('/settings'));
+    await waitFor(() => expect(router.state.location.href).toBe('/settings/inventory'));
 
     // Same DOM node ⇒ the route component never remounted, so releasing the
     // latch is the only thing that can make the second Escape work. Without
@@ -306,18 +356,20 @@ describe('/_app/settings Back button + Esc', () => {
 
   it('stays latched for a second Escape in the same task on a hash variant', async () => {
     // Guards the release added above: two Escapes in the same task both fire
-    // from `/settings#add-cluster`, so the second must still be latched out.
-    // An over-eager release (e.g. keying only on pathname, or resetting on any
-    // location change) would let this pop twice and land on `/`.
+    // from `/settings/inventory#add-cluster`, so the second must still be
+    // latched out. An over-eager release (e.g. keying only on pathname, or
+    // resetting on any location change) would let this pop twice and land
+    // on `/`.
     //
     // Scope, deliberately: this covers the same-task window only. Once the pop
-    // has landed on `/settings`, the latch has released by design and a further
-    // activation pops again — bounded by `canGoBack`, so the worst case is
-    // landing on `/`, never leaving the SPA. See the @ai-warning in the route.
+    // has landed on `/settings/inventory`, the latch has released by design
+    // and a further activation pops again — bounded by `canGoBack`, so the
+    // worst case is landing on `/`, never leaving the SPA. See the
+    // @ai-warning in the route.
     const { router } = renderSettingsRoute(disabledAuth, [
       '/',
-      '/settings',
-      '/settings#add-cluster',
+      '/settings/inventory',
+      '/settings/inventory#add-cluster',
     ]);
     await screen.findByRole('heading', { name: 'Settings' });
     const back = vi.spyOn(router.history, 'back');
@@ -325,21 +377,25 @@ describe('/_app/settings Back button + Esc', () => {
     document.dispatchEvent(escapeEvent());
     document.dispatchEvent(escapeEvent());
 
-    await waitFor(() => expect(router.state.location.href).toBe('/settings'));
+    await waitFor(() => expect(router.state.location.href).toBe('/settings/inventory'));
     expect(back).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(router.state.location.href).toBe('/settings');
+    expect(router.state.location.href).toBe('/settings/inventory');
   });
 
   it('stays latched while leaving the page, even though it renders once more', async () => {
     // Window (2) in the latch's @ai-warning, and the reason a plain "reset on
-    // location change" is wrong: once the pop lands on a different pathname this
-    // page renders once more before React unmounts it, so both controls are
-    // still live while the location no longer matches the one they fired from.
-    // Also pins that the latch is shared across the two controls (Back, then
-    // Esc) rather than being per-control. Three entries make an over-pop
-    // observable: index 2 → back → '/' (1) → back again → '/settings' (0).
-    const { router } = renderSettingsRoute(disabledAuth, ['/settings', '/', '/settings']);
+    // location change" is wrong: once the pop lands outside `/settings`
+    // entirely this layout renders once more before React unmounts it. Also
+    // pins that the latch is shared across the two controls (Back, then Esc)
+    // rather than being per-control. Three entries make an over-pop
+    // observable: index 2 → back → '/' (1) → back again →
+    // '/settings/forecasting' (0).
+    const { router } = renderSettingsRoute(disabledAuth, [
+      '/settings/forecasting',
+      '/',
+      '/settings/forecasting',
+    ]);
     await screen.findByRole('heading', { name: 'Settings' });
     const back = vi.spyOn(router.history, 'back');
     const button = screen.getByRole('button', { name: 'Back' });
@@ -359,8 +415,90 @@ describe('/_app/settings Back button + Esc', () => {
     expect(router.state.location.pathname).toBe('/');
   });
 
+  // #293: this pair is new — the single-route design could never exercise a
+  // landing on a SIBLING settings pathname (pathname only ever varied by
+  // leaving `/settings` altogether), so the old suite had no equivalent. Now
+  // that Forecasting/Inventory/Access are children of one persistent layout,
+  // Back/Esc must keep working across tab-to-tab hops, not just the
+  // enter/leave-Settings case above.
+  it('releases the latch when a pop lands on a sibling settings sub-route', async () => {
+    const { router } = renderSettingsRoute(disabledAuth, [
+      '/',
+      '/settings/forecasting',
+      '/settings/inventory',
+    ]);
+    await screen.findByRole('heading', { name: 'Settings' });
+    const back = vi.spyOn(router.history, 'back');
+
+    // First Esc: Inventory → Forecasting. The layout does NOT unmount (only
+    // its <Outlet/> child swaps), so this landing must release the latch —
+    // unlike the old design, where any pathname change meant "about to
+    // unmount, stay latched".
+    document.dispatchEvent(escapeEvent());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/forecasting'));
+
+    // Second Esc, awaited separately so it is unambiguously a fresh
+    // activation: Forecasting → '/'. If the latch had wrongly stayed set,
+    // this would be a silent no-op and the assertion below would time out.
+    document.dispatchEvent(escapeEvent());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(back).toHaveBeenCalledTimes(2);
+  });
+
+  it('stays latched for a second Escape in the same task across sibling sub-routes', async () => {
+    // The in-flight guard (clause 1: `href` unchanged since firing) is keyed
+    // purely on href, not on the destination pathname — pin that it still
+    // holds when the destination is a sibling settings route rather than '/'.
+    const { router } = renderSettingsRoute(disabledAuth, [
+      '/',
+      '/settings/forecasting',
+      '/settings/inventory',
+    ]);
+    await screen.findByRole('heading', { name: 'Settings' });
+    const back = vi.spyOn(router.history, 'back');
+
+    document.dispatchEvent(escapeEvent());
+    document.dispatchEvent(escapeEvent());
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/forecasting'));
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+
+  // #297 review fix — WARNING finding #1: `firedFromRef` used to only ever be
+  // overwritten, never cleared, so returning to the exact href a PRIOR pop
+  // fired from re-triggers the in-flight guard and silently no-ops. Distinct
+  // from the two tests above: those exercise a single fire-and-release; this
+  // one exercises firing TWICE from the same href across an intervening
+  // sibling-tab visit, which is the reproduction the review actually filed.
+  it('does not dead-latch on Inventory → Esc → Inventory (tab click) → Esc', async () => {
+    const { router } = renderSettingsRoute(disabledAuth, [
+      '/',
+      '/settings/forecasting',
+      '/settings/inventory',
+    ]);
+    await screen.findByRole('heading', { name: 'Settings' });
+    const back = vi.spyOn(router.history, 'back');
+
+    // On Inventory, Esc → Forecasting. `firedFromRef` now holds
+    // '/settings/inventory'.
+    document.dispatchEvent(escapeEvent());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/forecasting'));
+
+    // Click the Inventory tab again: an everyday forward navigation lands
+    // back on the exact href the first Esc fired from.
+    await userEvent.click(screen.getByRole('link', { name: 'Inventory' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/inventory'));
+
+    // Esc again is a brand-new activation, not a double-pop of the first one.
+    // Without clearing the stale ref once the first pop settled, this would
+    // silently no-op (`back` stuck at 1 call, pathname stuck on Inventory).
+    document.dispatchEvent(escapeEvent());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/forecasting'));
+    expect(back).toHaveBeenCalledTimes(2);
+  });
+
   it('exposes the Esc shortcut to assistive tech without polluting the name', async () => {
-    renderSettingsRoute(disabledAuth, ['/', '/settings']);
+    renderSettingsRoute(disabledAuth, ['/', '/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings' });
 
     // The visual `Esc` hint is aria-hidden, so `aria-keyshortcuts` is the only

@@ -2,7 +2,7 @@ import type {
   VsphereConnectionCreate,
   VsphereConnectionUpdate,
   VsphereProbe,
-  VsphereTrustCa,
+  VsphereTrustCert,
   VsphereVerify,
   ApiErrorBody,
   AuthConfigTest,
@@ -38,10 +38,16 @@ import {
   hostUpdateInputSchema,
   isApiErrorBody,
   itemAllocationRowInputSchema,
+  itemBulkCreateQuarterlyGrowthInputSchema,
+  itemBulkCreateQuarterlyGrowthResponseSchema,
+  itemBulkShiftDatesInputSchema,
+  itemBulkShiftDatesResponseSchema,
   itemCreateInputSchema,
   itemResponseSchema,
   itemUpdateInputSchema,
   localUserSummarySchema,
+  orderApprovalCreateInputSchema,
+  orderApprovalResponseSchema,
   paginatedSchema,
   rotateSigningSecretResponseSchema,
   scenarioSchema,
@@ -156,9 +162,14 @@ export type CapacityAppendInputWire = z.input<typeof capacityRowInputSchema>;
 export type ItemCreateInputWire = z.input<typeof itemCreateInputSchema>;
 export type ItemUpdateInputWire = z.input<typeof itemUpdateInputSchema>;
 export type ItemAllocationAppendInputWire = z.input<typeof itemAllocationRowInputSchema>;
+export type ItemBulkShiftDatesInputWire = z.input<typeof itemBulkShiftDatesInputSchema>;
+export type ItemBulkCreateQuarterlyGrowthInputWire = z.input<
+  typeof itemBulkCreateQuarterlyGrowthInputSchema
+>;
 export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
 export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
 export type HostCommissioningConfirmInputWire = z.input<typeof hostCommissioningConfirmInputSchema>;
+export type OrderApprovalCreateInputWire = z.input<typeof orderApprovalCreateInputSchema>;
 
 // ---------- Query string helper ----------
 
@@ -280,6 +291,16 @@ export const api = {
       ),
     delete: (id: string) => request<void>(`/api/host-replacements/${id}`, { method: 'DELETE' }),
   },
+  orderApprovals: {
+    // Approve the current procurement recommendation for a cluster (#292). The
+    // server derives and snapshots the breach; the only input is an optional note.
+    create: (clusterId: string, input: OrderApprovalCreateInputWire) =>
+      request(
+        `/api/clusters/${clusterId}/order-approvals`,
+        { method: 'POST', body: JSON.stringify(input) },
+        orderApprovalResponseSchema,
+      ),
+  },
   items: {
     listByCluster: (clusterId: string, params?: { limit?: number; offset?: number }) =>
       request(
@@ -306,6 +327,22 @@ export const api = {
         itemResponseSchema,
       ),
     delete: (id: string) => request<void>(`/api/items/${id}`, { method: 'DELETE' }),
+    bulkShiftDates: (input: ItemBulkShiftDatesInputWire, idempotencyKey: string) =>
+      request(
+        '/api/items/bulk-shift-dates',
+        {
+          method: 'POST',
+          body: JSON.stringify(input),
+          headers: { 'Idempotency-Key': idempotencyKey },
+        },
+        itemBulkShiftDatesResponseSchema,
+      ),
+    bulkCreateQuarterlyGrowth: (clusterId: string, input: ItemBulkCreateQuarterlyGrowthInputWire) =>
+      request(
+        `/api/clusters/${clusterId}/items/bulk-quarterly-growth`,
+        { method: 'POST', body: JSON.stringify(input) },
+        itemBulkCreateQuarterlyGrowthResponseSchema,
+      ),
   },
   settings: {
     categories: {
@@ -376,9 +413,9 @@ export const api = {
             { method: 'POST' },
             vsphereSyncNowResponseSchema,
           ),
-        trustCa: (id: string, input: VsphereTrustCa) =>
+        trustCert: (id: string, input: VsphereTrustCert) =>
           request(
-            `/api/settings/vsphere/connections/${id}/trust-ca`,
+            `/api/settings/vsphere/connections/${id}/trust-cert`,
             { method: 'POST', body: JSON.stringify(input) },
             vsphereConnectionResponseSchema,
           ),

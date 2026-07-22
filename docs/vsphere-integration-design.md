@@ -48,6 +48,11 @@ one and **will recur**:
 > **`@ai-warning` this at the TLS implementation site.** A future contributor meeting a handshake failure
 > will reach for `rejectUnauthorized: false` on day one. The answer is the trust flow, not the flag.
 
+> **Amendment 2026-07-21:** root-pinning (D11) and its #278 refuse-to-pin fallback are replaced by
+> leaf-fingerprint pinning (`docs/superpowers/specs/2026-07-21-vsphere-leaf-fingerprint-pinning-design.md`).
+> This is **not** the "ignore TLS" flag rejected above — verification stays on; the predicate is exact-cert
+> identity rather than chain-to-a-trusted-root. The rejection of an insecure/ignore flag stands.
+
 ### 0.2 — Q1 (GiB): proceeding on evidence, owner confirmation still welcome
 
 The research is conclusive that the chain is **base-2 end to end** (§D3a: govmomi's `units` defines `GB` as
@@ -442,6 +447,15 @@ servers on the installed stack (**Node v26.5.0, undici 8.6.0/8.7.0, `@types/node
 > govmomi model does not port. This is exactly the cross-language API assumption that needs testing, not
 > recall.)_
 
+> **⚠️ SUPERSEDED 2026-07-21** — replaced by leaf-fingerprint pinning
+> (`docs/superpowers/specs/2026-07-21-vsphere-leaf-fingerprint-pinning-design.md`), which also removes PR
+> #278's `chain_incomplete`/`isSelfSignedAnchor` gate. Real vCenters present the leaf **without** the VMCA
+> root in the handshake, so root-pinning had nothing to pin (#272). Leaf-fingerprint pinning verifies the
+> exact certificate at the socket before any credential byte is written; it is verification-equivalent, not
+> the §0.1-rejected "ignore TLS" flag, and **D10 (no `checkServerIdentity`) still holds.** The rest of this
+> section is kept for the historical record — it documents why root-pinning was chosen and, per the spec
+> above, why it doesn't survive contact with a real vCenter.
+
 ### D11 — **Pin the root of the presented chain as a `ca:` trust anchor.** No insecure flag on the credential path.
 
 Verified end-to-end (`probe4.mjs`) across **both** real-world vCenter cert shapes with **one uniform code
@@ -488,6 +502,11 @@ fallback considered):
 emits **SHA-256 by default** — so SHA-256 is both correct _and_ what the admin's out-of-band confirmation
 command actually prints. _(vCenter's own `HostConnectSpec.sslThumbprint` remains SHA-1 for legacy reasons —
 do not let that pull the design back.)_
+
+> **⚠️ SUPERSEDED 2026-07-21** — see the note at D11 above: root-pinning is replaced by leaf-fingerprint
+> pinning (`docs/superpowers/specs/2026-07-21-vsphere-leaf-fingerprint-pinning-design.md`). The
+> `checkServerIdentity` prohibition below still holds verbatim under the new design (it isn't used there
+> either); the `ca:`/root-pin specifics are historical.
 
 ### D11a — The corrected rule, for code and docs, verbatim
 
@@ -551,6 +570,11 @@ matching the vSphere Client's own 30-day alarm.
 A CA certificate is public by construction — vCenter serves it unauthenticated and presents it in every
 handshake; a fingerprint is a hash of public data. Encrypting either protects a secret that does not exist.
 Only `passwordEnc` is encrypted.
+
+> **⚠️ AMENDED 2026-07-21** — see the note at D11 above: root-pinning is replaced by leaf-fingerprint
+> pinning. `tls_pinned_ca_pem` was **dropped** (commit `81f1329`); only the leaf fingerprint
+> (`tls_pinned_sha256`) is stored now. The "public cert data, not a secret" rationale above is unchanged and
+> applies to the fingerprint alone — there is no CA PEM column left to reason about.
 
 ---
 
@@ -1100,7 +1124,7 @@ model ClusterMetricBaseline {
   tenantId            String   @default("default") @map("tenant_id")
   capturedAt          DateTime @map("captured_at") @db.Date      // PERIOD ANCHOR
   source              String   @default("manual")                // 'manual' | 'vsphere'
-  observedAt          DateTime? @map("observed_at") @db.Timestamptz(3)  // informational only
+  observedAt          DateTime? @map("observed_at") @db.Timestamptz(3)  // ABSORPTION BOUNDARY
   baselineConsumption Decimal  @map("baseline_consumption") @db.Decimal(18, 3)
   baselineCapacity    Decimal  @map("baseline_capacity") @db.Decimal(18, 3)
   …
@@ -1111,8 +1135,12 @@ model ClusterMetricBaseline {
 
 - **`capturedAt` is `@db.Date` and IS the period anchor.** The forecast is month-grained and truncates to
   first-of-month anyway (`forecast-loader.ts:109`), so snapping discards nothing the engine could use. The
-  honest cost — conflating _when we measured_ with _which period this represents_ — is what the nullable,
-  informational `observedAt` absorbs; it is in no key and read by nothing on the forecast path.
+  honest cost — conflating _when we measured_ with _which period this represents_ — is what the nullable
+  `observedAt` absorbs; it is in no key, but it is **not** informational and **not** unread. As shipped
+  (#195) it is the sole input to delta absorption (`absorbed` in `forecast.ts`), read on every cluster and
+  forecast request: `captured_at` is an operator-editable label and `source` flips to `manual` on any value
+  correction, so `observed_at` is the only fact here no edit path rewrites. A row that loses it falls into
+  the absorb-nothing branch and its capacity silently inflates.
 - **`source` is NOT in the unique key.** Including it would let a manual and a vSphere row coexist for the
   same period, making **"the newest baseline" ambiguous** and forcing an implicit tiebreak — for a value
   anchoring hardware purchasing, that is a bug waiting to be found by a wrong invoice. Excluding it means

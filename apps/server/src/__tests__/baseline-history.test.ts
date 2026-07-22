@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildServer } from '../server.js';
+import { makeCluster } from './factories.js';
 import { prisma } from './setup.js';
 import { makeTestEnv } from './test-helpers.js';
 
@@ -51,17 +52,13 @@ async function createCluster(
 }
 
 describe('baseline history — append semantics', () => {
-  it('creating a cluster writes both the history row and the legacy row (dual-write)', async () => {
+  it('creating a cluster writes the history row', async () => {
     const id = await createCluster(uniqueName('create'), '2026-05-01');
 
     const history = await prisma.clusterBaselineHistory.findMany({ where: { clusterId: id } });
     expect(history).toHaveLength(1);
     expect(history[0]?.source).toBe('manual');
     expect(history[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-05-01');
-
-    // The legacy table is still written so an image rollback finds its data.
-    const legacy = await prisma.clusterMetricBaseline.findMany({ where: { clusterId: id } });
-    expect(legacy).toHaveLength(1);
   });
 
   it('a baseline in a NEW month APPENDS rather than overwriting the previous one', async () => {
@@ -120,6 +117,82 @@ describe('baseline history — append semantics', () => {
     // Q6: manual and vSphere baselines must share one period key, or "the newest
     // baseline" would be decided by accident of day-of-month.
     expect(history[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-05-01');
+  });
+
+  it('a mid-month CREATE snaps in the response too, not only in the row', async () => {
+    // `ClusterResponse.baselineDate` is documented as ALWAYS first-of-month, and
+    // it is derived straight from `captured_at` — so the row assertion above and
+    // this one pin the same `startOfUtcMonth` from the two ends that matter. The
+    // response half is what baseline-edit-form.tsx resets its date input from, and
+    // what a consumer slicing `YYYY-MM` off it reads.
+    const res = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name: uniqueName('snap-create-echo'),
+        baselineDate: '2026-05-15',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json() as { id: string; baselineDate: string };
+    expect(body.baselineDate).toBe('2026-05-01');
+
+    const history = await prisma.clusterBaselineHistory.findMany({ where: { clusterId: body.id } });
+    expect(history[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-05-01');
+  });
+
+  it('a mid-month RE-DATE snaps the moved row to the first of the month', async () => {
+    // The update path's own `startOfUtcMonth`, which the create tests cannot
+    // reach. A date-only edit MOVES the metric's newest row BACK onto the
+    // submitted period; unsnapped, that row lands at 2026-06-15 and becomes the
+    // one anchor in the table the period unique key — the monthly idempotency
+    // guarantee — cannot deduplicate against that month's snapshot at 2026-06-01.
+    const id = await createCluster(uniqueName('snap-redate'), '2026-07-01', 100, 1000);
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${id}`,
+      payload: { baselineDate: '2026-06-15' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { baselineDate: string }).baselineDate).toBe('2026-06-01');
+
+    const history = await prisma.clusterBaselineHistory.findMany({ where: { clusterId: id } });
+    expect(history).toHaveLength(1);
+    expect(history[0]?.capturedAt.toISOString().slice(0, 10)).toBe('2026-06-01');
+  });
+
+  it('a mid-month combined edit snaps the row the values are written to', async () => {
+    // The other update write site. A forward-dated combined edit APPENDS at the
+    // target rather than moving anything, so `capturedAt` reaches the table
+    // through the upsert key instead of through the re-anchor — a separate
+    // statement, and one a snap applied at only one of the two would leave open.
+    const id = await createCluster(uniqueName('snap-combined'), '2026-05-01', 100, 1000);
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${id}`,
+      payload: {
+        baselineDate: '2026-06-15',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 200, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const history = await prisma.clusterBaselineHistory.findMany({
+      where: { clusterId: id },
+      orderBy: { capturedAt: 'asc' },
+    });
+    expect(history.map((h) => h.capturedAt.toISOString().slice(0, 10))).toEqual([
+      '2026-05-01',
+      '2026-06-01',
+    ]);
+    expect(history[1]?.baselineConsumption.toNumber()).toBe(200);
   });
 
   it('the DATABASE rejects two baselines for the same cluster/metric/period', async () => {
@@ -223,20 +296,149 @@ describe('baseline history — forecast anchoring', () => {
   });
 });
 
-describe('baseline history — the backfill migrated existing data losslessly', () => {
-  it('every legacy baseline has a matching history row anchored on the cluster baselineDate', async () => {
-    // The migration guards this with a row-count assertion and aborts the boot if
-    // it fails; this re-checks the invariant against whatever the suite has
-    // created, so a future write path that forgets the dual-write is caught here
-    // rather than in production.
-    const orphans = await prisma.$queryRaw<Array<{ count: bigint }>>`
-      SELECT COUNT(*)::bigint AS count
-      FROM cluster_metric_baselines b
-      WHERE NOT EXISTS (
-        SELECT 1 FROM cluster_baseline_history h
-        WHERE h.cluster_id = b.cluster_id AND h.metric_type_id = b.metric_type_id
-      )
-    `;
-    expect(Number(orphans[0]?.count ?? 0)).toBe(0);
+const CPU_KEY = 'cpu_cores_195';
+
+/**
+ * Three history rows across two metrics, shaped so that the three plausible
+ * readings of `ClusterResponse.baselineDate` each give a DIFFERENT answer:
+ *
+ *   memory_gb  2026-03-01  (100)  the cluster's oldest row
+ *   memory_gb  2026-08-01  (800)  memory's newest
+ *   cpu        2026-05-01  ( 32)  cpu's newest — and the stalest metric
+ *
+ *   MIN over the newest row per metric ->  2026-05-01   (the contract)
+ *   MAX over the newest row per metric ->  2026-08-01
+ *   MIN over every row (naive, one stage) -> 2026-03-01
+ *
+ * Every other fixture in this suite holds exactly one row per metric, and under
+ * that shape all three readings agree — which is why nothing else here can tell
+ * a correct implementation from either wrong one.
+ */
+async function multiMetricCluster(): Promise<string> {
+  await prisma.metricType.upsert({
+    where: { key: CPU_KEY },
+    update: {},
+    create: { key: CPU_KEY, displayName: 'CPU (#195)', unit: 'cores' },
+  });
+  const cluster = await makeCluster(prisma, {
+    name: uniqueName('min-derivation'),
+    baselineDate: new Date(Date.UTC(2026, 2, 1)),
+    baselineConsumption: 100,
+    baselineCapacity: 1000,
+    extraBaselines: [
+      {
+        metricKey: 'memory_gb',
+        capturedAt: new Date(Date.UTC(2026, 7, 1)),
+        baselineConsumption: 800,
+        baselineCapacity: 1000,
+      },
+      {
+        metricKey: CPU_KEY,
+        capturedAt: new Date(Date.UTC(2026, 4, 1)),
+        baselineConsumption: 32,
+        baselineCapacity: 128,
+      },
+    ],
+  });
+  return cluster.id;
+}
+
+describe('baseline history — the derived cluster baselineDate', () => {
+  it('reports the STALEST metric: MIN over the newest row per metric', async () => {
+    const id = await multiMetricCluster();
+
+    const res = await server.inject({ method: 'GET', url: `/api/clusters/${id}` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { baselineDate: string };
+
+    // MIN, because the >90-day staleness flag has to react to the metric that
+    // stopped being measured. MAX would render this cluster as freshly baselined
+    // while cpu sat frozen since May — fresh-looking, unmeasured, and feeding the
+    // numbers that buy hardware. The vSphere snapshot job writes memory_gb only,
+    // so a multi-metric cluster drifting apart like this is the normal case, not
+    // a contrived one.
+    expect(body.baselineDate).toBe('2026-05-01');
+    expect(body.baselineDate).not.toBe('2026-08-01'); // MAX
+    expect(body.baselineDate).not.toBe('2026-03-01'); // MIN over every row
+  });
+
+  it('returns one entry per metric, each anchored on that metric’s newest row', async () => {
+    const id = await multiMetricCluster();
+
+    const res = await server.inject({ method: 'GET', url: `/api/clusters/${id}` });
+    const body = res.json() as {
+      metrics: Array<{ metricTypeKey: string; baselineConsumption: number }>;
+    };
+
+    // Three rows, two metrics: one entry PER METRIC, never one per period.
+    expect(await prisma.clusterBaselineHistory.count({ where: { clusterId: id } })).toBe(3);
+    expect(body.metrics).toHaveLength(2);
+
+    // August's 800, not March's 100 — the guard against a first-write-wins or
+    // ascending-order reduction, which would serve a five-month-old number under
+    // a fresh-looking date.
+    const memory = body.metrics.find((m) => m.metricTypeKey === 'memory_gb');
+    expect(memory?.baselineConsumption).toBe(800);
+  });
+
+  it('orders metrics by metric key ascending', async () => {
+    const id = await multiMetricCluster();
+
+    const res = await server.inject({ method: 'GET', url: `/api/clusters/${id}` });
+    const body = res.json() as { metrics: Array<{ metricTypeKey: string }> };
+
+    // cluster-tile.tsx, cluster-panel.tsx and fleet-console.tsx all read
+    // `metrics[0]` positionally. Insertion order would put memory first; key
+    // order puts cpu first ('c' < 'm'), so this fails if the ordering is dropped.
+    expect(body.metrics.map((m) => m.metricTypeKey)).toEqual([CPU_KEY, 'memory_gb']);
+  });
+});
+
+describe('baseline history — history is the only source of ClusterResponse.metrics', () => {
+  it('serves every metric from that metric’s NEWEST history row', async () => {
+    // Replaces the #177 orphan invariant (every `cluster_metric_baselines` row
+    // has a history row), which the contract migration makes vacuous by deleting
+    // the table. Restated from the other end: nothing may reach a client that the
+    // append-only history cannot account for.
+    //
+    // Asserting merely that SOME history row exists per served metric would be
+    // unfalsifiable — `toResponse` maps over exactly the rows `loadNewestBaselines`
+    // returned, so a wrong row is still a row, and a `_min`/`_max` flip, a dropped
+    // `orderBy` or a period attached to the wrong row would all pass. The bite is
+    // in WHICH row, so the served numbers are compared against the newest one
+    // re-derived here; `multiMetricCluster` holds memory at both March (100) and
+    // August (800), which is what makes the two answers differ.
+    await createCluster(uniqueName('inv-a'), '2026-05-01');
+    await createCluster(uniqueName('inv-b'), '2026-06-01');
+    await multiMetricCluster();
+
+    const res = await server.inject({ method: 'GET', url: '/api/clusters?limit=100' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      items: Array<{
+        id: string;
+        metrics: Array<{
+          metricTypeKey: string;
+          baselineConsumption: number;
+          baselineCapacity: number;
+        }>;
+      }>;
+    };
+
+    let checked = 0;
+    for (const cluster of body.items) {
+      for (const metric of cluster.metrics) {
+        const newest = await prisma.clusterBaselineHistory.findFirst({
+          where: { clusterId: cluster.id, metricType: { key: metric.metricTypeKey } },
+          orderBy: { capturedAt: 'desc' },
+        });
+        expect(newest).not.toBeNull();
+        expect(metric.baselineConsumption).toBe(newest?.baselineConsumption.toNumber());
+        expect(metric.baselineCapacity).toBe(newest?.baselineCapacity.toNumber());
+        checked += 1;
+      }
+    }
+    // Without this the loop passes vacuously on an empty fleet.
+    expect(checked).toBe(4);
   });
 });

@@ -44,16 +44,22 @@ export function BulletMeter({
           boxShadow: '0 0 8px color-mix(in oklab, var(--accent) 40%, transparent)',
         }}
       />
+      {/* Threshold ticks (#243 Part B): each carries a 1px halo in the card
+          surface color so it survives ANY fill underneath — in dark theme
+          --warning and --accent resolve to the same hex, so an un-haloed warn
+          tick vanishes into the amber fill exactly at warn breach. Crit is
+          taller than warn (protrudes 4px vs 2px past the track): shape, not
+          hue alone, separates the two severities (WCAG 1.4.1). */}
       <span
         data-testid="bullet-meter-warn-tick"
         aria-hidden
-        className="absolute -top-0.5 -bottom-0.5 w-0.5 rounded-full bg-warning/70"
+        className="absolute -top-0.5 -bottom-0.5 w-0.5 rounded-full bg-warning shadow-[0_0_0_1px_var(--card)]"
         style={{ left: `${warn}%` }}
       />
       <span
         data-testid="bullet-meter-crit-tick"
         aria-hidden
-        className="absolute -top-0.5 -bottom-0.5 w-0.5 rounded-full bg-destructive/75"
+        className="absolute -top-1 -bottom-1 w-0.5 rounded-full bg-destructive shadow-[0_0_0_1px_var(--card)]"
         style={{ left: `${crit}%` }}
       />
     </div>

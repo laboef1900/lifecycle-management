@@ -7,6 +7,7 @@ import type {
   ItemResponse,
   TenantSettings,
   VsphereConnectionResponse,
+  VsphereProbeResult,
 } from '../../index.js';
 import {
   clusterResponseSchema,
@@ -15,6 +16,7 @@ import {
   itemResponseSchema,
   tenantSettingsResponseSchema,
   vsphereConnectionResponseSchema,
+  vsphereProbeResultSchema,
 } from '../responses.js';
 
 describe('clusterResponseSchema', () => {
@@ -303,7 +305,7 @@ describe('vsphereConnectionResponseSchema', () => {
     port: 443,
     username: 'svc-lcm',
     tlsMode: 'pinned',
-    pinnedRootFingerprintSha256: Array.from({ length: 32 }, () => 'AB').join(':'),
+    pinnedLeafFingerprintSha256: Array.from({ length: 32 }, () => 'AB').join(':'),
     instanceUuid: '4c4c4544-0000-0000-0000-000000000000',
     apiVersion: '8.0.2.0',
     enabled: true,
@@ -396,6 +398,7 @@ describe('tenantSettingsResponseSchema', () => {
     warnThreshold: 0.7,
     critThreshold: 0.9,
     procurementLeadTimeWeeks: 6,
+    idempotencyKeyRetentionHours: 24,
   };
 
   it('round-trips a representative tenant settings response', () => {
@@ -410,5 +413,36 @@ describe('tenantSettingsResponseSchema', () => {
   it('rejects a non-numeric warnThreshold', () => {
     const bad = { ...literal, warnThreshold: 'high' };
     expect(tenantSettingsResponseSchema.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe('vsphereProbeResultSchema', () => {
+  const base = {
+    reachable: false,
+    trustedBySystemRoots: false,
+    leafFingerprintSha256: null,
+    validFrom: null,
+    validTo: null,
+  };
+
+  // @ai-warning This RUNTIME validator is the web client's boundary — `request()`
+  // rejects any response it does not accept with `RESPONSE_VALIDATION`. Its
+  // `outcome` enum MUST stay in lockstep with the `VsphereProbeResult.outcome`
+  // union in `vsphere.ts`; the `z.ZodType<VsphereProbeResult>` annotation does NOT
+  // enforce exhaustiveness (a narrower enum is still assignable), so only a test
+  // catches drift.
+  it.each(['ok', 'unreachable', 'tls_untrusted', 'not_a_vcenter'] as const)(
+    'accepts every VsphereProbeResult outcome the server can send: %s',
+    (outcome) => {
+      const value: VsphereProbeResult = { ...base, outcome };
+      expect(vsphereProbeResultSchema.safeParse(value).success).toBe(true);
+    },
+  );
+
+  it('rejects an unknown outcome', () => {
+    // Also guards the retired #272 chain-incomplete outcome: any value outside the
+    // enum (a stale server sending one) is refused, so the web client never receives
+    // an outcome it has no branch for.
+    expect(vsphereProbeResultSchema.safeParse({ ...base, outcome: 'bogus' }).success).toBe(false);
   });
 });

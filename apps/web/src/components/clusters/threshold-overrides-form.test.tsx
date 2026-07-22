@@ -12,6 +12,16 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+// The cross-reference link to the global defaults section (#243 Part B) needs
+// only its rendered href — a real RouterProvider is unnecessary machinery for
+// this form's own tests. Mirrors the lightweight stand-in fleet-verdict.test
+// uses for the same reason.
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({ children, to, hash }: { children: React.ReactNode; to: string; hash?: string }) => (
+    <a href={hash ? `${to}#${hash}` : to}>{children}</a>
+  ),
+}));
+
 const CLUSTER_ID = 'clu_test_001';
 
 function renderWithClient(
@@ -36,10 +46,22 @@ describe('<ThresholdOverridesForm>', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows "Inherited from tenant defaults" when no override', async () => {
+  it('shows "Inherited from global defaults" when no override', async () => {
     renderWithClient(<ThresholdOverridesForm clusterId={CLUSTER_ID} />);
     await waitFor(() => {
-      expect(screen.getByText(/inherited from tenant defaults/i)).toBeInTheDocument();
+      expect(screen.getByText(/inherited from global defaults/i)).toBeInTheDocument();
+    });
+  });
+
+  it('links "global defaults" to the Settings Forecasting sub-route', async () => {
+    // #293: Forecasting is its own `/settings/forecasting` route rather than
+    // an in-page `#section-forecasting` anchor on a single flat page.
+    renderWithClient(<ThresholdOverridesForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'global defaults' })).toHaveAttribute(
+        'href',
+        '/settings/forecasting',
+      );
     });
   });
 

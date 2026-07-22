@@ -203,7 +203,7 @@ describe('operator rename pins a synced host label (nameIsCustom parity)', () =>
     hostname: 'vcenter.corp.local',
     username: 'u',
     password: 'p',
-    pinnedRootPem: null,
+    pinnedLeafSha256: null,
   };
 
   function inventory(hostName: string): CollectedInventory {

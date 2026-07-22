@@ -30,7 +30,12 @@ afterEach(async () => {
   }
 });
 
-const CREDS = { hostname: 'vcenter.corp.local', username: 'u', password: 'p', pinnedRootPem: null };
+const CREDS = {
+  hostname: 'vcenter.corp.local',
+  username: 'u',
+  password: 'p',
+  pinnedLeafSha256: null,
+};
 
 function inventory(usage: Array<number | null> = [300, 200]): CollectedInventory {
   return {
@@ -181,8 +186,11 @@ describe('⚠️ idempotency is enforced by Postgres, not by us', () => {
       where: { source: 'vsphere' },
       orderBy: { createdAt: 'desc' },
     });
-    // observedAt keeps the real instant — informational, in no key, read by
-    // nothing on the forecast path.
+    // observedAt keeps the real instant. In no key — but NOT informational: it is
+    // the sole input to delta absorption (`absorbed` in forecast.ts), so this
+    // assertion is a forecast-correctness assertion, not a bookkeeping one. A
+    // snapshot that stopped writing it would silently push every synced cluster
+    // into the absorb-nothing branch.
     expect(row.observedAt?.toISOString()).toBe('2026-08-23T14:07:00.000Z');
   });
 });

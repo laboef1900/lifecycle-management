@@ -87,6 +87,22 @@ export interface ProcurementInfo {
   breachMonth: string | null;
 }
 
+/**
+ * Annotation-only acknowledgment of the live procurement recommendation (#292).
+ * Present when the cluster's latest `OrderApproval` still covers the live breach
+ * (DESIGN.md §3 coverage rule); `null` when there is no breach or the approval
+ * has been superseded (capacity/threshold changed, or the breach worsened by
+ * ≥ T). Purely descriptive — it never feeds back into the forecast math (INV-1).
+ */
+export interface ForecastAcknowledgment {
+  /** Free-text note captured at approval time; `null` when the admin left it blank. */
+  note: string | null;
+  /** Who approved: a username/e-mail, or "anonymous (auth disabled)". */
+  approvedByLabel: string;
+  /** ISO instant the approval was recorded. */
+  approvedAt: string;
+}
+
 export interface ForecastResponse {
   fromMonth: string;
   toMonth: string;
@@ -106,6 +122,12 @@ export interface ForecastResponse {
    * measurement into a fabricated trend, on the series that drives purchasing.
    */
   baselineHistory: BaselineHistoryPoint[];
+  /**
+   * The acknowledgment covering the live breach, or `null`. Additive/optional so
+   * an older server that omits it still satisfies the contract (#292); the
+   * current server always sets it (to an object or `null`).
+   */
+  acknowledgment?: ForecastAcknowledgment | null;
 }
 
 // ---------- What-if scenarios ----------

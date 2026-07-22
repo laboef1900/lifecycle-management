@@ -1,4 +1,4 @@
-import { startOfUtcMonth, type VsphereSyncResult } from '@lcm/shared';
+import { startOfUtcMonth, type VsphereSyncOutcome, type VsphereSyncResult } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
 import type {
@@ -6,6 +6,20 @@ import type {
   CollectedInventory,
   VsphereInventoryCollector,
 } from './vsphere-inventory.js';
+import { extractTlsErrorCode } from './vsphere-tls.js';
+
+/**
+ * Pino-shaped sink for the sync diagnostic (#272). Its own interface rather than
+ * the collector's `{ warn }`-only `CollectorLogger`: this service logs at two
+ * levels (see the level policy in `syncConnection`), and naming it for the sync
+ * path keeps it honest about who uses it.
+ */
+export interface VsphereLogger {
+  info(details: Record<string, unknown>, message: string): void;
+  warn(details: Record<string, unknown>, message: string): void;
+}
+
+const noopLogger: VsphereLogger = { info: () => undefined, warn: () => undefined };
 
 /**
  * Reconciles vCenter inventory into LCM (#176, epic #172).
@@ -30,10 +44,20 @@ import type {
  *    the wrong one's capacity with plausible-looking numbers.
  */
 export class VsphereSyncService {
+  private readonly logger: VsphereLogger;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly collector: VsphereInventoryCollector,
-  ) {}
+    /**
+     * Structured sink for the TLS-failure diagnostic (#272). Optional so the
+     * many `new VsphereSyncService(prisma, collector)` call sites (tests
+     * included) keep working; defaults to no-op.
+     */
+    logger?: VsphereLogger,
+  ) {
+    this.logger = logger ?? noopLogger;
+  }
 
   /**
    * Sync one connection.
@@ -54,7 +78,7 @@ export class VsphereSyncService {
       port?: number;
       username: string;
       password: string;
-      pinnedRootPem: string | null;
+      pinnedLeafSha256: string | null;
     },
     /**
      * Graceful-shutdown cancellation (design §D21). Threaded into the vCenter
@@ -86,11 +110,36 @@ export class VsphereSyncService {
       // Degrade, never crash: the last known inventory keeps serving and the
       // connection is marked. A failure on THIS vCenter must not affect any other.
       const outcome = classify(err);
+      // Server-log the raw OpenSSL/Node code (#272) — the one fact `sanitize`
+      // and `lastError` throw away. It is what separates an incomplete-chain pin
+      // (`UNABLE_TO_GET_ISSUER_CERT_LOCALLY`/`SELF_SIGNED_CERT_IN_CHAIN`) from a
+      // rotation. Code only, never the message/stack: a driver error can carry
+      // the credential, and `lastError` is UI-rendered and stored, so it keeps
+      // the sanitized string untouched below.
+      //
+      // Level policy: `unreachable` is routine and transient (a vCenter down for
+      // a maintenance window would warn on every poll), so it logs at INFO;
+      // `tls_untrusted` and `auth_failed` are persistent, actionable, and the
+      // states #272 is about, so they warn.
+      const details = {
+        event: 'vsphere.sync.failed',
+        connectionId,
+        outcome,
+        tlsCode: extractTlsErrorCode(err),
+      };
+      if (outcome === 'unreachable') this.logger.info(details, 'vCenter sync failed');
+      else this.logger.warn(details, 'vCenter sync failed');
       await this.prisma.vsphereConnection.update({
         where: { id: connectionId },
         data: { status: outcome, lastError: sanitize(err) },
       });
-      return { ...empty, outcome, error: sanitize(err) };
+      // VsphereSyncOutcome (the job-result vocabulary) has no cert_mismatch value
+      // — the connection row above gets the more specific status (routing the
+      // operator to the "Replace the trusted certificate" dialog), but the
+      // returned result stays within the vocabulary the scheduler understands.
+      const syncOutcome: VsphereSyncOutcome =
+        outcome === 'cert_mismatch' ? 'tls_untrusted' : outcome;
+      return { ...empty, outcome: syncOutcome, error: sanitize(err) };
     }
 
     // ⚠️ The identity guard. If this hostname now answers as a different vCenter —
@@ -191,8 +240,10 @@ export class VsphereSyncService {
           externalName: collected.name,
           name: await this.uniqueLabel(tenantId, collected.name, null),
           // A synced cluster has no measured baseline yet — the monthly snapshot
-          // (#178) writes the first one. baselineDate anchors at import.
-          baselineDate: new Date(),
+          // (#178) writes the first one. Until then it has no baseline history at
+          // all, so `ClusterResponse.baselineDate` falls back to `createdAt`
+          // (#195) — the same import instant the dropped `baselineDate` column
+          // used to record here explicitly.
         },
       });
       clusterId = cluster.id;
@@ -257,9 +308,19 @@ export class VsphereSyncService {
           },
         });
         await this.reconcileHostCapacity(tenantId, existing, memoryMetricId, desiredMemory, now);
+        // #289 keep the host's membership timeline in step with its clusterId.
+        // If vCenter moved it between clusters this pass, this closes the old
+        // interval and opens a new one; otherwise it is a no-op.
+        await this.reconcileMembership(
+          tenantId,
+          existing.id,
+          clusterId,
+          existing.commissionedAt,
+          now,
+        );
         hostsUpdated += 1;
       } else {
-        await this.prisma.host.create({
+        const createdHost = await this.prisma.host.create({
           data: {
             tenantId,
             clusterId,
@@ -291,6 +352,15 @@ export class VsphereSyncService {
             },
           },
         });
+        // #289 seed the host's first membership timeline in its cluster so the
+        // forecast attributes its capacity (parity with the migration backfill).
+        await this.reconcileMembership(
+          tenantId,
+          createdHost.id,
+          clusterId,
+          createdHost.commissionedAt,
+          now,
+        );
         hostsCreated += 1;
       }
     }
@@ -326,6 +396,64 @@ export class VsphereSyncService {
     }
 
     return { hostsCreated, hostsUpdated, hostsMissing: missingHosts.length };
+  }
+
+  /**
+   * Keep a synced host's time-scoped cluster membership in step with its
+   * `clusterId` (#289). Idempotent, and the sole membership writer on the sync
+   * path:
+   *  - no open membership yet (first import, or a legacy synced host predating
+   *    #289) → seed one open row from the host's commissioning date;
+   *  - open membership already in this cluster → no-op, so idempotent re-syncs
+   *    never accrete rows;
+   *  - open membership in a DIFFERENT cluster (vCenter moved the host) → close it
+   *    and open a new one.
+   *
+   * @ai-note The move date is the current month start, but CLAMPED to never
+   * precede the open interval's start — a `startOfUtcMonth(now)` earlier than
+   * `effectiveFrom` (a host commissioned and moved within one month) would write a
+   * `effectiveTo < effectiveFrom` row. Clamping yields a harmless zero-length old
+   * interval instead. Never retroactive: past months keep the old attribution.
+   * Invariant preserved: exactly one open membership per host, contiguous.
+   */
+  private async reconcileMembership(
+    tenantId: string,
+    hostId: string,
+    clusterId: string,
+    commissionedAt: Date,
+    now: Date,
+  ): Promise<void> {
+    const open = await this.prisma.hostClusterMembership.findFirst({
+      where: { hostId, effectiveTo: null },
+    });
+    if (!open) {
+      await this.prisma.hostClusterMembership.create({
+        data: { tenantId, hostId, clusterId, effectiveFrom: commissionedAt, effectiveTo: null },
+      });
+      return;
+    }
+    if (open.clusterId === clusterId) return;
+
+    const monthStart = startOfUtcMonth(now);
+    const moveDate = monthStart > open.effectiveFrom ? monthStart : open.effectiveFrom;
+    // @ai-note The close and the open are ONE atomic transaction. Run as two
+    // autocommit writes, a crash between them would strand the host with zero open
+    // memberships; the next sync's `!open` branch would then seed a fresh
+    // `[commissionedAt, null)` interval in the DESTINATION, overlapping the closed
+    // source interval and RETROACTIVELY re-attributing the host's pre-move months
+    // to the destination — the exact forecast landmine this feature prevents. The
+    // transaction makes "close old + open new" all-or-nothing, so the invariant
+    // (exactly one open membership, contiguous, non-overlapping) never breaks even
+    // mid-pass.
+    await this.prisma.$transaction([
+      this.prisma.hostClusterMembership.update({
+        where: { id: open.id },
+        data: { effectiveTo: moveDate },
+      }),
+      this.prisma.hostClusterMembership.create({
+        data: { tenantId, hostId, clusterId, effectiveFrom: moveDate, effectiveTo: null },
+      }),
+    ]);
   }
 
   /**
@@ -455,8 +583,15 @@ function startOfUtcDay(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
-function classify(err: unknown): 'unreachable' | 'auth_failed' | 'tls_untrusted' {
+function classify(err: unknown): 'unreachable' | 'auth_failed' | 'tls_untrusted' | 'cert_mismatch' {
+  const code = extractTlsErrorCode(err);
   const msg = err instanceof Error ? err.message : String(err);
+  // Checked BEFORE the generic /cert|tls/ branch below: that regex would
+  // otherwise swallow the Task 3 leaf-pin mismatch into tls_untrusted, losing
+  // the distinction that routes the operator to the replace-cert dialog.
+  if (code === 'CERT_FINGERPRINT_MISMATCH' || /CERT_FINGERPRINT_MISMATCH/.test(msg)) {
+    return 'cert_mismatch';
+  }
   if (/auth|login|credential/i.test(msg)) return 'auth_failed';
   if (/cert|tls|self.signed/i.test(msg)) return 'tls_untrusted';
   return 'unreachable';
@@ -470,6 +605,9 @@ function classify(err: unknown): 'unreachable' | 'auth_failed' | 'tls_untrusted'
 function sanitize(err: unknown): string {
   const outcome = classify(err);
   if (outcome === 'auth_failed') return 'vCenter rejected the credentials.';
+  if (outcome === 'cert_mismatch') {
+    return 'vCenter is presenting a different certificate than the one you trusted.';
+  }
   if (outcome === 'tls_untrusted') return 'vCenter presented an untrusted certificate.';
   return 'Could not reach vCenter.';
 }

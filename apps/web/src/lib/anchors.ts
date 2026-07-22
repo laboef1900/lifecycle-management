@@ -13,6 +13,31 @@ import { useCallback, useSyncExternalStore } from 'react';
 export const ADD_CLUSTER_HASH = 'add-cluster';
 
 /**
+ * Cluster panel → Hosts tab (`apps/web/src/components/detail/cluster-panel.tsx`).
+ *
+ * Unlike `ADD_CLUSTER_HASH`, this anchor never appears in the URL: the
+ * requester (the unknown-capacity `RecommendationChip`) and the target (the
+ * panel's own Tabs) are already mounted together on the same page, so there is
+ * no navigation for a location hash to survive. The request counter alone is
+ * the whole signal — see `useAnchorFocusRequest`.
+ */
+export const HOSTS_TAB_HASH = 'hosts-tab';
+
+/**
+ * @ai-note (#293, reverses #243 Part B) Settings' three sections used to be
+ * `#section-*` in-page table-of-contents anchors on one flat-scrolling
+ * `/settings` route — `FORECASTING_SECTION_HASH` / `INVENTORY_SECTION_HASH` /
+ * `ACCESS_SECTION_HASH` lived here. They are gone: each section is now its own
+ * sub-route (`/settings/forecasting`, `/settings/inventory`,
+ * `/settings/access`, see `routes/_app.settings.*.tsx`), so a real router
+ * `Link to=` replaces what used to be a fragment anchor — there is no page to
+ * scroll within anymore. `ADD_CLUSTER_HASH` above is unaffected: it still
+ * deep-links to a specific panel *inside* the Inventory sub-route
+ * (`/settings/inventory#add-cluster`) exactly as it deep-linked into the old
+ * single page, and still needs `requestAnchorFocus` for the same reason.
+ */
+
+/**
  * How many focus requests each anchor has received. Per anchor, and
  * monotonically increasing.
  *
@@ -42,10 +67,10 @@ function subscribe(listener: () => void): () => void {
  * a deep link while the URL already carries its hash produces an identical
  * location, so an effect keyed on the hash never re-runs and the action is a
  * silent no-op (⌘K → "Add cluster" a second time while already sitting on
- * `/settings#add-cluster` did nothing at all). A linking surface MUST call this
- * *in addition to* navigating: the hash keeps the destination shareable and
- * survives a reload, this counter guarantees every invocation is observable
- * even when nothing about the URL changed.
+ * `/settings/inventory#add-cluster` did nothing at all). A linking surface
+ * MUST call this *in addition to* navigating: the hash keeps the destination
+ * shareable and survives a reload, this counter guarantees every invocation is
+ * observable even when nothing about the URL changed.
  *
  * A module-level counter is used rather than a nonce in the URL so repeat
  * invocations do not pollute shareable links or the history stack, and rather

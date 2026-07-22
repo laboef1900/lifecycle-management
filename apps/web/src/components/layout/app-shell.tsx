@@ -1,11 +1,12 @@
 import { Link, Outlet } from '@tanstack/react-router';
-import { Activity, Search, Settings } from 'lucide-react';
+import { Search, Settings } from 'lucide-react';
 
 import { CommandPalette } from '@/components/command/command-palette';
 import { KeyboardShortcuts } from '@/components/command/keyboard-shortcuts';
 import { ShortcutsDialog } from '@/components/command/shortcuts-dialog';
 import { UserMenu } from '@/components/layout/user-menu';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
+import { BrandMark } from '@/components/ui/brand-mark';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 
@@ -31,12 +32,7 @@ function Header(): React.JSX.Element {
   return (
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4 sm:gap-4">
       <Link to="/" className="flex items-center gap-2.5 font-display font-semibold">
-        <span
-          aria-hidden
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius)] bg-accent"
-        >
-          <Activity className="h-4 w-4 text-accent-foreground" />
-        </span>
+        <BrandMark className="h-7 w-7" />
         <span>Capacity Forecast</span>
       </Link>
       <div className="ml-auto flex items-center gap-2">
@@ -52,15 +48,17 @@ function Header(): React.JSX.Element {
 }
 
 function SettingsLink(): React.JSX.Element {
+  // Points at the default sub-route (#293) rather than bare `/settings`, so
+  // the topbar's persistent entry point skips the index route's redirect hop.
   return (
     <>
       <Button asChild type="button" variant="ghost" size="icon" className="sm:hidden">
-        <Link to="/settings" aria-label="Settings">
+        <Link to="/settings/forecasting" aria-label="Settings">
           <Settings className="h-4 w-4" />
         </Link>
       </Button>
       <Button asChild type="button" variant="ghost" size="sm" className="hidden sm:inline-flex">
-        <Link to="/settings">
+        <Link to="/settings/forecasting">
           <Settings className="h-4 w-4" />
           <span>Settings</span>
         </Link>

@@ -9,7 +9,9 @@ import {
   MoreVertical,
   Pencil,
   Plus,
+  PowerOff,
   Replace,
+  Scaling,
   Trash2,
 } from 'lucide-react';
 import { Fragment, useState } from 'react';
@@ -22,6 +24,13 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -32,6 +41,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api } from '@/lib/api-client';
 import { formatGb, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -105,7 +115,10 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                 : 'No hosts yet.'}
             </p>
           </div>
-          {canManage ? (
+          {/* Only shown once the table has rows — with no hosts yet the
+              EmptyState below carries the one "Add host" CTA (#243 Part B) so
+              the two controls never coexist with the same accessible name. */}
+          {canManage && hosts.length > 0 ? (
             <Button size="sm" onClick={() => setCreateOpen(true)}>
               <Plus className="h-4 w-4" />
               Add host
@@ -128,7 +141,17 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
         ) : hostsQuery.isError ? (
           <ErrorRow message={hostsQuery.error.message} />
         ) : hosts.length === 0 ? (
-          <EmptyState title="Add a host to start contributing capacity." />
+          <EmptyState
+            title="Add a host to start contributing capacity."
+            action={
+              canManage ? (
+                <Button size="sm" onClick={() => setCreateOpen(true)}>
+                  <Plus className="h-4 w-4" />
+                  Add host
+                </Button>
+              ) : undefined
+            }
+          />
         ) : (
           <Table>
             <TableHeader>
@@ -138,7 +161,13 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                 <TableHead>State</TableHead>
                 <TableHead className="min-w-[230px]">Lifecycle</TableHead>
                 <TableHead className="text-right">Current capacity</TableHead>
-                <TableHead className="w-24 text-right">Actions</TableHead>
+                {/* Sticky at phone width (#243 Part B): the wide Lifecycle
+                    gantt column pushes Actions off-canvas with no scroll cue
+                    otherwise — pinning it keeps Edit/More reachable without
+                    scrolling. */}
+                <TableHead sticky className="w-24 text-right">
+                  Actions
+                </TableHead>
               </TableRow>
               {domain ? (
                 <TableRow className="hover:bg-transparent">
@@ -156,12 +185,15 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                 const isOpen = expanded.has(host.id);
                 return (
                   <Fragment key={host.id}>
-                    <TableRow>
+                    {/* `group` backs the sticky Actions cell's hover match
+                        below — the cell itself paints transparent otherwise,
+                        so it needs the row's hover state relayed to it. */}
+                    <TableRow className="group">
                       <TableCell>
                         <button
                           type="button"
                           onClick={() => toggle(host.id)}
-                          className="rounded p-1 hover:bg-accent"
+                          className="rounded p-1 text-muted-foreground hover:bg-card-hover hover:text-foreground"
                           aria-expanded={isOpen}
                           aria-label={isOpen ? 'Collapse history' : 'Expand history'}
                         >
@@ -187,7 +219,7 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                       <TableCell className="text-right tabular-nums">
                         {latest ? formatGb(latest.amount) : '—'}
                       </TableCell>
-                      <TableCell>
+                      <TableCell sticky>
                         <RowActions
                           onEdit={() => setTarget({ host, kind: 'edit' })}
                           onResize={() => setTarget({ host, kind: 'resize' })}
@@ -311,6 +343,16 @@ interface RowActionsProps {
   canReplace: boolean;
 }
 
+/**
+ * Row-level actions (#243 Part B): only Edit and Transition — the two most
+ * frequent operations — stay inline; everything else folds into the overflow
+ * menu behind the MoreVertical kebab, with visible text (not icon-only), so
+ * seven equal-weight icon buttons no longer compete for attention. Frequent
+ * items (Replace, History, Resize) sit above a separator from the two
+ * consequential ones (Decommission, Delete), which the audit groups together
+ * as "destructive" — both already require their own confirmation dialog,
+ * unchanged here.
+ */
 function RowActions({
   onEdit,
   onResize,
@@ -325,70 +367,106 @@ function RowActions({
 }: RowActionsProps): React.JSX.Element {
   return (
     <div className="flex items-center justify-end gap-1">
+      <IconButton label="Edit" onClick={onEdit}>
+        <Pencil className="h-3.5 w-3.5" />
+      </IconButton>
+      {/* Disabled state is conveyed via aria-disabled, not the native
+          `disabled` attribute: a truly disabled button can't take focus, so
+          keyboard/AT users could never reach "No further transitions" — the
+          one explanation for why the control is inert. Staying focusable
+          keeps the focus-triggered tooltip reachable; the guarded onClick
+          keeps it inert to activation either way. */}
       <IconButton
+        label={canTransition ? 'Transition…' : 'No further transitions'}
         onClick={onTransition}
-        title={canTransition ? 'Transition…' : 'No further transitions'}
         disabled={!canTransition}
       >
         <ArrowRightLeft className="h-3.5 w-3.5" />
       </IconButton>
-      {canReplace ? (
-        <IconButton onClick={onReplace} title="Replace…">
-          <Replace className="h-3.5 w-3.5" />
-        </IconButton>
-      ) : null}
-      <IconButton onClick={onHistory} title="View history">
-        <History className="h-3.5 w-3.5" />
-      </IconButton>
-      <IconButton onClick={onResize} title="Resize">
-        <Plus className="h-3.5 w-3.5" />
-      </IconButton>
-      <IconButton
-        onClick={onDecommission}
-        title={isDecommissioned ? 'Edit decommission' : 'Decommission'}
-      >
-        <MoreVertical className="h-3.5 w-3.5" />
-      </IconButton>
-      <IconButton onClick={onEdit} title="Edit">
-        <Pencil className="h-3.5 w-3.5" />
-      </IconButton>
-      <IconButton onClick={onDelete} title="Delete" destructive>
-        <Trash2 className="h-3.5 w-3.5" />
-      </IconButton>
+      {/* `modal={false}`: every item here opens a Dialog (setTarget). Radix's
+          documented pattern for "open a dialog from a dropdown menu item" —
+          left modal (the default), the menu's own focus trap and the
+          newly-opened dialog's fight over focus in the same tick, which in
+          this app's Radix version pairing (react-dialog's FocusScope vs.
+          react-menu's, resolved to different versions) is an infinite loop,
+          not just a glitch. Non-modal still returns focus to the trigger
+          normally on Escape/outside-click dismissal. */}
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="More actions"
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-card-hover hover:text-foreground"
+          >
+            <MoreVertical className="h-3.5 w-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {canReplace ? (
+            <DropdownMenuItem onSelect={() => onReplace()}>
+              <Replace className="h-4 w-4" />
+              Replace…
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuItem onSelect={() => onHistory()}>
+            <History className="h-4 w-4" />
+            View history
+          </DropdownMenuItem>
+          {/* Scaling, not Plus: Plus already means "add a new host" on the
+              header CTA (WCAG SC 3.2.4 consistent identification). */}
+          <DropdownMenuItem onSelect={() => onResize()}>
+            <Scaling className="h-4 w-4" />
+            Resize…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {/* PowerOff, not MoreVertical: the kebab now means "more actions"
+              (this trigger) everywhere in the row, so Decommission needed an
+              honest glyph of its own. */}
+          <DropdownMenuItem onSelect={() => onDecommission()} destructive>
+            <PowerOff className="h-4 w-4" />
+            {isDecommissioned ? 'Edit decommission' : 'Decommission…'}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onDelete()} destructive>
+            <Trash2 className="h-4 w-4" />
+            Delete…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
 
 function IconButton({
   children,
-  title,
-  destructive,
+  label,
   disabled,
   onClick,
 }: {
   children: React.ReactNode;
-  title: string;
-  destructive?: boolean;
+  label: string;
   disabled?: boolean;
   onClick: () => void;
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-label={title}
-      disabled={disabled}
-      className={cn(
-        'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
-        'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
-        destructive
-          ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-          : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={disabled ? undefined : onClick}
+          aria-label={label}
+          aria-disabled={disabled ? true : undefined}
+          className={cn(
+            'inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors',
+            disabled
+              ? 'cursor-not-allowed opacity-40 hover:bg-transparent'
+              : 'hover:bg-card-hover hover:text-foreground',
+          )}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 

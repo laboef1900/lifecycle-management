@@ -1,6 +1,9 @@
 import {
   clusterIdItemsParamsSchema,
+  idempotencyKeyHeaderSchema,
   itemAllocationRowInputSchema,
+  itemBulkCreateQuarterlyGrowthInputSchema,
+  itemBulkShiftDatesInputSchema,
   itemCreateInputSchema,
   itemIdParamsSchema,
   itemUpdateInputSchema,
@@ -27,10 +30,29 @@ export const itemsRoutes: FastifyPluginAsync = async (fastify) => {
     return created;
   });
 
+  // Static segment, so it never shadows (or is shadowed by) a future
+  // `/clusters/:clusterId/items/:id` route.
+  fastify.post('/clusters/:clusterId/items/bulk-quarterly-growth', async (request, reply) => {
+    const { clusterId } = clusterIdItemsParamsSchema.parse(request.params);
+    const input = itemBulkCreateQuarterlyGrowthInputSchema.parse(request.body);
+    const created = await service.createQuarterlyGrowthBatch(request.tenantId, clusterId, input);
+    reply.status(201);
+    return created;
+  });
+
   fastify.patch('/items/:id', async (request) => {
     const { id } = itemIdParamsSchema.parse(request.params);
     const input = itemUpdateInputSchema.parse(request.body);
     return service.update(request.tenantId, id, input);
+  });
+
+  // Static segment, so it never shadows (or is shadowed by) `/items/:id/...`.
+  // Admin-gated automatically: a mutating /api route outside the read-only
+  // exemption list (see `requiresAdmin` in plugins/auth.ts).
+  fastify.post('/items/bulk-shift-dates', async (request) => {
+    const idempotencyKey = idempotencyKeyHeaderSchema.parse(request.headers['idempotency-key']);
+    const input = itemBulkShiftDatesInputSchema.parse(request.body);
+    return service.bulkShiftDates(request.tenantId, input, idempotencyKey);
   });
 
   fastify.post('/items/:id/allocations', async (request, reply) => {

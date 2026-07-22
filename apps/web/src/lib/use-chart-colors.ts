@@ -11,28 +11,23 @@ export interface ChartColors {
   utilizationOk: string;
   utilizationWarn: string;
   utilizationCrit: string;
-  /**
-   * Categories are now free-form strings (display names). `eventNamed` holds the
-   * recognizable colors for the well-known display names; anything else is
-   * resolved deterministically against `eventPalette` via {@link eventColor}.
-   */
-  eventNamed: Record<string, string>;
-  eventPalette: string[];
+  /** Event marker color when the event adds capacity (`capacityDelta > 0`). */
+  eventAdds: string;
+  /** Event marker color for everything else — see {@link eventColor}. */
+  eventConsumes: string;
 }
 
 /**
  * @ai-note The chart palette lives in `styles.css` as `--chart-*` custom
- * properties (semantic roles reference the shared tokens; `--chart-1..7` is the
- * chart-only categorical event scale). {@link useChartColors} reads those at
- * runtime so charts track the design tokens in both themes.
+ * properties (semantic roles reference the shared `--success`/`--destructive`/
+ * etc tokens). {@link useChartColors} reads those at runtime so charts track
+ * the design tokens in both themes.
  *
  * These maps are the resolved fallback for environments where the stylesheet
  * is not applied to the document — jsdom unit tests, and the first render
  * before styles resolve. They mirror the resolved token values; in the browser
  * the real `--chart-*` properties win.
  */
-export type Palette7 = readonly [string, string, string, string, string, string, string];
-
 export interface ChartFallback {
   consumption: string;
   capacity: string;
@@ -41,7 +36,8 @@ export interface ChartFallback {
   utilizationOk: string;
   utilizationWarn: string;
   utilizationCrit: string;
-  palette: Palette7;
+  eventAdds: string;
+  eventConsumes: string;
 }
 
 export const FALLBACK_LIGHT: ChartFallback = {
@@ -50,9 +46,10 @@ export const FALLBACK_LIGHT: ChartFallback = {
   grid: '#e3e8f2', // --chart-grid
   axis: '#8a94ac', // --chart-axis
   utilizationOk: '#5a6478', // --fg-muted
-  utilizationWarn: '#95610c', // --warning
+  utilizationWarn: '#865c0c', // --warning
   utilizationCrit: '#c0343c', // --destructive
-  palette: ['#171c2c', '#5a6478', '#66708c', '#a8b0c4', '#8f6400', '#95610c', '#0f766e'],
+  eventAdds: '#176b45', // --success
+  eventConsumes: '#c0343c', // --destructive
 };
 
 export const FALLBACK_DARK: ChartFallback = {
@@ -63,7 +60,8 @@ export const FALLBACK_DARK: ChartFallback = {
   utilizationOk: '#8b93a7', // --fg-muted
   utilizationWarn: '#ffc53d', // --warning
   utilizationCrit: '#ff6b6b', // --destructive
-  palette: ['#e8ecf5', '#8b93a7', '#7c86a0', '#4a5570', '#ffc53d', '#ffc53d', '#2dd4bf'],
+  eventAdds: '#3dd68c', // --success
+  eventConsumes: '#ff6b6b', // --destructive
 };
 
 /**
@@ -101,13 +99,6 @@ function resolveChartColors(isDark: boolean): ChartColors {
   };
 
   const consumption = read('--chart-consumption', fb.consumption);
-  const c1 = read('--chart-1', fb.palette[0]);
-  const c2 = read('--chart-2', fb.palette[1]);
-  const c3 = read('--chart-3', fb.palette[2]);
-  const c4 = read('--chart-4', fb.palette[3]);
-  const c5 = read('--chart-5', fb.palette[4]);
-  const c6 = read('--chart-6', fb.palette[5]);
-  const c7 = read('--chart-7', fb.palette[6]);
 
   return {
     consumption,
@@ -118,10 +109,8 @@ function resolveChartColors(isDark: boolean): ChartColors {
     utilizationOk: read('--chart-utilization-ok', fb.utilizationOk),
     utilizationWarn: read('--chart-utilization-warn', fb.utilizationWarn),
     utilizationCrit: read('--chart-utilization-crit', fb.utilizationCrit),
-    // The four well-known categories map to the first four scale entries, matching
-    // the deterministic fallback in eventColor for any other category.
-    eventNamed: { Growth: c1, Hardware: c2, OpenShift: c3, Note: c4 },
-    eventPalette: [c1, c2, c3, c4, c5, c6, c7],
+    eventAdds: read('--chart-event-adds', fb.eventAdds),
+    eventConsumes: read('--chart-event-consumes', fb.eventConsumes),
   };
 }
 
@@ -148,22 +137,11 @@ export function useChartColors(): ChartColors {
   return colors;
 }
 
-function hashString(value: string): number {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash);
-}
-
 /**
- * Resolve any free-form category string to a stable chart color: a recognizable
- * color for the well-known display names, otherwise a deterministic pick from
- * the palette (so the same category always gets the same color).
+ * Resolve an event's `capacityDelta` to its marker color: green when the event
+ * adds capacity, red for everything else (reduces capacity, null/undefined, or
+ * a consumption-only event) — see issue #286.
  */
-export function eventColor(colors: ChartColors, category: string): string {
-  const named = colors.eventNamed[category];
-  if (named) return named;
-  const palette = colors.eventPalette;
-  return palette[hashString(category) % palette.length] ?? palette[0] ?? colors.axis;
+export function eventColor(colors: ChartColors, capacityDelta: number | null | undefined): string {
+  return (capacityDelta ?? 0) > 0 ? colors.eventAdds : colors.eventConsumes;
 }

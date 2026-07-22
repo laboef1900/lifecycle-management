@@ -184,12 +184,7 @@ describe('vCenter credentials — the password gate on trust material', () => {
 describe('vCenter connections — re-pointing resets trust', () => {
   it('changing the hostname clears the pin and the discovered identity', async () => {
     const id = await makeConnection(uniqueName('repoint'));
-    await service().trustCa(
-      'default',
-      id,
-      '-----BEGIN CERTIFICATE-----\nold\n-----END CERTIFICATE-----',
-      'AB'.repeat(1).padEnd(2, 'B'),
-    );
+    await service().trustCert('default', id, 'AB'.repeat(32));
     await prisma.vsphereConnection.update({
       where: { id },
       data: { instanceUuid: 'uuid-of-the-old-vcenter', status: 'active' },
@@ -200,10 +195,10 @@ describe('vCenter connections — re-pointing resets trust', () => {
       password: 'sup3r-s3cret',
     });
 
-    // Keeping the pin would trust the OLD vCenter's CA for the NEW host; keeping
-    // instanceUuid would let the identity check pass against an instance we have
-    // never spoken to. Both must be re-established deliberately.
-    expect(updated.pinnedRootFingerprintSha256).toBeNull();
+    // Keeping the pin would trust the OLD vCenter's certificate for the NEW host;
+    // keeping instanceUuid would let the identity check pass against an instance we
+    // have never spoken to. Both must be re-established deliberately.
+    expect(updated.pinnedLeafFingerprintSha256).toBeNull();
     expect(updated.instanceUuid).toBeNull();
     expect(updated.status).toBe('never_connected');
   });
@@ -279,13 +274,12 @@ describe('configurable port (#199)', () => {
     expect(row.port).toBe(8443);
   });
 
-  it('changing only the port keeps the pinned CA and identity — a port change is not a host change', async () => {
+  it('changing only the port keeps the pinned certificate and identity — a port change is not a host change', async () => {
     const id = await makeConnection(uniqueName('pinned'));
     await prisma.vsphereConnection.update({
       where: { id },
       data: {
         tlsMode: 'pinned',
-        tlsPinnedCaPem: 'PEM-ROOT',
         tlsPinnedSha256: 'AB:CD',
         instanceUuid: 'uuid-1',
       },
@@ -300,7 +294,7 @@ describe('configurable port (#199)', () => {
     const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id } });
     // Same host ⇒ same Machine SSL certificate: the pin and the identity guard must
     // survive a port-only change (only a hostname change resets them).
-    expect(row.tlsPinnedCaPem).toBe('PEM-ROOT');
+    expect(row.tlsPinnedSha256).toBe('AB:CD');
     expect(row.instanceUuid).toBe('uuid-1');
   });
 });

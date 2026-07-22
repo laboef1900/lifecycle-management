@@ -27,11 +27,13 @@ describe('tenantSettingsSchema', () => {
         warnThreshold: 0.7,
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
       }),
     ).toEqual({
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
+      idempotencyKeyRetentionHours: 24,
     });
   });
 
@@ -41,6 +43,7 @@ describe('tenantSettingsSchema', () => {
         warnThreshold: 0.8,
         critThreshold: 0.8,
         procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
       }),
     ).toThrow();
   });
@@ -51,6 +54,7 @@ describe('tenantSettingsSchema', () => {
         warnThreshold: 0.9,
         critThreshold: 0.7,
         procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
       }),
     ).toThrow();
   });
@@ -65,6 +69,7 @@ describe('tenantSettingsSchema', () => {
         warnThreshold: 0.7,
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 105,
+        idempotencyKeyRetentionHours: 24,
       }),
     ).toThrow();
     expect(() =>
@@ -72,8 +77,47 @@ describe('tenantSettingsSchema', () => {
         warnThreshold: 0.7,
         critThreshold: 0.9,
         procurementLeadTimeWeeks: -1,
+        idempotencyKeyRetentionHours: 24,
       }),
     ).toThrow();
+  });
+});
+
+describe('tenantSettingsSchema — idempotencyKeyRetentionHours', () => {
+  const base = { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 8 };
+
+  it('accepts the default of 24', () => {
+    expect(tenantSettingsSchema.parse({ ...base, idempotencyKeyRetentionHours: 24 })).toMatchObject(
+      { idempotencyKeyRetentionHours: 24 },
+    );
+  });
+
+  it('accepts the 1 and 168 boundaries', () => {
+    expect(tenantSettingsSchema.parse({ ...base, idempotencyKeyRetentionHours: 1 })).toMatchObject({
+      idempotencyKeyRetentionHours: 1,
+    });
+    expect(
+      tenantSettingsSchema.parse({ ...base, idempotencyKeyRetentionHours: 168 }),
+    ).toMatchObject({ idempotencyKeyRetentionHours: 168 });
+  });
+
+  it('rejects 0 and 169', () => {
+    expect(() =>
+      tenantSettingsSchema.parse({ ...base, idempotencyKeyRetentionHours: 0 }),
+    ).toThrow();
+    expect(() =>
+      tenantSettingsSchema.parse({ ...base, idempotencyKeyRetentionHours: 169 }),
+    ).toThrow();
+  });
+
+  it('rejects a non-integer', () => {
+    expect(() =>
+      tenantSettingsSchema.parse({ ...base, idempotencyKeyRetentionHours: 4.5 }),
+    ).toThrow();
+  });
+
+  it('rejects a missing value', () => {
+    expect(() => tenantSettingsSchema.parse(base)).toThrow();
   });
 });
 

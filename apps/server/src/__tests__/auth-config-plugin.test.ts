@@ -2,7 +2,11 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { encrypt, generateSecret, loadKey } from '../crypto/secret-box.js';
-import { authConfigPlugin, AuthConfigStrictBootError } from '../plugins/auth-config.js';
+import {
+  authConfigPlugin,
+  AuthConfigStrictBootError,
+  degradeWouldWidenAccess,
+} from '../plugins/auth-config.js';
 import { prismaPlugin } from '../plugins/prisma.js';
 import { AuthConfigService, AuthSecretDecryptError } from '../services/auth-config.js';
 import { prisma } from './setup.js';
@@ -413,6 +417,9 @@ describe('auth-config plugin', () => {
   });
 
   it('the decrypt-failure degrade leaves the stored oidc mode intact', async () => {
+    // OIDC is the ONE mode that still degrades: it is the only mode that reads
+    // the encrypted columns at boot, so it is the only mode a key failure can
+    // affect (#241). This path is deliberately preserved, not weakened.
     const clientSecretEnc = encrypt('super-secret-client-secret', KEY);
     await prisma.authConfig.create({
       data: {
@@ -436,6 +443,30 @@ describe('auth-config plugin', () => {
     const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
     expect(row!.mode).toBe('oidc');
     expect(row!.clientSecretEnc).toBe(clientSecretEnc);
+  });
+
+  it('a stored LOCAL row with undecryptable leftover ciphertext keeps enforcing local WITHOUT strict boot (#241)', async () => {
+    // The sibling of the strict-boot case below, and the more important one:
+    // the deployments most exposed to this fail-open are precisely those that
+    // never opted into AUTH_STRICT_BOOT. Closing it must not depend on the
+    // flag. Before #241 this boot produced `current.mode === 'disabled'` with
+    // overrideCause `secret_decrypt_failure` — an open, anonymous-ADMIN API for
+    // a deployment configured closed.
+    const signingSecretEnc = encrypt(generateSecret(), KEY);
+    await prisma.authConfig.create({
+      data: { id: 'singleton', mode: 'local', clientId: 'legacy', signingSecretEnc },
+    });
+
+    const server = await buildTestServer({ CONFIG_ENCRYPTION_KEY: WRONG_KEY_B64 });
+    created.push(server);
+
+    expect(server.authConfig.current.mode).toBe('local');
+    expect(server.authConfig.storedMode).toBe('local');
+    expect(server.authConfig.overrideCause).toBeNull();
+    expect(server.authConfig.current.signingSecret).toBeNull();
+    const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
+    expect(row!.mode).toBe('local');
+    expect(row!.signingSecretEnc).toBe(signingSecretEnc);
   });
 
   it('records break_glass as the cause when BOTH overrides fire on the same boot', async () => {
@@ -586,9 +617,13 @@ describe('auth-config plugin — AUTH_STRICT_BOOT', () => {
   });
 
   it('does not refuse boot for an intentionally-disabled row that still holds an undecryptable secret (#126 F1)', async () => {
-    // oidc -> disabled via Settings leaves clientSecretEnc populated; a later key
-    // rotation makes it undecryptable. The row is already disabled, so failing
-    // open is NOT a downgrade — strict boot must not refuse it.
+    // Historically: oidc -> disabled via Settings left clientSecretEnc
+    // populated, and a later key rotation made it undecryptable; the row was
+    // already disabled, so failing open was not a downgrade and strict boot had
+    // to spare it. Since #241 the row is not even read — decryption is gated on
+    // the stored mode — so there is no failure to spare. Rows in this exact
+    // shape still exist on deployments that switched to disabled before #241,
+    // which is why this stays pinned.
     await prisma.authConfig.create({
       data: {
         id: 'singleton',
@@ -639,13 +674,23 @@ describe('auth-config plugin — AUTH_STRICT_BOOT', () => {
     await expect(strict.ready()).rejects.toBeInstanceOf(AuthConfigStrictBootError);
   });
 
-  it('refuses to boot when the stored mode is LOCAL and its secret cannot be decrypted', async () => {
-    // The fail-open this closes: a guard scoped to `mode === 'oidc'` let a
-    // configured LOCAL deployment degrade straight into an anonymous-ADMIN API
-    // under the very flag whose entire purpose is to refuse that. `local` is a
-    // configured, closed mode exactly like `oidc` — the only stored mode for
-    // which failing open is NOT a downgrade is `disabled` (see the sibling
-    // #136 F1 guard below).
+  it('BOOTS and keeps enforcing LOCAL when a stored local row holds undecryptable leftover ciphertext (#241)', async () => {
+    // This test used to assert the OPPOSITE — "refuses to boot when the stored
+    // mode is LOCAL and its secret cannot be decrypted" — and that refusal was
+    // the #222 fix: `toEffective()` decrypted every secret column regardless of
+    // the row's mode, so a configured LOCAL deployment whose leftover OIDC
+    // ciphertext went unreadable DEGRADED to `mode=disabled`, i.e. an
+    // anonymous-ADMIN open API. Strict boot was the opt-in way to refuse that
+    // downgrade.
+    //
+    // #241 closes the fail-open at the SOURCE rather than refusing its symptom:
+    // decryption is gated on the stored mode, so a `local` row never reads the
+    // encrypted columns, never degrades, and leaves strict boot nothing to
+    // refuse. The guarantee is strictly stronger than the old refusal — the
+    // deployment keeps ENFORCING `local` instead of going down. This is NOT a
+    // return to the pre-#222 `=== 'oidc'` scoping bug: the strict-boot predicate
+    // is still the divergence test `!== 'disabled'`; it simply is no longer
+    // reachable for `local`.
     await prisma.authConfig.create({
       data: {
         id: 'singleton',
@@ -661,19 +706,27 @@ describe('auth-config plugin — AUTH_STRICT_BOOT', () => {
     });
     created.push(server);
 
-    await expect(server.ready()).rejects.toBeInstanceOf(AuthConfigStrictBootError);
+    await expect(server.ready()).resolves.toBeDefined();
 
-    // Refused BEFORE any assignment, so the configured row is untouched and
-    // restoring the key recovers the deployment as it was.
+    // Still CLOSED — the security property #241 delivers.
+    expect(server.authConfig.current.mode).toBe('local');
+    expect(server.authConfig.storedMode).toBe('local');
+    // No degrade happened at all, so there is no cause to attribute.
+    expect(server.authConfig.overrideCause).toBeNull();
+    expect(server.authConfig.current.signingSecret).toBeNull();
+
+    // The row and its (now unread) ciphertext are untouched.
     const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
     expect(row!.mode).toBe('local');
     expect(row!.signingSecretEnc).not.toBeNull();
   });
 
-  it('RECOVERY_DISABLE_AUTH still overrides strict boot for a stored LOCAL row', async () => {
-    // Break-glass remains the one documented escape hatch out of the refusal
-    // above — otherwise a local-mode deployment with a broken key would have no
-    // way back in at all.
+  it('RECOVERY_DISABLE_AUTH still masks a stored LOCAL row to disabled under strict boot', async () => {
+    // Break-glass is unaffected by #241: it is a separate, deliberate override
+    // that masks whatever the stored mode is. It no longer has a decrypt
+    // refusal to escape (the row above now boots enforcing `local`), but it
+    // remains the documented way out when the operator has locked themselves
+    // out of a local deployment some other way.
     await prisma.authConfig.create({
       data: {
         id: 'singleton',
@@ -702,14 +755,18 @@ describe('auth-config plugin — AUTH_STRICT_BOOT', () => {
   });
 
   it('#136 F1 REGRESSION GUARD: a stored DISABLED row with stale undecryptable ciphertext must STILL BOOT under strict boot — do not re-narrow this to "any secret failure refuses"', async () => {
-    // The strict-boot guard covers every stored mode EXCEPT `disabled`.
-    // `disabled` is the one mode where degrading to disabled is not a
-    // downgrade, so refusing here would be a spurious outage — and the app's
-    // documented default posture is precisely a disabled deployment that may
-    // still carry leftover ciphertext from an earlier oidc configuration.
-    // Widening the
-    // guard to "a decrypt failure always refuses" re-breaks #136 F1
-    // (docs/pr-review-2026-07.md:71).
+    // The exemption is now STRUCTURAL rather than a carve-out in the
+    // strict-boot predicate: since #241 gated decryption on the stored mode, a
+    // `disabled` row never reads its leftover ciphertext, so no decrypt failure
+    // is raised, no degrade fires, and the strict-boot guard is never consulted
+    // in the first place. Before #241 the row DID throw and was spared only by
+    // the predicate's `!== 'disabled'` test (#136 F1,
+    // docs/pr-review-2026-07.md:71).
+    //
+    // The outcome this guard exists to protect is unchanged and still asserted:
+    // the app's documented default posture — a disabled deployment carrying
+    // leftover ciphertext from an earlier oidc configuration — must boot, not
+    // suffer a spurious outage.
     await prisma.authConfig.create({
       data: {
         id: 'singleton',
@@ -729,10 +786,11 @@ describe('auth-config plugin — AUTH_STRICT_BOOT', () => {
 
     expect(server.authConfig.current.mode).toBe('disabled');
     expect(server.authConfig.storedMode).toBe('disabled');
-    // The degrade still happened and is still attributed...
-    expect(server.authConfig.overrideCause).toBe('secret_decrypt_failure');
-    // ...but enforced and stored agree, so there is no open-despite-config
-    // divergence to report (sanitize() must answer forceDisabledReason: null).
+    // No degrade occurred, so there is no cause to attribute (#241). This was
+    // `'secret_decrypt_failure'` while a disabled row still decrypted its
+    // leftover columns. Either way enforced and stored agree, so sanitize()
+    // reports forceDisabledReason: null.
+    expect(server.authConfig.overrideCause).toBeNull();
     const row = await prisma.authConfig.findUnique({ where: { id: 'singleton' } });
     expect(row!.mode).toBe('disabled');
     expect(row!.clientSecretEnc).not.toBeNull();
@@ -775,5 +833,47 @@ describe('auth-config plugin — AUTH_STRICT_BOOT', () => {
     created.push(server);
 
     expect(server.authConfig.current.mode).toBe('oidc');
+  });
+});
+
+/**
+ * The strict-boot guard's predicate, asserted directly.
+ *
+ * It carries an `@ai-warning` forbidding a re-narrowing to `=== 'oidc'`, and
+ * since #241 that warning is no longer covered by ANY integration test above:
+ * `toEffective()` gates decryption on the stored mode, so only a stored `oidc`
+ * row can raise `AuthSecretDecryptError`, and only `oidc` can therefore reach
+ * the guard at all. The `local` arm is unreachable-but-load-bearing — it is
+ * what keeps the guard correct for a future mode that stores decryptable
+ * secrets, which is precisely the shape of the #222 fail-open (an `=== 'oidc'`
+ * guard let a stored `local` row degrade into an open, anonymous-ADMIN API
+ * under the flag whose whole purpose is to refuse that).
+ *
+ * Reachability and correctness are separate properties, so they get separate
+ * tests: the boots/refuses cases above pin the reachable wiring, and these pin
+ * the predicate itself. `=== 'oidc'` passes every integration test in this file
+ * and fails the first case below — which is exactly the gap this closes.
+ */
+describe('degradeWouldWidenAccess — the strict-boot predicate (#222/#241)', () => {
+  it('is TRUE for a stored `local` row — the arm no integration test can reach', () => {
+    expect(degradeWouldWidenAccess('local')).toBe(true);
+  });
+
+  it('is TRUE for a stored `oidc` row', () => {
+    expect(degradeWouldWidenAccess('oidc')).toBe(true);
+  });
+
+  it('is FALSE for a stored `disabled` row — degrading it is not a downgrade (#136 F1)', () => {
+    expect(degradeWouldWidenAccess('disabled')).toBe(false);
+  });
+
+  it('is FALSE for an unrecognised stored mode, matching the closed-by-default normalization', () => {
+    // `mode` is a plain String column. An unrecognised value is ENFORCED as
+    // `disabled` (normalizeStoredMode / toEffective), so degrading it to
+    // `disabled` widens nothing and must not refuse boot — the predicate has to
+    // agree with enforcement, not with the raw column text.
+    expect(degradeWouldWidenAccess('OIDC')).toBe(false);
+    expect(degradeWouldWidenAccess('Local')).toBe(false);
+    expect(degradeWouldWidenAccess('')).toBe(false);
   });
 });

@@ -9,11 +9,7 @@ import { buildServer } from '../server.js';
 import { SessionService } from '../services/sessions.js';
 import { VsphereConnectionsService } from '../services/vsphere-connections.js';
 import { VsphereJobRunner } from '../services/vsphere-job-runner.js';
-import {
-  MAX_DUE_JOBS_PER_TICK,
-  MAX_NEVER_CONNECTED_JOBS_PER_TICK,
-  VsphereScheduler,
-} from '../services/vsphere-scheduler.js';
+import { VsphereScheduler } from '../services/vsphere-scheduler.js';
 import { makeVsphereConnection, makeVsphereConnectionJob } from './factories.js';
 import { prisma } from './setup.js';
 import { makeOidcTestEnv, makeTestEnv } from './test-helpers.js';
@@ -194,6 +190,13 @@ describe('POST /api/settings/vsphere/connections', () => {
         await guardedServer.close();
       }
 
+      // #279: every one of those anonymous creates seeds an immediately-due job but
+      // carries a NULL pin — no operator has confirmed a certificate. The scheduler
+      // fails closed on an unestablished pin, so it selects and runs NONE of them.
+      // This is the strongest possible bound on the background work an anonymous flood
+      // can seed: it is not merely rate-capped per tick, it never runs at all until a
+      // human establishes the pin. (The per-tick first-contact budget for legitimately
+      // pinned never-connected rows is covered in vsphere-scheduler.test.ts.)
       const now = new Date();
       let outboundRuns = 0;
       const scheduler = new VsphereScheduler(
@@ -213,14 +216,14 @@ describe('POST /api/settings/vsphere/connections', () => {
       );
 
       const outcomes = await scheduler.runDueJobs();
-      expect(outcomes).toHaveLength(MAX_NEVER_CONNECTED_JOBS_PER_TICK);
-      expect(outboundRuns).toBe(MAX_NEVER_CONNECTED_JOBS_PER_TICK);
-      expect(MAX_NEVER_CONNECTED_JOBS_PER_TICK).toBeLessThan(MAX_DUE_JOBS_PER_TICK);
+      expect(outcomes).toHaveLength(0);
+      expect(outboundRuns).toBe(0);
+      // All ten remain due — nothing ran, and no stored state was mutated.
       expect(
         await prisma.vsphereConnectionJob.count({
           where: { dueAt: { lte: now }, connection: { enabled: true } },
         }),
-      ).toBe(10 - MAX_NEVER_CONNECTED_JOBS_PER_TICK);
+      ).toBe(10);
     } finally {
       // Prefix cleanup also catches the 11th row if a rate-limit regression made
       // the assertion fail after persisting it.
@@ -299,7 +302,7 @@ describe('PUT /api/settings/vsphere/connections/:id — the password gate', () =
     const id = await createConnection(uniqueName('port-right-pw'), 'correct-horse');
     await prisma.vsphereConnection.update({
       where: { id },
-      data: { tlsPinnedCaPem: 'PEM-ROOT', instanceUuid: 'uuid-1' },
+      data: { tlsPinnedSha256: 'AB:CD', instanceUuid: 'uuid-1' },
     });
     const res = await server.inject({
       method: 'PUT',
@@ -308,9 +311,9 @@ describe('PUT /api/settings/vsphere/connections/:id — the password gate', () =
     });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { port: number }).port).toBe(8443);
-    // A port change is not a host change: the pinned CA and identity survive.
+    // A port change is not a host change: the pinned certificate and identity survive.
     const row = await prisma.vsphereConnection.findUniqueOrThrow({ where: { id } });
-    expect(row.tlsPinnedCaPem).toBe('PEM-ROOT');
+    expect(row.tlsPinnedSha256).toBe('AB:CD');
     expect(row.instanceUuid).toBe('uuid-1');
   });
 
@@ -358,15 +361,15 @@ describe('POST /api/settings/vsphere/probe — carries no credential', () => {
   });
 });
 
-describe('POST /api/settings/vsphere/connections/:id/trust-ca', () => {
+describe('POST /api/settings/vsphere/connections/:id/trust-cert', () => {
   it('requires the password — a re-pin plus a DNS spoof is full exfiltration', async () => {
     const id = await createConnection(uniqueName('trust'));
     const fingerprint = Array.from({ length: 32 }, () => 'AB').join(':');
 
     const res = await server.inject({
       method: 'POST',
-      url: `/api/settings/vsphere/connections/${id}/trust-ca`,
-      payload: { rootFingerprintSha256: fingerprint, password: 'wrong' },
+      url: `/api/settings/vsphere/connections/${id}/trust-cert`,
+      payload: { leafFingerprintSha256: fingerprint, password: 'wrong' },
     });
     expect(res.statusCode).toBe(422);
     expect(res.json()).toMatchObject({ error: { code: 'PASSWORD_MISMATCH' } });
@@ -518,7 +521,15 @@ describe('POST /api/settings/vsphere/connections/:id/sync — "Sync now" (#192)'
     await prisma.vsphereConnection.deleteMany({});
 
     const key = randomBytes(32);
-    const { id } = await makeVsphereConnection(prisma, { key, name: uniqueName('syncnow-d15a') });
+    // An established, PINNED connection — "Sync now" acts on a connection already in
+    // service. Without an established pin the #279 fail-closed gate would (correctly)
+    // hold this row out of the claim/run path.
+    const { id } = await makeVsphereConnection(prisma, {
+      key,
+      name: uniqueName('syncnow-d15a'),
+      lastConnectedAt: new Date('2026-07-01T00:00:00Z'),
+      tlsPinnedSha256: 'AA:BB:CC:DD',
+    });
     const now = new Date();
     await makeVsphereConnectionJob(prisma, {
       connectionId: id,
@@ -609,6 +620,13 @@ describe('POST /api/settings/vsphere/connections/:id/sync — "Sync now" (#192)'
     expect(job.lastSyncStatus).toBe('ok'); // recorded by the shared status writer
     // lastSuccessPeriod unchanged — no new baseline was taken this month.
     expect(job.lastSuccessPeriod?.getTime()).toBe(startOfUtcMonth(now).getTime());
+
+    // Clean up: this is now an established, PINNED connection whose job the run above
+    // left due again (poll cadence). This file's fork shares the vSphere tables with
+    // the scheduler suite (isolate:false, no truncation), so a leftover eligible row
+    // would perturb that suite's selection-order assertions. Remove it (the job row
+    // cascades).
+    await prisma.vsphereConnection.deleteMany({ where: { id } });
   });
 });
 

@@ -37,8 +37,8 @@ vi.mock('@/lib/use-chart-colors', () => ({
     utilizationOk: '#525252',
     utilizationWarn: '#b45309',
     utilizationCrit: '#b91c1c',
-    eventNamed: {},
-    eventPalette: [],
+    eventAdds: '#176b45',
+    eventConsumes: '#c0343c',
   }),
 }));
 
@@ -51,6 +51,7 @@ vi.mock('recharts', () => {
     XAxis: () => null,
     YAxis: () => null,
     Tooltip: () => null,
+    Area: () => null,
     Line: () => null,
     ReferenceLine: () => null,
     ReferenceDot: () => null,
@@ -125,15 +126,188 @@ describe('<ClusterTile>', () => {
     expect(screen.getByRole('link')).toHaveAttribute('href', '/clusters/c1');
   });
 
-  it('shows an "ORDER BY ... IN ..." chip when there is a projected order-by date', () => {
+  it('shows an "ORDER BY ..." chip when there is a projected order-by date', () => {
     render(
       <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
     );
-    expect(screen.getByText(/ORDER BY 2026-12-28/)).toBeInTheDocument();
-    expect(screen.getByText(/IN /)).toBeInTheDocument();
+    // "Dec 28", not the raw "2026-12-28" ISO string (#243 Part B copy item 1)
+    // — still uppercased to match the chip's own ALL-CAPS convention.
+    const chip = screen.getByText(/ORDER BY DEC 28/);
+    expect(chip).toBeInTheDocument();
+    // #290: the relative-days suffix ("· IN X D" / "· X D OVERDUE") is
+    // dropped from the visible chip label — the Badge's color tone already
+    // conveys urgency, and the tile's aria-label still carries the
+    // relative-days detail for assistive tech.
+    expect(chip.textContent).toBe('ORDER BY DEC 28');
   });
 
-  it('shows a "no order needed" chip when there is no projected order-by date', () => {
+  // Spec §4.4 amendment (2026-07-20, #268): the ORDER BY chip moved up to the
+  // cluster-name row. #291 (2026-07-22) later removed the EVENT chip that had
+  // shared this describe block entirely, rather than merely relocating it —
+  // see the "EVENT chip removal (#291)" describe block below for its coverage.
+  describe('chip placement (#268)', () => {
+    const eventForecast = forecast({
+      events: [
+        {
+          id: 'e1',
+          effectiveDate: '2026-09-01',
+          category: 'hardware',
+          title: 'Decommission',
+          description: null,
+          consumptionDelta: null,
+          capacityDelta: -2000,
+        },
+      ],
+    });
+
+    it('places the ORDER BY chip on the cluster-name row', () => {
+      render(
+        <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      const name = screen.getByText('CL-Prod-P1');
+      const chip = screen.getByText(/ORDER BY DEC 28/);
+      expect(chip.parentElement).toBe(name.parentElement);
+    });
+
+    it('drops the bottom flag row entirely when nothing is left to put in it', () => {
+      // A fresh baseline and no provisional hosts leave the row empty. Rendering
+      // it anyway would keep its `gap` height — the space the chart is meant to
+      // reclaim — so absence, not emptiness, is the requirement. Still exercised
+      // with a forecast carrying an event (#291: events no longer affect this
+      // row at all, so this also guards against the bottom row reappearing).
+      const { container } = render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(container.querySelector('.flex.flex-wrap.gap-1')).toBeNull();
+    });
+
+    it('still renders the flag row when a stale baseline needs it', () => {
+      const { container } = render(
+        <ClusterTile
+          entry={entry({ cluster: cluster({ baselineDate: '2026-03-10' }) })}
+          forecast={forecast()}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(container.querySelector('.flex.flex-wrap.gap-1')).not.toBeNull();
+      expect(screen.getByText(/BASELINE/)).toBeInTheDocument();
+    });
+
+    it("names events in the tile aria-label — the console's only event-in-window signal now that the visible EVENT chip is gone (#291)", () => {
+      // The tile's aria-label OVERRIDES its visible content. Before #291 this
+      // segment backstopped a visible-but-easily-missed chip; after #291 it is
+      // the ONLY place the fleet console still surfaces this information.
+      render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(screen.getByRole('link').getAttribute('aria-label')).toContain(
+        '1 event in the forecast window',
+      );
+    });
+
+    it('pluralizes the event count in the aria-label', () => {
+      const twoEvents = forecast({
+        events: [
+          {
+            id: 'e1',
+            effectiveDate: '2026-09-01',
+            category: 'hardware',
+            title: 'Decommission',
+            description: null,
+            consumptionDelta: null,
+            capacityDelta: -2000,
+          },
+          {
+            id: 'e2',
+            effectiveDate: '2026-10-01',
+            category: 'hardware',
+            title: 'Expansion',
+            description: null,
+            consumptionDelta: 500,
+            capacityDelta: null,
+          },
+        ],
+      });
+      render(
+        <ClusterTile entry={entry()} forecast={twoEvents} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      expect(screen.getByRole('link').getAttribute('aria-label')).toContain(
+        '2 events in the forecast window',
+      );
+    });
+
+    it('names no events in the aria-label when there are none', () => {
+      render(
+        <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      expect(screen.getByRole('link').getAttribute('aria-label')).not.toContain('event');
+    });
+  });
+
+  // #291 (2026-07-22, owner decision): the fleet console's visible EVENT chip
+  // is removed outright — the fleet console thereby has no visible
+  // in-window event signal at all; only the aria-label (covered above) and
+  // the cluster detail panel's ForecastChart still carry it.
+  describe('EVENT chip removal (#291)', () => {
+    it('never renders a visible EVENT chip, however many events the forecast carries', () => {
+      const eventForecast = forecast({
+        events: [
+          {
+            id: 'e1',
+            effectiveDate: '2026-09-01',
+            category: 'hardware',
+            title: 'Decommission',
+            description: null,
+            consumptionDelta: null,
+            capacityDelta: -2000,
+          },
+        ],
+      });
+      render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(screen.queryByText(/EVENT/)).toBeNull();
+    });
+  });
+
+  it('aligns the runway sub-line with the numeral unit instead of nudging it up (#268)', () => {
+    render(
+      <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+    );
+    const sub = screen.getByText(/past warn 70%/);
+    // `pb-1` on an `items-end` row is what left the sub-line visibly stepped
+    // above the 'mo' it qualifies; baseline alignment on the row replaces it.
+    expect(sub.className).not.toMatch(/pb-1/);
+    expect(sub.parentElement?.className).toMatch(/items-baseline/);
+  });
+
+  it('labels the runway numeral unit in lowercase "mo", matching RunwayPill and the fleet verdict (#243 Part B copy item 2)', () => {
+    render(
+      <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+    );
+    expect(screen.getByText('mo', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText('MO', { exact: true })).toBeNull();
+  });
+
+  // Spec §4.4 amendment (2026-07-19, #243 Part B): a healthy tile restated
+  // the all-clear four ways (OK badge, "24+ mo no breach", this chip, and a
+  // baseline chip repeating the same date on every tile) — the one tile that
+  // someday reads ORDER BY wouldn't stand out. The order chip now renders
+  // only when there is something to say: a real order-by date, or the
+  // unknown-capacity case (covered separately below).
+  it('omits the order chip entirely when there is no projected order-by date and capacity is known', () => {
     render(
       <ClusterTile
         entry={entry()}
@@ -143,7 +317,7 @@ describe('<ClusterTile>', () => {
         thresholds={{ warn: 0.7, crit: 0.9 }}
       />,
     );
-    expect(screen.getByText(/no order needed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no order needed/i)).toBeNull();
   });
 
   it('shows a stale-baseline warning chip past 90 days', () => {
@@ -157,7 +331,11 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText(/⚠ BASELINE \d+ D OLD/)).toBeInTheDocument();
   });
 
-  it('shows a plain baseline chip for a fresh baseline', () => {
+  // Same spec §4.4 amendment as above: the baseline chip is now shown only
+  // in its stale/warn variant — a fresh baseline repeating its date on every
+  // tile added no information the "BASELINES ✓ all fresh" verdict instrument
+  // didn't already state.
+  it('omits the baseline chip entirely for a fresh baseline', () => {
     render(
       <ClusterTile
         entry={entry({ cluster: cluster({ baselineDate: '2026-06-20' }) })}
@@ -165,7 +343,7 @@ describe('<ClusterTile>', () => {
         thresholds={{ warn: 0.7, crit: 0.9 }}
       />,
     );
-    expect(screen.getByText(/BASELINE 2026-06-20/)).toBeInTheDocument();
+    expect(screen.queryByText(/BASELINE 2026-06-20/)).toBeNull();
     expect(screen.queryByText(/⚠/)).toBeNull();
   });
 
@@ -176,7 +354,10 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText('CL-Prod-P1')).toBeInTheDocument();
     const link = screen.getByRole('link');
     expect(link.getAttribute('aria-label')).toContain('CL-Prod-P1');
-    expect(link.getAttribute('aria-label')).toContain('2026-12-28');
+    // "Dec 28", not the raw ISO string (#243 Part B copy item 1) — the
+    // aria-label's own sentence-style casing, unlike the visible chip's caps.
+    expect(link.getAttribute('aria-label')).toContain('Dec 28');
+    expect(link.getAttribute('aria-label')).not.toContain('2026-12-28');
   });
 
   it('renders an "unknown" state for a zero-capacity cluster, never "0.0% used" (#200)', () => {
@@ -227,7 +408,16 @@ describe('<ClusterTile>', () => {
     expect(screen.getByText(/order status unknown/i)).toBeInTheDocument();
     expect(screen.queryByText(/no breach/i)).toBeNull();
     expect(screen.queryByText(/no order needed/i)).toBeNull();
-    expect(link).not.toHaveTextContent(/\d+\+? MO/);
+    expect(link).not.toHaveTextContent(/\d+\+? mo/i);
+    // Finding: the verdict named the problem ("runway and breach timing
+    // cannot be calculated") but never the fix — the Hosts tab is the only
+    // path off this state for a synced cluster with no recorded capacity.
+    expect(screen.getByText(/add host capacity to calculate runway/i)).toBeInTheDocument();
+    // The a11y path names the same fix. aria-label overrides the tile's
+    // visible content, so a screen-reader user who only heard "capacity
+    // required" would be left in exactly the dead end this item removes.
+    expect(link.getAttribute('aria-label')).toMatch(/add host capacity/i);
+    expect(link.getAttribute('aria-label')).not.toMatch(/capacity required to calculate/i);
   });
 
   it('reflects an already-past-warn breach in the runway sub-line, badge, and verdict when crit is never reached in-window (finding 1)', () => {
@@ -283,7 +473,7 @@ describe('<ClusterTile>', () => {
     // summary.alreadyBreached is 'warn' (current month already over warn,
     // under crit) but a later in-window month (index 1) crosses crit. Per
     // the spec's recorded amendment, the numeral must keep tracking warn
-    // (the same "{horizon}+ MO" treatment as when crit is never reached) —
+    // (the same "{horizon}+ mo" treatment as when crit is never reached) —
     // crit surfaces only in the sub-line/verdict, never promotes the
     // numeral to a "to crit" countdown. Otherwise the numeral (which reads
     // as a countdown to crit) contradicts the panel's RunwayPill, which
@@ -308,7 +498,7 @@ describe('<ClusterTile>', () => {
     expect(screen.queryByText(/to crit/i)).toBeNull();
   });
 
-  it('renders an em dash instead of a synthetic "0+ MO" for an archived cluster with no forecast (finding 3)', () => {
+  it('renders an em dash instead of a synthetic "0+ mo" for an archived cluster with no forecast (finding 3)', () => {
     render(
       <ClusterTile
         entry={{
@@ -321,7 +511,11 @@ describe('<ClusterTile>', () => {
         thresholds={{ warn: 0.7, crit: 0.9 }}
       />,
     );
-    expect(screen.getByText('Archived')).toBeInTheDocument();
+    const archivedBadge = screen.getByText('Archived');
+    expect(archivedBadge).toBeInTheDocument();
+    // Icon + text on the badge (#243, WCAG 1.4.1): the tile's dimming is
+    // never the only archived signal.
+    expect(archivedBadge.querySelector('svg')).not.toBeNull();
     expect(screen.getByLabelText('archived — no forecast')).toHaveTextContent('—');
     const link = screen.getByRole('link');
     expect(link).not.toHaveTextContent('0+');
@@ -412,5 +606,63 @@ describe('<ClusterTile>', () => {
       />,
     );
     expect(screen.getByText(/4 HOSTS NEED DATES/)).toBeInTheDocument();
+  });
+
+  it('describes a genuinely healthy runway with the raw horizon length, not the numeral\'s "+" (finding: "24+-month window")', () => {
+    // A cluster that never crosses warn/crit anywhere in-window: distinct
+    // from the default entry() fixture (already past warn) and from the
+    // past-warn/past-crit fixtures above — this is computeRunway's final,
+    // genuinely-unbreached branch, where `plus` is always true because the
+    // numeral itself is an open-ended "{horizon}+ mo" countdown. The
+    // window-boundary sentence describes a fixed fact (the window is
+    // exactly `horizon` months long) and must not inherit that "+".
+    const healthyMonths: ForecastMonthPoint[] = [
+      { month: '2026-07-01', consumption: 12000, capacity: 24576, utilization: 12000 / 24576 },
+      { month: '2026-08-01', consumption: 12200, capacity: 24576, utilization: 12200 / 24576 },
+    ];
+    render(
+      <ClusterTile
+        entry={entry({ months: healthyMonths, summary: { months: null, alreadyBreached: false } })}
+        forecast={forecast({ months: healthyMonths })}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+      />,
+    );
+    expect(screen.getByText(/no breach in the 2-month window/i)).toBeInTheDocument();
+    expect(screen.queryByText(/2\+-month window/i)).toBeNull();
+  });
+
+  // Finding: sub-10px micro text on tiles violates the design system's own
+  // --text-label 10px floor (styles.css). Contrast passes, but 9px uppercase
+  // tracked mono is hard to read on the primary console. This tile's own
+  // portion: the order chip (was 9.5px) and FlagChip (was 9px).
+  describe('micro-text floor', () => {
+    // #290: the order chip now renders via the shared `Badge` (`text-xs` =
+    // 12px), which clears the design system's 10px --text-label floor but no
+    // longer literally matches the old bespoke `text-[10px]` class.
+    it('renders the order chip via the shared Badge at text-xs (12px), clearing the 10px floor', () => {
+      render(
+        <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+      const chip = screen.getByText(/ORDER BY DEC 28/);
+      expect(chip.className).toMatch(/text-xs/);
+      expect(chip.className).not.toMatch(/text-\[9\.5px\]/);
+      expect(chip.className).not.toMatch(/text-\[10px\]/);
+    });
+
+    // Re-pointed at the stale-baseline chip (#291): the EVENT chip this test
+    // originally floored was removed from the tile, but FlagChip itself is
+    // still rendered here, so the 10px floor still needs a live assertion.
+    it('floors the FlagChip at 10px, not 9px', () => {
+      render(
+        <ClusterTile
+          entry={entry({ cluster: cluster({ baselineDate: '2026-03-10' }) })}
+          forecast={forecast()}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      const chip = screen.getByText(/⚠ BASELINE/);
+      expect(chip.className).toMatch(/text-\[10px\]/);
+      expect(chip.className).not.toMatch(/text-\[9px\]/);
+    });
   });
 });

@@ -22,17 +22,25 @@ test.describe('configurable thresholds', () => {
     // lead time and echo it back — omitting it fails validation (400) and
     // would silently leak 65/85 into subsequent runs.
     const current = await request.get(`${API_BASE}/api/settings/tenant`);
-    const { procurementLeadTimeWeeks } = (await current.json()) as {
+    const { procurementLeadTimeWeeks, idempotencyKeyRetentionHours } = (await current.json()) as {
       procurementLeadTimeWeeks: number;
+      idempotencyKeyRetentionHours: number;
     };
     const reset = await request.put(`${API_BASE}/api/settings/tenant`, {
-      data: { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks },
+      data: {
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks,
+        idempotencyKeyRetentionHours,
+      },
     });
     expect(reset.ok()).toBe(true);
   });
 
   test('saves tenant thresholds and fleet tiles reflect new values', async ({ page }) => {
-    await page.goto('/settings');
+    // #293: thresholds live on the Forecasting sub-route now (bare
+    // `/settings` still redirects there, but this is the direct target).
+    await page.goto('/settings/forecasting');
     await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
 
     const warn = page.getByLabel('Warn %');
@@ -45,10 +53,11 @@ test.describe('configurable thresholds', () => {
 
     // Submit and wait for the PUT to land before navigating away — otherwise
     // we can race the fleet console's cached thresholds. Scoped to the
-    // ForecastThresholdsForm's own <form>: in disabled auth mode the
-    // Authentication panel also renders on this page with its own
-    // identically-labeled "Save" button (pre-existing, unrelated to the
-    // fleet console redesign), so an unscoped role lookup is ambiguous here.
+    // ForecastThresholdsForm's own <form> for robustness — Categories' own
+    // submit on this same Forecasting sub-route is labelled "Add", not
+    // "Save", but the Access sub-route's Authentication panel (identically
+    // labelled "Save" pre-#293, when all three sections shared one page) no
+    // longer renders here at all, having moved to its own route.
     const thresholdsForm = page.locator('form').filter({ has: warn });
     const putPromise = page.waitForResponse(
       (r) => r.url().endsWith('/api/settings/tenant') && r.request().method() === 'PUT',
@@ -56,7 +65,8 @@ test.describe('configurable thresholds', () => {
     await thresholdsForm.getByRole('button', { name: /^save$/i }).click();
     const putResp = await putPromise;
     expect(putResp.ok()).toBe(true);
-    await expect(page.getByText(/source: saved tenant settings/i)).toBeVisible();
+    // #243 Part B: "Saved tenant settings" dropped the data-model word "tenant".
+    await expect(page.getByText(/source: saved settings/i)).toBeVisible();
 
     // Navigate to the fleet console: each cluster tile's compact forecast
     // chart draws the thresholds as label-less ReferenceLines, so propagation
@@ -85,8 +95,8 @@ test.describe('configurable thresholds', () => {
 
     await page.goto(`/clusters/${clusterId}`);
     const panel = page.locator('.cluster-panel');
-    await panel.getByRole('tab', { name: 'Settings' }).click();
-    await expect(page.getByText(/inherited from tenant defaults/i)).toBeVisible();
+    await panel.getByRole('tab', { name: 'Cluster settings' }).click();
+    await expect(page.getByText(/inherited from global defaults/i)).toBeVisible();
 
     await page.getByLabel('Warn %').fill('60');
     await page.getByLabel('Crit %').fill('85');
@@ -109,7 +119,7 @@ test.describe('configurable thresholds', () => {
     await expect(page.getByText('Crit 85%').first()).toBeVisible();
 
     // Reset back to inherited.
-    await page.locator('.cluster-panel').getByRole('tab', { name: 'Settings' }).click();
+    await page.locator('.cluster-panel').getByRole('tab', { name: 'Cluster settings' }).click();
     const resetPromise = page.waitForResponse(
       (r) =>
         r.url().includes(`/api/clusters/${clusterId}/settings`) &&
@@ -118,7 +128,7 @@ test.describe('configurable thresholds', () => {
     await page.getByRole('button', { name: /reset to inherited/i }).click();
     const resetResp = await resetPromise;
     expect(resetResp.ok()).toBe(true);
-    await expect(page.getByText(/inherited from tenant defaults/i)).toBeVisible();
+    await expect(page.getByText(/inherited from global defaults/i)).toBeVisible();
   });
 });
 
@@ -136,11 +146,11 @@ test.describe('cluster identity + baseline edit', () => {
     try {
       await page.goto(`/clusters/${cluster.id}`);
       const panel = page.locator('.cluster-panel');
-      // The panel header name is an h2 (spec §5.1) — the page's only h1 is
-      // the fleet verdict headline computed on the console beneath.
-      await expect(panel.getByRole('heading', { name: originalName, level: 2 })).toBeVisible();
+      // The panel header name is the h1 since #243 (the console's verdict h1
+      // beneath is inert-hidden while the panel is up).
+      await expect(panel.getByRole('heading', { name: originalName, level: 1 })).toBeVisible();
 
-      await panel.getByRole('tab', { name: 'Settings' }).click();
+      await panel.getByRole('tab', { name: 'Cluster settings' }).click();
 
       const nameInput = page.getByLabel('Name');
       await expect(nameInput).toHaveValue(originalName);
@@ -157,7 +167,7 @@ test.describe('cluster identity + baseline edit', () => {
       await page.getByRole('button', { name: /^save$/i }).click();
       await putResponse;
 
-      await expect(panel.getByRole('heading', { name: newName, level: 2 })).toBeVisible();
+      await expect(panel.getByRole('heading', { name: newName, level: 1 })).toBeVisible();
     } finally {
       // Restore the cluster name so subsequent runs are deterministic.
       await request.put(`/api/clusters/${cluster.id}`, { data: { name: originalName } });
@@ -185,7 +195,7 @@ test.describe('cluster identity + baseline edit', () => {
 
     try {
       await page.goto(`/clusters/${cluster.id}`);
-      await page.locator('.cluster-panel').getByRole('tab', { name: 'Settings' }).click();
+      await page.locator('.cluster-panel').getByRole('tab', { name: 'Cluster settings' }).click();
 
       const consumptionInput = page.getByLabel(/memory.*baseline consumption/i);
       await consumptionInput.fill(String(newConsumption));
@@ -253,7 +263,7 @@ test.describe('cluster lifecycle', () => {
       // Archive via UI (the panel's Settings tab).
       await page.goto(`/clusters/${id}`);
       const panel = page.locator('.cluster-panel');
-      await panel.getByRole('tab', { name: 'Settings' }).click();
+      await panel.getByRole('tab', { name: 'Cluster settings' }).click();
       await page.getByRole('button', { name: /^archive$/i }).click();
       const archiveResponse = page.waitForResponse(
         (r) => r.url().endsWith(`/api/clusters/${id}/archive`) && r.request().method() === 'POST',
@@ -268,13 +278,20 @@ test.describe('cluster lifecycle', () => {
       await page.goto('/');
       await expect(page.getByRole('link', { name: new RegExp(name) })).toHaveCount(0);
 
-      // Show archived toggle reveals the cluster's (muted) tile.
-      await page.getByRole('button', { name: /show archived/i }).click();
+      // The archived toggle lives in the Filter popover (#243): open it and
+      // check the "Show archived (N)" item to reveal the cluster's tile.
+      await page.getByTestId('fleet-filter-button').click();
+      await page.getByRole('checkbox', { name: /show archived/i }).check();
+      // The issue #243 verification list: the toggle announces the resulting
+      // mixed view in words on the console's polite status region.
+      await expect(page.getByTestId('fleet-filter-announcement')).toHaveText(
+        /including \d+ archived/,
+      );
       await expect(page.getByRole('link', { name: new RegExp(name) })).toBeVisible();
 
       // Unarchive via UI.
       await page.goto(`/clusters/${id}`);
-      await panel.getByRole('tab', { name: 'Settings' }).click();
+      await panel.getByRole('tab', { name: 'Cluster settings' }).click();
       await page.getByRole('button', { name: /^unarchive$/i }).click();
       const unarchiveResponse = page.waitForResponse(
         (r) => r.url().endsWith(`/api/clusters/${id}/unarchive`) && r.request().method() === 'POST',
@@ -308,7 +325,7 @@ test.describe('cluster lifecycle', () => {
 
     await page.goto(`/clusters/${id}`);
     const panel = page.locator('.cluster-panel');
-    await panel.getByRole('tab', { name: 'Settings' }).click();
+    await panel.getByRole('tab', { name: 'Cluster settings' }).click();
     await page.getByRole('button', { name: /^delete$/i }).click();
     const deleteResponse = page.waitForResponse(
       (r) =>
@@ -320,9 +337,11 @@ test.describe('cluster lifecycle', () => {
     // The lifecycle card now navigates to `/` (spec §5.6), not `/clusters`.
     await expect(page).toHaveURL('/');
 
-    // Cluster gone from default and showArchived lists.
+    // Cluster gone from default and showArchived lists (#243: the archived
+    // toggle is a checkbox inside the Filter popover).
     await expect(page.getByRole('link', { name: new RegExp(name) })).toHaveCount(0);
-    await page.getByRole('button', { name: /show archived/i }).click();
+    await page.getByTestId('fleet-filter-button').click();
+    await page.getByRole('checkbox', { name: /show archived/i }).check();
     await expect(page.getByRole('link', { name: new RegExp(name) })).toHaveCount(0);
 
     // API confirms 404.

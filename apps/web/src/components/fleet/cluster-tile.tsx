@@ -1,12 +1,14 @@
 import type { ForecastResponse, LiveUsage } from '@lcm/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
+import { Archive } from 'lucide-react';
 import { memo } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { utilStatus, type ClusterForecastEntry } from '@/lib/forecast-summary';
-import { formatMonthShort } from '@/lib/format-month';
+import { RUNWAY_UNIT } from '@/lib/format';
+import { formatDateShort, formatMonthShort } from '@/lib/format-month';
 import { cn } from '@/lib/utils';
 
 import { ClusterTileChart } from './cluster-tile-chart';
@@ -46,10 +48,10 @@ const STATUS_BADGE: Record<
   unknown: { variant: 'outline', label: 'UNKNOWN' },
 };
 
-const ORDER_CHIP_TONE: Record<'now' | 'soon' | 'planned', string> = {
-  now: 'border-destructive/40 bg-destructive/10 text-destructive',
-  soon: 'border-warning/40 bg-warning/10 text-warning',
-  planned: 'border-border text-fg-muted',
+const ORDER_BADGE_VARIANT: Record<'now' | 'soon' | 'planned', 'danger' | 'warning' | 'outline'> = {
+  now: 'danger',
+  soon: 'warning',
+  planned: 'outline',
 };
 
 interface RunwayInfo {
@@ -153,9 +155,14 @@ function computeRunway(
 
 /**
  * Uniform fleet-console tile (spec §4.4): name + status chip, runway numeral,
- * order-by chip, one-line verdict, flag chips (event-in-window, stale
- * baseline), and the compact forecast chart. Renders a non-link error state
- * when the forecast failed to load.
+ * order-by chip, one-line verdict, a stale-baseline flag chip, and the
+ * compact forecast chart. Renders a non-link error state when the forecast
+ * failed to load.
+ *
+ * #291 (2026-07-22): the tile no longer carries a visible event-in-window
+ * signal — the `EVENT ×n` chip was removed outright (owner decision, not a
+ * relocation). Event data still reaches the tile's aria-label (below) and,
+ * in full, the cluster detail panel's `ForecastChart`.
  *
  * Wrapped in `memo` (PR review fix 4d) so mousing across the fleet grid —
  * which only flips one tile's `linked` prop via `fleet-console.tsx`'s hover
@@ -233,7 +240,9 @@ export const ClusterTile = memo(function ClusterTile({
           ? `past crit ${runway.pastThresholdPct}%`
           : 'no breach';
   const verdict = runwayUnknown
-    ? `${utilText} — runway and breach timing cannot be calculated.`
+    ? // Names the destination, not just the problem (#243 audit): a synced
+      // cluster with no recorded host capacity is a dead end otherwise.
+      `${utilText} — add host capacity to calculate runway.`
     : runway.breachLabel
       ? `${utilText} — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
       : runway.pastLabel === 'warn'
@@ -242,7 +251,11 @@ export const ClusterTile = memo(function ClusterTile({
           : `${utilText} — already past warn; crit beyond the ${runway.value}-month window.`
         : runway.pastLabel === 'crit'
           ? `${utilText} — already past crit.`
-          : `${utilText} — no breach in the ${runway.value}${runway.plus ? '+' : ''}-month window.`;
+          : // `runway.value` is the exact horizon length here (the numeral's
+            // own "+" marks an open-ended countdown; this sentence describes
+            // a fixed window boundary and must not inherit it — it previously
+            // read "no breach in the 24+-month window" on a 24-month window).
+            `${utilText} — no breach in the ${runway.value}-month window.`;
 
   // Live usage / sync summary, appended so assistive tech hears it — the tile's
   // aria-label overrides its visible content, so the visible LIVE line below
@@ -257,13 +270,25 @@ export const ClusterTile = memo(function ClusterTile({
     isArchived
       ? 'archived — no forecast'
       : runwayUnknown
-        ? 'runway unknown — capacity required to calculate breach timing'
+        ? // Names the destination for the a11y path too, matching the visible
+          // verdict above: the screen-reader user is the one who can least
+          // afford this dead end, and aria-label overrides the tile's visible
+          // content, so leaving it at "capacity required" hid the only fix.
+          'runway unknown — add host capacity to calculate breach timing'
         : `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,
     orderByDate
-      ? `order by ${orderByDate} (${formatRelativeDays(orderByDate)})`
+      ? `order by ${formatDateShort(orderByDate)} (${formatRelativeDays(orderByDate)})`
       : orderUnknown
         ? 'order status unknown — capacity required'
         : 'no order needed',
+    // #291 (2026-07-22): the visible EVENT chip this segment used to describe
+    // was removed from the tile entirely (owner decision — not merely
+    // relocated, as it was under #268). This aria-label segment is now the
+    // fleet console's ONLY surviving event-in-window signal, visible or not:
+    // assistive tech must not regress below what sighted users already lost.
+    !isArchived && events.length > 0
+      ? `${events.length} event${events.length === 1 ? '' : 's'} in the forecast window`
+      : null,
     stale ? `baseline ${ageDays} days old — re-measure` : null,
     liveSummary || null,
     !isArchived && provisionalCount > 0
@@ -295,11 +320,56 @@ export const ClusterTile = memo(function ClusterTile({
         <Badge variant={badge.variant} dot>
           {badge.label}
         </Badge>
-        {cluster.archivedAt ? <Badge variant="outline">Archived</Badge> : null}
+        {/* Icon + text, never the tile's dimming alone (#243, WCAG 1.4.1). */}
+        {cluster.archivedAt ? (
+          <Badge variant="outline">
+            <Archive className="h-3 w-3" aria-hidden />
+            Archived
+          </Badge>
+        ) : null}
         {!isArchived ? <SyncStateBadge cluster={cluster} /> : null}
+        {/*
+          Spec §4.4 amendment (2026-07-20, #268): the order-by chip moves up
+          here from the runway row. It is the tile's single most decision-bearing
+          fact on a purchasing surface, so it belongs on the identity line beside
+          the name and status — and vacating the runway row is what frees a whole
+          chip row for the chart.
+
+          Spec §4.4 amendment (2026-07-19, #243 Part B): the chip renders
+          only when there's something to say — a real order-by date, or the
+          unknown-capacity case (still an information-bearing state, unlike
+          the old "— · NO ORDER NEEDED" placeholder, which just repeated the
+          all-clear a tile had already stated three other ways).
+
+          #290: restyled onto the shared `Badge` (matching the status and
+          vSphere badges) and moved into their cluster instead of being
+          pushed to the row's far edge via `ml-auto`. The relative-days
+          suffix (`· 12 D OVERDUE`) is dropped from the visible label — the
+          badge's color tone already conveys urgency, and the aria-label
+          below still carries the relative-days detail for assistive tech.
+        */}
+        {orderByDate || orderUnknown ? (
+          <Badge
+            variant={
+              orderByDate
+                ? ORDER_BADGE_VARIANT[urgency === 'none' ? 'planned' : urgency]
+                : 'outline'
+            }
+          >
+            {orderByDate
+              ? `ORDER BY ${formatDateShort(orderByDate).toUpperCase()}`
+              : 'ORDER STATUS UNKNOWN'}
+          </Badge>
+        ) : null}
       </div>
 
-      <div className="flex flex-wrap items-end gap-2">
+      {/*
+        `items-baseline` (was `items-end`) so the runway sub-line sits on the
+        same baseline as the numeral's inline unit — under `items-end` the
+        sub-line carried a `pb-1` nudge that left it visibly stepped above the
+        'mo' it qualifies (#268).
+      */}
+      <div className="flex flex-wrap items-baseline gap-2">
         {isArchived ? (
           <span
             className="font-mono text-[28px] font-bold leading-none tracking-tight text-fg-muted"
@@ -312,32 +382,18 @@ export const ClusterTile = memo(function ClusterTile({
             <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-fg-muted">
               —
             </span>
-            <span className="pb-1 font-mono text-[10px] text-fg-muted">{runwaySub}</span>
+            <span className="font-mono text-[10px] text-fg-muted">{runwaySub}</span>
           </>
         ) : (
           <>
             <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-accent">
               {runway.value}
               {runway.plus ? '+' : ''}
-              <span className="ml-1 text-xs font-semibold text-fg-muted">MO</span>
+              <span className="ml-1 text-xs font-semibold text-fg-muted">{RUNWAY_UNIT}</span>
             </span>
-            <span className="pb-1 font-mono text-[10px] text-fg-muted">{runwaySub}</span>
+            <span className="font-mono text-[10px] text-fg-muted">{runwaySub}</span>
           </>
         )}
-        <span
-          className={cn(
-            'ml-auto rounded border px-1.5 py-0.5 font-mono text-[9.5px] font-bold tracking-[0.08em]',
-            orderByDate
-              ? ORDER_CHIP_TONE[urgency === 'none' ? 'planned' : urgency]
-              : 'border-border text-fg-muted',
-          )}
-        >
-          {orderByDate
-            ? `ORDER BY ${orderByDate} · ${formatRelativeDays(orderByDate).toUpperCase()}`
-            : orderUnknown
-              ? '— · ORDER STATUS UNKNOWN'
-              : '— · NO ORDER NEEDED'}
-        </span>
       </div>
 
       <p className="text-[11px] leading-[1.45] text-fg-muted">
@@ -348,22 +404,28 @@ export const ClusterTile = memo(function ClusterTile({
         <LiveUsageInline cluster={cluster} live={live} isPending={liveUsagePending} />
       ) : null}
 
-      <div className="flex flex-wrap gap-1">
-        {!isArchived ? <ProvisionalHostHint count={provisionalCount} /> : null}
-        {events.length > 0 ? (
-          <FlagChip tone="warn">
-            EVENT ×{events.length}
-            {events[0]
-              ? ` · ${formatMonthShort(`${events[0].effectiveDate.slice(0, 7)}-01`).toUpperCase()}`
-              : ''}
-          </FlagChip>
-        ) : null}
-        {stale ? (
-          <FlagChip tone="warn">⚠ BASELINE {ageDays} D OLD</FlagChip>
-        ) : (
-          <FlagChip tone="muted">BASELINE {cluster.baselineDate}</FlagChip>
-        )}
-      </div>
+      {/*
+        The event chip that used to live here left for the runway row under
+        #268, then was removed from the tile altogether under #291 — so on a
+        healthy tile both remaining children (provisional-host hint,
+        stale-baseline chip) are absent and the row collapses — rendered
+        conditionally rather than as an always-present empty flex box, whose
+        `gap` would otherwise still consume height the chart now uses.
+      */}
+      {(!isArchived && provisionalCount > 0) || stale ? (
+        <div className="flex flex-wrap gap-1">
+          {!isArchived ? <ProvisionalHostHint count={provisionalCount} /> : null}
+          {/*
+          Spec §4.4 amendment (2026-07-19, #243 Part B): the baseline chip
+          now renders only in its stale/warn variant — a fresh baseline
+          repeating its date on every tile added no information the
+          "BASELINES ✓ all fresh" verdict instrument didn't already state.
+          That leaves FlagChip with a single (warn) tone — its muted variant
+          is gone, not just unused.
+        */}
+          {stale ? <FlagChip>⚠ BASELINE {ageDays} D OLD</FlagChip> : null}
+        </div>
+      ) : null}
 
       <div className="mt-auto">
         <ClusterTileChart months={entry.months} thresholds={thresholds} orderByDate={orderByDate} />
@@ -373,17 +435,17 @@ export const ClusterTile = memo(function ClusterTile({
 });
 
 function FlagChip({
-  tone,
   children,
+  className,
 }: {
-  tone: 'warn' | 'muted';
   children: React.ReactNode;
+  className?: string;
 }): React.JSX.Element {
   return (
     <span
       className={cn(
-        'rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-[0.05em]',
-        tone === 'warn' ? 'border-warning/35 text-warning' : 'border-border text-fg-muted',
+        'rounded-sm border border-warning/35 px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-[0.05em] text-warning',
+        className,
       )}
     >
       {children}

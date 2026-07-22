@@ -12,6 +12,11 @@
 @import '@fontsource/jetbrains-mono/600.css';
 @import '@fontsource/jetbrains-mono/700.css';
 
+/* Theme is class-driven (html.dark via ThemeProvider), so the `dark:` variant
+   must key off that class — Tailwind's default is the prefers-color-scheme
+   media query, which desyncs whenever the user overrides the system theme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #f4f6fa;
   --foreground: #171c2c;
@@ -37,14 +42,35 @@
   --accent: #8f6400;
   --accent-foreground: #ffffff;
   --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
+  /* @ai-note accent-toned micro-labels sitting on an accent wash (the order-by
+     rail's lead-time zone label). Ratios below are measured against the wash
+     over the card, not the bare card, since that is what the text is painted
+     on. The mockup softens the label to 75% accent, which clears AA in dark
+     (5.6:1) but reaches only 2.97:1 in light — far short of the 4.5:1 floor for
+     9px text. Light therefore keeps the accent at full strength (4.67:1);
+     html.dark below restores the mockup's softening. */
+  --accent-label: var(--accent);
   --accent-gradient: linear-gradient(
     135deg,
     var(--accent),
     color-mix(in oklab, var(--accent) 65%, black)
   );
-  --success: #1e7f4f;
+  /* @ai-note spec §3's #1E7F4F measures 4.377:1 as `Badge`'s success variant
+     actually renders it — text-success on bg-success/10 composited over the
+     white --card, not bare white (the ~4.4:1 finding, docs/uiux-audit-2026-07.md)
+     — short of the 4.5:1 SC 1.4.3 floor. Darkened within the same green hue
+     family (150.3°→152.9°) to #176B45 (5.620:1). Dark theme's #3DD68C is
+     unaffected (~5.9:1, already clears AA) and untouched. */
+  --success: #176b45;
   --success-foreground: #ffffff;
-  --warning: #95610c;
+  /* @ai-note same pass, same composited-background methodology: spec §3's
+     #95610C measures 4.603:1 — technically clears AA but with almost no
+     margin (the audit's "no headroom" note), close enough to the floor that
+     ordinary rendering/anti-aliasing variance could tip it under 4.5:1.
+     Darkened one step within the same amber hue family (37.2°→39.3°) to
+     #865C0C (5.147:1) for real headroom. Dark theme's #FFC53D is unaffected
+     (shared with --accent by deliberate design, see CLAUDE.md) and untouched. */
+  --warning: #865c0c;
   --warning-foreground: #ffffff;
   --destructive: #c0343c;
   --destructive-foreground: #ffffff;
@@ -54,12 +80,32 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.025);
   --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.05);
   --overlay-shadow: 0 2px 4px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.1);
+  /* Glass tokens (#243): the scenario controls card is the ONE sanctioned
+     glass surface (CLAUDE.md house-style amendment). Derived from the slate
+     surface tokens; the fallback is near-opaque so the no-backdrop-filter and
+     prefers-reduced-transparency paths pass AA on their own. */
+  --glass-fill: rgba(255, 255, 255, 0.7);
+  --glass-border: color-mix(in srgb, var(--border-strong) 80%, transparent);
+  --glass-fallback: rgba(255, 255, 255, 0.94);
   /* Surface gradients (spec §3). The dark theme is the mockup's richer,
      gradient-lit chassis; the light sibling has no gradient recipe in the
      spec, so it stays flat (solid --background / --card) here and is
      overridden with the real gradients in html.dark below. */
   --surface-backdrop: var(--background);
   --surface-card: var(--card);
+  /* Login hero (#257). A per-theme pair rather than a reuse of
+     --surface-backdrop, which is flat var(--background) in light and only
+     carries a gradient in dark — the hero gets a designed light counterpart
+     (owner decision 2026-07-20), so both themes declare a real surface here.
+     Light is a warm off-white with an amber-tinted wash; the grid tint is
+     amber here and a plain white hairline in dark.
+     @ai-warning the stops are tuned against the WORST-case composite — the
+     darkest gradient stop with a grid line painted over it — so that every
+     element sitting on the hero clears AA in both themes. --fg-muted (the
+     supporting sentence) is the tightest at 4.87:1 light / 4.81:1 dark.
+     Retune a stop and those have to be re-measured. */
+  --hero-surface: linear-gradient(155deg, #fdfbf6 0%, #faf5ea 55%, #f6f0e4 100%);
+  --hero-grid: rgb(143 100 0 / 0.06);
   /* Bullet-meter fill (spec §3: "amber meter gradient"). Light theme has no
      literal recipe in the spec ("derive from light --accent") — a darker
      shade of the light --accent to --accent itself keeps the same ramp
@@ -72,9 +118,11 @@
 
   /* Chart colors — the single source of truth for Recharts, read at runtime by
      use-chart-colors.ts. Semantic roles reference the shared tokens so charts
-     track the palette in both themes; the categorical event scale (--chart-1..7)
-     is chart-only. Tokens built from var() below resolve per theme automatically
-     via the dark overrides above/below, so only genuinely independent literals
+     track the palette in both themes; the categorical scale (--chart-1..7) is
+     chart-only. Event markers are keyed by capacityDelta (issue #286) via the
+     chart-event-adds/consumes roles above, not this categorical scale. Tokens
+     built from var() below resolve per theme automatically via the dark
+     overrides above/below, so only genuinely independent literals
      (chart-consumption/capacity/grid/axis/1-4/7) are re-declared in html.dark. */
   /* Consumption line: a dedicated violet, NOT amber. Amber (--accent/--warning)
      is double-booked as the warn-threshold color, so on the forecast charts the
@@ -90,6 +138,8 @@
   --chart-utilization-ok: var(--fg-muted);
   --chart-utilization-warn: var(--warning);
   --chart-utilization-crit: var(--destructive);
+  --chart-event-adds: var(--success);
+  --chart-event-consumes: var(--destructive);
   --chart-1: #171c2c;
   --chart-2: #5a6478;
   --chart-3: #66708c;
@@ -118,6 +168,7 @@ html.dark {
   --accent: #ffc53d;
   --accent-foreground: #171c2c;
   --accent-soft: color-mix(in oklab, var(--accent) 15%, transparent);
+  --accent-label: color-mix(in oklab, var(--accent) 75%, transparent);
   --accent-gradient: linear-gradient(
     135deg,
     var(--accent),
@@ -132,19 +183,31 @@ html.dark {
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.2);
   --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.3);
   --overlay-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.45);
+  /* Dark glass (#243): fill/fallback are --card (#151b2c) with alpha; the
+     border is a light hairline so the card keeps a lit edge on dark charts. */
+  --glass-fill: rgba(21, 27, 44, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-fallback: rgba(21, 27, 44, 0.94);
   --surface-backdrop: radial-gradient(
     1200px 500px at 50% -220px,
     #141b31 0%,
     var(--background) 60%
   );
   --surface-card: linear-gradient(180deg, #171e31, #131928);
+  /* Dark hero (#257): the near-black treatment, lit from the top-left so the
+     brand lockup sits in the light and the checklist falls away into the
+     background. #161d33 is the lightest point and therefore the worst case
+     for the light text on top — see the :root note. */
+  --hero-surface: radial-gradient(900px 520px at 15% -10%, #161d33 0%, #0b0f1c 62%);
+  --hero-grid: rgb(255 255 255 / 0.045);
   /* Exact spec §3 value: linear-gradient(90deg,#D9A32C,#FFC53D). */
   --meter-gradient: linear-gradient(90deg, #d9a32c, var(--accent));
 
   /* Categorical event-scale + independent chart roles (the var()-referencing
-     roles above — chart-5, chart-6, and the chart-utilization-* trio — resolve
-     automatically from the dark tokens above; consumption is an independent
-     literal per theme, see the :root note). */
+     roles above — chart-5, chart-6, the chart-utilization-* trio, and
+     chart-event-adds/consumes — resolve automatically from the dark tokens
+     above; consumption is an independent literal per theme, see the :root
+     note). */
   --chart-consumption: #c084fc;
   --chart-capacity: #c7d0e4;
   --chart-grid: #1b2236;
@@ -157,6 +220,23 @@ html.dark {
 }
 
 @theme {
+  /* Breakpoints pinned to their px defaults (#243 review). Tailwind v4's
+     defaults are rem-based (--breakpoint-lg: 64rem …), and rem in a media
+     query resolves against the user's BROWSER default font size — while the
+     app's JS layout queries (PANE_SIDE_BY_SIDE_QUERY '(min-width: 1024px)'
+     and isWide '(min-width: 640px)' in cluster-panel.tsx) and the
+     .scenario-card AA fallback below are fixed px. At e.g. a 20px browser
+     font, `lg:` would fire at 1280px, opening a 1024–1280px band where JS
+     declared the scenario pane side-by-side (content column NOT inert) while
+     CSS still rendered the sheet layout — a near-viewport-wide glass card
+     over live, tabbable content. Pinning every breakpoint keeps utilities
+     and matchMedia in lockstep at any font size; new JS media queries MUST
+     use the same px values. */
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -191,7 +271,17 @@ html.dark {
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
-  --text-display: 28px;
+  /* @ai-note fluid, not flat 28px (#243 Part B): the fleet verdict h1 is
+     long, cluster-name-dependent prose, not a short page title — a flat
+     28px cost measurably more wrapped lines/vertical space on narrow
+     viewports than the clamp() the headline was already tuned with
+     pre-token-adoption. Kept that exact formula here so every text-display
+     consumer (verdict h1, Settings h1, cluster panel title via text-h1)
+     shares one canonical, viewport-aware ceiling instead of a per-component
+     arbitrary value. Settings' single-word h1 is unaffected in practice: it
+     converges to the same 28px above ~1273px and only tapers down (never
+     wraps differently) below ~1000px. */
+  --text-display: clamp(22px, 2.2vw, 28px);
   --text-display--line-height: 1.1;
   --text-display--letter-spacing: -0.025em;
   --text-display--font-weight: 600;
@@ -281,4 +371,76 @@ body {
    Narrow this and the sheet would leave part of an inert column on screen. */
 .cluster-panel {
   width: 100vw;
+}
+
+/* Login hero panel (#257): the brand column of the split-screen /login layout.
+   An opaque page surface — deliberately NOT glass; the scenario controls card
+   is this app's one sanctioned glass surface (#243), and that exception is for
+   the floating-controls layer, never a page surface. The grid is two 1px
+   repeating gradients over the themed --hero-surface wash; the flat
+   background-color underneath is the fallback for forced-colors mode, which
+   drops background-image entirely. */
+.login-hero {
+  background-color: var(--background);
+  background-image:
+    repeating-linear-gradient(to right, var(--hero-grid) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(to bottom, var(--hero-grid) 0 1px, transparent 1px 72px),
+    var(--hero-surface);
+}
+
+/* Scenario controls card (#243): the single sanctioned glass surface (house
+   style permits exactly one designated glass surface per view — this one).
+   The base declaration is the near-opaque fallback and must pass AA on its
+   own: it serves browsers without backdrop-filter AND
+   prefers-reduced-transparency users (the media query is not Baseline — no
+   Firefox support — so the default can never rely on it firing). The
+   @supports block layers the real glass on top. Never animate the blur
+   radius; the card's motion wrapper animates transform/opacity only. */
+.scenario-card {
+  background: var(--glass-fallback);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-modal);
+  /* Themed lift (--overlay-shadow) + an inset lit top edge. Deviation from
+     the #243 recipe's fixed rgb(0 0 0 / .35) shadow, recorded there: the
+     fixed value out-shadowed every other light-theme overlay. */
+  box-shadow:
+    var(--overlay-shadow),
+    inset 0 1px 0 rgb(255 255 255 / 0.08);
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .scenario-card {
+    background: var(--glass-fill);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    backdrop-filter: blur(14px) saturate(160%);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .scenario-card {
+    background: var(--glass-fallback);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* Light theme below `lg` only: the card sits on the sheet's black/40 scrim,
+   and the 70% white fill composited over scrim-dimmed light content lands
+   around #e0e0e0 — where the card's 10px `--fg-subtle` labels measure ~3.7:1,
+   under the 4.5:1 AA floor that token was explicitly re-tuned to meet. Per
+   the #243 rule ("fix by raising tint alpha, never by more blur"), the sheet
+   body uses the near-opaque fallback there (4.68:1). Dark theme passes under
+   its scrim (≈5:1+) and light at `lg`+ has no scrim (≈4.8:1), so both keep
+   full glass. The 1024px breakpoint MUST stay in lockstep with
+   PANE_SIDE_BY_SIDE_QUERY / the `lg:` utilities in cluster-panel.tsx —
+   guaranteed since the @theme block pins --breakpoint-lg to the same literal
+   1024px. */
+@media (max-width: 1023.98px) {
+  html:not(.dark) .scenario-card {
+    background: var(--glass-fallback);
+    /* Match the prefers-reduced-transparency rule above: with a 94%-opaque
+       fill there is no reason to keep a 14px blur compositing underneath. */
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }

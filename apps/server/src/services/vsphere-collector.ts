@@ -78,7 +78,7 @@ const DEFAULT_MAX_OBJECTS = 100;
 /** The transport seam — the real `soapCall` in production, a spy in tests. */
 export type SoapTransport = (
   hostname: string,
-  pinnedRootPem: string | null,
+  pinnedLeafSha256: string | null,
   action: string,
   body: string,
   cookie: string | null,
@@ -142,17 +142,17 @@ export class VsphereClientInventoryCollector implements VsphereInventoryCollecto
       hostname: string;
       username: string;
       password: string;
-      pinnedRootPem: string | null;
+      pinnedLeafSha256: string | null;
       port?: number;
     },
     signal?: AbortSignal,
   ): Promise<CollectedInventory> {
-    const { hostname, username, password, pinnedRootPem } = input;
+    const { hostname, username, password, pinnedLeafSha256 } = input;
     const call = (action: string, body: string, cookie: string | null): Promise<SoapCallResult> => {
       const options: SoapCallOptions = {};
       if (signal) options.signal = signal;
       if (input.port !== undefined) options.port = input.port;
-      return this.transport(hostname, pinnedRootPem, action, body, cookie, options);
+      return this.transport(hostname, pinnedLeafSha256, action, body, cookie, options);
     };
 
     // 1. RetrieveServiceContent — unauthenticated; yields identity + the MoRefs the

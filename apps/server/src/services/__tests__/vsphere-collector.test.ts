@@ -1,3 +1,5 @@
+import { X509Certificate } from 'node:crypto';
+
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -22,7 +24,9 @@ import { VCSIM_CERT_PEM, VCSIM_IMAGE, VCSIM_KEY_PEM } from './vcsim-fixtures.js'
  *
  * The connection uses `hostname: 'localhost'` (in the fixture cert's SAN) plus the
  * test-only `port` seam so a Testcontainers-mapped port is reachable. TLS is the
- * real production path: `ca: [VCSIM_CERT_PEM]`, `rejectUnauthorized: true`.
+ * real production path: the pinned connection routes through
+ * `fingerprintPinnedConnection`, gating vcsim's presented leaf against
+ * {@link VCSIM_LEAF_SHA256} before any SOAP body is written.
  */
 
 // A plain service-account username: vcsim rejects a login whose userName contains
@@ -78,15 +82,20 @@ async function startVcsim(topology: Topology): Promise<StartedTestContainer> {
     .start();
 }
 
+// The uppercase colon SHA-256 of the exact leaf vcsim presents (it serves
+// VCSIM_CERT_PEM verbatim via `-tlscert`), which is what the credential-path
+// fingerprint gate compares against.
+const VCSIM_LEAF_SHA256 = new X509Certificate(VCSIM_CERT_PEM).fingerprint256;
+
 function endpoint(container: StartedTestContainer): {
   hostname: string;
   port: number;
-  pinnedRootPem: string;
+  pinnedLeafSha256: string;
 } {
   return {
     hostname: 'localhost',
     port: container.getMappedPort(8989),
-    pinnedRootPem: VCSIM_CERT_PEM,
+    pinnedLeafSha256: VCSIM_LEAF_SHA256,
   };
 }
 
@@ -165,9 +174,16 @@ describe('VsphereClientInventoryCollector (vcsim)', () => {
     // Force pagination: 24 managed objects at 2 per page ⇒ 12 pages ⇒ 11 continues.
     // A collector missing the loop would return ≤ 2 objects and issue 0 continues.
     let continueCalls = 0;
-    const transport: SoapTransport = (hostname, pinnedRootPem, action, body, cookie, options) => {
+    const transport: SoapTransport = (
+      hostname,
+      pinnedLeafSha256,
+      action,
+      body,
+      cookie,
+      options,
+    ) => {
       if (action === 'ContinueRetrievePropertiesEx') continueCalls += 1;
-      return soapCall(hostname, pinnedRootPem, action, body, cookie, options);
+      return soapCall(hostname, pinnedLeafSha256, action, body, cookie, options);
     };
     const collector = new VsphereClientInventoryCollector({ maxObjects: 2, transport });
 
@@ -212,7 +228,7 @@ describe('VsphereClientInventoryCollector (vcsim)', () => {
       await collector.collect({
         hostname: 'localhost',
         port: fleet.getMappedPort(8989),
-        pinnedRootPem: null, // no pin ⇒ the self-signed cert is distrusted by the system store
+        pinnedLeafSha256: null, // no pin ⇒ the self-signed cert is distrusted by the system store
         username: USERNAME,
         password: secret,
       });
@@ -338,9 +354,9 @@ describe('VsphereClientInventoryCollector — host inclusion policy (§D3 rule 1
 
   function syntheticTransport(): SoapTransport {
     // A canned response per SOAP action — the collector's full session sequence,
-    // no network. `_hostname`/`_pinnedRootPem` are unused: this transport never
+    // no network. `_hostname`/`_pinnedLeafSha256` are unused: this transport never
     // touches TLS or sockets.
-    return (_hostname, _pinnedRootPem, action) => {
+    return (_hostname, _pinnedLeafSha256, action) => {
       switch (action) {
         case 'RetrieveServiceContent':
           return Promise.resolve({ status: 200, body: serviceContentBody, setCookie: null });
@@ -393,7 +409,7 @@ describe('VsphereClientInventoryCollector — host inclusion policy (§D3 rule 1
       hostname: 'vcenter.example.test',
       username: 'svc-lcm',
       password: 'unused-by-the-synthetic-transport',
-      pinnedRootPem: null,
+      pinnedLeafSha256: null,
     });
     return { inventory, warnings };
   }
