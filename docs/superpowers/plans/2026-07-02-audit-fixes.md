@@ -40,6 +40,7 @@ General note for every B task: after editing `package.json` files run `PNPM inst
 ### Task B1: TypeScript 6 + ESLint 10 toolchain
 
 **Files:**
+
 - Modify: `package.json` (root devDependencies)
 - Possibly modify: `tsconfig.base.json`, `eslint.config.js`, and any files with new type errors
 
@@ -67,6 +68,7 @@ General note for every B task: after editing `package.json` files run `PNPM inst
 ### Task B2: Vite 8 + Vitest 4 stack
 
 **Files:**
+
 - Modify: `package.json` (root: vitest), `apps/web/package.json`, `packages/shared/package.json` (vitest devDep)
 - Possibly modify: `apps/web/vite.config.ts`, `apps/web/vitest.config.ts` (or test section in vite config)
 
@@ -97,11 +99,13 @@ General note for every B task: after editing `package.json` files run `PNPM inst
 ### Task B3: Zod 4 migration
 
 **Files:**
+
 - Modify: `packages/shared/package.json` (`"zod": "^4.4.3"`), `apps/server/package.json` (`"zod": "^4.4.3"`)
 - Modify: `apps/server/src/plugins/error-handler.ts:23` (flatten), `apps/server/src/env.ts` (ZodIssue type, url())
 - Possibly modify: any file failing typecheck afterward
 
 **Interfaces:**
+
 - Produces: all shared schemas behave identically on the wire; `error.flatten()` replaced by `z.flattenError(error)`.
 
 - [ ] **Step 1:** Bump both package.jsons to `"zod": "^4.4.3"`, `PNPM install`.
@@ -125,10 +129,12 @@ and in the ZodError branch replace `details: error.flatten(),` with:
 ### Task B4: Fastify ecosystem + app-dep bumps
 
 **Files:**
+
 - Modify: `apps/server/package.json`, `apps/web/package.json`, root `package.json`
 - Modify: `apps/server/src/server.ts:36` (cors call), any lucide icon imports that were renamed
 
 **Interfaces:**
+
 - Produces: `server.register(cors, { origin: true, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] })` — temporary; Task C4 replaces `origin: true` with the allowlist.
 
 - [ ] **Step 1:** `apps/server/package.json`:
@@ -165,10 +171,10 @@ Root: `"prettier": "^3.9.4"`, `"@types/node": "^22.19.19"`, `"husky": "^9.1.7"`,
 - [ ] **Step 3:** `apps/server/src/server.ts:36` — @fastify/cors 11 no longer defaults to all methods; make them explicit:
 
 ```ts
-  await server.register(cors, {
-    origin: true, // tightened to an env-driven allowlist in Task C4
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  });
+await server.register(cors, {
+  origin: true, // tightened to an env-driven allowlist in Task C4
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+});
 ```
 
 - [ ] **Step 4:** `PNPM --filter @lcm/server exec prisma generate`, then `PNPM typecheck`. lucide-react 1.x renamed some icons — if imports fail, check the error list and apply the new names 1:1 (e.g. grep the failing name in `node_modules/lucide-react/dist/lucide-react.d.ts` to find its replacement).
@@ -178,6 +184,7 @@ Root: `"prettier": "^3.9.4"`, `"@types/node": "^22.19.19"`, `"husky": "^9.1.7"`,
 ### Task B5: Test-dependency security bumps + xlsx CDN pin
 
 **Files:**
+
 - Modify: `apps/server/package.json` (devDependencies)
 
 **Interfaces:** none
@@ -210,11 +217,13 @@ PNPM --filter @lcm/server exec tsx -e "import { parseCapacityXlsx } from './scri
 ### Task C1: Forecast range bounds (DoS fix)
 
 **Files:**
+
 - Modify: `packages/shared/src/schemas/forecast.ts`, `packages/shared/src/dates.ts` (add helper)
 - Modify: `apps/server/src/services/forecast-loader.ts` (~line 109, after from/to derivation)
 - Test: `packages/shared/src/schemas/__tests__/forecast.test.ts` (create), plus the server's existing forecast route test file (extend)
 
 **Interfaces:**
+
 - Produces: `MAX_FORECAST_SPAN_MONTHS = 120` exported from `@lcm/shared`; `monthsBetweenUtc(from: Date, to: Date): number` exported from `@lcm/shared` (dates module).
 
 - [ ] **Step 1:** Write failing tests in `packages/shared/src/schemas/__tests__/forecast.test.ts`:
@@ -225,15 +234,27 @@ import { forecastQuerySchema, MAX_FORECAST_SPAN_MONTHS } from '../forecast.js';
 
 describe('forecastQuerySchema range bounds', () => {
   it('rejects from > to', () => {
-    const r = forecastQuerySchema.safeParse({ metric: 'memory_gb', from: '2027-01', to: '2026-01' });
+    const r = forecastQuerySchema.safeParse({
+      metric: 'memory_gb',
+      from: '2027-01',
+      to: '2026-01',
+    });
     expect(r.success).toBe(false);
   });
   it('rejects spans over MAX_FORECAST_SPAN_MONTHS', () => {
-    const r = forecastQuerySchema.safeParse({ metric: 'memory_gb', from: '2026-01', to: '2999-12' });
+    const r = forecastQuerySchema.safeParse({
+      metric: 'memory_gb',
+      from: '2026-01',
+      to: '2999-12',
+    });
     expect(r.success).toBe(false);
   });
   it('accepts a 24-month window', () => {
-    const r = forecastQuerySchema.safeParse({ metric: 'memory_gb', from: '2026-01', to: '2027-12' });
+    const r = forecastQuerySchema.safeParse({
+      metric: 'memory_gb',
+      from: '2026-01',
+      to: '2027-12',
+    });
     expect(r.success).toBe(true);
   });
   it('still accepts omitted bounds', () => {
@@ -251,7 +272,9 @@ describe('forecastQuerySchema range bounds', () => {
 ```ts
 /** Whole-month difference between two UTC dates (to minus from). */
 export function monthsBetweenUtc(from: Date, to: Date): number {
-  return (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth());
+  return (
+    (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth())
+  );
 }
 ```
 
@@ -287,15 +310,15 @@ Ensure both new symbols are exported from the shared package's index barrel.
 - [ ] **Step 4:** Server-side cap regardless of client input (a lone `?to=9999-12` still explodes via the baseline-date default). In `apps/server/src/services/forecast-loader.ts`, immediately after `const toMonth = ...` (~line 110):
 
 ```ts
-    if (toMonth < fromMonth) {
-      throw new UnprocessableError('INVALID_RANGE', 'to must be on or after from');
-    }
-    if (monthsBetweenUtc(fromMonth, toMonth) > MAX_FORECAST_SPAN_MONTHS) {
-      throw new UnprocessableError(
-        'RANGE_TOO_LARGE',
-        `Forecast window must not exceed ${MAX_FORECAST_SPAN_MONTHS} months`,
-      );
-    }
+if (toMonth < fromMonth) {
+  throw new UnprocessableError('INVALID_RANGE', 'to must be on or after from');
+}
+if (monthsBetweenUtc(fromMonth, toMonth) > MAX_FORECAST_SPAN_MONTHS) {
+  throw new UnprocessableError(
+    'RANGE_TOO_LARGE',
+    `Forecast window must not exceed ${MAX_FORECAST_SPAN_MONTHS} months`,
+  );
+}
 ```
 
 Import `MAX_FORECAST_SPAN_MONTHS, monthsBetweenUtc` from `@lcm/shared`. `UnprocessableError` is already imported in this file.
@@ -307,10 +330,12 @@ Import `MAX_FORECAST_SPAN_MONTHS, monthsBetweenUtc` from `@lcm/shared`. `Unproce
 ### Task C2: `includeArchived` boolean coercion fix
 
 **Files:**
+
 - Modify: `packages/shared/src/schemas/cluster.ts:36-38`
 - Test: `packages/shared/src/schemas/__tests__/cluster.test.ts` (create or extend)
 
 **Interfaces:**
+
 - Produces: `clustersListQuerySchema` output type `{ includeArchived: boolean; limit: number; offset: number }` after C8 merges pagination; in this task just `{ includeArchived: boolean }`.
 
 - [ ] **Step 1:** Failing test:
@@ -325,7 +350,9 @@ describe('clustersListQuerySchema.includeArchived', () => {
     ['false', false],
     [undefined, false],
   ])('parses %s to %s', (wire, expected) => {
-    const parsed = clustersListQuerySchema.parse(wire === undefined ? {} : { includeArchived: wire });
+    const parsed = clustersListQuerySchema.parse(
+      wire === undefined ? {} : { includeArchived: wire },
+    );
     expect(parsed.includeArchived).toBe(expected);
   });
   it('rejects junk values', () => {
@@ -354,10 +381,12 @@ In `apps/server/src/routes/clusters.ts:17` the `?? false` is now redundant — s
 ### Task C3: Input bounds + strict schemas
 
 **Files:**
+
 - Modify: `packages/shared/src/schemas/common.ts`, `cluster.ts`, `host.ts`, `item.ts`, `settings.ts`
 - Test: `packages/shared/src/schemas/__tests__/bounds.test.ts` (create)
 
 **Interfaces:**
+
 - Produces: identical schema names/output types; only stricter runtime acceptance.
 
 - [ ] **Step 1:** Failing tests in `bounds.test.ts`:
@@ -376,7 +405,8 @@ describe('input bounds', () => {
   it('rejects amounts above 1e12', () => {
     expect(
       hostCreateInputSchema.safeParse({
-        name: 'h', commissionedAt: '2026-01-01',
+        name: 'h',
+        commissionedAt: '2026-01-01',
         capacities: [{ ...cap(0), amount: 1e13 }],
       }).success,
     ).toBe(false);
@@ -384,7 +414,8 @@ describe('input bounds', () => {
   it('rejects more than 1000 capacity rows', () => {
     expect(
       hostCreateInputSchema.safeParse({
-        name: 'h', commissionedAt: '2026-01-01',
+        name: 'h',
+        commissionedAt: '2026-01-01',
         capacities: Array.from({ length: 1001 }, (_, i) => cap(i)),
       }).success,
     ).toBe(false);
@@ -392,9 +423,12 @@ describe('input bounds', () => {
   it('rejects more than 50 baselines', () => {
     expect(
       clusterCreateInputSchema.safeParse({
-        name: 'c', baselineDate: '2026-01-01',
+        name: 'c',
+        baselineDate: '2026-01-01',
         baselines: Array.from({ length: 51 }, (_, i) => ({
-          metricTypeKey: `m${i}`, baselineConsumption: 1, baselineCapacity: 2,
+          metricTypeKey: `m${i}`,
+          baselineConsumption: 1,
+          baselineCapacity: 2,
         })),
       }).success,
     ).toBe(false);
@@ -402,8 +436,12 @@ describe('input bounds', () => {
   it('rejects unknown keys on create bodies', () => {
     expect(
       itemCreateInputSchema.safeParse({
-        kind: 'event', name: 'e', category: 'Growth', effectiveDate: '2026-01-01',
-        metricTypeKey: 'memory_gb', evil: true,
+        kind: 'event',
+        name: 'e',
+        category: 'Growth',
+        effectiveDate: '2026-01-01',
+        metricTypeKey: 'memory_gb',
+        evil: true,
       }).success,
     ).toBe(false);
   });
@@ -435,11 +473,13 @@ export const positiveAmount = z
 ### Task C4: Fastify production hardening
 
 **Files:**
+
 - Modify: `apps/server/package.json` (add plugins), `apps/server/src/env.ts`, `apps/server/src/server.ts`
 - Modify: `.env.example`, `README.md` (env table), `docker/docker-compose.yml` (pass-through), `docker/docker-compose.dev.yml` if it sets server env (check)
 - Test: server integration test for rate-limit config exclusion + a headers assertion
 
 **Interfaces:**
+
 - Produces: `envSchema` gains `CORS_ORIGIN: string | undefined`, `TRUST_PROXY: string` (default `'loopback,uniquelocal'`), `RATE_LIMIT_MAX: number` (default 300). `buildServer` behavior: helmet headers on all responses; 429 after RATE_LIMIT_MAX req/min/IP (skipped when `NODE_ENV === 'test'`); 503 under event-loop pressure; CORS disabled unless CORS_ORIGIN set.
 
 - [ ] **Step 1:** `PNPM --filter @lcm/server add @fastify/helmet @fastify/rate-limit @fastify/under-pressure`
@@ -462,32 +502,34 @@ import underPressure from '@fastify/under-pressure';
 Server options: `trustProxy: env.TRUST_PROXY, bodyLimit: 1_048_576,` (replaces `trustProxy: true`). Registrations, replacing the current cors line:
 
 ```ts
-  await server.register(helmet, {
-    // The SPA's CSP is owned by nginx (docker/nginx.conf); this is a JSON API.
-    contentSecurityPolicy: false,
-    // Internal deployments serve plain HTTP; an HSTS header would be misleading.
-    strictTransportSecurity: false,
-  });
+await server.register(helmet, {
+  // The SPA's CSP is owned by nginx (docker/nginx.conf); this is a JSON API.
+  contentSecurityPolicy: false,
+  // Internal deployments serve plain HTTP; an HSTS header would be misleading.
+  strictTransportSecurity: false,
+});
 
-  // Same-origin proxies (Vite dev, nginx prod) mean CORS is normally unnecessary;
-  // it stays off unless an allowlist is configured.
-  const corsOrigins = env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
-  await server.register(cors, {
-    origin: corsOrigins && corsOrigins.length > 0 ? corsOrigins : false,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  });
+// Same-origin proxies (Vite dev, nginx prod) mean CORS is normally unnecessary;
+// it stays off unless an allowlist is configured.
+const corsOrigins = env.CORS_ORIGIN?.split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+await server.register(cors, {
+  origin: corsOrigins && corsOrigins.length > 0 ? corsOrigins : false,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+});
 
-  if (env.NODE_ENV !== 'test') {
-    await server.register(rateLimit, {
-      max: env.RATE_LIMIT_MAX,
-      timeWindow: '1 minute',
-    });
-    await server.register(underPressure, {
-      maxEventLoopDelay: 1000,
-      message: 'Service under pressure',
-      retryAfter: 10,
-    });
-  }
+if (env.NODE_ENV !== 'test') {
+  await server.register(rateLimit, {
+    max: env.RATE_LIMIT_MAX,
+    timeWindow: '1 minute',
+  });
+  await server.register(underPressure, {
+    maxEventLoopDelay: 1000,
+    message: 'Service under pressure',
+    retryAfter: 10,
+  });
+}
 ```
 
 - [ ] **Step 4:** Add an integration test (in the server's existing route-test style) asserting a plain GET `/healthz` response carries `x-content-type-options: nosniff` (helmet active) and no `access-control-allow-origin` header when CORS_ORIGIN is unset.
@@ -508,6 +550,7 @@ Server options: `trustProxy: env.TRUST_PROXY, bodyLimit: 1_048_576,` (replaces `
 ### Task C5: Process lifecycle + Prisma logging
 
 **Files:**
+
 - Modify: `apps/server/src/index.ts`, `apps/server/src/plugins/prisma.ts:16`
 
 **Interfaces:** none (behavioral)
@@ -583,34 +626,36 @@ main().catch((err: unknown) => {
 ### Task C6: Serialize append/transition write races
 
 **Files:**
+
 - Modify: `apps/server/src/services/hosts.ts` (appendCapacity), `apps/server/src/services/items.ts` (appendAllocation), `apps/server/src/services/host-lifecycle.ts` (transition — read the TODO at ~line 30 first)
 - Modify: the service that maps Prisma errors (find `translatePrismaError` implementations) to add P2034 → 409
 
 **Interfaces:**
+
 - Produces: same public signatures; concurrent conflicting appends now yield HTTP 409 `WRITE_CONFLICT` instead of corrupting the monotonic-date invariant.
 
 - [ ] **Step 1:** In `hosts.ts` `appendCapacity`, wrap the read-validate-create sequence (currently `findFirst` → checks → `create`) in a serializable interactive transaction. Shape:
 
 ```ts
-    try {
-      await this.prisma.$transaction(
-        async (tx) => {
-          const host = await tx.host.findFirst({
-            where: { id, tenantId },
-            include: { capacities: { include: { metricType: true } } },
-          });
-          // ...move the existing NotFound / EFFECTIVE_BEFORE_COMMISSION /
-          // metricType / EFFECTIVE_NOT_MONOTONIC checks here unchanged,
-          // resolving metric types via tx...
-          await tx.hostMetricCapacity.create({ data: { /* unchanged */ } });
-        },
-        { isolationLevel: 'Serializable' },
-      );
-    } catch (err) {
-      this.translatePrismaError(err);
-      throw err;
-    }
-    return this.getById(tenantId, id);
+try {
+  await this.prisma.$transaction(
+    async (tx) => {
+      const host = await tx.host.findFirst({
+        where: { id, tenantId },
+        include: { capacities: { include: { metricType: true } } },
+      });
+      // ...move the existing NotFound / EFFECTIVE_BEFORE_COMMISSION /
+      // metricType / EFFECTIVE_NOT_MONOTONIC checks here unchanged,
+      // resolving metric types via tx...
+      await tx.hostMetricCapacity.create({ data: {/* unchanged */} });
+    },
+    { isolationLevel: 'Serializable' },
+  );
+} catch (err) {
+  this.translatePrismaError(err);
+  throw err;
+}
+return this.getById(tenantId, id);
 ```
 
 `resolveMetricTypes` currently uses `this.prisma` — add an optional `tx` parameter (`tx: Prisma.TransactionClient = this.prisma`) so it can run inside the transaction.
@@ -620,9 +665,9 @@ main().catch((err: unknown) => {
 - [ ] **Step 4:** In `translatePrismaError` (grep for it in both services — likely a shared private method or util): add before other checks:
 
 ```ts
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
-      throw new ConflictError('WRITE_CONFLICT', 'Concurrent write detected; retry the request');
-    }
+if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+  throw new ConflictError('WRITE_CONFLICT', 'Concurrent write detected; retry the request');
+}
 ```
 
 If no `ConflictError` (409) exists in `apps/server/src/services/errors.ts`, add one mirroring `UnprocessableError`'s shape with `statusCode = 409`.
@@ -633,6 +678,7 @@ If no `ConflictError` (409) exists in `apps/server/src/services/errors.ts`, add 
 ### Task C7: Tenant scoping on ClusterSettings queries
 
 **Files:**
+
 - Modify: `apps/server/src/services/settings.ts` (~lines 69-71, 101-112, 126)
 - Read first: `apps/server/prisma/schema.prisma` (ClusterSettings model)
 
@@ -647,6 +693,7 @@ If no `ConflictError` (409) exists in `apps/server/src/services/errors.ts`, add 
 ### Task C8: Pagination on list endpoints
 
 **Files:**
+
 - Create: `packages/shared/src/schemas/pagination.ts`
 - Modify: `packages/shared/src/schemas/cluster.ts` (merge pagination into list query), shared index barrel
 - Modify: `apps/server/src/routes/clusters.ts:15-18`, `apps/server/src/routes/hosts.ts:19-22`, `apps/server/src/routes/items.ts:15-18`
@@ -654,6 +701,7 @@ If no `ConflictError` (409) exists in `apps/server/src/services/errors.ts`, add 
 - Test: shared schema test + server integration tests for the three endpoints
 
 **Interfaces:**
+
 - Produces (consumed by Task D4b): `paginationQuerySchema` (limit default 100 max 500, offset default 0); `interface Paginated<T> { items: T[]; total: number; limit: number; offset: number }`; all three list endpoints return `Paginated<...Response>`.
 
 - [ ] **Step 1:** `packages/shared/src/schemas/pagination.ts`:
@@ -730,19 +778,21 @@ Apply the same `{ count + findMany take/skip }` → `Paginated<...>` pattern to 
 ### Task D1: Fleet KPI reads the current month
 
 **Files:**
+
 - Modify: `apps/web/src/lib/aggregate-fleet.ts:72-92`
 - Test: `apps/web/src/lib/aggregate-fleet.test.ts` (find exact path via glob; line ~56 locks old behavior)
 
 **Interfaces:**
+
 - Produces: `FleetSummary.totalConsumption/totalCapacity/utilization/worstCluster` now describe `fleetMonths[0]` (the current month — `resolveWindow` starts windows at this month).
 
 - [ ] **Step 1:** Update the test that pins last-month behavior to expect FIRST-month totals; add a regression comment. Also update any `worstCluster` expectations to first-month. Run: FAIL.
 - [ ] **Step 2:** In `aggregate-fleet.ts` replace `const latest = fleetMonths[fleetMonths.length - 1];` with:
 
 ```ts
-  // Headline KPIs describe the PRESENT: window rows start at the current
-  // month (resolveWindow anchors windows at "now"), so row 0 is today.
-  const current = fleetMonths[0];
+// Headline KPIs describe the PRESENT: window rows start at the current
+// month (resolveWindow anchors windows at "now"), so row 0 is today.
+const current = fleetMonths[0];
 ```
 
 and use `current` in the block below. In the `worstCluster` loop replace `series.months[series.months.length - 1]` with `series.months[0]`.
@@ -753,6 +803,7 @@ and use `current` in the block below. In the `worstCluster` loop replace `series
 ### Task D2: Complete mutation invalidations + onError feedback
 
 **Files:**
+
 - Modify: `apps/web/src/components/clusters/host-dialogs.tsx:52-62`
 - Modify: `apps/web/src/components/clusters/item-dialogs.tsx:44-53`
 - Modify: `apps/web/src/components/clusters/threshold-overrides-form.tsx:42-59`
@@ -786,8 +837,8 @@ and use `current` in the block below. In the `worstCluster` loop replace `series
 - [ ] **Step 4:** `forecast-thresholds-form.tsx` `onSuccess` — after `setQueryData` add:
 
 ```ts
-      void queryClient.invalidateQueries({ queryKey: ['forecast'] });
-      void queryClient.invalidateQueries({ queryKey: ['cluster-settings'] });
+void queryClient.invalidateQueries({ queryKey: ['forecast'] });
+void queryClient.invalidateQueries({ queryKey: ['cluster-settings'] });
 ```
 
 plus the same `onError` toast (`'Could not save settings'`).
@@ -799,6 +850,7 @@ plus the same `onError` toast (`'Could not save settings'`).
 ### Task D3: Client form bounds match server schemas
 
 **Files:**
+
 - Modify: `apps/web/src/components/settings/forecast-thresholds-form.tsx:63-81`
 - Modify: `apps/web/src/components/clusters/threshold-overrides-form.tsx:72-83`
 - Modify: `apps/web/src/components/settings/categories-form.tsx` (Input ~line 117)
@@ -810,30 +862,30 @@ plus the same `onError` toast (`'Could not save settings'`).
 - [ ] **Step 1:** `forecast-thresholds-form.tsx` `handleSubmit` — after the warn<crit check add:
 
 ```ts
-    if (warnPct < 1 || warnPct > 99 || critPct < 1 || critPct > 99) {
-      setValidationError('Thresholds must be between 1% and 99%.');
-      return;
-    }
+if (warnPct < 1 || warnPct > 99 || critPct < 1 || critPct > 99) {
+  setValidationError('Thresholds must be between 1% and 99%.');
+  return;
+}
 ```
 
 - [ ] **Step 2:** `threshold-overrides-form.tsx` `handleSubmit` — same guard applied to whichever of warn/crit is a number:
 
 ```ts
-    for (const pct of [warnPct, critPct]) {
-      if (typeof pct === 'number' && (pct < 1 || pct > 99)) {
-        setValidationError('Thresholds must be between 1% and 99%.');
-        return;
-      }
-    }
+for (const pct of [warnPct, critPct]) {
+  if (typeof pct === 'number' && (pct < 1 || pct > 99)) {
+    setValidationError('Thresholds must be between 1% and 99%.');
+    return;
+  }
+}
 ```
 
 - [ ] **Step 3:** `categories-form.tsx` new-category `Input`: add `maxLength={60}` (server cap is `.max(60)`).
 - [ ] **Step 4:** `host-dialogs.tsx` — add `maxLength={120}` to the serialNumber/vendor/model Inputs and `maxLength={2000}` to description (both dialogs — grep the JSX). In `CreateHostDialog`'s safeParse-failure branch, after building `fieldErrors`, add a fallback so no failure is ever silent:
 
 ```ts
-      if (Object.keys(fieldErrors).length === 0) {
-        toast.error(parsed.error.issues[0]?.message ?? 'Invalid input');
-      }
+if (Object.keys(fieldErrors).length === 0) {
+  toast.error(parsed.error.issues[0]?.message ?? 'Invalid input');
+}
 ```
 
 Apply the same fallback in `EditHostDialog`'s mapping (~line 381).
@@ -841,18 +893,20 @@ Apply the same fallback in `EditHostDialog`'s mapping (~line 381).
 - [ ] **Step 5:** `baseline-edit-form.tsx` — invalid numeric edits currently fall back to server values silently in `handleConfirm`. Add a guard before mutate:
 
 ```ts
-    const invalidMetric = metrics.find((m) => {
-      const edit = metricEdits[m.metricTypeKey];
-      return (
-        (edit?.consumption !== null && edit?.consumption !== undefined && parseNumber(edit.consumption) === null) ||
-        (edit?.capacity !== null && edit?.capacity !== undefined && parseNumber(edit.capacity) === null)
-      );
-    });
-    if (invalidMetric) {
-      toast.error(`Invalid number for ${invalidMetric.metricTypeKey}`);
-      setConfirmOpen(false);
-      return;
-    }
+const invalidMetric = metrics.find((m) => {
+  const edit = metricEdits[m.metricTypeKey];
+  return (
+    (edit?.consumption !== null &&
+      edit?.consumption !== undefined &&
+      parseNumber(edit.consumption) === null) ||
+    (edit?.capacity !== null && edit?.capacity !== undefined && parseNumber(edit.capacity) === null)
+  );
+});
+if (invalidMetric) {
+  toast.error(`Invalid number for ${invalidMetric.metricTypeKey}`);
+  setConfirmOpen(false);
+  return;
+}
 ```
 
 (import `toast` from `'sonner'`.)
@@ -863,11 +917,13 @@ Apply the same fallback in `EditHostDialog`'s mapping (~line 381).
 ### Task D4a: Response schemas in @lcm/shared
 
 **Files:**
+
 - Create: `packages/shared/src/schemas/responses.ts`
 - Modify: shared index barrel
 - Test: `packages/shared/src/schemas/__tests__/responses.test.ts`
 
 **Interfaces:**
+
 - Produces (consumed by D4b): Zod schemas typed against the EXISTING interfaces (which stay the source of truth — zero drift risk, server untouched): `clusterResponseSchema: z.ZodType<ClusterResponse>`, `hostResponseSchema: z.ZodType<HostResponse>`, `itemResponseSchema: z.ZodType<ItemResponse>`, `forecastResponseSchema: z.ZodType<ForecastResponse>`, `categoryResponseSchema`, `hostLifecycleEventResponseSchema`, `hostReplacementResponseSchema`, plus `paginatedSchema<T>(item)` helper. `tenantSettingsSchema` / `clusterSettingsResponseSchema` already exist — re-use, do not duplicate.
 
 - [ ] **Step 1:** Read the remaining response interfaces you haven't seen (`ForecastResponse` in `forecast.ts`, `CategoryResponse`, `HostLifecycleEventResponse`, `HostReplacementResponse`, `HostState` — grep the shared package). Then create `responses.ts`. Pattern (complete example for the two cluster shapes; replicate field-for-field for the rest — the `z.ZodType<T>` annotation makes tsc reject any missing/mistyped field, so parity is compiler-enforced):
@@ -919,12 +975,14 @@ Continue for `HostResponse` (+`CapacityResponseRow`, `state: hostStateSchema` �
 ### Task D4b: api-client validates responses + pagination envelope
 
 **Files:**
+
 - Modify: `apps/web/src/lib/api-client.ts` (request(), api.clusters.list, api.hosts.listByCluster, api.items.listByCluster, every request<> call gains a schema)
 - Modify: every caller of the three list functions (grep `api.clusters.list`, `api.hosts.listByCluster`, `api.items.listByCluster` under `apps/web/src`) to consume `.items`
 - Modify: `apps/web/src/components/clusters/cluster-table.tsx` (rename local `ClusterForecastEntry` → `ClusterTableEntry`; add truncation note row)
 - Test: existing web tests; extend api-client test if one exists
 
 **Interfaces:**
+
 - Consumes: D4a schemas, C8 envelope.
 - Produces: `request<T>(path, init?, schema?: z.ZodType<T>)` — parses when schema given, throws `ApiError(500-style local code 'RESPONSE_VALIDATION', ...)` on mismatch.
 
@@ -941,20 +999,20 @@ async function request<T>(
 and replace the final `return body as T;` with:
 
 ```ts
-  if (schema === undefined) {
-    return body as T;
-  }
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) {
-    throw new ApiError(response.status, {
-      error: {
-        code: 'RESPONSE_VALIDATION',
-        message: 'Server response did not match the expected shape',
-        details: z.flattenError(parsed.error),
-      },
-    });
-  }
-  return parsed.data;
+if (schema === undefined) {
+  return body as T;
+}
+const parsed = schema.safeParse(body);
+if (!parsed.success) {
+  throw new ApiError(response.status, {
+    error: {
+      code: 'RESPONSE_VALIDATION',
+      message: 'Server response did not match the expected shape',
+      details: z.flattenError(parsed.error),
+    },
+  });
+}
+return parsed.data;
 ```
 
 (import `z` from `'zod'` and the D4a schemas from `@lcm/shared`.)
@@ -963,9 +1021,9 @@ and replace the final `return body as T;` with:
 - [ ] **Step 3:** Pagination plumbing — `api.clusters.list` gains optional `limit`/`offset` params building a `URLSearchParams`; same for the two `listByCluster` fns. Then update callers: grep shows call sites in `routes/index.tsx`, the clusters route, host/item panels, `command-palette.tsx`. Each `useQuery` whose `queryFn` returned an array now returns `Paginated<...>`; the least-churn fix is `select: (page) => page.items` on those `useQuery` options — EXCEPT `cluster-table.tsx`, which should receive both `items` and `total` so it can render, after the table body when `total > items.length`:
 
 ```tsx
-        <p className="mt-2 text-xs text-fg-subtle" role="status">
-          Showing first {clusters.length} of {total} clusters.
-        </p>
+<p className="mt-2 text-xs text-fg-subtle" role="status">
+  Showing first {clusters.length} of {total} clusters.
+</p>
 ```
 
 (adapt naming to the component's actual props; thread `total` from the route that owns the query.)
@@ -982,6 +1040,7 @@ and replace the final `return body as T;` with:
 ### Task E1: Compose fail-closed password + container hardening
 
 **Files:**
+
 - Modify: `docker/docker-compose.yml`, `.dockerignore:28`
 
 **Interfaces:** none
@@ -992,18 +1051,18 @@ and replace the final `return body as T;` with:
 - [ ] **Step 2:** Add to ALL THREE services:
 
 ```yaml
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+security_opt:
+  - no-new-privileges:true
+cap_drop:
+  - ALL
 ```
 
 Add resource limits — `db`: `mem_limit: 1g`, `cpus: 2`, `pids_limit: 256`; `server`: `mem_limit: 512m`, `cpus: 1`, `pids_limit: 256`; `web`: `mem_limit: 256m`, `cpus: 1`, `pids_limit: 128`. Add to `server` only (distroless Node writes nothing except tmp):
 
 ```yaml
-    read_only: true
-    tmpfs:
-      - /tmp
+read_only: true
+tmpfs:
+  - /tmp
 ```
 
 Do NOT set `read_only` on `db` (data dir) or `web` (nginx cache paths unverified on DHI image — leave a one-line comment noting that).
@@ -1015,6 +1074,7 @@ Do NOT set `read_only` on `db` (data dir) or `web` (nginx cache paths unverified
 ### Task E2: nginx security headers + externalized theme script
 
 **Files:**
+
 - Modify: `docker/nginx.conf`
 - Modify: `apps/web/index.html` (inline anti-FOUC script at lines ~8-17)
 - Create: `apps/web/public/theme-init.js`
@@ -1105,6 +1165,7 @@ server {
 ### Task E3: CI/CD hardening
 
 **Files:**
+
 - Modify: `.github/workflows/ci.yml`, `.github/workflows/publish-images.yml`
 - Create: `.github/dependabot.yml`
 
@@ -1141,8 +1202,8 @@ permissions:
 and in the Build-and-push step `with:` add:
 
 ```yaml
-          provenance: true
-          sbom: true
+provenance: true
+sbom: true
 ```
 
 - [ ] **Step 4:** Create `.github/dependabot.yml`:
@@ -1167,6 +1228,7 @@ updates:
 ### Task E4: Documentation drift
 
 **Files:**
+
 - Modify: `docs/operations.md:63` (volume name), `README.md` (env table PORT row + new env rows if not already added in C4)
 
 **Interfaces:** none
