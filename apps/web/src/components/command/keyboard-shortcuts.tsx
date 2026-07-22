@@ -47,7 +47,7 @@ export function KeyboardShortcuts(): React.JSX.Element {
           navigate({ to: '/' });
         } else if (event.key === 's') {
           event.preventDefault();
-          navigate({ to: '/settings' });
+          navigate({ to: '/settings/forecasting' });
         }
         clearPrefix();
         return;

@@ -1,4 +1,6 @@
 import {
+  Link,
+  Outlet,
   createFileRoute,
   useCanGoBack,
   useLocation,
@@ -7,79 +9,72 @@ import {
 } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef } from 'react';
 
-import { AddClusterPanel } from '@/components/settings/add-cluster-panel';
-import { AuthenticationForm } from '@/components/settings/authentication-form';
-import { CategoriesForm } from '@/components/settings/categories-form';
-import { ForecastThresholdsForm } from '@/components/settings/forecast-thresholds-form';
-import { VcenterConnectionsPanel } from '@/components/settings/vcenter-connections-panel';
 import { BackButton } from '@/components/ui/back-button';
-import {
-  ACCESS_SECTION_HASH,
-  FORECASTING_SECTION_HASH,
-  INVENTORY_SECTION_HASH,
-} from '@/lib/anchors';
+import { useIsAdmin } from '@/lib/auth';
 import { isOverlayOpen, isTypingTarget } from '@/lib/keyboard';
+import { cn } from '@/lib/utils';
 
 export const Route = createFileRoute('/_app/settings')({
-  component: SettingsPage,
+  component: SettingsLayout,
 });
 
-function SettingsPage(): React.JSX.Element {
-  const { auth } = Route.useRouteContext();
+/** Every pathname this layout renders for — its own index plus every child. */
+const SETTINGS_PATH_PREFIX = '/settings';
+
+function isSettingsPathname(pathname: string): boolean {
+  return pathname === SETTINGS_PATH_PREFIX || pathname.startsWith(`${SETTINGS_PATH_PREFIX}/`);
+}
+
+function SettingsLayout(): React.JSX.Element {
+  const isAdmin = useIsAdmin();
   const router = useRouter();
   const canGoBack = useCanGoBack();
   const navigate = useNavigate();
   const { href, pathname } = useLocation();
-  // Disabled-mode bootstrap: with no auth enforced yet, anyone on this page
-  // can configure it. Once OIDC is on, only an ADMIN sees the panel.
-  const canManageAuth = auth.user?.role === 'ADMIN' || auth.authRequired === false;
 
   // Go back to the previous route when there is real history to pop, else fall
-  // back to the fleet console — a deep link/refresh onto /settings has no prior
-  // entry (useCanGoBack tracks `__TSR_index !== 0`), so it lands on `/`.
+  // back to the fleet console — a deep link/refresh onto /settings/* has no
+  // prior entry (useCanGoBack tracks `__TSR_index !== 0`), so it lands on `/`.
   //
-  // @ai-warning Re-entrancy latch, keyed to the location it fired from — NOT
-  // a one-shot boolean. (The cluster panel used to carry a sibling `isClosing`
-  // guard; #243's instant close removed it — the panel's close is a bare
-  // synchronous navigate that double-activation can't compound, so this latch
-  // is now the only one of its kind and must justify itself alone.)
-  // `router.history.back()` is `window.history.back()`: the traversal is queued
-  // and only lands on a later task (popstate → router transition → unmount), so
-  // this page — and its document keydown listener — outlives its own navigation
-  // in two windows that need OPPOSITE treatment. Both are load-bearing:
+  // @ai-warning Re-entrancy latch, keyed to the href it fired from — NOT a
+  // one-shot boolean. `router.history.back()` is `window.history.back()`: the
+  // traversal is queued and only lands on a later task (popstate → router
+  // transition → unmount), so this layout — and its document keydown listener
+  // — outlives its own navigation in two windows that need OPPOSITE treatment.
+  // Both are load-bearing:
   //
   //  1. Pop not landed yet — `href` is still the one we fired from and
   //     `canGoBack` is stale. A second activation here (double-clicked Back,
   //     double-tapped Esc, OS auto-repeat) pops a *second* entry and can eject
   //     the user out of the SPA entirely. Stay latched.
-  //  2. Pop landed on a different pathname — this page still renders once more
-  //     before React unmounts it (verified in the memory-router harness:
-  //     SettingsPage renders at href `/` after Back). Resetting here would
-  //     re-open exactly the double-pop of (1). Stay latched; the unmount
-  //     discards the latch anyway.
+  //  2. Pop landed outside `/settings` entirely — this layout still renders
+  //     once more before React unmounts it (the parent route no longer
+  //     matches). Resetting here would re-open exactly the double-pop of (1).
+  //     Stay latched; the unmount discards the latch anyway.
   //
-  // The case that MUST release is a pop landing on the SAME pathname: the route
-  // does not remount, so the page carries this latch for the rest of the visit.
-  // `/settings#add-cluster` (the ⌘K Add-cluster deep link) → back → `/settings`
-  // is exactly that, and a permanent latch leaves Back and Esc dead with no
-  // recovery short of a reload. Hence: released only by a same-pathname,
-  // different-href landing. Do NOT simplify this to "reset on location change"
-  // — that is window (2), and it is reachable.
-  //
-  // Two consequences of that release, both accepted:
-  //  - Once such a pop HAS landed, a further activation is no longer guarded,
-  //    so a slow double-click pops again. `canGoBack` bounds it: the worst
-  //    case is landing on `/`, never leaving the SPA. The code cannot tell a
-  //    stray second click from a deliberate new intent once the pop landed.
-  //  - A pop landing on the same pathname AND the same href keeps the latch
-  //    forever. Unreachable today — TanStack dedupes a navigation to the
-  //    current href, so adjacent identical entries do not occur — but a future
-  //    navigation that can create them would need this rule widened.
-  const firedFromRef = useRef<{ href: string; pathname: string } | null>(null);
+  // @ai-note (#293) This redesigns the release condition the single-route
+  // version of this page used (pinned in `app-settings-back.test.tsx`), rather
+  // than copying it: that version compared the CURRENT pathname against the
+  // one the latch fired from, because `/settings` was the only pathname this
+  // page ever rendered at (only the hash varied) — any pathname change meant
+  // the page was on its way OUT and about to unmount, so it stayed latched
+  // until then. Now Forecasting/Inventory/Access are sibling child routes
+  // under this shared layout: this component does NOT unmount when Back (or a
+  // tab `Link`) lands on a sibling sub-route — only `<Outlet/>`'s child does —
+  // so treating "pathname changed" as "about to unmount" would leave Back and
+  // Esc dead on the very first cross-tab landing, with no recovery short of a
+  // reload. The rule that actually matches this layout's lifetime: stay
+  // latched only while `href` hasn't moved yet (case 1) OR the landing left
+  // `/settings` altogether (case 2, still `isSettingsPathname` === false).
+  // Landing anywhere else under `/settings` — including the exact sub-route we
+  // started from, e.g. `/settings/inventory#add-cluster` → back →
+  // `/settings/inventory` — releases the latch, because this layout is
+  // provably still mounted to receive the next Back/Esc.
+  const firedFromRef = useRef<string | null>(null);
   const goBack = useCallback((): void => {
     const firedFrom = firedFromRef.current;
-    if (firedFrom !== null && (firedFrom.href === href || firedFrom.pathname !== pathname)) return;
-    firedFromRef.current = { href, pathname };
+    if (firedFrom !== null && (firedFrom === href || !isSettingsPathname(pathname))) return;
+    firedFromRef.current = href;
     if (canGoBack) {
       router.history.back();
     } else {
@@ -118,76 +113,51 @@ function SettingsPage(): React.JSX.Element {
       <BackButton onClick={goBack} />
       <header>
         {/* The 'Configuration' eyebrow is dropped (#243 Part B) — the h1 below
-            already names the page, and the in-page nav that replaces it below
-            gives the eyebrow's real estate to something the user can act on.
-            font-display + text-display: the existing type-scale tokens
-            (styles.css) were defined but unused here — every sibling screen's
-            top-level heading (fleet verdict, cluster panel title) uses
-            font-display; Settings was the one screen still on the arbitrary
-            Inter fallback. */}
+            already names the page, and the tab nav that replaces the old
+            in-page nav below gives the eyebrow's real estate to something the
+            user can act on. font-display + text-display: the existing
+            type-scale tokens (styles.css) were defined but unused here —
+            every sibling screen's top-level heading (fleet verdict, cluster
+            panel title) uses font-display; Settings was the one screen still
+            on the arbitrary Inter fallback. */}
         <h1 className="font-display text-display">Settings</h1>
       </header>
-      {/* In-page table of contents (#243 Part B — Medium: "Settings page is
-          one flat scroll"): plain fragment anchors are enough here — this is
-          a static jump list, not a repeatable cross-page action, so it does
-          not need the requestAnchorFocus contract lib/anchors.ts defines for
-          that case (see the doc comment on the *_SECTION_HASH constants). */}
-      <nav aria-label="Settings sections" className="flex flex-wrap gap-4 text-sm">
-        <a
-          href={`#${FORECASTING_SECTION_HASH}`}
-          className="text-steel underline-offset-4 hover:underline"
-        >
-          Forecasting
-        </a>
-        <a
-          href={`#${INVENTORY_SECTION_HASH}`}
-          className="text-steel underline-offset-4 hover:underline"
-        >
-          Inventory
-        </a>
-        {canManageAuth ? (
-          <a
-            href={`#${ACCESS_SECTION_HASH}`}
-            className="text-steel underline-offset-4 hover:underline"
-          >
-            Access
-          </a>
-        ) : null}
+      {/* Tab-style sub-nav (#293, reverses #243 Part B's "one flat scroll"):
+          each item is a real route (`/settings/forecasting`,
+          `/settings/inventory`, `/settings/access`), not a fragment anchor —
+          plain <Link>s carrying `aria-current="page"` automatically
+          (TanStack Router's default active-link behaviour) rather than a
+          synthetic ARIA tablist, since these are genuinely separate pages a
+          user can bookmark or reload, not tab-panels sharing one DOM. */}
+      <nav aria-label="Settings sections" className="flex gap-4 border-b border-border text-sm">
+        <SettingsTab to="/settings/forecasting">Forecasting</SettingsTab>
+        <SettingsTab to="/settings/inventory">Inventory</SettingsTab>
+        {isAdmin ? <SettingsTab to="/settings/access">Access</SettingsTab> : null}
       </nav>
-      <section
-        id={FORECASTING_SECTION_HASH}
-        aria-labelledby="settings-section-forecasting-heading"
-        className="scroll-mt-24 space-y-6"
-      >
-        <h2 id="settings-section-forecasting-heading" className="font-display text-h2">
-          Forecasting
-        </h2>
-        <ForecastThresholdsForm />
-        <CategoriesForm />
-      </section>
-      <section
-        id={INVENTORY_SECTION_HASH}
-        aria-labelledby="settings-section-inventory-heading"
-        className="scroll-mt-24 space-y-6"
-      >
-        <h2 id="settings-section-inventory-heading" className="font-display text-h2">
-          Inventory
-        </h2>
-        <VcenterConnectionsPanel />
-        <AddClusterPanel />
-      </section>
-      {canManageAuth ? (
-        <section
-          id={ACCESS_SECTION_HASH}
-          aria-labelledby="settings-section-access-heading"
-          className="scroll-mt-24 space-y-6"
-        >
-          <h2 id="settings-section-access-heading" className="font-display text-h2">
-            Access
-          </h2>
-          <AuthenticationForm />
-        </section>
-      ) : null}
+      <Outlet />
     </div>
+  );
+}
+
+function SettingsTab({
+  to,
+  children,
+}: {
+  to: '/settings/forecasting' | '/settings/inventory' | '/settings/access';
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <Link
+      to={to}
+      className={cn(
+        'relative inline-flex h-9 items-center whitespace-nowrap px-1 font-medium text-fg-muted',
+        'transition-colors hover:text-foreground focus-visible:text-foreground',
+        'after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:origin-center after:scale-x-0',
+        'after:rounded-full after:bg-accent after:transition-transform after:duration-200 after:ease-out',
+        'data-[status=active]:text-foreground data-[status=active]:after:scale-x-100',
+      )}
+    >
+      {children}
+    </Link>
   );
 }

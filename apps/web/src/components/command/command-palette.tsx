@@ -91,7 +91,7 @@ export function CommandPalette(): React.JSX.Element {
                   icon={Settings}
                   label="Go to settings"
                   hint="g s"
-                  onSelect={() => runAndClose(() => navigate({ to: '/settings' }))}
+                  onSelect={() => runAndClose(() => navigate({ to: '/settings/forecasting' }))}
                 />
               </PaletteGroup>
 
@@ -123,15 +123,16 @@ export function CommandPalette(): React.JSX.Element {
                   // @ai-warning The `requestAnchorFocus` call is load-bearing,
                   // not belt-and-braces: navigating to a location the user is
                   // already at is a no-op the panel cannot observe, so without
-                  // it re-running this action from /settings#add-cluster does
-                  // nothing at all. See lib/anchors.ts.
+                  // it re-running this action from
+                  // /settings/inventory#add-cluster does nothing at all. See
+                  // lib/anchors.ts.
                   <PaletteItem
                     icon={Plus}
                     label="Add cluster — Settings"
                     keywords={['create cluster', 'new cluster', 'add cluster']}
                     onSelect={() =>
                       runAndClose(() => {
-                        void navigate({ to: '/settings', hash: ADD_CLUSTER_HASH });
+                        void navigate({ to: '/settings/inventory', hash: ADD_CLUSTER_HASH });
                         requestAnchorFocus(ADD_CLUSTER_HASH);
                       })
                     }
