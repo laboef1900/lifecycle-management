@@ -53,12 +53,14 @@ describe('<ThresholdOverridesForm>', () => {
     });
   });
 
-  it('links "global defaults" to the Settings page Forecasting section', async () => {
+  it('links "global defaults" to the Settings Forecasting sub-route', async () => {
+    // #293: Forecasting is its own `/settings/forecasting` route rather than
+    // an in-page `#section-forecasting` anchor on a single flat page.
     renderWithClient(<ThresholdOverridesForm clusterId={CLUSTER_ID} />);
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'global defaults' })).toHaveAttribute(
         'href',
-        '/settings#section-forecasting',
+        '/settings/forecasting',
       );
     });
   });

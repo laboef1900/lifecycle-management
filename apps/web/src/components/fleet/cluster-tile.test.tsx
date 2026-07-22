@@ -126,14 +126,19 @@ describe('<ClusterTile>', () => {
     expect(screen.getByRole('link')).toHaveAttribute('href', '/clusters/c1');
   });
 
-  it('shows an "ORDER BY ... IN ..." chip when there is a projected order-by date', () => {
+  it('shows an "ORDER BY ..." chip when there is a projected order-by date', () => {
     render(
       <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
     );
     // "Dec 28", not the raw "2026-12-28" ISO string (#243 Part B copy item 1)
     // — still uppercased to match the chip's own ALL-CAPS convention.
-    expect(screen.getByText(/ORDER BY DEC 28/)).toBeInTheDocument();
-    expect(screen.getByText(/IN /)).toBeInTheDocument();
+    const chip = screen.getByText(/ORDER BY DEC 28/);
+    expect(chip).toBeInTheDocument();
+    // #290: the relative-days suffix ("· IN X D" / "· X D OVERDUE") is
+    // dropped from the visible chip label — the Badge's color tone already
+    // conveys urgency, and the tile's aria-label still carries the
+    // relative-days detail for assistive tech.
+    expect(chip.textContent).toBe('ORDER BY DEC 28');
   });
 
   // Spec §4.4 amendment (2026-07-20, #268): two chips move up a row each so the
@@ -627,13 +632,17 @@ describe('<ClusterTile>', () => {
   // tracked mono is hard to read on the primary console. This tile's own
   // portion: the order chip (was 9.5px) and FlagChip (was 9px).
   describe('micro-text floor', () => {
-    it('floors the order chip at 10px, not 9.5px', () => {
+    // #290: the order chip now renders via the shared `Badge` (`text-xs` =
+    // 12px), which clears the design system's 10px --text-label floor but no
+    // longer literally matches the old bespoke `text-[10px]` class.
+    it('renders the order chip via the shared Badge at text-xs (12px), clearing the 10px floor', () => {
       render(
         <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
       );
       const chip = screen.getByText(/ORDER BY DEC 28/);
-      expect(chip.className).toMatch(/text-\[10px\]/);
+      expect(chip.className).toMatch(/text-xs/);
       expect(chip.className).not.toMatch(/text-\[9\.5px\]/);
+      expect(chip.className).not.toMatch(/text-\[10px\]/);
     });
 
     it('floors the FlagChip at 10px, not 9px', () => {
