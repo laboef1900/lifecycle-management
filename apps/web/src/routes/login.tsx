@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { Activity, Check, ShieldCheck } from 'lucide-react';
+import { Check, ShieldCheck } from 'lucide-react';
 import { z } from 'zod';
 
 import { type LoginErrorCode, loginErrorCodeSchema, safeRedirectPath } from '@lcm/shared';
 
 import { Field } from '@/components/form/field';
+import { BrandMark } from '@/components/ui/brand-mark';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { localLogin } from '@/lib/api-client';
@@ -139,21 +140,6 @@ export function LocalLoginForm({
         {pending ? 'Signing in…' : 'Sign in'}
       </Button>
     </form>
-  );
-}
-
-/** The amber app mark, shared by the hero lockup and the sign-in card. */
-function BrandMark({ className }: { className?: string }): React.JSX.Element {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        'flex items-center justify-center rounded-[var(--radius)] bg-accent shadow-[var(--shadow-card)]',
-        className,
-      )}
-    >
-      <Activity className="h-1/2 w-1/2 text-accent-foreground" />
-    </span>
   );
 }
 
