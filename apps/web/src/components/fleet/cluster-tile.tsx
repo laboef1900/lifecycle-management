@@ -48,10 +48,10 @@ const STATUS_BADGE: Record<
   unknown: { variant: 'outline', label: 'UNKNOWN' },
 };
 
-const ORDER_CHIP_TONE: Record<'now' | 'soon' | 'planned', string> = {
-  now: 'border-destructive/40 bg-destructive/10 text-destructive',
-  soon: 'border-warning/40 bg-warning/10 text-warning',
-  planned: 'border-border text-fg-muted',
+const ORDER_BADGE_VARIANT: Record<'now' | 'soon' | 'planned', 'danger' | 'warning' | 'outline'> = {
+  now: 'danger',
+  soon: 'warning',
+  planned: 'outline',
 };
 
 interface RunwayInfo {
@@ -155,9 +155,14 @@ function computeRunway(
 
 /**
  * Uniform fleet-console tile (spec §4.4): name + status chip, runway numeral,
- * order-by chip, one-line verdict, flag chips (event-in-window, stale
- * baseline), and the compact forecast chart. Renders a non-link error state
- * when the forecast failed to load.
+ * order-by chip, one-line verdict, a stale-baseline flag chip, and the
+ * compact forecast chart. Renders a non-link error state when the forecast
+ * failed to load.
+ *
+ * #291 (2026-07-22): the tile no longer carries a visible event-in-window
+ * signal — the `EVENT ×n` chip was removed outright (owner decision, not a
+ * relocation). Event data still reaches the tile's aria-label (below) and,
+ * in full, the cluster detail panel's `ForecastChart`.
  *
  * Wrapped in `memo` (PR review fix 4d) so mousing across the fleet grid —
  * which only flips one tile's `linked` prop via `fleet-console.tsx`'s hover
@@ -276,10 +281,11 @@ export const ClusterTile = memo(function ClusterTile({
       : orderUnknown
         ? 'order status unknown — capacity required'
         : 'no order needed',
-    // The tile's aria-label OVERRIDES its visible content, so a chip that is
-    // never named here is silent to assistive tech however prominent it looks.
-    // The EVENT chip was in that position before #268 and became more visible
-    // when it moved up a row, so name it (issue AC-7).
+    // #291 (2026-07-22): the visible EVENT chip this segment used to describe
+    // was removed from the tile entirely (owner decision — not merely
+    // relocated, as it was under #268). This aria-label segment is now the
+    // fleet console's ONLY surviving event-in-window signal, visible or not:
+    // assistive tech must not regress below what sighted users already lost.
     !isArchived && events.length > 0
       ? `${events.length} event${events.length === 1 ? '' : 's'} in the forecast window`
       : null,
@@ -334,20 +340,26 @@ export const ClusterTile = memo(function ClusterTile({
           unknown-capacity case (still an information-bearing state, unlike
           the old "— · NO ORDER NEEDED" placeholder, which just repeated the
           all-clear a tile had already stated three other ways).
+
+          #290: restyled onto the shared `Badge` (matching the status and
+          vSphere badges) and moved into their cluster instead of being
+          pushed to the row's far edge via `ml-auto`. The relative-days
+          suffix (`· 12 D OVERDUE`) is dropped from the visible label — the
+          badge's color tone already conveys urgency, and the aria-label
+          below still carries the relative-days detail for assistive tech.
         */}
         {orderByDate || orderUnknown ? (
-          <span
-            className={cn(
-              'ml-auto shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold tracking-[0.08em]',
+          <Badge
+            variant={
               orderByDate
-                ? ORDER_CHIP_TONE[urgency === 'none' ? 'planned' : urgency]
-                : 'border-border text-fg-muted',
-            )}
+                ? ORDER_BADGE_VARIANT[urgency === 'none' ? 'planned' : urgency]
+                : 'outline'
+            }
           >
             {orderByDate
-              ? `ORDER BY ${formatDateShort(orderByDate).toUpperCase()} · ${formatRelativeDays(orderByDate).toUpperCase()}`
-              : '— · ORDER STATUS UNKNOWN'}
-          </span>
+              ? `ORDER BY ${formatDateShort(orderByDate).toUpperCase()}`
+              : 'ORDER STATUS UNKNOWN'}
+          </Badge>
         ) : null}
       </div>
 
@@ -382,19 +394,6 @@ export const ClusterTile = memo(function ClusterTile({
             <span className="font-mono text-[10px] text-fg-muted">{runwaySub}</span>
           </>
         )}
-        {/*
-          Spec §4.4 amendment (2026-07-20, #268): the event chip takes the slot
-          the order-by chip vacated (which moved to the header row above),
-          emptying the bottom flag row so its height can go to the chart.
-        */}
-        {events.length > 0 ? (
-          <FlagChip className="ml-auto shrink-0">
-            EVENT ×{events.length}
-            {events[0]
-              ? ` · ${formatMonthShort(`${events[0].effectiveDate.slice(0, 7)}-01`).toUpperCase()}`
-              : ''}
-          </FlagChip>
-        ) : null}
       </div>
 
       <p className="text-[11px] leading-[1.45] text-fg-muted">
@@ -406,10 +405,12 @@ export const ClusterTile = memo(function ClusterTile({
       ) : null}
 
       {/*
-        The event chip left this row for the runway row above (#268), so on a
-        healthy tile both remaining children are absent and the row collapses —
-        rendered conditionally rather than as an always-present empty flex box,
-        whose `gap` would otherwise still consume height the chart now uses.
+        The event chip that used to live here left for the runway row under
+        #268, then was removed from the tile altogether under #291 — so on a
+        healthy tile both remaining children (provisional-host hint,
+        stale-baseline chip) are absent and the row collapses — rendered
+        conditionally rather than as an always-present empty flex box, whose
+        `gap` would otherwise still consume height the chart now uses.
       */}
       {(!isArchived && provisionalCount > 0) || stale ? (
         <div className="flex flex-wrap gap-1">

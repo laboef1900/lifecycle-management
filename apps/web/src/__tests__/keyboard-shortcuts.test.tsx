@@ -34,7 +34,9 @@ function buildRouter() {
   });
   const settingsRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/settings',
+    // #293: `g s` now targets the default Settings sub-route directly rather
+    // than the bare `/settings` index (which just redirects there).
+    path: '/settings/forecasting',
     component: () => <div data-testid="settings">Settings</div>,
   });
   const routeTree = rootRoute.addChildren([indexRoute, clustersRoute, settingsRoute]);
@@ -62,14 +64,14 @@ describe('KeyboardShortcuts (real router context)', () => {
     render(wrap(router));
 
     // Start somewhere else so a stray navigation would be observable.
-    await router.navigate({ to: '/settings' });
+    await router.navigate({ to: '/settings/forecasting' });
 
     await user.keyboard('g');
     await user.keyboard('c');
 
     // Allow router to flush state
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(router.state.location.pathname).toBe('/settings');
+    expect(router.state.location.pathname).toBe('/settings/forecasting');
   });
 
   test('g o navigates to /', async () => {
@@ -78,12 +80,27 @@ describe('KeyboardShortcuts (real router context)', () => {
     render(wrap(router));
 
     // Start somewhere else to make the assertion meaningful
-    await router.navigate({ to: '/settings' });
+    await router.navigate({ to: '/settings/forecasting' });
 
     await user.keyboard('g');
     await user.keyboard('o');
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(router.state.location.pathname).toBe('/');
+  });
+
+  // #293: Settings split into sub-routes; `g s` now targets the default
+  // sub-route (`/settings/forecasting`) directly rather than the bare
+  // `/settings` index it used to navigate to pre-split.
+  test('g s navigates to /settings/forecasting', async () => {
+    const user = userEvent.setup();
+    const router = buildRouter();
+    render(wrap(router));
+
+    await user.keyboard('g');
+    await user.keyboard('s');
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(router.state.location.pathname).toBe('/settings/forecasting');
   });
 });

@@ -308,9 +308,19 @@ export class VsphereSyncService {
           },
         });
         await this.reconcileHostCapacity(tenantId, existing, memoryMetricId, desiredMemory, now);
+        // #289 keep the host's membership timeline in step with its clusterId.
+        // If vCenter moved it between clusters this pass, this closes the old
+        // interval and opens a new one; otherwise it is a no-op.
+        await this.reconcileMembership(
+          tenantId,
+          existing.id,
+          clusterId,
+          existing.commissionedAt,
+          now,
+        );
         hostsUpdated += 1;
       } else {
-        await this.prisma.host.create({
+        const createdHost = await this.prisma.host.create({
           data: {
             tenantId,
             clusterId,
@@ -342,6 +352,15 @@ export class VsphereSyncService {
             },
           },
         });
+        // #289 seed the host's first membership timeline in its cluster so the
+        // forecast attributes its capacity (parity with the migration backfill).
+        await this.reconcileMembership(
+          tenantId,
+          createdHost.id,
+          clusterId,
+          createdHost.commissionedAt,
+          now,
+        );
         hostsCreated += 1;
       }
     }
@@ -377,6 +396,64 @@ export class VsphereSyncService {
     }
 
     return { hostsCreated, hostsUpdated, hostsMissing: missingHosts.length };
+  }
+
+  /**
+   * Keep a synced host's time-scoped cluster membership in step with its
+   * `clusterId` (#289). Idempotent, and the sole membership writer on the sync
+   * path:
+   *  - no open membership yet (first import, or a legacy synced host predating
+   *    #289) → seed one open row from the host's commissioning date;
+   *  - open membership already in this cluster → no-op, so idempotent re-syncs
+   *    never accrete rows;
+   *  - open membership in a DIFFERENT cluster (vCenter moved the host) → close it
+   *    and open a new one.
+   *
+   * @ai-note The move date is the current month start, but CLAMPED to never
+   * precede the open interval's start — a `startOfUtcMonth(now)` earlier than
+   * `effectiveFrom` (a host commissioned and moved within one month) would write a
+   * `effectiveTo < effectiveFrom` row. Clamping yields a harmless zero-length old
+   * interval instead. Never retroactive: past months keep the old attribution.
+   * Invariant preserved: exactly one open membership per host, contiguous.
+   */
+  private async reconcileMembership(
+    tenantId: string,
+    hostId: string,
+    clusterId: string,
+    commissionedAt: Date,
+    now: Date,
+  ): Promise<void> {
+    const open = await this.prisma.hostClusterMembership.findFirst({
+      where: { hostId, effectiveTo: null },
+    });
+    if (!open) {
+      await this.prisma.hostClusterMembership.create({
+        data: { tenantId, hostId, clusterId, effectiveFrom: commissionedAt, effectiveTo: null },
+      });
+      return;
+    }
+    if (open.clusterId === clusterId) return;
+
+    const monthStart = startOfUtcMonth(now);
+    const moveDate = monthStart > open.effectiveFrom ? monthStart : open.effectiveFrom;
+    // @ai-note The close and the open are ONE atomic transaction. Run as two
+    // autocommit writes, a crash between them would strand the host with zero open
+    // memberships; the next sync's `!open` branch would then seed a fresh
+    // `[commissionedAt, null)` interval in the DESTINATION, overlapping the closed
+    // source interval and RETROACTIVELY re-attributing the host's pre-move months
+    // to the destination — the exact forecast landmine this feature prevents. The
+    // transaction makes "close old + open new" all-or-nothing, so the invariant
+    // (exactly one open membership, contiguous, non-overlapping) never breaks even
+    // mid-pass.
+    await this.prisma.$transaction([
+      this.prisma.hostClusterMembership.update({
+        where: { id: open.id },
+        data: { effectiveTo: moveDate },
+      }),
+      this.prisma.hostClusterMembership.create({
+        data: { tenantId, hostId, clusterId, effectiveFrom: moveDate, effectiveTo: null },
+      }),
+    ]);
   }
 
   /**

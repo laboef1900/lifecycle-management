@@ -6,6 +6,7 @@ import {
   hostCommissioningConfirmInputSchema,
   hostCreateInputSchema,
   hostIdParamsSchema,
+  hostMoveInputSchema,
   hostTransitionInputSchema,
   hostUpdateInputSchema,
   paginationQuerySchema,
@@ -58,6 +59,15 @@ export const hostRoutes: FastifyPluginAsync = async (fastify) => {
     const updated = await service.appendCapacity(request.tenantId, id, input);
     reply.status(201);
     return updated;
+  });
+
+  // Move a host to a different cluster with a time-scoped membership (#289). A
+  // mutating POST, so `requiresAdmin` gates it by construction (VIEWER → 403).
+  // Static `/move` suffix — no collision with `/hosts/:id/capacity` etc.
+  fastify.post('/hosts/:id/move', async (request) => {
+    const { id } = hostIdParamsSchema.parse(request.params);
+    const input = hostMoveInputSchema.parse(request.body);
+    return service.move(request.tenantId, id, input);
   });
 
   fastify.delete('/hosts/:id', async (request, reply) => {

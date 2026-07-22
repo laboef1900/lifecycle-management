@@ -3,6 +3,7 @@ import type {
   CapacityRowInput,
   HostCommissioningConfirmInput,
   HostCreateInput,
+  HostMoveInput,
   HostResponse,
   HostUpdateInput,
   Paginated,
@@ -18,6 +19,7 @@ import {
   assertHostCapacityAppendable,
   assertHostCreatableUnderCluster,
   assertHostDeletable,
+  assertHostMovable,
 } from './sync-ownership.js';
 
 const CAPACITY_DUPLICATE: UniqueConstraintMapping = {
@@ -121,43 +123,137 @@ export class HostsService {
     const metricTypes = await this.resolveMetricTypes(input.capacities.map((c) => c.metricTypeKey));
 
     try {
-      const created = await this.prisma.host.create({
-        data: {
-          tenantId,
-          clusterId,
-          name: input.name,
-          description: input.description ?? null,
-          commissionedAt: input.commissionedAt,
-          decommissionedAt: input.decommissionedAt ?? null,
-          serialNumber: input.serialNumber ?? null,
-          vendor: input.vendor ?? null,
-          model: input.model ?? null,
-          purchasedAt: input.purchasedAt ?? null,
-          warrantyEndsAt: input.warrantyEndsAt ?? null,
-          eolAt: input.eolAt ?? null,
-          runPastEol: input.runPastEol ?? false,
-          capacities: {
-            create: input.capacities.map((c) => {
-              const metricType = metricTypes.get(c.metricTypeKey);
-              if (!metricType) {
-                throw new UnprocessableError('UNKNOWN_METRIC', `Unknown metric ${c.metricTypeKey}`);
-              }
-              return {
-                tenantId,
-                metricTypeId: metricType.id,
-                effectiveFrom: c.effectiveFrom,
-                amount: new Prisma.Decimal(c.amount),
-              };
-            }),
+      const created = await this.prisma.$transaction(async (tx) => {
+        const host = await tx.host.create({
+          data: {
+            tenantId,
+            clusterId,
+            name: input.name,
+            description: input.description ?? null,
+            commissionedAt: input.commissionedAt,
+            decommissionedAt: input.decommissionedAt ?? null,
+            serialNumber: input.serialNumber ?? null,
+            vendor: input.vendor ?? null,
+            model: input.model ?? null,
+            purchasedAt: input.purchasedAt ?? null,
+            warrantyEndsAt: input.warrantyEndsAt ?? null,
+            eolAt: input.eolAt ?? null,
+            runPastEol: input.runPastEol ?? false,
+            capacities: {
+              create: input.capacities.map((c) => {
+                const metricType = metricTypes.get(c.metricTypeKey);
+                if (!metricType) {
+                  throw new UnprocessableError(
+                    'UNKNOWN_METRIC',
+                    `Unknown metric ${c.metricTypeKey}`,
+                  );
+                }
+                return {
+                  tenantId,
+                  metricTypeId: metricType.id,
+                  effectiveFrom: c.effectiveFrom,
+                  amount: new Prisma.Decimal(c.amount),
+                };
+              }),
+            },
           },
-        },
-        include: hostInclude,
+          include: hostInclude,
+        });
+        // #289 open the host's membership timeline in its creating cluster,
+        // effective from its commissioning date. The forecast attributes host
+        // capacity through this timeline, so every host-creating path MUST seed
+        // one open membership (parity with the migration backfill and sync).
+        await tx.hostClusterMembership.create({
+          data: {
+            tenantId,
+            hostId: host.id,
+            clusterId,
+            effectiveFrom: host.commissionedAt,
+            effectiveTo: null,
+          },
+        });
+        return host;
       });
       return this.toResponse(created);
     } catch (err) {
       translatePrismaError(err, { uniqueConstraint: CAPACITY_DUPLICATE });
       throw err;
     }
+  }
+
+  /**
+   * Move a manual host to a different cluster with a TIME-SCOPED membership (#289,
+   * owner decision 2026-07-22). The move closes the current open membership at
+   * `moveDate` and opens a new one in the destination — the forecast then credits
+   * the OLD cluster before `moveDate` and the NEW cluster on/after it, so history
+   * is never retroactively rewritten (the landmine of a naive `clusterId` flip).
+   *
+   * Refused for synced hosts and synced destinations (`SYNC_OWNED_FIELD`, 409):
+   * vCenter owns a synced host's cluster and a synced cluster's host membership.
+   *
+   * @ai-note Invariants held inside this Serializable transaction: exactly one
+   * open membership per host; intervals contiguous (closed `effectiveTo` equals
+   * the new `effectiveFrom`) and non-overlapping; `hosts.clusterId` equals the
+   * open membership's `clusterId`.
+   */
+  async move(tenantId: string, id: string, input: HostMoveInput): Promise<HostResponse> {
+    await this.prisma.$transaction(
+      async (tx) => {
+        const host = await tx.host.findFirst({
+          where: { id, tenantId },
+          select: { id: true, source: true, clusterId: true },
+        });
+        if (!host) {
+          throw new NotFoundError('Host', id);
+        }
+        assertHostMovable(host.source, id);
+
+        const destination = await tx.cluster.findFirst({
+          where: { id: input.clusterId, tenantId },
+          select: { id: true, source: true },
+        });
+        if (!destination) {
+          throw new NotFoundError('Cluster', input.clusterId);
+        }
+        assertHostCreatableUnderCluster(destination.source, input.clusterId);
+
+        if (host.clusterId === input.clusterId) {
+          throw new UnprocessableError(
+            'HOST_ALREADY_IN_CLUSTER',
+            'Host already belongs to this cluster',
+          );
+        }
+
+        const open = await tx.hostClusterMembership.findFirst({
+          where: { hostId: id, effectiveTo: null },
+        });
+        if (open) {
+          if (input.moveDate <= open.effectiveFrom) {
+            throw new UnprocessableError(
+              'INVALID_MOVE_DATE',
+              'moveDate must be after the start of the current cluster membership',
+            );
+          }
+          await tx.hostClusterMembership.update({
+            where: { id: open.id },
+            data: { effectiveTo: input.moveDate },
+          });
+        }
+
+        await tx.hostClusterMembership.create({
+          data: {
+            tenantId,
+            hostId: id,
+            clusterId: input.clusterId,
+            effectiveFrom: input.moveDate,
+            effectiveTo: null,
+          },
+        });
+        await tx.host.update({ where: { id }, data: { clusterId: input.clusterId } });
+      },
+      { isolationLevel: 'Serializable' },
+    );
+    return this.getById(tenantId, id);
   }
 
   async update(tenantId: string, id: string, input: HostUpdateInput): Promise<HostResponse> {
@@ -224,9 +320,54 @@ export class HostsService {
           data: { effectiveFrom: input.commissionedAt },
         });
       }
+      if (input.commissionedAt !== undefined) {
+        await this.realignEarliestMembership(tx, id, input.commissionedAt);
+      }
       await tx.host.update({ where: { id }, data });
     });
     return this.getById(tenantId, id);
+  }
+
+  /**
+   * Keep the host's EARLIEST membership aligned with its commissioning date
+   * (#289). The first membership is seeded at `commissionedAt`
+   * (create/sync/backfill), and the forecast attributes a host to a cluster only
+   * within its membership interval — so when an operator confirms an earlier real
+   * commissioning date (Q9c, #194), the earliest interval's start must move with
+   * it, or capacity is stranded (attributed to no cluster) for the months between
+   * the real and the provisional date. Parity with how the earliest capacity row
+   * is re-dated on the same confirm. Only the earliest interval moves; later
+   * intervals (a subsequent move) are immutable history.
+   */
+  private async realignEarliestMembership(
+    tx: Prisma.TransactionClient,
+    hostId: string,
+    commissionedAt: Date,
+  ): Promise<void> {
+    const earliest = await tx.hostClusterMembership.findFirst({
+      where: { hostId },
+      orderBy: { effectiveFrom: 'asc' },
+    });
+    if (!earliest || earliest.effectiveFrom.getTime() === commissionedAt.getTime()) return;
+    // Guard the timeline invariant (#289). If the earliest interval is CLOSED (the
+    // host was later moved), the correction must not push its start on/after its
+    // own end, or we write an inverted / zero-length `[from, to)` row (from >= to)
+    // — a silent break of the "contiguous, non-overlapping" invariant. The
+    // capacity-row guard in `update`/`confirmCommissioning` does NOT catch this: a
+    // host's first capacity row may legitimately postdate `commissionedAt`, so a
+    // correction can satisfy that check yet still land after a prior move's date.
+    // Reject with the same code as the capacity guard — both mean "this
+    // commissionedAt is inconsistent with the host's history".
+    if (earliest.effectiveTo !== null && commissionedAt >= earliest.effectiveTo) {
+      throw new UnprocessableError(
+        'INVALID_COMMISSIONED_AT',
+        'commissionedAt cannot be on or after the first cluster move date',
+      );
+    }
+    await tx.hostClusterMembership.update({
+      where: { id: earliest.id },
+      data: { effectiveFrom: commissionedAt },
+    });
   }
 
   /**
@@ -285,6 +426,7 @@ export class HostsService {
               data: { effectiveFrom: entry.commissionedAt },
             });
           }
+          await this.realignEarliestMembership(tx, entry.hostId, entry.commissionedAt);
           await tx.host.update({
             where: { id: entry.hostId },
             data: { commissionedAt: entry.commissionedAt, commissionedAtProvisional: false },

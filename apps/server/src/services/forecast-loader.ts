@@ -18,6 +18,7 @@ import {
   type ForecastHost,
   type ForecastInput,
   type ForecastResult,
+  type HostMembershipInterval,
 } from './forecast.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import {
@@ -197,14 +198,6 @@ export class ForecastService {
           where: { tenantId, metricTypeId: metricType.id },
           orderBy: { capturedAt: 'asc' },
         },
-        hosts: {
-          include: {
-            capacities: { where: { metricTypeId: metricType.id } },
-            replacedByLinks: {
-              include: { new: { select: { commissionedAt: true, state: true } } },
-            },
-          },
-        },
         items: {
           where: { OR: [{ metricTypeId: metricType.id }, { metricTypeId: null }] },
           include: { allocations: { where: { metricTypeId: metricType.id } } },
@@ -255,7 +248,47 @@ export class ForecastService {
       );
     }
 
-    const hosts: ForecastHost[] = cluster.hosts.map((host) => ({
+    // @ai-context #289 — time-scoped attribution. Hosts are loaded through the
+    // membership timeline (`HostClusterMembership WHERE clusterId`), NOT through
+    // `cluster.hosts` by the host's CURRENT `clusterId`. That is the whole point:
+    // a host that moved AWAY from this cluster still contributes to its pre-move
+    // months, and one that moved IN contributes only from its move date. Each
+    // month's attribution is resolved in `effectiveCapacityAt` from
+    // `membershipIntervals`. Ordered by host creation (then id) so the result's
+    // host list is deterministic — the characterization snapshot depends on it.
+    const memberships = await this.prisma.hostClusterMembership.findMany({
+      where: { tenantId, clusterId },
+      orderBy: [{ host: { createdAt: 'asc' } }, { hostId: 'asc' }],
+      include: {
+        host: {
+          include: {
+            capacities: { where: { metricTypeId: metricType.id } },
+            replacedByLinks: {
+              include: { new: { select: { commissionedAt: true, state: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    // A host can hold more than one interval in this cluster (moved A->B->A), so
+    // group all of a host's intervals under one ForecastHost.
+    type MembershipHost = (typeof memberships)[number]['host'];
+    const byHostId = new Map<
+      string,
+      { host: MembershipHost; intervals: HostMembershipInterval[] }
+    >();
+    for (const m of memberships) {
+      const entry = byHostId.get(m.hostId);
+      if (entry) entry.intervals.push({ from: m.effectiveFrom, to: m.effectiveTo });
+      else
+        byHostId.set(m.hostId, {
+          host: m.host,
+          intervals: [{ from: m.effectiveFrom, to: m.effectiveTo }],
+        });
+    }
+
+    const hosts: ForecastHost[] = [...byHostId.values()].map(({ host, intervals }) => ({
       id: host.id,
       name: host.name,
       commissionedAt: host.commissionedAt,
@@ -265,6 +298,7 @@ export class ForecastService {
         effectiveFrom: c.effectiveFrom,
         amount: c.amount.toNumber(),
       })),
+      membershipIntervals: intervals,
     }));
 
     const applications: ForecastApplication[] = cluster.items
