@@ -257,6 +257,15 @@ export async function makeHost(
           amount: new Prisma.Decimal(row.amount),
         })),
       },
+      // #289 Every real host-creating path (HostsService.create, sync, and the
+      // migration backfill) opens one membership timeline in the host's cluster.
+      // The forecast attributes host capacity THROUGH this timeline, so the
+      // factory must seed it too — otherwise a factory-made host would contribute
+      // nothing to its cluster's forecast. `effectiveFrom = commissionedAt`,
+      // `effectiveTo = null` reproduces the pre-#289 whole-life attribution.
+      memberships: {
+        create: [{ tenantId, clusterId: options.clusterId, effectiveFrom: commissionedAt }],
+      },
     },
   });
 

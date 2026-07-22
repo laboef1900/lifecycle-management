@@ -54,11 +54,24 @@ export const hostUpdateInputSchema = z
     { message: 'At least one field must be provided' },
   );
 
+/**
+ * Move a host to a different cluster with a TIME-SCOPED membership (#289). The
+ * move records a date: the forecast attributes the host to the *old* cluster
+ * before `moveDate` and the *new* cluster on/after it, so history is never
+ * retroactively rewritten (owner decision 2026-07-22). `clusterId` is the
+ * DESTINATION cluster; `moveDate` is when the host moved.
+ */
+export const hostMoveInputSchema = z.strictObject({
+  clusterId: cuid,
+  moveDate: dateOnly,
+});
+
 export const hostIdParamsSchema = z.object({ id: cuid });
 export const clusterIdHostsParamsSchema = z.object({ clusterId: cuid });
 
 export type HostCreateInput = z.infer<typeof hostCreateInputSchema>;
 export type HostUpdateInput = z.infer<typeof hostUpdateInputSchema>;
+export type HostMoveInput = z.infer<typeof hostMoveInputSchema>;
 export type CapacityRowInput = z.infer<typeof capacityRowInputSchema>;
 
 export interface CapacityResponseRow {

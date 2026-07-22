@@ -74,6 +74,22 @@ export function assertHostDeletable(source: string, hostId: string): void {
 }
 
 /**
+ * A synced host's cluster membership is sync-owned — `reconcileHosts` writes each
+ * synced host's `clusterId` from vCenter on every pass, so an operator move would
+ * fight the sync writer and be silently reverted on the next tick. Refuse it
+ * (#289, parity with {@link assertHostDeletable}); a vCenter-side host move
+ * reassigns the LCM cluster on the next sync, with membership history intact.
+ */
+export function assertHostMovable(source: string, hostId: string): void {
+  if (isSynced(source)) {
+    throw new ConflictError(
+      'SYNC_OWNED_FIELD',
+      `Host ${hostId} is synced from a vCenter connection, which owns its cluster membership; it cannot be moved directly. Move it in vCenter and it will re-sync.`,
+    );
+  }
+}
+
+/**
  * A synced host's capacity is sync-owned once #198 lands: sync records each host's
  * installed memory from vCenter, so the operator appendCapacity path would fight
  * the sync writer. Refuse it on synced hosts (parity with {@link assertHostDeletable});

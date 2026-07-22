@@ -733,3 +733,81 @@ describe('sync writes host memory capacity (#198)', () => {
     expect(august!.utilization).not.toBeNull();
   });
 });
+
+describe('sync maintains host cluster membership (#289)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('opens one membership on first import so the forecast attributes the host', async () => {
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+    const host = await prisma.host.findFirstOrThrow({ where: { connectionId: conn } });
+    const rows = await prisma.hostClusterMembership.findMany({ where: { hostId: host.id } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.clusterId).toBe(host.clusterId);
+    expect(rows[0]!.effectiveTo).toBeNull();
+    expect(rows[0]!.effectiveFrom.getTime()).toBe(host.commissionedAt.getTime());
+  });
+
+  it('a vCenter-side host move between clusters closes the old membership and opens a new one', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-15T00:00:00.000Z'));
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+    const host = await prisma.host.findFirstOrThrow({ where: { connectionId: conn } });
+    const c1 = host.clusterId;
+
+    // Same host (matched by moref) reappears under a DIFFERENT cluster.
+    vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
+    const moved = inventory({
+      clusters: [
+        {
+          moref: 'domain-c2',
+          name: 'Staging',
+          hosts: [
+            {
+              moref: 'host-1',
+              name: 'esx-01',
+              memoryGiB: 512,
+              usageGiB: 300,
+              inMaintenanceMode: false,
+              connected: true,
+            },
+          ],
+        },
+      ],
+    });
+    await new VsphereSyncService(prisma, fakeCollector(moved)).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+
+    const after = await prisma.host.findFirstOrThrow({ where: { id: host.id } });
+    expect(after.clusterId).not.toBe(c1);
+
+    const rows = await prisma.hostClusterMembership.findMany({
+      where: { hostId: host.id },
+      orderBy: { effectiveFrom: 'asc' },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.clusterId).toBe(c1);
+    expect(rows[0]!.effectiveTo).not.toBeNull();
+    expect(rows[1]!.clusterId).toBe(after.clusterId);
+    expect(rows[1]!.effectiveTo).toBeNull();
+    // contiguous, non-retroactive (move attributed to the current month start)
+    expect(rows[0]!.effectiveTo!.getTime()).toBe(rows[1]!.effectiveFrom.getTime());
+    expect(rows[1]!.effectiveFrom.getTime()).toBe(new Date('2026-05-01T00:00:00.000Z').getTime());
+    // exactly one open membership survives
+    expect(rows.filter((r) => r.effectiveTo === null)).toHaveLength(1);
+  });
+});
