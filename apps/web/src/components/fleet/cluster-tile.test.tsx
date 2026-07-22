@@ -141,11 +141,10 @@ describe('<ClusterTile>', () => {
     expect(chip.textContent).toBe('ORDER BY DEC 28');
   });
 
-  // Spec §4.4 amendment (2026-07-20, #268): two chips move up a row each so the
-  // bottom flag row can collapse and give its height to the chart. These assert
-  // DOM ADJACENCY rather than mere presence — every content assertion in this
-  // file passes wherever a chip happens to sit, so nothing else in the suite
-  // would catch a silent revert to the old arrangement.
+  // Spec §4.4 amendment (2026-07-20, #268): the ORDER BY chip moved up to the
+  // cluster-name row. #291 (2026-07-22) later removed the EVENT chip that had
+  // shared this describe block entirely, rather than merely relocating it —
+  // see the "EVENT chip removal (#291)" describe block below for its coverage.
   describe('chip placement (#268)', () => {
     const eventForecast = forecast({
       events: [
@@ -170,37 +169,12 @@ describe('<ClusterTile>', () => {
       expect(chip.parentElement).toBe(name.parentElement);
     });
 
-    it('places the EVENT chip on the runway row, where the order chip used to sit', () => {
-      render(
-        <ClusterTile
-          entry={entry()}
-          forecast={eventForecast}
-          thresholds={{ warn: 0.7, crit: 0.9 }}
-        />,
-      );
-      // The runway row is the numeral's parent — 'mo' is nested inside the
-      // numeral span, so step up twice to reach the row itself.
-      const runwayRow = screen.getByText('mo', { exact: true }).parentElement?.parentElement;
-      expect(screen.getByText(/EVENT/).parentElement).toBe(runwayRow);
-    });
-
-    it('keeps ORDER BY and EVENT on different rows', () => {
-      render(
-        <ClusterTile
-          entry={entry()}
-          forecast={eventForecast}
-          thresholds={{ warn: 0.7, crit: 0.9 }}
-        />,
-      );
-      expect(screen.getByText(/ORDER BY DEC 28/).parentElement).not.toBe(
-        screen.getByText(/EVENT/).parentElement,
-      );
-    });
-
     it('drops the bottom flag row entirely when nothing is left to put in it', () => {
       // A fresh baseline and no provisional hosts leave the row empty. Rendering
       // it anyway would keep its `gap` height — the space the chart is meant to
-      // reclaim — so absence, not emptiness, is the requirement.
+      // reclaim — so absence, not emptiness, is the requirement. Still exercised
+      // with a forecast carrying an event (#291: events no longer affect this
+      // row at all, so this also guards against the bottom row reappearing).
       const { container } = render(
         <ClusterTile
           entry={entry()}
@@ -223,10 +197,10 @@ describe('<ClusterTile>', () => {
       expect(screen.getByText(/BASELINE/)).toBeInTheDocument();
     });
 
-    it('names events in the tile aria-label so the moved EVENT chip is not silent to AT', () => {
-      // The tile's aria-label OVERRIDES its visible content, so the visible
-      // EVENT chip is invisible to assistive tech unless the label names it —
-      // more so after #268 moved the chip up to the prominent runway row.
+    it("names events in the tile aria-label — the console's only event-in-window signal now that the visible EVENT chip is gone (#291)", () => {
+      // The tile's aria-label OVERRIDES its visible content. Before #291 this
+      // segment backstopped a visible-but-easily-missed chip; after #291 it is
+      // the ONLY place the fleet console still surfaces this information.
       render(
         <ClusterTile
           entry={entry()}
@@ -275,6 +249,36 @@ describe('<ClusterTile>', () => {
         <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
       );
       expect(screen.getByRole('link').getAttribute('aria-label')).not.toContain('event');
+    });
+  });
+
+  // #291 (2026-07-22, owner decision): the fleet console's visible EVENT chip
+  // is removed outright — the fleet console thereby has no visible
+  // in-window event signal at all; only the aria-label (covered above) and
+  // the cluster detail panel's ForecastChart still carry it.
+  describe('EVENT chip removal (#291)', () => {
+    it('never renders a visible EVENT chip, however many events the forecast carries', () => {
+      const eventForecast = forecast({
+        events: [
+          {
+            id: 'e1',
+            effectiveDate: '2026-09-01',
+            category: 'hardware',
+            title: 'Decommission',
+            description: null,
+            consumptionDelta: null,
+            capacityDelta: -2000,
+          },
+        ],
+      });
+      render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(screen.queryByText(/EVENT/)).toBeNull();
     });
   });
 
@@ -645,27 +649,18 @@ describe('<ClusterTile>', () => {
       expect(chip.className).not.toMatch(/text-\[10px\]/);
     });
 
+    // Re-pointed at the stale-baseline chip (#291): the EVENT chip this test
+    // originally floored was removed from the tile, but FlagChip itself is
+    // still rendered here, so the 10px floor still needs a live assertion.
     it('floors the FlagChip at 10px, not 9px', () => {
       render(
         <ClusterTile
-          entry={entry()}
-          forecast={forecast({
-            events: [
-              {
-                id: 'e1',
-                effectiveDate: '2026-09-01',
-                category: 'hardware',
-                title: 'Decommission',
-                description: null,
-                consumptionDelta: null,
-                capacityDelta: -2000,
-              },
-            ],
-          })}
+          entry={entry({ cluster: cluster({ baselineDate: '2026-03-10' }) })}
+          forecast={forecast()}
           thresholds={{ warn: 0.7, crit: 0.9 }}
         />,
       );
-      const chip = screen.getByText(/EVENT/);
+      const chip = screen.getByText(/⚠ BASELINE/);
       expect(chip.className).toMatch(/text-\[10px\]/);
       expect(chip.className).not.toMatch(/text-\[9px\]/);
     });
