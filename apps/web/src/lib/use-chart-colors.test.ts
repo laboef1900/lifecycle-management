@@ -53,7 +53,7 @@ function resolve(props: Map<string, string>, name: string): string {
   }
 }
 
-const ROLE_TOKENS: Record<keyof Omit<ChartFallback, 'palette'>, string> = {
+const ROLE_TOKENS: Record<keyof ChartFallback, string> = {
   consumption: '--chart-consumption',
   capacity: '--chart-capacity',
   grid: '--chart-grid',
@@ -61,17 +61,9 @@ const ROLE_TOKENS: Record<keyof Omit<ChartFallback, 'palette'>, string> = {
   utilizationOk: '--chart-utilization-ok',
   utilizationWarn: '--chart-utilization-warn',
   utilizationCrit: '--chart-utilization-crit',
+  eventAdds: '--chart-event-adds',
+  eventConsumes: '--chart-event-consumes',
 };
-
-const PALETTE_TOKENS = [
-  '--chart-1',
-  '--chart-2',
-  '--chart-3',
-  '--chart-4',
-  '--chart-5',
-  '--chart-6',
-  '--chart-7',
-] as const;
 
 describe.each([
   ['light', FALLBACK_LIGHT, lightProps],
@@ -79,10 +71,6 @@ describe.each([
 ])('chart color fallbacks mirror the CSS tokens (%s)', (_theme, fallback, props) => {
   it.each(Object.entries(ROLE_TOKENS))('%s mirrors %s', (field, token) => {
     expect(fallback[field as keyof typeof ROLE_TOKENS]).toBe(resolve(props, token));
-  });
-
-  it('the categorical palette mirrors --chart-1..7', () => {
-    expect(fallback.palette).toEqual(PALETTE_TOKENS.map((token) => resolve(props, token)));
   });
 });
 

@@ -25,8 +25,8 @@ vi.mock('@/lib/use-chart-colors', () => ({
     utilizationOk: '#525252',
     utilizationWarn: '#b45309',
     utilizationCrit: '#b91c1c',
-    eventNamed: {},
-    eventPalette: [],
+    eventAdds: '#176b45',
+    eventConsumes: '#c0343c',
   }),
 }));
 
