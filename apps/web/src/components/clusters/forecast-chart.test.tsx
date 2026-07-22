@@ -324,8 +324,8 @@ describe('ForecastChart props mapping', () => {
     expect(yAxis.dataset.ticks).toBe('null');
   });
 
-  it('shows category legend chips for the event categories present', () => {
-    const forecast = makeForecast({
+  it('shows a legend chip only for the capacity direction(s) present among events', () => {
+    const consumesOnly = makeForecast({
       events: [
         {
           id: 'e1',
@@ -338,11 +338,27 @@ describe('ForecastChart props mapping', () => {
         },
       ],
     });
-    renderChart(forecast);
+    renderChart(consumesOnly);
 
     expect(screen.getByText('Actual —')).toBeInTheDocument();
     expect(screen.getByText('Capacity ceiling')).toBeInTheDocument();
-    expect(screen.getByText('OpenShift')).toBeInTheDocument();
+    expect(screen.getByText('Consumes capacity')).toBeInTheDocument();
+    expect(screen.queryByText('Adds capacity')).not.toBeInTheDocument();
+  });
+
+  it('shows both direction chips when events add and consume capacity', () => {
+    const forecast = makeForecast({
+      events: [
+        makeEvent({ id: 'e1', capacityDelta: 100 }),
+        makeEvent({ id: 'e2', effectiveDate: '2026-07-01', capacityDelta: null }),
+      ],
+    });
+    renderChart(forecast);
+
+    expect(screen.getByTestId('legend-swatch-event-adds')).toBeInTheDocument();
+    expect(screen.getByTestId('legend-swatch-event-consumes')).toBeInTheDocument();
+    expect(screen.getByText('Adds capacity')).toBeInTheDocument();
+    expect(screen.getByText('Consumes capacity')).toBeInTheDocument();
   });
 
   it('explains the actual/forecast split, swatches Headroom as a filled area, and lists the measured baseline', () => {
@@ -447,15 +463,15 @@ describe('ForecastChart props mapping', () => {
     expect(screen.getByTestId('y-axis').dataset.labelFill).toBe('var(--fg-subtle)');
   });
 
-  it('labels each event dot with vertical text in the category colour', () => {
+  it('labels each event dot with vertical text colored by capacity direction', () => {
     const forecast = makeForecast({
       events: [
-        makeEvent({ id: 'e1', effectiveDate: '2026-06-15', category: 'Growth' }),
+        makeEvent({ id: 'e1', effectiveDate: '2026-06-15', capacityDelta: 100 }),
         makeEvent({
           id: 'e2',
           effectiveDate: '2026-07-01',
-          category: 'Hardware',
           title: 'HW Tausch',
+          capacityDelta: -50,
         }),
       ],
     });
@@ -466,17 +482,17 @@ describe('ForecastChart props mapping', () => {
     const julyDot = dots.find((d) => d.dataset.x === '2026-07-01');
     if (!juneDot || !julyDot) throw new Error('expected dots for June and July');
 
-    const growthLabel = within(juneDot).getByText('Wachstum');
-    const hardwareLabel = within(julyDot).getByText('HW Tausch');
+    const addsLabel = within(juneDot).getByText('Wachstum');
+    const consumesLabel = within(julyDot).getByText('HW Tausch');
 
     // Vertical orientation, matching the -90° y-axis label convention.
-    expect(growthLabel.getAttribute('transform')).toMatch(/rotate\(-90/);
-    expect(hardwareLabel.getAttribute('transform')).toMatch(/rotate\(-90/);
+    expect(addsLabel.getAttribute('transform')).toMatch(/rotate\(-90/);
+    expect(consumesLabel.getAttribute('transform')).toMatch(/rotate\(-90/);
 
-    // Label colour comes from the event category and matches its own dot.
-    expect(growthLabel.getAttribute('fill')).toBe(juneDot.dataset.fill);
-    expect(hardwareLabel.getAttribute('fill')).toBe(julyDot.dataset.fill);
-    expect(growthLabel.getAttribute('fill')).not.toBe(hardwareLabel.getAttribute('fill'));
+    // Label colour comes from the event's capacityDelta and matches its own dot.
+    expect(addsLabel.getAttribute('fill')).toBe(juneDot.dataset.fill);
+    expect(consumesLabel.getAttribute('fill')).toBe(julyDot.dataset.fill);
+    expect(addsLabel.getAttribute('fill')).not.toBe(consumesLabel.getAttribute('fill'));
   });
 
   it('wraps the label in a category-coloured box with a leader line from the dot', () => {
