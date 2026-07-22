@@ -7,6 +7,7 @@ import {
   backoffMs,
   computeDueState,
   MAX_DUE_JOBS_PER_TICK,
+  MAX_NEVER_CONNECTED_JOBS_PER_TICK,
   missedPeriods,
   nextMonthlyBoundary,
   periodFor,
@@ -72,6 +73,9 @@ async function makeJob(dueAt: string, options: MakeJobOptions = {}): Promise<str
     key: KEY,
     name: uniq('conn'),
     lastConnectedAt: new Date('2026-07-01T00:00:00Z'),
+    // An established connection has a pin; the null-pin fail-closed gate (#279) would
+    // otherwise (correctly) make these rows ineligible for unattended selection.
+    tlsPinnedSha256: 'AA:BB:CC:DD',
   });
   made.push(id);
   await makeVsphereConnectionJob(prisma, {
@@ -224,6 +228,63 @@ describe('catch-up IS the data model', () => {
     const outcomes = await sched.runDueJobs();
     expect(outcomes).toHaveLength(MAX_DUE_JOBS_PER_TICK);
     expect(calls).toEqual(ids.slice(0, MAX_DUE_JOBS_PER_TICK));
+  });
+});
+
+describe('#279 — fail closed on an unestablished (null) pin', () => {
+  /** A due job for a connection built with explicit pin/last-connected state. */
+  async function makeJobWith(opts: {
+    tlsPinnedSha256?: string | null;
+    lastConnectedAt: Date | null;
+  }): Promise<string> {
+    const { id } = await makeVsphereConnection(prisma, {
+      key: KEY,
+      name: uniq('pin279'),
+      lastConnectedAt: opts.lastConnectedAt,
+      ...(opts.tlsPinnedSha256 !== undefined ? { tlsPinnedSha256: opts.tlsPinnedSha256 } : {}),
+    });
+    made.push(id);
+    await makeVsphereConnectionJob(prisma, {
+      connectionId: id,
+      dueAt: new Date('2026-08-01T00:00:00Z'),
+    });
+    return id;
+  }
+
+  it('never selects an ESTABLISHED connection whose pin was nulled (post-migration state)', async () => {
+    // lastConnectedAt set (established) but the leaf-pinning migration nulled the pin.
+    const id = await makeJobWith({ lastConnectedAt: new Date('2026-07-01T00:00:00Z') });
+    const sched = new VsphereScheduler(prisma, okRunner(), fixedClock('2026-08-10T00:00:00Z'));
+    const outcomes = await sched.runDueJobs();
+    expect(outcomes.find((o) => o.connectionId === id)).toBeUndefined();
+  });
+
+  it('never selects a first-contact connection with a null pin (fresh anonymous create)', async () => {
+    const id = await makeJobWith({ lastConnectedAt: null });
+    const sched = new VsphereScheduler(prisma, okRunner(), fixedClock('2026-08-10T00:00:00Z'));
+    const outcomes = await sched.runDueJobs();
+    expect(outcomes.find((o) => o.connectionId === id)).toBeUndefined();
+  });
+
+  it('still runs a first-contact connection ONCE its pin is established, within the budget', async () => {
+    // A probed+trusted-but-never-connected row (pin set, lastConnectedAt null) is
+    // eligible; the first-contact budget still caps how many run per tick.
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_NEVER_CONNECTED_JOBS_PER_TICK + 1; i++) {
+      ids.push(await makeJobWith({ lastConnectedAt: null, tlsPinnedSha256: 'AA:BB:CC:DD' }));
+    }
+    const calls: string[] = [];
+    const sched = new VsphereScheduler(
+      prisma,
+      runner(async (connectionId) => {
+        calls.push(connectionId);
+        return okReport();
+      }),
+      fixedClock('2026-08-10T00:00:00Z'),
+    );
+    const outcomes = await sched.runDueJobs();
+    expect(outcomes).toHaveLength(MAX_NEVER_CONNECTED_JOBS_PER_TICK);
+    expect(calls).toHaveLength(MAX_NEVER_CONNECTED_JOBS_PER_TICK);
   });
 });
 

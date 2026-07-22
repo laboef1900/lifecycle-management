@@ -1,171 +1,153 @@
-# DESIGN — Move a host between clusters (time-scoped membership) — #289
+# DESIGN — #279: fail closed when a vCenter leaf pin is unestablished
 
-**Risk: HIGH** — touches forecast-engine correctness (drives hardware purchasing) and adds a
-Prisma migration. Merge requires two independent AI reviews + green CI per the Automated
-high-risk approval policy (CLAUDE.md). This document is the written design/spec/threat-model the
-policy mandates.
+**Risk class:** HIGH (credential-bearing vSphere TLS trust path).
+**Owner decision (2026-07-22, recorded on #279):** _pin-only, fail closed._
+`tlsMode='system'` stays unreachable; the gate lives at the **job-selection
+layer**, not inside `soapCall`; the operator verify path is preserved.
 
-## 1. Problem & owner decision
+## 1. Problem
 
-A manual host is pinned to its creating cluster: there is no cluster-changing path, so relocating a
-host means delete + recreate, which loses its capacity history. Issue #289 adds a move.
+`soapCall` (`services/vsphere-client.ts`) branches only on whether
+`pinnedLeafSha256` is truthy. A **non-null** pin routes through
+`fingerprintPinnedConnection`, which destroys the socket before any request byte is
+written if the presented leaf ≠ the pin. A **null** pin falls back to
+`rejectUnauthorized: true` — the system trust store.
 
-The owner recorded (2026-07-22) that membership is **time-scoped**, NOT a naive `clusterId` flip. A
-flip re-attributes the host's _entire_ capacity history to the destination across _all_ modelled
-months, retroactively rewriting both clusters' forecasts on a purchasing surface. Time-scoped
-attribution instead credits the **old** cluster before the move date and the **new** cluster after
-it, and never rewrites the past.
+For a **self-signed** vCenter (the norm here), a null pin fails the handshake and
+sends nothing (`tls_untrusted`). But for a peer trusted by the **system CAs**, the
+null-pin path **transmits the stored service-account credential** during the window
+before a pin is established. Three states reach that window on the **unattended**
+(scheduler/job-runner) path, none of which is gated today:
 
-## 2. Data model
+1. `create()` stores the password and seeds `job.dueAt = now()` — immediately due,
+   no pin yet.
+2. A hostname re-point resets `tlsPinnedSha256 = null`, `status = 'never_connected'`.
+3. Migration `20260721183652_vsphere_leaf_pinning` nulled `tls_pinned_sha256` (and
+   set `status = 'tls_untrusted'`) for previously-pinned rows.
 
-New table `host_cluster_memberships` (`HostClusterMembership`):
+Neither `vsphere-scheduler.ts` (selection filters on `enabled` + `lastConnectedAt`)
+nor `vsphere-job-runner.ts` (row select reads `enabled` + `tlsPinnedSha256`, but does
+not act on a null pin) stops those rows from running with a null pin. The existing
+`vsphere-fingerprint-pin.test.ts` only exercises wrong-pin and matching-pin against a
+**self-signed** server, so the null-pin-against-a-trusted-peer case is uncovered.
 
-| column           | type  | notes                                                  |
-| ---------------- | ----- | ------------------------------------------------------ |
-| `id`             | text  | cuid (client-generated), uuid for the SQL backfill     |
-| `tenant_id`      | text  | tenant scope, default `'default'` (project convention) |
-| `host_id`        | text  | FK → hosts, `ON DELETE CASCADE`                        |
-| `cluster_id`     | text  | FK → clusters, `ON DELETE CASCADE`                     |
-| `effective_from` | date  | inclusive start of the interval                        |
-| `effective_to`   | date? | exclusive end; `NULL` = the current (open) membership  |
-| `created_at`     | ts    | audit                                                  |
+`tlsMode='system'` is genuinely unreachable: the DB default is `'pinned'`, the only
+writers set `'pinned'`, and `toResponse` merely reads it. So "null pin" unambiguously
+means **"pinning intended, not yet established"** — which is why fail-closed is the
+correct, information-preserving reading.
 
-`HostMetricCapacity` stays FK'd to `host_id` (unchanged) — no capacity rows are moved or recreated.
-Attribution is resolved through the membership timeline at forecast time.
+## 2. Trust boundaries
 
-`Host.clusterId` is retained as a denormalised "current cluster" pointer used pervasively (host
-lists, host responses, replacements, sync's `missingHosts` query, the cluster panel's current-month
-capacity). **Invariant kept by construction: `Host.clusterId` == the host's open membership's
-`clusterId`.** Every write path maintains both together.
+- **Untrusted:** the network path to vCenter (DNS, routing). An on-path attacker or a
+  self-service internal DNS spoof can substitute a peer the system CAs trust.
+- **Trust anchor:** the operator-confirmed **leaf** SHA-256 pin (`tlsPinnedSha256`),
+  established out-of-band (`govc about.cert -thumbprint`) via probe → verify →
+  trust-cert. Until it exists, the connection has **no** verified peer identity.
+- **Secret crossing the boundary:** the decrypted vCenter service-account password
+  (`revealPassword`). It must only be transmitted to a peer whose leaf matches the
+  pin.
+- **Actors:** the **unattended** scheduler/job-runner (no human in the loop → must
+  fail closed) vs. the **operator-initiated** verify route (a human establishing the
+  pin with a live-entered password → must keep working).
 
-### Why no partial unique index for "one open membership"
+## 3. Design — where the gate lives
 
-Postgres could enforce "≤1 open membership per host" with a partial unique index
-(`WHERE effective_to IS NULL`). The schema deliberately avoids partial indexes (see the
-`hosts_tenant_serial_unique` comment / #123: partial indexes desync from Prisma and cause spurious
-`migrate dev` drift). Consistent with that precedent and with the app-enforced
-`source='vsphere' ⇒ observed_at NOT NULL` invariant, the single-open-membership invariant is
-enforced in application code inside **Serializable** transactions. Tests pin it.
+The fail-closed check lives at the **job-selection layer**, in three mirrored places,
+exactly where `enabled` is already guarded:
 
-## 3. Trust boundaries & misuse cases
+1. **Scheduler selection** (`vsphere-scheduler.ts`, `executeDueJobs`): both the
+   `established` and `first-contact` `findMany` queries add
+   `connection: { tlsPinnedSha256: { not: null } }`. A null-pin row is never selected.
+2. **Scheduler claim** (`vsphere-scheduler.ts`, `runOne`): the conditional-`updateMany`
+   claim adds the same predicate, so a row whose pin is cleared between select and
+   claim is not claimed (defence against the select→claim race, mirroring the
+   `enabled` re-check).
+3. **Job-runner row select** (`vsphere-job-runner.ts`, `run`): after loading the
+   connection and **before** `revealPassword`, a `tlsPinnedSha256 === null` row
+   returns early as a **skip** — surfacing `status = 'tls_untrusted'` with a clear
+   `lastError` — so the credential is never even decrypted. This mirrors the existing
+   `!connection.enabled` defensive branch.
 
-- **API boundary**: `POST /api/hosts/:id/move` body is validated by `hostMoveInputSchema`
-  (`@lcm/shared`, Zod `strictObject`) _inside_ the handler before any DB access.
-- **RBAC**: a mutating POST ⇒ `requiresAdmin` gates it by construction (method-based). VIEWER → 403.
-  Asserted by test, not assumed.
-- **Sync ownership**: a synced host's cluster membership is owned by vCenter (`reconcileHosts`).
-  Manual move of a synced **host** → `ConflictError('SYNC_OWNED_FIELD')` (409). Moving any host
-  **into** a synced destination cluster is likewise refused (reuses
-  `assertHostCreatableUnderCluster`) — vCenter owns a synced cluster's host membership.
-- **Tenant isolation**: host and destination cluster are both looked up with `tenantId` scoping; a
-  cross-tenant id 404s.
-- **Misuse — retroactive rewrite**: prevented by the interval model; a move never edits or deletes an
-  existing interval's `effective_from`, only closes the open one and appends a new one.
-- **Misuse — degenerate/overlapping intervals**: `moveDate` must be strictly after the current
-  open membership's `effective_from` (→ `INVALID_MOVE_DATE`, 422); same-cluster move is refused
-  (`HOST_ALREADY_IN_CLUSTER`, 422).
-- **Misuse — sub-month move granularity**: `moveDate` is constrained by the contract
-  (`hostMoveInputSchema`) to the **first of a month** (UTC). The forecast resolves membership at
-  first-of-month granularity, so a mid-month date is silently coarse — and two moves in the _same
-  calendar month_ (A→B→C) would strand the intermediate cluster at capacity 0 for **every** month.
-  First-of-month + the `moveDate > effective_from` guard together force every interval to span at
-  least one full month, so no cluster is ever stranded.
+The gate is **not** in `soapCall`: `soapCall` receives no `tlsMode`/intent, and the
+operator verify route legitimately calls it with `pinnedLeafSha256: null` and **must
+still send**. Putting the gate at job selection leaves the operator path untouched by
+construction.
 
-## 4. Invariants (enforced + tested)
+**Verify path preserved.** `routes/settings-vsphere.ts` `POST /verify` calls
+`verifyLogin(..., pinnedLeafSha256: null)` with the operator's live-entered password —
+an explicit, human-initiated step whose purpose is to establish the pin. It does not
+go through the scheduler/job-runner, so this change does not touch it. `soapCall` and
+`fingerprintPinnedConnection` are unchanged.
 
-1. A host has **exactly one** open membership (`effective_to IS NULL`) at any time.
-2. Memberships for a host are **contiguous and non-overlapping**: a move sets the open row's
-   `effective_to = moveDate` and inserts a new open row with `effective_from = moveDate` (the closed
-   interval's end equals the next interval's start).
-3. `Host.clusterId` == the open membership's `clusterId`.
-4. Month **M** (first-of-month, UTC) attributes a host's capacity to the cluster whose interval
-   contains M, using `[effective_from, effective_to)` half-open semantics (`from <= M < to`,
-   or `to IS NULL`). This mirrors the existing `commissionedAt`/decommission month gating in
-   `effectiveCapacityAt`.
-5. Backfilled/pre-feature hosts get a single open membership from their `commissioned_at`, so current
-   forecasts are byte-for-byte unchanged at migration time.
+## 4. Invariants
 
-## 5. Forecast-engine change (the high-risk core)
+- **INV-279:** an unattended job never decrypts or transmits vCenter credentials over
+  a connection whose leaf pin is null. Enforced structurally at job selection and
+  proven by the credential-sink regression test.
+- **INV-3 (amended, was leaf-pinning-spec §Invariants #3):** a null pin no longer
+  takes the system-trust path on an **unattended** connection. Pinning is
+  **mandatory** for unattended connections; a null-pin row is ineligible for
+  scheduled sync/poll/snapshot and fails closed. `tlsMode='system'` remains
+  **non-writable / unreachable** — there is deliberately no CA-signed-without-pin
+  unattended workflow. The null-pin system-trust path survives **only** for the
+  operator-initiated verify route, whose job is to establish the pin.
+- **Non-destructive degrade (issue #222 pattern):** the gate never mutates stored
+  config — the pin, `tlsMode`, and encrypted password are untouched. It only surfaces
+  a reachability `status`. Running probe → verify → trust-cert establishes the pin and
+  the connection resumes with no further operator action. The override never outlives
+  its cause.
+- **Per-connection:** one unpinned connection is gated in isolation; others are
+  unaffected.
 
-- `forecast.ts`: `ForecastHost` gains an **optional** `membershipIntervals?: {from, to|null}[]`.
-  `effectiveCapacityAt` returns 0 for a month not covered by any interval (in addition to the
-  existing commissioned/decommissioned gating). **`undefined` = no time-scoping (always attributed)**
-  — the pure function is unchanged for every existing caller/unit test that omits the field, so the
-  characterization snapshot still means something.
-- `forecast-loader.ts`: the projecting forecast now loads hosts via `HostClusterMembership` rows
-  `WHERE clusterId = C` (not `cluster.hosts` by current `clusterId`), so a host that **moved away**
-  still contributes to C for its pre-move months, and a host that **moved in** does not contribute to
-  C for pre-move months. Each `ForecastHost` carries its C-intervals.
-- `clusters.ts` (cluster panel/list current-month capacity) is **unchanged**: it computes only the
-  current month from `cluster.hosts` (current `clusterId`), and by Invariant 3 the current cluster ==
-  the open membership, so the present-month number is already correct. Only the multi-month
-  _projecting_ forecast needs time-scoping.
+## 5. Misuse cases
 
-## 6. Membership maintenance (all write paths)
+- **On-path MITM / DNS spoof to a CA-trusted peer during the pin window:** previously
+  the null-pin poll would hand the credential to the spoofed peer. Now the unattended
+  path never runs an unpinned connection → credential never sent. **Closed.**
+- **Attacker seeds/repoints a connection anonymously in `disabled` mode:** a fresh or
+  repointed row has a null pin → never eligible for unattended work; establishing a
+  pin still requires the password gate on trust-cert. **Closed.**
+- **Implementer "fixes" a handshake failure by relaxing the gate in `soapCall`:**
+  rejected by design — the gate is at job selection; `soapCall`'s single confined
+  `rejectUnauthorized:false` site (in `fingerprintPinnedConnection`) is untouched, and
+  the byte-recording tests still hold.
+- **Benign renewal misread:** unchanged from #272 — a rotated leaf reports
+  `cert_mismatch` (pin present, mismatched); a _null_ pin reports `tls_untrusted`. Both
+  fail closed until the operator re-confirms.
 
-- **Migration backfill**: one open membership per existing host at its `commissioned_at`. A count
-  guard fails the migration (rolls back, server refuses to boot) if it did not produce exactly one row
-  per host — the same fail-closed pattern the baseline-history backfill uses.
-- **Reference-data seed** (`prisma/seed.ts` → `seedReferenceData`, the `pnpm seed` /
-  `SEED_ON_BOOT=true` first-boot path): every seeded host gets one open membership at its
-  `commissionedAt`. The loader builds its host list EXCLUSIVELY from the membership timeline, so a
-  seeded host without one is **absent** from every forecast (`hosts: []`). These reference hosts carry
-  no `HostMetricCapacity` rows, so the visible effect is forecast **visibility** — the host
-  reappearing with its `projectedDecommissionAt` EOL-cliff marker — not capacity attribution.
-  Find-or-create keeps the seed idempotent and heals hosts seeded before #289. Crucially, a reseed
-  **preserves an operator's move**: it does not reset `Host.clusterId` when the open membership points
-  at a different cluster (`entrypoint.ts` reseeds on every boot while `SEED_ON_BOOT=true`), so it can
-  never desync the pointer from the open membership (Invariant 3). A regression test drives the real
-  seed function through a seed → move → reseed sequence.
-- **`HostsService.create`** (manual): host + open membership at `commissionedAt`, in one transaction.
-- **`HostsService.move`** (new, manual): Serializable tx — reject synced host / synced destination /
-  same cluster / bad date; close the open membership at `moveDate`; open a new one; update
-  `Host.clusterId`.
-- **`VsphereSyncService.reconcileHosts`** (synced): a single idempotent `reconcileMembership` helper,
-  called for every reconciled host — creates the open membership on first import, no-ops when the
-  cluster is unchanged, and closes+opens when vCenter moved the host between clusters. The synced move
-  date is the current month start clamped to be ≥ the open interval's start (never retroactive, never
-  a `to < from` interval). The close+open pair runs in a single `$transaction`, so a mid-pass crash
-  cannot strand the host with **zero** open memberships — otherwise the next sync's `!open` branch
-  would seed a fresh `[commissioned_at, null)` interval in the destination that OVERLAPS the closed
-  source interval, retroactively re-attributing pre-move months to the destination.
-- **`realignEarliestMembership`** (on a `commissionedAt` correction, `update`/`confirmCommissioning`):
-  moves the earliest interval's `effective_from` to the corrected date, but **refuses** a correction
-  that would land on/after that interval's `effective_to` when it is closed (the host later moved),
-  which would invert it (`from >= to`). The capacity-row guard alone does not catch this because a
-  first capacity row may legitimately postdate `commissionedAt`.
-- **Test factory `makeHost`**: creates the open membership too (the test-time equivalent of the
-  backfill), so every existing forecast test keeps identical attribution.
+## 6. Failure / recovery & rollback
 
-## 7. Failure / recovery & rollback
+- **Failure mode introduced:** a connection with no established pin will not sync
+  unattended. This is intentional and visible (`status = tls_untrusted` /
+  `never_connected`, both actionable in the connection panel). It is **not** a crash
+  and **not** a silent idle — the operator sees the status and runs Check certificate →
+  confirm → Save.
+- **Recovery:** operator establishes the pin (probe → verify → trust-cert). The next
+  scheduler tick selects the now-pinned row and syncs. No data mutated, no manual DB
+  work.
+- **Rollback:** revert this PR. The change is pure selection/guard logic plus tests and
+  docs — no schema migration, no data change, no contract change. Reverting restores
+  the prior (vulnerable) behavior with zero migration. Rolling forward again is
+  likewise a code-only deploy.
 
-- The move is a single Serializable transaction — it either fully applies (close + open + pointer) or
-  not at all. No partial state.
-- A host with a missing/legacy membership (should not occur post-backfill) is handled defensively:
-  `move` still opens a new interval; the loader simply attributes nothing for uncovered months
-  (errs _low_ on capacity ⇒ higher utilization ⇒ buy earlier ⇒ safe direction).
-- **Rollback**: revert the app image (`LCM_IMAGE_TAG`). The old code ignores
-  `host_cluster_memberships` entirely and reads `Host.clusterId`, which the new code kept accurate, so
-  forecasts are correct on the old code too. The table can be left in place (inert) or dropped by a
-  later contract migration; nothing else references it. No data is destroyed by rollback.
-- The migration is **additive** (new table + backfill); it drops/rewrites nothing.
+## 7. Security / privacy impact
 
-## 8. Security & privacy impact
+- **Security:** closes credential disclosure to a system-CA-trusted MITM peer during
+  the pin-establishment window on the unattended path. Strengthens the
+  vet-then-transmit ordering the whole vSphere trust design is built on.
+- **Privacy:** none — no new data collected, logged, or exposed. The gate writes only a
+  coarse `status`/sanitized `lastError` (no secret, no cert internals). Logs unchanged.
+- **Contracts:** no `@lcm/shared` schema change. `tlsMode` stays a two-value,
+  both-fail-closed enum; `'system'` stays unreachable.
 
-No new sensitive data: `host_cluster_memberships` holds ids and dates only — no secrets, no PII, no
-credentials. No new external calls, no new network exposure. No logging of secrets. RBAC unchanged
-(ADMIN-gated by method). ASVS L1 posture unchanged.
+## 8. Verification
 
-## 9. Verification
-
-Integration tests (Testcontainers) in `apps/server/src/__tests__/host-move.test.ts`:
-
-- a move splits attribution at the move date across the two clusters;
-- months **before** the move are byte-identical for **both** clusters before vs. after the move;
-- a synced-host move → `SYNC_OWNED_FIELD` (409); move into a synced destination → `SYNC_OWNED_FIELD`;
-- VIEWER → 403 on the route; same-cluster → 422; bad move date → 422; unknown host/cluster → 404;
-- the "exactly one open, contiguous, non-overlapping" invariant on the resulting rows.
-
-Plus a synced host moved between clusters in vCenter closes/opens its membership
-(`vsphere-sync.test.ts`). Existing forecast + sync forecast suites act as the characterization guard
-(they must stay green, proving current forecasts are unchanged).
+- **Regression (new, failing-first):** `vsphere-fingerprint-pin.test.ts` — a null-pin,
+  established, enabled connection driven through the unattended job runner never
+  decrypts or transmits the credential (a credential-sink spy stays empty), reports a
+  skip, and surfaces `tls_untrusted`; the stored pin is left null (non-destructive). A
+  companion asserts the operator path is preserved: `soapCall` with a null pin still
+  opens a connection to the peer (the gate is at the job layer, not `soapCall`).
+- Existing scheduler/job-runner suites updated so their **established** connections
+  carry a pin (that is what an established connection is), keeping their behavior.
+- `pnpm lint && pnpm typecheck && pnpm test` (Testcontainers Postgres) all green.

@@ -273,7 +273,7 @@ export function FleetConsole(): React.JSX.Element {
                 }
               >
                 <Button asChild variant="accent" size="lg">
-                  <Link to="/settings" hash={ADD_CLUSTER_HASH}>
+                  <Link to="/settings/inventory" hash={ADD_CLUSTER_HASH}>
                     Add a cluster in Settings
                   </Link>
                 </Button>

@@ -134,6 +134,36 @@ export class VsphereJobRunner implements JobRunner {
       return report;
     }
 
+    // Fail closed on an unestablished pin (#279). A `pinned`-mode connection whose
+    // leaf fingerprint has never been captured (fresh create, hostname re-point, or a
+    // row nulled by the 20260721183652 leaf-pinning migration) has NO verified peer
+    // identity, so an unattended run MUST NOT decrypt or transmit the stored
+    // credential over the null-pin system-trust path — that is exactly the window a
+    // system-CA-trusted MITM could exploit. The scheduler's selection and claim
+    // queries already exclude these rows; this mirrors the `enabled` guard above as
+    // the belt-and-braces gate at the runner boundary, so the fail-closed control
+    // does not depend on a single query. Placed BEFORE revealPassword: the password
+    // is never even decrypted.
+    //
+    // Degrade non-destructively (issue #222 pattern): surface `tls_untrusted` ("pin
+    // not established — verify required") without touching the stored pin, tlsMode, or
+    // credential, so the operator verify + trust-cert flow restores normal operation.
+    // Reported as `skipped`, never a failure — a transient race must not trigger a
+    // false backoff storm.
+    if (connection.tlsPinnedSha256 === null) {
+      await this.prisma.vsphereConnection
+        .update({
+          where: { id: connectionId },
+          data: {
+            status: 'tls_untrusted',
+            lastError: 'Certificate pin not established — verify the connection to pin it.',
+          },
+        })
+        .catch(() => undefined);
+      report.sync.outcome = 'skipped';
+      return report;
+    }
+
     let password: string;
     try {
       password = await this.services.connections.revealPassword(connection.tenantId, connectionId);
@@ -162,8 +192,9 @@ export class VsphereJobRunner implements JobRunner {
       // The stored leaf fingerprint (captured and pinned at connect time) arms the
       // credential-path gate: `soapCall` opens the pinned connection through
       // `fingerprintPinnedConnection`, which destroys the socket before any request
-      // byte is written if the presented leaf does not match this pin. A null pin
-      // (no capture) falls back to the system trust store.
+      // byte is written if the presented leaf does not match this pin. It is
+      // guaranteed non-null here: the null-pin fail-closed gate above returned early
+      // (#279), so an unattended run never reaches `soapCall` on the system-trust path.
       pinnedLeafSha256: connection.tlsPinnedSha256,
     };
 

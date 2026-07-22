@@ -41,7 +41,9 @@ test('create cluster, add host + application, chart reflects updates', async ({
     // Adding a cluster is now a configuration task on the Settings page
     // (#223) — the console no longer has a "+ Add cluster" control. Create it
     // from the Settings "Add cluster" panel, then return to the console.
-    await page.goto('/settings');
+    // #293: the panel lives on the Inventory sub-route now, not bare
+    // `/settings` (which redirects to the Forecasting sub-route by default).
+    await page.goto('/settings/inventory');
     await page.getByRole('button', { name: '+ Add cluster' }).click();
     const createDialog = page.getByRole('dialog', { name: 'New cluster' });
     await createDialog.getByRole('textbox', { name: 'Name' }).fill(clusterName);

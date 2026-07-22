@@ -105,7 +105,14 @@ function spies(overrides: Partial<JobRunnerServices> = {}): Spies {
 }
 
 async function makeConn(enabled = true): Promise<string> {
-  const { id } = await makeVsphereConnection(prisma, { key: KEY, name: uniq('conn'), enabled });
+  const { id } = await makeVsphereConnection(prisma, {
+    key: KEY,
+    name: uniq('conn'),
+    enabled,
+    // An established, pinned connection. Without a pin the null-pin fail-closed gate
+    // (#279) short-circuits the run before the D15a dispatch these tests exercise.
+    tlsPinnedSha256: 'AA:BB:CC:DD',
+  });
   made.push(id);
   return id;
 }
