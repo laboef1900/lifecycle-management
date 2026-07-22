@@ -373,6 +373,13 @@ export interface MakeVsphereConnectionOptions {
   instanceUuid?: string;
   lastConnectedAt?: Date | null;
   /**
+   * The pinned leaf-fingerprint SHA-256 (schema column `tlsPinnedSha256`). Defaults
+   * to `null` — an unestablished pin, which the scheduler/job-runner now gate OUT of
+   * unattended work (#279). Pass a fingerprint to model an established, pinned
+   * connection (what the scheduler/job-runner suites need to reach the run path).
+   */
+  tlsPinnedSha256?: string | null;
+  /**
    * The AES-GCM key the password is encrypted under — must match the service that
    * reveals it. Supply it to write a REAL encrypted `passwordEnc` (so
    * `revealPassword` round-trips, as the scheduler/job tests need). Omit it and the
@@ -415,6 +422,9 @@ export async function makeVsphereConnection(
       ...(options.instanceUuid !== undefined ? { instanceUuid: options.instanceUuid } : {}),
       ...(options.lastConnectedAt !== undefined
         ? { lastConnectedAt: options.lastConnectedAt }
+        : {}),
+      ...(options.tlsPinnedSha256 !== undefined
+        ? { tlsPinnedSha256: options.tlsPinnedSha256 }
         : {}),
     },
   });
