@@ -116,6 +116,7 @@ function handshake(
 describe('TLS trust — why checkServerIdentity cannot implement pinning', () => {
   it('⚠️ rejectUnauthorized:false CONNECTS and never calls checkServerIdentity', async () => {
     const { port } = await startServer({ key: privateKey, cert: certificate });
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
     const r = await handshake(port, { rejectUnauthorized: false });
 
     // THIS is the finding the whole TLS design rests on. The intuitive design —
