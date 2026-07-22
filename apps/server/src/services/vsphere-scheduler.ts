@@ -2,6 +2,7 @@ import { addUtcMonths, startOfUtcMonth, type VsphereSyncOutcome } from '@lcm/sha
 import { Prisma, type PrismaClient, type VsphereConnectionJob } from '@prisma/client';
 
 import { POLL_INTERVAL_MS } from './vsphere-live-usage.js';
+import { extractTlsErrorCode } from './vsphere-tls.js';
 
 /** Injectable clock. Production passes the real one; tests pin it. */
 export interface Clock {
@@ -535,9 +536,22 @@ function delay(ms: number): Promise<void> {
 /**
  * @ai-warning Sanitized. `lastError` is stored and rendered — it must never carry a
  * credential, a stack, or a driver internal. Detail belongs in the server log.
+ *
+ * @ai-note #280: the `CERT_FINGERPRINT_MISMATCH` branch MUST be checked via
+ * `extractTlsErrorCode(err)`, not a message regex, and MUST come before the generic
+ * `/cert|tls/` branch below — mirroring `classify`/`sanitize` in vsphere-sync.ts,
+ * which is the reference behavior. The error `fingerprintPinnedConnection`
+ * (vsphere-tls.ts) throws does NOT contain the literal string
+ * `CERT_FINGERPRINT_MISMATCH` in its message, only in `err.code`; a message-regex
+ * "mirror" would silently miss it and fall through to the generic untrusted-cert
+ * message, losing the distinction that routes the operator to the "Replace the
+ * trusted certificate" dialog.
  */
 export function sanitizeJobError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
+  if (extractTlsErrorCode(err) === 'CERT_FINGERPRINT_MISMATCH') {
+    return 'vCenter is presenting a different certificate than the one you trusted.';
+  }
   if (/auth|login|credential/i.test(msg)) return 'vCenter rejected the credentials.';
   if (/cert|tls|self.signed/i.test(msg)) return 'vCenter presented an untrusted certificate.';
   if (/identity/i.test(msg)) return 'vCenter identity changed; sync is blocked pending re-adopt.';

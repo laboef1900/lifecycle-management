@@ -219,6 +219,41 @@ describe('⚠️ a sync failure aborts the snapshot deliberately', () => {
   });
 });
 
+describe('#280 — poll-path leaf-pin mismatch classifies as cert_mismatch, mirroring sync', () => {
+  it('a poll-only tick whose collect throws the CERT_FINGERPRINT_MISMATCH code reports the specific cert_mismatch message, not the generic untrusted-cert one', async () => {
+    const id = await makeConn();
+    const s = spies({
+      collector: {
+        collect: async () => {
+          // The exact shape `fingerprintPinnedConnection` (vsphere-tls.ts) throws on a
+          // pinned leaf mismatch: the message itself does NOT contain the literal
+          // string CERT_FINGERPRINT_MISMATCH — only `err.code` does.
+          throw Object.assign(
+            new Error('vCenter presented a certificate that does not match the pinned fingerprint'),
+            { code: 'CERT_FINGERPRINT_MISMATCH' },
+          );
+        },
+      },
+    });
+    const report = await build(s).run(
+      id,
+      MEASURED_AT,
+      { poll: true, sync: false, snapshot: false },
+      new AbortController().signal,
+    );
+
+    expect(report.poll).toEqual({ ran: true, ok: false });
+    expect(report.errorMessage).toBe(
+      'vCenter is presenting a different certificate than the one you trusted.',
+    );
+    // Never the generic message a message-regex fallback would have produced.
+    expect(report.errorMessage).not.toBe('vCenter presented an untrusted certificate.');
+    // And never the raw code/driver text (lastError is stored + UI-rendered).
+    expect(report.errorMessage).not.toContain('CERT_FINGERPRINT_MISMATCH');
+    expect(report.errorMessage).not.toContain('pinned fingerprint');
+  });
+});
+
 describe('⚠️ load-shed: the poll is skipped under pressure, the snapshot is not', () => {
   it('skips the poll collect entirely when under pressure', async () => {
     const id = await makeConn();
