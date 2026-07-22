@@ -94,11 +94,14 @@ const REFERENCE_CLUSTERS: ReferenceCluster[] = [
  * `SEED_ON_BOOT` can re-run safely.
  *
  * @ai-note #289 — every host-creating path MUST open the host's membership
- * timeline. The forecast attributes host capacity EXCLUSIVELY through
+ * timeline. The forecast builds its host list EXCLUSIVELY from
  * `HostClusterMembership` (`forecast-loader.ts`), so a seeded host with no open
- * membership is invisible to every forecast (`hosts: []`, capacity 0) even
- * though the cluster panel's current-month number — read off `Host.clusterId` —
- * still shows it. This function seeds one open membership per host from its
+ * membership is absent from every forecast (`hosts: []`) even though the cluster
+ * panel's current-month number — read off `Host.clusterId` — still shows it. For
+ * these reference hosts the visible effect is FORECAST VISIBILITY, not capacity:
+ * they carry no `HostMetricCapacity` rows by design, so the concrete regression is
+ * the host reappearing in the forecast with its `projectedDecommissionAt`
+ * EOL-cliff marker. This function seeds one open membership per host from its
  * commissioning date, parity with `HostsService.create`, the sync writer, the
  * migration backfill, and the test factory.
  */
@@ -186,11 +189,33 @@ export async function seedReferenceData(prisma: PrismaClient): Promise<void> {
         select: { id: true },
       });
 
+      // The membership timeline is the source of truth for a host's placement
+      // (#289). Look up the open membership BEFORE the write so a reseed can honour
+      // an operator's move.
+      //
+      // @ai-warning A reseed MUST NOT reset `Host.clusterId` back to the seed's
+      // cluster when an operator has MOVED a seeded host elsewhere (open membership
+      // points at a different cluster). Doing so desyncs the denormalised pointer
+      // from the open membership and silently breaks `HostsService.move`'s invariant
+      // (`Host.clusterId` == open membership's `clusterId`) — no error, no
+      // self-heal. This is a real path: `entrypoint.ts` reseeds on every boot while
+      // `SEED_ON_BOOT=true`, and ops guidance has admins flip that back off after.
+      const openMembership = existing
+        ? await prisma.hostClusterMembership.findFirst({
+            where: { hostId: existing.id, effectiveTo: null },
+            select: { id: true, clusterId: true },
+          })
+        : null;
+      const preserveOperatorMove =
+        openMembership !== null && openMembership.clusterId !== cluster.id;
+
       const host = existing
         ? await prisma.host.update({
             where: { id: existing.id },
             data: {
-              clusterId: cluster.id,
+              // Re-home to the seed cluster ONLY when the operator has not moved
+              // the host away (see the @ai-warning above).
+              ...(preserveOperatorMove ? {} : { clusterId: cluster.id }),
               name: hostName,
               commissionedAt: BASELINE_DATE,
               ...hostData,
@@ -207,15 +232,12 @@ export async function seedReferenceData(prisma: PrismaClient): Promise<void> {
             },
           });
 
-      // #289 open the host's membership timeline in its cluster so the forecast
-      // attributes it (see the module @ai-note). Find-or-create keeps the seed
-      // idempotent AND heals a host seeded before #289 (which has no membership):
-      // only seed when the host has no open membership. The seed never MOVES a
-      // host, so a pre-existing open row already points at the right cluster.
-      const openMembership = await prisma.hostClusterMembership.findFirst({
-        where: { hostId: host.id, effectiveTo: null },
-        select: { id: true },
-      });
+      // #289 open the host's membership timeline so the forecast can SEE the host
+      // (these reference hosts carry no capacity rows — the visible effect is the
+      // host reappearing with its EOL-cliff marker, not capacity; see the module
+      // @ai-note). Only heal a host with NO open membership (a new host, or one
+      // seeded before #289) — never add a second open row, and never touch an
+      // operator's moved-to membership resolved above.
       if (!openMembership) {
         await prisma.hostClusterMembership.create({
           data: {

@@ -108,9 +108,15 @@ enforced in application code inside **Serializable** transactions. Tests pin it.
   per host — the same fail-closed pattern the baseline-history backfill uses.
 - **Reference-data seed** (`prisma/seed.ts` → `seedReferenceData`, the `pnpm seed` /
   `SEED_ON_BOOT=true` first-boot path): every seeded host gets one open membership at its
-  `commissionedAt`. The loader attributes hosts EXCLUSIVELY through the membership timeline, so a
-  seeded host without one is invisible to every forecast (`hosts: []`); find-or-create keeps the seed
-  idempotent and heals hosts seeded before #289. A regression test drives the real seed function.
+  `commissionedAt`. The loader builds its host list EXCLUSIVELY from the membership timeline, so a
+  seeded host without one is **absent** from every forecast (`hosts: []`). These reference hosts carry
+  no `HostMetricCapacity` rows, so the visible effect is forecast **visibility** — the host
+  reappearing with its `projectedDecommissionAt` EOL-cliff marker — not capacity attribution.
+  Find-or-create keeps the seed idempotent and heals hosts seeded before #289. Crucially, a reseed
+  **preserves an operator's move**: it does not reset `Host.clusterId` when the open membership points
+  at a different cluster (`entrypoint.ts` reseeds on every boot while `SEED_ON_BOOT=true`), so it can
+  never desync the pointer from the open membership (Invariant 3). A regression test drives the real
+  seed function through a seed → move → reseed sequence.
 - **`HostsService.create`** (manual): host + open membership at `commissionedAt`, in one transaction.
 - **`HostsService.move`** (new, manual): Serializable tx — reject synced host / synced destination /
   same cluster / bad date; close the open membership at `moveDate`; open a new one; update
