@@ -137,6 +137,40 @@ describe('/_app/settings sub-routes (#293)', () => {
     await screen.findByRole('heading', { name: 'Forecasting', level: 2 });
   });
 
+  // #297 review fix — Minor finding #2: pre-#293 bookmarks used
+  // `/settings#section-*` as in-page table-of-contents anchors
+  // (`FORECASTING_SECTION_HASH` / `INVENTORY_SECTION_HASH` /
+  // `ACCESS_SECTION_HASH`, retired in `lib/anchors.ts`). Each section is now
+  // its own route, so the index redirect must map the old hash onto the new
+  // sub-route instead of unconditionally landing on Forecasting.
+  it('maps a pre-#293 #section-inventory bookmark onto the Inventory sub-route', async () => {
+    renderSettingsRoute(disabledAuth, ['/settings#section-inventory']);
+    await screen.findByRole('heading', { name: 'Settings', level: 1 });
+    await screen.findByRole('heading', { name: 'Inventory', level: 2 });
+  });
+
+  it('maps a pre-#293 #section-access bookmark onto the Access sub-route', async () => {
+    renderSettingsRoute(disabledAuth, ['/settings#section-access']);
+    await screen.findByRole('heading', { name: 'Settings', level: 1 });
+    await screen.findByRole('heading', { name: 'Access', level: 2 });
+  });
+
+  it('maps a pre-#293 #section-forecasting bookmark onto the Forecasting sub-route', async () => {
+    renderSettingsRoute(disabledAuth, ['/settings#section-forecasting']);
+    await screen.findByRole('heading', { name: 'Settings', level: 1 });
+    await screen.findByRole('heading', { name: 'Forecasting', level: 2 });
+  });
+
+  // `#add-cluster` is different from the `#section-*` hashes above: it still
+  // addresses a real panel *within* the Inventory sub-route (`ADD_CLUSTER_HASH`
+  // is unretired), so the index redirect must carry it onto the new URL —
+  // `/settings/inventory#add-cluster` — rather than dropping it.
+  it('preserves a pre-#293 #add-cluster bookmark onto /settings/inventory#add-cluster', async () => {
+    renderSettingsRoute(disabledAuth, ['/settings#add-cluster']);
+    const trigger = await screen.findByRole('button', { name: '+ Add cluster' });
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
   it('renders the tab nav linking to each sub-route, including Access for an admin', async () => {
     renderSettingsRoute(disabledAuth, ['/settings/forecasting']);
     await screen.findByRole('heading', { name: 'Settings', level: 1 });
