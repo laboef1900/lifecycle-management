@@ -10,6 +10,7 @@ import {
   missedPeriods,
   nextMonthlyBoundary,
   periodFor,
+  sanitizeJobError,
   VsphereScheduler,
   type Clock,
   type JobRunner,
@@ -127,6 +128,32 @@ describe('pure derivations', () => {
     expect(missedPeriods(lastSuccess, new Date('2026-09-01T00:00:00Z'))).toBe(1);
     expect(missedPeriods(lastSuccess, new Date('2026-08-01T00:00:00Z'))).toBe(0);
     expect(missedPeriods(null, new Date('2026-09-01T00:00:00Z'))).toBe(0);
+  });
+
+  it('#280 — classifies a leaf-pin mismatch by CODE (via extractTlsErrorCode), mirroring vsphere-sync.classify, not by message regex', () => {
+    // The exact error shape `fingerprintPinnedConnection` (vsphere-tls.ts) throws: the
+    // message does NOT contain the literal string CERT_FINGERPRINT_MISMATCH, only
+    // `err.code` does — a message-regex "mirror" would silently miss this.
+    const err = Object.assign(
+      new Error('vCenter presented a certificate that does not match the pinned fingerprint'),
+      { code: 'CERT_FINGERPRINT_MISMATCH' },
+    );
+    expect(sanitizeJobError(err)).toBe(
+      'vCenter is presenting a different certificate than the one you trusted.',
+    );
+    // The sanitized message must never leak the raw code or driver message
+    // (@ai-warning above `sanitizeJobError`: lastError is stored and UI-rendered).
+    expect(sanitizeJobError(err)).not.toContain('CERT_FINGERPRINT_MISMATCH');
+    expect(sanitizeJobError(err)).not.toContain('pinned fingerprint');
+  });
+
+  it('a generic untrusted/self-signed certificate (no fingerprint-mismatch code) still maps to the untrusted-cert message', () => {
+    expect(sanitizeJobError(new Error('self signed certificate in certificate chain'))).toBe(
+      'vCenter presented an untrusted certificate.',
+    );
+    expect(sanitizeJobError(new Error('unable to verify the first certificate'))).toBe(
+      'vCenter presented an untrusted certificate.',
+    );
   });
 });
 
