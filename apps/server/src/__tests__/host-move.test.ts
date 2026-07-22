@@ -165,6 +165,38 @@ describe('host move — forecast attribution (#289)', () => {
     expect(capacityInMonth(bMonths, '2026-06-01')).toBe(512);
     expect(capacityInMonth(bMonths, '2026-07-01')).toBe(0);
   });
+
+  it('makes the previously-stranding same-month double move well-defined — the intermediate cluster keeps a full month (#289)', async () => {
+    // Review finding: two moves in one calendar month (A→B→C) stranded B at
+    // capacity 0 for EVERY month. With `moveDate` constrained to the first of a
+    // month AND the `moveDate > current-start` guard, a second move cannot land in
+    // the same month — so B always holds the host for at least one full month.
+    const a = await makeCluster(prisma, { name: 'strand-a', baselineCapacity: 0 });
+    const b = await makeCluster(prisma, { name: 'strand-b', baselineCapacity: 0 });
+    const c = await makeCluster(prisma, { name: 'strand-c', baselineCapacity: 0 });
+    const host = await makeHost(prisma, {
+      clusterId: a.id,
+      commissionedAt: utc(2026, 1, 1),
+      initialCapacity: [{ effectiveFrom: utc(2026, 1, 1), amount: 512 }],
+    });
+
+    await hosts.move(TENANT, host.id, { clusterId: b.id, moveDate: utc(2026, 6, 1) });
+    // A second move dated in the SAME calendar month is refused — this is what
+    // prevents the zero-length interval that stranded B before.
+    await expect(
+      hosts.move(TENANT, host.id, { clusterId: c.id, moveDate: utc(2026, 6, 1) }),
+    ).rejects.toMatchObject({ code: 'INVALID_MOVE_DATE', statusCode: 422 });
+
+    // The well-defined correction is the next first-of-month; B keeps all of June.
+    await hosts.move(TENANT, host.id, { clusterId: c.id, moveDate: utc(2026, 7, 1) });
+
+    const bMonths = await monthsFor(b.id);
+    const cMonths = await monthsFor(c.id);
+    expect(capacityInMonth(bMonths, '2026-06-01')).toBe(512); // B is NOT stranded
+    expect(capacityInMonth(bMonths, '2026-07-01')).toBe(0);
+    expect(capacityInMonth(cMonths, '2026-06-01')).toBe(0);
+    expect(capacityInMonth(cMonths, '2026-07-01')).toBe(512);
+  });
 });
 
 describe('host move — service guards (#289)', () => {
@@ -231,6 +263,67 @@ describe('host move — service guards (#289)', () => {
   });
 });
 
+describe('host commissionedAt correction vs the membership timeline (#289)', () => {
+  const hosts = new HostsService(prisma);
+
+  // Sets up a MOVED host whose earliest interval is closed at the move date and
+  // whose first capacity row deliberately postdates commissioning — the exact
+  // shape that lets a later `commissionedAt` slip past the capacity-row guard.
+  async function movedHostWithLateCapacity(): Promise<string> {
+    const a = await makeCluster(prisma, {
+      name: `realign-a-${Math.random()}`,
+      baselineCapacity: 0,
+    });
+    const b = await makeCluster(prisma, {
+      name: `realign-b-${Math.random()}`,
+      baselineCapacity: 0,
+    });
+    const host = await makeHost(prisma, {
+      clusterId: a.id,
+      commissionedAt: utc(2026, 3, 1),
+      // First capacity row postdates commissioning, so a commissionedAt correction
+      // up to 2026-05-01 passes the "not after the earliest capacity row" guard.
+      initialCapacity: [{ effectiveFrom: utc(2026, 5, 1), amount: 512 }],
+    });
+    // Earliest interval is now closed: [2026-03-01, 2026-04-01) in A.
+    await hosts.move(TENANT, host.id, { clusterId: b.id, moveDate: utc(2026, 4, 1) });
+    return host.id;
+  }
+
+  it('rejects a commissionedAt correction that would invert the earliest interval', async () => {
+    const hostId = await movedHostWithLateCapacity();
+
+    // 2026-05-01 is >= the earliest interval's end (2026-04-01): applying it would
+    // write effectiveFrom(05-01) > effectiveTo(04-01). Must be rejected, not written.
+    await expect(
+      hosts.update(TENANT, hostId, { commissionedAt: utc(2026, 5, 1) }),
+    ).rejects.toMatchObject({ code: 'INVALID_COMMISSIONED_AT', statusCode: 422 });
+
+    // The timeline is untouched — the earliest interval is still valid (from < to).
+    const rows = await prisma.hostClusterMembership.findMany({
+      where: { hostId },
+      orderBy: { effectiveFrom: 'asc' },
+    });
+    expect(rows[0]!.effectiveFrom.getTime()).toBe(utc(2026, 3, 1).getTime());
+    expect(rows[0]!.effectiveTo!.getTime()).toBe(utc(2026, 4, 1).getTime());
+    expect(rows[0]!.effectiveFrom.getTime()).toBeLessThan(rows[0]!.effectiveTo!.getTime());
+  });
+
+  it('still allows an EARLIER commissionedAt correction, realigning the earliest interval', async () => {
+    const hostId = await movedHostWithLateCapacity();
+
+    await hosts.update(TENANT, hostId, { commissionedAt: utc(2026, 2, 1) });
+
+    const rows = await prisma.hostClusterMembership.findMany({
+      where: { hostId },
+      orderBy: { effectiveFrom: 'asc' },
+    });
+    // Earliest interval start moved back with the correction; end is unchanged.
+    expect(rows[0]!.effectiveFrom.getTime()).toBe(utc(2026, 2, 1).getTime());
+    expect(rows[0]!.effectiveTo!.getTime()).toBe(utc(2026, 4, 1).getTime());
+  });
+});
+
 describe('POST /api/hosts/:id/move — route + RBAC (#289)', () => {
   let server: FastifyInstance;
 
@@ -284,6 +377,20 @@ describe('POST /api/hosts/:id/move — route + RBAC (#289)', () => {
       method: 'POST',
       url: `/api/hosts/${host.id}/move`,
       payload: { clusterId: target.id },
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a non-first-of-month moveDate with 400 (engine granularity)', async () => {
+    const source = await makeCluster(prisma, { name: 'r-mid-src' });
+    const target = await makeCluster(prisma, { name: 'r-mid-dst' });
+    const host = await makeHost(prisma, { clusterId: source.id });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/hosts/${host.id}/move`,
+      payload: { clusterId: target.id, moveDate: '2026-06-15' },
     });
 
     expect(res.statusCode).toBe(400);

@@ -64,6 +64,12 @@ enforced in application code inside **Serializable** transactions. Tests pin it.
 - **Misuse — degenerate/overlapping intervals**: `moveDate` must be strictly after the current
   open membership's `effective_from` (→ `INVALID_MOVE_DATE`, 422); same-cluster move is refused
   (`HOST_ALREADY_IN_CLUSTER`, 422).
+- **Misuse — sub-month move granularity**: `moveDate` is constrained by the contract
+  (`hostMoveInputSchema`) to the **first of a month** (UTC). The forecast resolves membership at
+  first-of-month granularity, so a mid-month date is silently coarse — and two moves in the _same
+  calendar month_ (A→B→C) would strand the intermediate cluster at capacity 0 for **every** month.
+  First-of-month + the `moveDate > effective_from` guard together force every interval to span at
+  least one full month, so no cluster is ever stranded.
 
 ## 4. Invariants (enforced + tested)
 
@@ -100,6 +106,11 @@ enforced in application code inside **Serializable** transactions. Tests pin it.
 - **Migration backfill**: one open membership per existing host at its `commissioned_at`. A count
   guard fails the migration (rolls back, server refuses to boot) if it did not produce exactly one row
   per host — the same fail-closed pattern the baseline-history backfill uses.
+- **Reference-data seed** (`prisma/seed.ts` → `seedReferenceData`, the `pnpm seed` /
+  `SEED_ON_BOOT=true` first-boot path): every seeded host gets one open membership at its
+  `commissionedAt`. The loader attributes hosts EXCLUSIVELY through the membership timeline, so a
+  seeded host without one is invisible to every forecast (`hosts: []`); find-or-create keeps the seed
+  idempotent and heals hosts seeded before #289. A regression test drives the real seed function.
 - **`HostsService.create`** (manual): host + open membership at `commissionedAt`, in one transaction.
 - **`HostsService.move`** (new, manual): Serializable tx — reject synced host / synced destination /
   same cluster / bad date; close the open membership at `moveDate`; open a new one; update
@@ -108,7 +119,15 @@ enforced in application code inside **Serializable** transactions. Tests pin it.
   called for every reconciled host — creates the open membership on first import, no-ops when the
   cluster is unchanged, and closes+opens when vCenter moved the host between clusters. The synced move
   date is the current month start clamped to be ≥ the open interval's start (never retroactive, never
-  a `to < from` interval).
+  a `to < from` interval). The close+open pair runs in a single `$transaction`, so a mid-pass crash
+  cannot strand the host with **zero** open memberships — otherwise the next sync's `!open` branch
+  would seed a fresh `[commissioned_at, null)` interval in the destination that OVERLAPS the closed
+  source interval, retroactively re-attributing pre-move months to the destination.
+- **`realignEarliestMembership`** (on a `commissionedAt` correction, `update`/`confirmCommissioning`):
+  moves the earliest interval's `effective_from` to the corrected date, but **refuses** a correction
+  that would land on/after that interval's `effective_to` when it is closed (the host later moved),
+  which would invert it (`from >= to`). The capacity-row guard alone does not catch this because a
+  first capacity row may legitimately postdate `commissionedAt`.
 - **Test factory `makeHost`**: creates the open membership too (the test-time equivalent of the
   backfill), so every existing forecast test keeps identical attribution.
 

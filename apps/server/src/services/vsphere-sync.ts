@@ -436,13 +436,24 @@ export class VsphereSyncService {
 
     const monthStart = startOfUtcMonth(now);
     const moveDate = monthStart > open.effectiveFrom ? monthStart : open.effectiveFrom;
-    await this.prisma.hostClusterMembership.update({
-      where: { id: open.id },
-      data: { effectiveTo: moveDate },
-    });
-    await this.prisma.hostClusterMembership.create({
-      data: { tenantId, hostId, clusterId, effectiveFrom: moveDate, effectiveTo: null },
-    });
+    // @ai-note The close and the open are ONE atomic transaction. Run as two
+    // autocommit writes, a crash between them would strand the host with zero open
+    // memberships; the next sync's `!open` branch would then seed a fresh
+    // `[commissionedAt, null)` interval in the DESTINATION, overlapping the closed
+    // source interval and RETROACTIVELY re-attributing the host's pre-move months
+    // to the destination — the exact forecast landmine this feature prevents. The
+    // transaction makes "close old + open new" all-or-nothing, so the invariant
+    // (exactly one open membership, contiguous, non-overlapping) never breaks even
+    // mid-pass.
+    await this.prisma.$transaction([
+      this.prisma.hostClusterMembership.update({
+        where: { id: open.id },
+        data: { effectiveTo: moveDate },
+      }),
+      this.prisma.hostClusterMembership.create({
+        data: { tenantId, hostId, clusterId, effectiveFrom: moveDate, effectiveTo: null },
+      }),
+    ]);
   }
 
   /**

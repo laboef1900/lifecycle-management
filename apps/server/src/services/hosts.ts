@@ -348,12 +348,26 @@ export class HostsService {
       where: { hostId },
       orderBy: { effectiveFrom: 'asc' },
     });
-    if (earliest && earliest.effectiveFrom.getTime() !== commissionedAt.getTime()) {
-      await tx.hostClusterMembership.update({
-        where: { id: earliest.id },
-        data: { effectiveFrom: commissionedAt },
-      });
+    if (!earliest || earliest.effectiveFrom.getTime() === commissionedAt.getTime()) return;
+    // Guard the timeline invariant (#289). If the earliest interval is CLOSED (the
+    // host was later moved), the correction must not push its start on/after its
+    // own end, or we write an inverted / zero-length `[from, to)` row (from >= to)
+    // — a silent break of the "contiguous, non-overlapping" invariant. The
+    // capacity-row guard in `update`/`confirmCommissioning` does NOT catch this: a
+    // host's first capacity row may legitimately postdate `commissionedAt`, so a
+    // correction can satisfy that check yet still land after a prior move's date.
+    // Reject with the same code as the capacity guard — both mean "this
+    // commissionedAt is inconsistent with the host's history".
+    if (earliest.effectiveTo !== null && commissionedAt >= earliest.effectiveTo) {
+      throw new UnprocessableError(
+        'INVALID_COMMISSIONED_AT',
+        'commissionedAt cannot be on or after the first cluster move date',
+      );
     }
+    await tx.hostClusterMembership.update({
+      where: { id: earliest.id },
+      data: { effectiveFrom: commissionedAt },
+    });
   }
 
   /**

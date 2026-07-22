@@ -55,15 +55,30 @@ export const hostUpdateInputSchema = z
   );
 
 /**
+ * `moveDate` must be the FIRST of a month (UTC). The forecast resolves membership
+ * at first-of-month granularity (`monthRange` yields first-of-month dates only),
+ * so a non-aligned date is silently coarse — and worse, two moves inside the same
+ * calendar month would strand the intermediate cluster at capacity 0 for EVERY
+ * month, permanently and silently (a plausible "wrong cluster, fix it" correction).
+ * Constraining the contract to the first of a month keeps it aligned with the
+ * engine; combined with the service's `moveDate > current membership start` guard,
+ * a second move cannot land in the same month as the first, so every interval
+ * spans at least one full month and no cluster is ever stranded (#289).
+ */
+const firstOfMonthDate = dateOnly.refine((date) => date.getUTCDate() === 1, {
+  message: 'moveDate must be the first day of a month (YYYY-MM-01)',
+});
+
+/**
  * Move a host to a different cluster with a TIME-SCOPED membership (#289). The
  * move records a date: the forecast attributes the host to the *old* cluster
  * before `moveDate` and the *new* cluster on/after it, so history is never
  * retroactively rewritten (owner decision 2026-07-22). `clusterId` is the
- * DESTINATION cluster; `moveDate` is when the host moved.
+ * DESTINATION cluster; `moveDate` is when the host moved (the first of a month).
  */
 export const hostMoveInputSchema = z.strictObject({
   clusterId: cuid,
-  moveDate: dateOnly,
+  moveDate: firstOfMonthDate,
 });
 
 export const hostIdParamsSchema = z.object({ id: cuid });

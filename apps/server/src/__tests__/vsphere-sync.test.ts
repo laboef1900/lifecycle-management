@@ -810,4 +810,68 @@ describe('sync maintains host cluster membership (#289)', () => {
     // exactly one open membership survives
     expect(rows.filter((r) => r.effectiveTo === null)).toHaveLength(1);
   });
+
+  it('closes the old membership and opens the new one ATOMICALLY (one $transaction)', async () => {
+    // Regression for the WARNING review finding: the close+open were two separate
+    // autocommit writes, so a crash between them stranded the host with zero open
+    // memberships and the next sync seeded an OVERLAPPING interval in the
+    // destination, retroactively re-attributing pre-move months. They must run in a
+    // single transaction. `reconcileMembership`'s close+open is the ONLY
+    // $transaction on the whole sync path, so observing it proves the wrapping.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-15T00:00:00.000Z'));
+    const conn = await makeConn();
+    await new VsphereSyncService(prisma, fakeCollector(inventory())).syncConnection(
+      'default',
+      conn,
+      CREDS,
+    );
+    const host = await prisma.host.findFirstOrThrow({ where: { connectionId: conn } });
+
+    const txSpy = vi.spyOn(prisma, '$transaction');
+    try {
+      vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
+      const moved = inventory({
+        clusters: [
+          {
+            moref: 'domain-c2',
+            name: 'Staging',
+            hosts: [
+              {
+                moref: 'host-1',
+                name: 'esx-01',
+                memoryGiB: 512,
+                usageGiB: 300,
+                inMaintenanceMode: false,
+                connected: true,
+              },
+            ],
+          },
+        ],
+      });
+      await new VsphereSyncService(prisma, fakeCollector(moved)).syncConnection(
+        'default',
+        conn,
+        CREDS,
+      );
+
+      // The close+open ran as a single batched ($transaction([...])) write.
+      const batchedCalls = txSpy.mock.calls.filter(
+        (call) => Array.isArray(call[0]) && call[0].length === 2,
+      );
+      expect(batchedCalls.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      txSpy.mockRestore();
+    }
+
+    // And the committed state is the correct all-or-nothing result: two rows,
+    // exactly one open, contiguous — never a zero-open stranded state.
+    const rows = await prisma.hostClusterMembership.findMany({
+      where: { hostId: host.id },
+      orderBy: { effectiveFrom: 'asc' },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((r) => r.effectiveTo === null)).toHaveLength(1);
+    expect(rows[0]!.effectiveTo!.getTime()).toBe(rows[1]!.effectiveFrom.getTime());
+  });
 });
