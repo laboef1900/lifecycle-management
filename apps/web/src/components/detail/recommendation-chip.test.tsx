@@ -261,3 +261,62 @@ describe('<RecommendationChip> unknown-capacity fix action (#243 Part B item 4)'
     expect(requestAnchorFocus).not.toHaveBeenCalled();
   });
 });
+
+describe('<RecommendationChip> order approval (#292)', () => {
+  const ack = {
+    note: 'PO raised — 2 nodes',
+    approvedByLabel: 'Ada Admin',
+    approvedAt: '2026-07-14T09:00:00.000Z',
+  };
+
+  it('shows the Acknowledged annotation (note + who + relative date) when acknowledged', () => {
+    renderChip({ acknowledgment: ack });
+
+    const badge = screen.getByTestId('recommendation-acknowledged');
+    expect(badge).toHaveTextContent('Ada Admin');
+    expect(badge).toHaveTextContent('2d ago');
+    expect(badge).toHaveTextContent('PO raised — 2 nodes');
+    // Never color alone: an icon accompanies the text.
+    expect(badge.querySelector('svg')).not.toBeNull();
+    // The urgency chip still renders — an acknowledgment never mutes urgency.
+    expect(screen.getByTestId('recommendation-chip')).toBeInTheDocument();
+    // No approve action once acknowledged, even for an admin (onApprove passed).
+    expect(screen.queryByTestId('recommendation-approve')).toBeNull();
+  });
+
+  it('renders an approve action for an admin with an unacknowledged live breach', async () => {
+    const onApprove = vi.fn();
+    renderChip({ onApprove }); // default procurement has a future order-by date
+
+    const button = screen.getByTestId('recommendation-approve');
+    expect(button.tagName).toBe('BUTTON');
+    expect(screen.queryByTestId('recommendation-acknowledged')).toBeNull();
+
+    await userEvent.setup().click(button);
+    expect(onApprove).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no approve action to a viewer (no onApprove handler)', () => {
+    renderChip(); // breach present but no onApprove
+    expect(screen.queryByTestId('recommendation-approve')).toBeNull();
+  });
+
+  it('offers no approve action when there is no live breach to approve', () => {
+    const onApprove = vi.fn();
+    renderChip({ procurement: procurement({ orderByDate: null, breachMonth: null }), onApprove });
+    expect(screen.queryByTestId('recommendation-approve')).toBeNull();
+  });
+
+  it('keeps urgency escalating while acknowledged (annotation does not mute the chip)', () => {
+    renderChip({
+      procurement: procurement({ orderByDate: '2026-07-01' }), // overdue → crit
+      acknowledgment: ack,
+      onApprove: vi.fn(),
+    });
+
+    const chip = screen.getByTestId('recommendation-chip');
+    expect(chip.dataset.tone).toBe('crit');
+    expect(chip).toHaveTextContent('ORDER NOW');
+    expect(screen.getByTestId('recommendation-acknowledged')).toBeInTheDocument();
+  });
+});

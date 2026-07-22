@@ -29,6 +29,7 @@ import { healthRoutes } from './routes/health.js';
 import { hostReplacementRoutes } from './routes/host-replacements.js';
 import { hostRoutes } from './routes/hosts.js';
 import { itemsRoutes } from './routes/items.js';
+import { orderApprovalRoutes } from './routes/order-approvals.js';
 import { loadKey } from './crypto/secret-box.js';
 import { settingsAuthRoutes } from './routes/settings-auth.js';
 import { settingsVsphereRoutes } from './routes/settings-vsphere.js';
@@ -103,6 +104,7 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   await server.register(itemsRoutes, { prefix: '/api' });
   await server.register(categoriesRoutes, { prefix: '/api' });
   await server.register(forecastRoutes, { prefix: '/api' });
+  await server.register(orderApprovalRoutes, { prefix: '/api' });
   await server.register(settingsRoutes, { prefix: '/api' });
   // The bootstrap-window /settings/auth test+enable endpoints are open to any
   // caller while auth is disabled, so the SSRF internal-address deny-list must be

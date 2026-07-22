@@ -1,5 +1,12 @@
-import type { ProcurementInfo } from '@lcm/shared';
-import { CalendarClock, Check, CircleHelp, TriangleAlert } from 'lucide-react';
+import type { ForecastAcknowledgment, ProcurementInfo } from '@lcm/shared';
+import {
+  BadgeCheck,
+  CalendarClock,
+  Check,
+  CircleHelp,
+  ClipboardCheck,
+  TriangleAlert,
+} from 'lucide-react';
 import * as React from 'react';
 
 import { formatRelativeDays } from '@/components/fleet/order-by-rail';
@@ -15,6 +22,18 @@ export interface RecommendationChipProps {
   today?: Date;
   /** False when the current forecast has no capacity denominator. */
   capacityKnown?: boolean;
+  /**
+   * The acknowledgment covering the live breach, or `null` (#292). When present,
+   * an "Acknowledged" annotation renders beside the urgency chip; the chip's own
+   * urgency still escalates live from `orderByDate`. Read-only for everyone.
+   */
+  acknowledgment?: ForecastAcknowledgment | null;
+  /**
+   * Admin-only approve handler. When provided AND there is an unacknowledged live
+   * breach, an "Approve" affordance renders. Omitted for VIEWERs (read-only) and
+   * when there is nothing to approve; the server enforces the 403 regardless.
+   */
+  onApprove?: () => void;
 }
 
 export type RecommendationTone = 'crit' | 'planned' | 'none' | 'unknown';
@@ -146,6 +165,8 @@ export function RecommendationChip({
   procurement,
   today = new Date(),
   capacityKnown = true,
+  acknowledgment = null,
+  onApprove,
 }: RecommendationChipProps): React.JSX.Element {
   const rec = deriveRecommendation(procurement, today, capacityKnown);
   const Icon = TONE_ICON[rec.tone];
@@ -166,28 +187,119 @@ export function RecommendationChip({
   // Unknown is the one tone with a fix to offer (#243 Part B item 4), so it
   // alone gets the interactive trigger below; every other tone keeps the
   // original non-interactive span this file's docs already explain.
-  if (rec.tone === 'unknown') {
-    return (
+  const urgencyChip =
+    rec.tone === 'unknown' ? (
       <span role="status" data-testid="recommendation-chip" data-tone={rec.tone}>
         <UnknownCapacityTrigger className={triggerClassName} message={rec.message}>
           {chipContent}
         </UnknownCapacityTrigger>
       </span>
+    ) : (
+      <span role="status" data-testid="recommendation-chip" data-tone={rec.tone}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span data-testid="recommendation-chip-trigger" className={triggerClassName}>
+              {chipContent}
+              <span className="sr-only">{rec.message}</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs">{rec.message}</TooltipContent>
+        </Tooltip>
+      </span>
     );
+
+  // A live breach is one there is a concrete order-by date to approve (#292).
+  // No breach ⇒ nothing to acknowledge or approve (INV-3).
+  const hasLiveBreach = procurement.orderByDate !== null;
+
+  // Precedence: an existing acknowledgment annotates (read-only for everyone);
+  // otherwise an unacknowledged live breach offers the admin approve action.
+  // The urgency chip always renders — an acknowledgment never mutes urgency.
+  let affordance: React.JSX.Element | null = null;
+  if (acknowledgment) {
+    affordance = <AcknowledgedAnnotation acknowledgment={acknowledgment} today={today} />;
+  } else if (hasLiveBreach && onApprove) {
+    affordance = <ApproveOrderButton onApprove={onApprove} />;
   }
 
   return (
-    <span role="status" data-testid="recommendation-chip" data-tone={rec.tone}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span data-testid="recommendation-chip-trigger" className={triggerClassName}>
-            {chipContent}
-            <span className="sr-only">{rec.message}</span>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-xs">{rec.message}</TooltipContent>
-      </Tooltip>
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      {urgencyChip}
+      {affordance}
     </span>
+  );
+}
+
+/** "today" / "Nd ago" for a past approval instant (its date part only). */
+function formatApprovedRelative(approvedAt: string, today: Date): string {
+  const days = daysUntil(approvedAt.slice(0, 10), today);
+  if (days === 0) return 'today';
+  if (days < 0) return `${Math.abs(days)}d ago`;
+  return `in ${days}d`;
+}
+
+/**
+ * Read-only "Acknowledged" annotation shown beside the urgency chip when the
+ * live breach is covered by an approval (#292, DESIGN.md §6). Success tone, but
+ * never color alone — a `BadgeCheck` icon plus the word "Acknowledged" carry the
+ * meaning (WCAG 1.4.1). The note, approver label, and relative date are visible
+ * (truncated) and repeated in full via the sr-only text and hover tooltip. The
+ * trigger is a NON-focusable span, so the tooltip is structurally hover-only —
+ * same rationale as the urgency chip above.
+ */
+function AcknowledgedAnnotation({
+  acknowledgment,
+  today,
+}: {
+  acknowledgment: ForecastAcknowledgment;
+  today: Date;
+}): React.JSX.Element {
+  const relative = formatApprovedRelative(acknowledgment.approvedAt, today);
+  const detail = `${acknowledgment.approvedByLabel} · ${relative}${
+    acknowledgment.note ? ` · “${acknowledgment.note}”` : ''
+  }`;
+  const fullSentence = `Order acknowledged by ${acknowledgment.approvedByLabel} ${relative}.${
+    acknowledgment.note ? ` Note: ${acknowledgment.note}` : ''
+  }`;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          data-testid="recommendation-acknowledged"
+          className="inline-flex max-w-[20rem] items-center gap-1.5 rounded-sm border border-success/40 bg-success/10 px-1.5 py-1 text-[11px] font-medium text-success"
+        >
+          <BadgeCheck className="h-3 w-3 shrink-0" aria-hidden />
+          <span className="shrink-0 font-mono text-[9.5px] font-bold uppercase tracking-[0.08em]">
+            Ack
+          </span>
+          <span className="min-w-0 truncate font-sans normal-case text-fg-muted">{detail}</span>
+          <span className="sr-only">{fullSentence}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{fullSentence}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * Admin-only "Approve" affordance for an unacknowledged live breach (#292). A
+ * real, focusable `<button>` (it has an action, unlike the urgency chip's
+ * non-interactive trigger); clicking it hands off to the parent, which collects
+ * the optional note and performs the mutation. Steel/interaction tone with an
+ * icon + label — never color alone.
+ */
+function ApproveOrderButton({ onApprove }: { onApprove: () => void }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-testid="recommendation-approve"
+      onClick={onApprove}
+      className="inline-flex items-center gap-1.5 rounded-sm border border-steel/40 bg-steel/10 px-1.5 py-1 font-mono text-[9.5px] font-bold uppercase tracking-[0.08em] text-steel"
+    >
+      <ClipboardCheck className="h-3 w-3 shrink-0" aria-hidden />
+      Approve
+      <span className="sr-only">Approve this order recommendation and record a note</span>
+    </button>
   );
 }
 

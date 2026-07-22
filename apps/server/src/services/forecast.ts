@@ -1,4 +1,4 @@
-import type { BaselineHistoryPoint } from '@lcm/shared';
+import type { BaselineHistoryPoint, ForecastAcknowledgment } from '@lcm/shared';
 import type { EffectiveThresholds, ProcurementInfo } from '@lcm/shared';
 
 import { formatDate } from '../lib/dates.js';
@@ -117,6 +117,13 @@ export interface ForecastResult {
   applications: ForecastEntityContribution[];
   effectiveThresholds: EffectiveThresholds;
   procurement: ProcurementInfo;
+  /**
+   * Annotation-only acknowledgment of the live breach (#292), assembled by the
+   * loader from the `order_approvals` table. `null` when unacknowledged, no
+   * breach, or a scenario (a what-if is never acknowledged). INV-1: never feeds
+   * back into the forecast maths — hence its absence from `ComputedForecast`.
+   */
+  acknowledgment: ForecastAcknowledgment | null;
 }
 
 /**
@@ -125,11 +132,11 @@ export interface ForecastResult {
  * loader from the database, and the pure function must never learn that history
  * exists. Keeping it ignorant is what lets the characterization snapshot mean
  * something — the forecast maths is then unchanged by #177 by construction rather
- * than by assertion.
+ * than by assertion. `acknowledgment` is omitted for the same reason (INV-1).
  */
 export type ComputedForecast = Omit<
   ForecastResult,
-  'effectiveThresholds' | 'procurement' | 'baselineHistory'
+  'effectiveThresholds' | 'procurement' | 'baselineHistory' | 'acknowledgment'
 >;
 
 export function computeForecast(
