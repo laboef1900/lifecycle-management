@@ -32,6 +32,12 @@ export interface OrderApprovalResponse {
   leadTimeWeeks: number;
   warnThreshold: number;
   capacitySignature: number;
+  /**
+   * The metric this breach was snapshotted for (#292) — the cluster's primary
+   * metric at approval time. Nullable at the storage layer; v1 coverage stays
+   * single-metric and does not filter on it (DESIGN.md addendum item 3).
+   */
+  metricTypeId: string | null;
   approvedByUserId: string | null;
   approvedByLabel: string;
   note: string | null;

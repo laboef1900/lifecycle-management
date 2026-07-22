@@ -8,6 +8,7 @@ CREATE TABLE "order_approvals" (
     "lead_time_weeks" INTEGER NOT NULL,
     "warn_threshold" DOUBLE PRECISION NOT NULL,
     "capacity_signature" DOUBLE PRECISION NOT NULL,
+    "metric_type_id" TEXT,
     "approved_by_user_id" TEXT,
     "approved_by_label" TEXT NOT NULL,
     "note" TEXT,

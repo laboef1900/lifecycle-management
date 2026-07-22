@@ -267,6 +267,7 @@ export const orderApprovalResponseSchema: z.ZodType<OrderApprovalResponse> = z.o
   leadTimeWeeks: z.number(),
   warnThreshold: z.number(),
   capacitySignature: z.number(),
+  metricTypeId: z.string().nullable(),
   approvedByUserId: z.string().nullable(),
   approvedByLabel: z.string(),
   note: z.string().nullable(),

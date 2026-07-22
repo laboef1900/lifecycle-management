@@ -100,8 +100,25 @@ export class ForecastService {
   /**
    * The live procurement facts the order-approval write path snapshots (#292):
    * the current breach, the warn threshold, and the capacity signature — all from
-   * the REAL (non-scenario) forecast over the default window, i.e. exactly what
-   * the recommendation chip shows.
+   * the REAL (non-scenario) forecast.
+   *
+   * @ai-warning This evaluates the SERVER DEFAULT window (baseline-anchored:
+   * `fromMonth = firstOfMonth(newest baseline)`), which is NOT identical to the
+   * window the recommendation chip reads. The web chip requests a TODAY-anchored
+   * window (`resolveWindow` in `apps/web/src/components/clusters/window-controls.tsx`
+   * — `from = firstOfMonth(today)` for the 12/24-mo views), so under a stale
+   * baseline anchor the write and read windows diverge. This is deliberate and
+   * FAILS SAFE, NOT "exactly what the chip shows": the baseline-anchored window
+   * starts no later than any chip window, so the snapshotted `orderByDate` is
+   * never later than the live one — the ≥ T supersede rule (INV-5) can therefore
+   * never *falsely* supersede on any view (a genuine worsening reads as
+   * improving/unchanged, so an acknowledgment can only linger, never vanish), and
+   * live chip urgency escalates independently regardless. The one visible-but-safe
+   * symptom is a 422 on Approve for a breach that sits past this window's `to`
+   * (anchor + horizon) yet within the chip's `to` (today + horizon). Aligning the
+   * write window to `today` would fix that 422 but REGRESS the "all" view (whose
+   * `from` is the baseline) into false supersedes — see DESIGN.md §3 "Window
+   * divergence".
    */
   async liveBreachContext(
     tenantId: string,

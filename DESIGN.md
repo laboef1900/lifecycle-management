@@ -36,6 +36,18 @@ Natural baseline/consumption drift that only shifts `breachMonth` by < `T` does 
 
 Snapshot a scalar **`capacitySignature`** = sum of nameplate capacity across the cluster's active (non-decommissioned) hosts at approval time. The forecast loader already loads these; exposing a cluster nameplate total is trivial. Any capacity change moves the number; a true like-for-like host swap (identical capacity) leaves it unchanged — which is correct, because the breach doesn't move either.
 
+### Window divergence (write path vs. read path) — fails safe, deliberately not aligned
+
+The forecast is evaluated over a `[from, to]` window. The **write path** (`ForecastService.liveBreachContext`, invoked by `OrderApprovalService.create`) uses the **server default, baseline-anchored** window (`from = firstOfMonth(newest baseline)`). The **read path** the chip renders uses whatever window the web client requests, which for the 12/24-mo views is **today-anchored** (`resolveWindow` in `window-controls.tsx`: `from = firstOfMonth(today)`). Under a **stale baseline anchor** (anchor several months in the past) these windows diverge.
+
+This divergence is **left in place on purpose because it fails safe**, and the reviewer's flagged 422 is the price:
+
+- The baseline-anchored write window starts **no later than** any chip window, so the snapshotted `orderByDate` is **never later** than the live one. The `≥ T` worsening rule (INV-5) supersedes only when the live `orderByDate` is _earlier_ than the approved one — so with a write window that starts earliest, a genuine worsening reads as "improving/unchanged" and the approval can only **linger**, never **falsely vanish**, on _any_ view. Live chip urgency (`orderByDate` vs `today`) still escalates independently, so a lingering acknowledgment can never hide a now-urgent order.
+- **Rejected alternative — align the write window to `today`:** it would remove the 422 on the default 24-mo view, but the **`all` view** (whose `from` is the baseline, i.e. earlier than `today`) would then compute a live `orderByDate` _earlier_ than a today-anchored snapshot, tripping the `≥ T` rule and making the acknowledgment **disappear when the operator merely switches to the `all` window** — a worse, view-dependent regression on the purchasing surface. Anchoring the write window earliest is the more robust choice.
+- **One visible-but-safe symptom:** a `422 NO_LIVE_BREACH` on Approve for a breach that sits past the write window's `to` (`anchor + horizon`) yet within the chip's `to` (`today + horizon`) — only reachable when the anchor is stale by more than one month _and_ the breach is >24 months out. The chip shows the breach; Approve reports "no live breach". Confusing, but it can never mis-record or mask an order.
+
+The `liveBreachContext` doc comment states this accurately (it previously, wrongly, claimed "exactly what the chip shows"). A future change MAY align the windows by passing the displayed `from`/`to` into the approve request, but that widens the contract (client-controlled snapshot window) and must preserve the "never falsely supersede" property above.
+
 ## 4. Data model
 
 New Prisma model (mirrors the `HostReplacement` entity pattern):
@@ -51,6 +63,7 @@ model OrderApproval {
   leadTimeWeeks     Int      @map("lead_time_weeks")
   warnThreshold     Float    @map("warn_threshold")
   capacitySignature Float    @map("capacity_signature")
+  metricTypeId      String?  @map("metric_type_id")        // which metric this breach was for (snapshot id, no FK) — see addendum item 3
   // Audit:
   approvedByUserId  String?  @map("approved_by_user_id")   // nullable — see §7 disabled-mode
   approvedByLabel   String   @map("approved_by_label")      // username or "anonymous (auth disabled)"
@@ -105,7 +118,7 @@ Server integration (Testcontainers): approve a breach → forecast response `ack
 
 ## 11. Residual decision — RESOLVED (2026-07-22): "force re-approval when worse"
 
-Owner chose the stronger option: a live breach's latest approval is **superseded** when **any** of (1) capacity signature changed, (2) warn threshold changed, or (3) **the breach worsened on its own** — the live `orderByDate` is **earlier than the approved `orderByDate` by more than a tolerance `T`**.
+Owner chose the stronger option: a live breach's latest approval is **superseded** when **any** of (1) capacity signature changed, (2) warn threshold changed, or (3) **the breach worsened on its own** — the live `orderByDate` is **earlier than the approved `orderByDate` by ≥ a tolerance `T`**. (The boundary is `≥ T`, matching §3, INV-5, and the code + tests, which use `daysEarlier >= T`; the exact `T`-day boundary supersedes.)
 
 - **Default `T = 31 days`** (≈ one month), a named constant — the live `orderByDate` must move **≥ ~1 month earlier** than the approved date to force re-approval.
 - Only the **earlier** direction supersedes. A breach moving **later** (improving) never supersedes.
@@ -121,7 +134,7 @@ These clarify points the spec above did not pin down. None change the model; the
 
 2. **`capacitySignature` exact formula** (`services/order-approval-coverage.ts` `computeCapacitySignature`). Σ over hosts where `decommissionedAt IS NULL` of each host's **latest** capacity row (max `effectiveFrom`) for the metric. Setting a decommission date (even a future one) excludes the host — a deliberate change-detector, not a point-in-time capacity. A like-for-like swap (old decommissioned + new of identical capacity) leaves the sum unchanged, matching §3.
 
-3. **Coverage evaluated per requested metric (read path).** The `acknowledgment` embedded in a forecast response is computed against the live `capacitySignature`/`warnThreshold`/`orderByDate` **for the metric being requested**. Since `OrderApproval` stores no `metricTypeId` (per §4), an approval taken for one metric would only ever "cover" another metric if their capacity sums coincided exactly — harmless (annotation-only, INV-1) and vanishingly unlikely in the single-metric deployment. Accepted residual risk.
+3. **Coverage evaluated per requested metric (read path); `metricTypeId` snapshotted, not yet matched on.** The `acknowledgment` embedded in a forecast response is computed against the live `capacitySignature`/`warnThreshold`/`orderByDate` **for the metric being requested**. `OrderApproval` now **stores** a nullable `metricTypeId` — the cluster's primary metric at approval time (`OrderApprovalService.primaryMetric`) — captured **now, while the migration is unmerged**, so a later multi-metric world does not need a second migration + backfill on this purchasing-critical table (owner decision, 2026-07-22). **v1 coverage does NOT filter on it:** `resolveAcknowledgmentFor` still selects the latest approval per cluster regardless of metric, matching today's single-metric reality (the seed tracks only `memory_gb`, and every forecast consumer reads `metrics[0]`). So an approval taken for one metric would still only ever "cover" a different metric if their capacity sums coincided exactly — harmless (annotation-only, INV-1) and, with a single metric, unreachable. **Future follow-up (multi-metric coverage matching):** when a cluster tracks more than one metric, scope the coverage read by `metricTypeId` (store the requested metric's id on the read path and add `where: { metricTypeId }` to the latest-approval query) so each metric's breach carries its own acknowledgment. Tracked for when multi-metric lands; not implemented in v1.
 
 4. **Float comparisons.** `capacitySignature` (double) compared with epsilon `1e-6`; `warnThreshold` (double, from `Decimal(4,3)`) with `1e-9`. Prevents float-noise false-supersede.
 

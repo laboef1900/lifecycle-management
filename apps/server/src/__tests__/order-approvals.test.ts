@@ -41,6 +41,7 @@ interface ApprovalBody {
   leadTimeWeeks: number;
   warnThreshold: number;
   capacitySignature: number;
+  metricTypeId: string | null;
   approvedByUserId: string | null;
   approvedByLabel: string;
   note: string | null;
@@ -112,6 +113,8 @@ afterAll(async () => {
 describe('POST /api/clusters/:id/order-approvals', () => {
   it('snapshots the live breach and returns 201', async () => {
     const clusterId = await breachingCluster();
+    // The breach is snapshotted for the cluster's primary metric (#292).
+    const memoryMetric = await prisma.metricType.findUnique({ where: { key: 'memory_gb' } });
 
     const res = await approve(clusterId, 'ordered — 2 nodes');
     expect(res.statusCode).toBe(201);
@@ -123,6 +126,8 @@ describe('POST /api/clusters/:id/order-approvals', () => {
       leadTimeWeeks: 8,
       warnThreshold: 0.7,
       capacitySignature: 10_000,
+      // The primary (and only, in v1) metric's id is captured on the snapshot.
+      metricTypeId: memoryMetric?.id,
       note: 'ordered — 2 nodes',
       // Disabled mode: no users row, audit carried by the label (DESIGN.md §7).
       approvedByUserId: null,
@@ -272,6 +277,34 @@ describe('forecast acknowledgment coverage (DESIGN.md §3)', () => {
     await setLeadTimeWeeks(6);
 
     expect((await getForecast(clusterId)).json().acknowledgment).not.toBeNull();
+  });
+
+  it('stays acknowledged when the chip reads a today-anchored window that diverges from the baseline-anchored write window (window-divergence fails safe)', async () => {
+    // The write path snapshots over the SERVER DEFAULT (baseline-anchored, 2026-05)
+    // window; the web chip reads a TODAY-anchored window (resolveWindow's 24-mo
+    // view). ANCHOR (2026-05-01) is stale relative to "today", so the two windows
+    // diverge. Because the write window starts earliest, the snapshotted
+    // orderByDate is never LATER than the live one, so the ≥ T rule can never
+    // falsely supersede — the acknowledgment survives the divergence (INV-5,
+    // forecast-loader.ts liveBreachContext @ai-warning / DESIGN.md §3).
+    const clusterId = await breachingCluster();
+    await approve(clusterId, 'seen it');
+
+    const now = new Date();
+    const yyyyMm = (d: Date): string =>
+      `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    const from = yyyyMm(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)));
+    const to = yyyyMm(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 23, 1)));
+
+    const res = await disabledServer.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&from=${from}&to=${to}`,
+    });
+    const body = res.json() as ForecastBody;
+    // The today-anchored window still shows a live breach (util 0.8 every month)...
+    expect(body.procurement.orderByDate).not.toBeNull();
+    // ...and the acknowledgment is NOT falsely superseded by the window divergence.
+    expect(body.acknowledgment).not.toBeNull();
   });
 
   it('does not surface an acknowledgment once the breach clears — INV-3', async () => {

@@ -220,6 +220,13 @@ model OrderApproval {
   leadTimeWeeks     Int      @map("lead_time_weeks")
   warnThreshold     Float    @map("warn_threshold")
   capacitySignature Float    @map("capacity_signature")
+  // Which metric this breach was for (#292). Snapshot id, not an FK: the write
+  // path stores the PRIMARY metric's id (the metric the chip renders), so a later
+  // multi-metric world can scope coverage per metric without a second migration +
+  // backfill on this purchasing-critical table. Nullable so pre-existing rows and
+  // any future metric-less snapshot stay valid; v1 coverage stays single-metric
+  // and does NOT filter on it (DESIGN.md addendum item 3).
+  metricTypeId      String?  @map("metric_type_id")
   // Audit:
   approvedByUserId  String?  @map("approved_by_user_id")
   approvedByLabel   String   @map("approved_by_label")

@@ -19,6 +19,7 @@ type OrderApprovalRow = {
   leadTimeWeeks: number;
   warnThreshold: number;
   capacitySignature: number;
+  metricTypeId: string | null;
   approvedByUserId: string | null;
   approvedByLabel: string;
   note: string | null;
@@ -45,9 +46,9 @@ export class OrderApprovalService {
     input: OrderApprovalCreateInput,
     principal: SessionUser,
   ): Promise<OrderApprovalResponse> {
-    const metricKey = await this.primaryMetricKey(tenantId, clusterId);
+    const primaryMetric = await this.primaryMetric(tenantId, clusterId);
     const { procurement, warnThreshold, capacitySignature } =
-      await this.forecastService.liveBreachContext(tenantId, clusterId, metricKey);
+      await this.forecastService.liveBreachContext(tenantId, clusterId, primaryMetric.key);
 
     // 422 when there is nothing to approve: the live forecast shows no warn
     // breach for the primary metric (DESIGN.md §5). breachMonth and orderByDate
@@ -70,6 +71,10 @@ export class OrderApprovalService {
         leadTimeWeeks: procurement.leadTimeWeeks,
         warnThreshold,
         capacitySignature,
+        // Snapshot WHICH metric this breach was for (#292). v1 coverage still
+        // matches single-metric, but capturing it now avoids a second migration +
+        // backfill on this purchasing-critical table when multi-metric lands.
+        metricTypeId: primaryMetric.id,
         // Nullable + label pattern for disabled-auth mode (DESIGN.md §7): the
         // anonymous ADMIN has no `users` row, so persist the audit string only.
         approvedByUserId: isAnonymous ? null : principal.id,
@@ -84,12 +89,17 @@ export class OrderApprovalService {
   }
 
   /**
-   * The cluster's PRIMARY metric — the alphabetically-first tracked metric key,
-   * matching `ClusterResponse.metrics[0]` (`clusters.ts` orders newest baselines
-   * by `metricType.key: 'asc'`), which is exactly the metric the recommendation
-   * chip renders. 404 when the cluster is absent; 422 when it tracks no metric.
+   * The cluster's PRIMARY metric (id + key) — the alphabetically-first tracked
+   * metric key, matching `ClusterResponse.metrics[0]` (`clusters.ts` orders newest
+   * baselines by `metricType.key: 'asc'`), which is exactly the metric the
+   * recommendation chip renders. The id is snapshotted onto the approval so a
+   * future multi-metric world can scope coverage per metric (#292). 404 when the
+   * cluster is absent; 422 when it tracks no metric.
    */
-  private async primaryMetricKey(tenantId: string, clusterId: string): Promise<string> {
+  private async primaryMetric(
+    tenantId: string,
+    clusterId: string,
+  ): Promise<{ id: string; key: string }> {
     const cluster = await this.prisma.cluster.findFirst({
       where: { id: clusterId, tenantId },
       select: { id: true },
@@ -98,9 +108,11 @@ export class OrderApprovalService {
 
     const rows = await this.prisma.clusterBaselineHistory.findMany({
       where: { tenantId, clusterId },
-      select: { metricType: { select: { key: true } } },
+      select: { metricType: { select: { id: true, key: true } } },
     });
-    const [first] = rows.map((row) => row.metricType.key).sort();
+    const [first] = rows
+      .map((row) => row.metricType)
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     if (first === undefined) {
       throw new UnprocessableError(
         'NO_LIVE_BREACH',
@@ -125,6 +137,7 @@ function toResponse(row: OrderApprovalRow): OrderApprovalResponse {
     leadTimeWeeks: row.leadTimeWeeks,
     warnThreshold: row.warnThreshold,
     capacitySignature: row.capacitySignature,
+    metricTypeId: row.metricTypeId,
     approvedByUserId: row.approvedByUserId,
     approvedByLabel: row.approvedByLabel,
     note: row.note,
