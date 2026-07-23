@@ -35,6 +35,18 @@ const DEFAULT_HORIZON_MONTHS = 24;
 interface LoadOptions {
   fromMonth?: Date;
   toMonth?: Date;
+  /**
+   * WRITE-PATH ONLY (#303). When no explicit `fromMonth` is given, clamp the
+   * default baseline anchor to `min(capturedAt, today)` before deriving the
+   * window. A no-op for the normal past/present-dated baseline (`min` returns
+   * `capturedAt`); for a FUTURE-dated baseline it pulls the window start back to
+   * today so the snapshotted `orderByDate` matches the today-anchored chip read
+   * instead of landing months later and falsely tripping the ≥ T supersede rule.
+   * The read path (`forCluster`/`forClusterWithScenario`) never sets this, so its
+   * baseline-anchored window — and the `all` view that depends on it — is
+   * unchanged (see the #300 window-alignment rejection in DESIGN.md §3).
+   */
+  clampAnchorToToday?: boolean;
 }
 
 interface PreparedForecastInput {
@@ -103,40 +115,47 @@ export class ForecastService {
    * the current breach, the warn threshold, and the capacity signature — all from
    * the REAL (non-scenario) forecast.
    *
-   * @ai-warning This evaluates the SERVER DEFAULT window (baseline-anchored:
-   * `fromMonth = firstOfMonth(newest baseline)`), which is NOT identical to the
-   * window the recommendation chip reads. The web chip requests a TODAY-anchored
-   * window (`resolveWindow` in `apps/web/src/components/clusters/window-controls.tsx`
-   * — `from = firstOfMonth(today)` for the 12/24-mo views), so under a stale
-   * baseline anchor the write and read windows diverge. This is deliberate and,
-   * NOT "exactly what the chip shows", FAILS SAFE **only while the newest
-   * baseline's `capturedAt` is not later than today** (the normal case): then the
-   * baseline-anchored window starts no later than any chip window, so the
-   * snapshotted `orderByDate` is never later than the live one — the ≥ T supersede
-   * rule (INV-5) can never *falsely* supersede on any view (a genuine worsening
-   * reads as improving/unchanged, so an acknowledgment can only linger, never
-   * vanish), and live chip urgency escalates independently regardless. The one
-   * visible-but-safe symptom in that case is a 422 on Approve for a breach past
-   * this window's `to` (anchor + horizon) yet within the chip's (today + horizon).
+   * @ai-warning This evaluates the SERVER DEFAULT window with its anchor CLAMPED
+   * to `min(capturedAt, today)` (`clampAnchorToToday`, #303), NOT the raw
+   * baseline-anchored window and NOT the exact window the chip reads. The web
+   * chip requests a TODAY-anchored window (`resolveWindow` in
+   * `apps/web/src/components/clusters/window-controls.tsx` — `from =
+   * firstOfMonth(today)` for the 12/24-mo views).
    *
-   * KNOWN LIMITATION — future-dated baseline (behavioral fix tracked as #303):
-   * future-dated baselines are accepted with no upper bound (see the anchor
-   * @ai-warning in `prepare` — `capturedAt <= today` is deliberately NOT enforced).
-   * When `capturedAt` is LATER than today this write window starts LATER than the
-   * today-anchored chip window, so the snapshotted `orderByDate` can be later than
-   * the live one and the ≥ T rule then FALSELY supersedes the approval the instant
-   * it is created (the acknowledgment never appears). The fails-safe reasoning
-   * above does NOT cover this; it is a genuine defect fixed under #303, not here.
-   * Aligning the write window to `today` would fix the 422 but REGRESS the "all"
-   * view (whose `from` is the baseline) into false supersedes — see DESIGN.md §3
-   * "Window divergence" for both edges.
+   *   - PAST/PRESENT-dated baseline (`capturedAt ≤ today`, the normal case): the
+   *     clamp is a no-op, so this stays baseline-anchored and starts no later than
+   *     any chip window. The snapshotted `orderByDate` is never later than the
+   *     live one, so the ≥ T supersede rule (INV-5) can never *falsely* supersede
+   *     on any view (a genuine worsening reads as improving/unchanged, so an
+   *     acknowledgment can only linger, never vanish), and live chip urgency
+   *     escalates independently regardless. The one visible-but-safe symptom is a
+   *     422 on Approve for a breach past this window's `to` (anchor + horizon) yet
+   *     within the chip's (today + horizon).
+   *   - FUTURE-dated baseline (`capturedAt > today`): the clamp pulls the window
+   *     start back to `firstOfMonth(today)`, matching the chip's 12/24-mo anchor.
+   *     Without it (the pre-#303 defect) the raw baseline anchor started the write
+   *     window LATER than the chip's, so the snapshotted `orderByDate` landed later
+   *     than the live one and the ≥ T rule FALSELY superseded the approval the
+   *     instant it was created (the acknowledgment never appeared). Future-dated
+   *     baselines are accepted with no upper bound (see the anchor @ai-warning in
+   *     `prepare` — `capturedAt <= today` is deliberately NOT enforced), which is
+   *     why the write path, not the accept path, is where this is corrected.
+   *
+   * The clamp is deliberately write-path only and does NOT align the full window
+   * with the chip: the read path keeps its baseline-anchored `all` view, whose
+   * `from` is the baseline. Aligning the whole write window to `today` was
+   * rejected because it regresses that `all` view into false supersedes — see
+   * DESIGN.md §3 "Window divergence" for both edges.
    */
   async liveBreachContext(
     tenantId: string,
     clusterId: string,
     metricKey: string,
   ): Promise<LiveBreachContext> {
-    const prepared = await this.prepare(tenantId, clusterId, metricKey, {});
+    // #303: clamp the default anchor to min(capturedAt, today) for the snapshot.
+    const prepared = await this.prepare(tenantId, clusterId, metricKey, {
+      clampAnchorToToday: true,
+    });
     const result = this.finalize(prepared, prepared.input);
     return {
       procurement: result.procurement,
@@ -235,7 +254,19 @@ export class ForecastService {
       );
     }
 
-    const fromMonth = options.fromMonth ?? firstOfMonth(anchor.capturedAt);
+    // @ai-context #303 write-path anchor clamp. The DEFAULT anchor is the newest
+    // baseline's `capturedAt`; the write path (`liveBreachContext`) additionally
+    // clamps it to `min(capturedAt, today)` so a FUTURE-dated baseline does not
+    // start the snapshot window later than the today-anchored chip window and
+    // falsely supersede a fresh approval. `min` makes it a no-op for any
+    // past/present baseline, so the read path (no `clampAnchorToToday`) is
+    // untouched. `firstOfMonth` is monotonic, so clamping the instant then
+    // snapping equals snapping both then taking the earlier month.
+    const defaultAnchor =
+      options.clampAnchorToToday && anchor.capturedAt.getTime() > Date.now()
+        ? new Date()
+        : anchor.capturedAt;
+    const fromMonth = options.fromMonth ?? firstOfMonth(defaultAnchor);
     const toMonth = options.toMonth ?? addMonths(fromMonth, DEFAULT_HORIZON_MONTHS);
 
     if (toMonth < fromMonth) {

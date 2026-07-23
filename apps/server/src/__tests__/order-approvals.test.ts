@@ -62,6 +62,40 @@ async function breachingCluster(hostCapacity = 10_000): Promise<string> {
   return cluster.id;
 }
 
+/**
+ * A cluster whose newest baseline is dated ~9 months in the FUTURE, but whose
+ * only host was commissioned in the past and is already breaching (util 0.8).
+ * Future-dated baselines are accepted with no upper bound (forecast-loader.ts
+ * anchor `@ai-warning`), so the SERVER DEFAULT (baseline-anchored) write window
+ * starts ~9 months later than the chip's today-anchored read window — the exact
+ * #303 repro.
+ */
+async function futureBaselineBreachingCluster(): Promise<string> {
+  const now = new Date();
+  const futureBaseline = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 9, 1));
+  // Well in the past, so the host is active across BOTH the future write window
+  // and the today-anchored chip window.
+  const past = new Date('2024-01-01T00:00:00.000Z');
+  const cluster = await makeCluster(prisma, {
+    baselineDate: futureBaseline,
+    baselineConsumption: 8000,
+    baselineCapacity: 0,
+  });
+  await makeHost(prisma, {
+    clusterId: cluster.id,
+    commissionedAt: past,
+    initialCapacity: [{ effectiveFrom: past, amount: 10_000 }],
+  });
+  return cluster.id;
+}
+
+/** `YYYY-MM` for the first of the UTC month `monthsFromNow` months from now. */
+function monthFromNow(monthsFromNow: number): string {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + monthsFromNow, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
 /** A cluster whose live forecast never crosses warn (util 0.1). */
 async function healthyCluster(): Promise<string> {
   const cluster = await makeCluster(prisma, { baselineConsumption: 1000, baselineCapacity: 0 });
@@ -305,6 +339,51 @@ describe('forecast acknowledgment coverage (DESIGN.md §3)', () => {
     expect(body.procurement.orderByDate).not.toBeNull();
     // ...and the acknowledgment is NOT falsely superseded by the window divergence.
     expect(body.acknowledgment).not.toBeNull();
+  });
+
+  it('does not falsely supersede a fresh approval for a future-dated baseline (#303)', async () => {
+    // #303 repro: the newest baseline is dated ~9 months out, so the baseline-
+    // anchored WRITE window snapshots an orderByDate ~9 months later than the
+    // today-anchored chip READ window. Before the write-path anchor is clamped to
+    // min(capturedAt, today), the ≥ T supersede rule (INV-5) fires the instant the
+    // approval is created and the acknowledgment never appears in the default UI.
+    const clusterId = await futureBaselineBreachingCluster();
+
+    const res = await approve(clusterId, 'seen it — parts on order');
+    expect(res.statusCode).toBe(201);
+
+    // The chip reads a TODAY-anchored 24-mo window (resolveWindow).
+    const from = monthFromNow(0);
+    const to = monthFromNow(23);
+    const body = (
+      await disabledServer.inject({
+        method: 'GET',
+        url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&from=${from}&to=${to}`,
+      })
+    ).json() as ForecastBody;
+
+    // The today-anchored window shows a live breach (util 0.8 every month)...
+    expect(body.procurement.orderByDate).not.toBeNull();
+    // ...and the fresh approval is NOT falsely superseded by the window divergence.
+    expect(body.acknowledgment).toMatchObject({ note: 'seen it — parts on order' });
+  });
+
+  it('leaves a past-dated baseline unaffected — the clamp is a no-op (#303 regression)', async () => {
+    // A normal past-dated anchor (2026-05): min(capturedAt, today) === capturedAt,
+    // so the clamp changes nothing. The snapshot is still the baseline-anchored
+    // orderByDate, and a genuine ≥ T worsening still supersedes exactly as before.
+    const clusterId = await breachingCluster();
+
+    const approval = (await approve(clusterId)).json() as ApprovalBody;
+    // Baseline-anchored: first-of-breach-month (2026-05-01) − 8 weeks. Unchanged
+    // by the clamp — proof the write path is untouched for past-dated baselines.
+    expect(approval.orderByDate).toBe('2026-03-06');
+    expect((await getForecast(clusterId)).json().acknowledgment).not.toBeNull();
+
+    // +6 weeks lead ⇒ orderByDate 42 days earlier (≥ 31): the worsening still
+    // supersedes, identically to before the fix.
+    await setLeadTimeWeeks(14);
+    expect((await getForecast(clusterId)).json().acknowledgment).toBeNull();
   });
 
   it('does not surface an acknowledgment once the breach clears — INV-3', async () => {
