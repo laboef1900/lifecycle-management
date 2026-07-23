@@ -38,7 +38,9 @@ test.describe('configurable thresholds', () => {
   });
 
   test('saves tenant thresholds and fleet tiles reflect new values', async ({ page }) => {
-    await page.goto('/settings');
+    // #293: thresholds live on the Forecasting sub-route now (bare
+    // `/settings` still redirects there, but this is the direct target).
+    await page.goto('/settings/forecasting');
     await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
 
     const warn = page.getByLabel('Warn %');
@@ -51,10 +53,11 @@ test.describe('configurable thresholds', () => {
 
     // Submit and wait for the PUT to land before navigating away — otherwise
     // we can race the fleet console's cached thresholds. Scoped to the
-    // ForecastThresholdsForm's own <form>: in disabled auth mode the
-    // Authentication panel also renders on this page with its own
-    // identically-labeled "Save" button (pre-existing, unrelated to the
-    // fleet console redesign), so an unscoped role lookup is ambiguous here.
+    // ForecastThresholdsForm's own <form> for robustness — Categories' own
+    // submit on this same Forecasting sub-route is labelled "Add", not
+    // "Save", but the Access sub-route's Authentication panel (identically
+    // labelled "Save" pre-#293, when all three sections shared one page) no
+    // longer renders here at all, having moved to its own route.
     const thresholdsForm = page.locator('form').filter({ has: warn });
     const putPromise = page.waitForResponse(
       (r) => r.url().endsWith('/api/settings/tenant') && r.request().method() === 'PUT',

@@ -789,6 +789,18 @@ outage self-heals without operator action. A failure never silently becomes a
 success: the connection's status and last-error reflect the real outcome (see
 _Troubleshooting_).
 
+**A connection with no established certificate pin never syncs unattended — it fails
+closed.** The scheduler only runs a connection whose leaf certificate has been
+confirmed and pinned (step 3 above). A connection that is saved but not yet pinned —
+including one whose pin was cleared by a hostname change, or reset by the
+leaf-fingerprint pinning upgrade — is held out of every scheduled poll, sync, and
+snapshot and reports **Certificate not trusted**. This is deliberate: the stored
+service-account credential is only ever transmitted to a peer whose leaf matches the
+pin, so an unpinned connection must not hand it to whatever the network resolves the
+hostname to. Confirm and pin the certificate (Check certificate → confirm → Save, or
+_Replace the trusted certificate_) and the connection resumes on the next tick. No
+stored configuration is touched while it waits, so nothing is lost.
+
 The connection panel shows **last synced**, the **sync status**, and a **live-usage**
 reading per synced cluster. "No sample yet" and a stale reading are shown as exactly
 that — never as `0`, which would read as "empty and available" and is the one lie the
@@ -872,15 +884,15 @@ that something is broken.
 
 ### Troubleshooting
 
-| Status                      | Meaning                                                                                                                                                                                                              |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Not yet connected**       | Saved, never contacted.                                                                                                                                                                                              |
-| **Certificate not trusted** | Self-signed and not yet confirmed. Use _Check certificate_.                                                                                                                                                          |
-| **Certificate changed**     | The presented certificate no longer matches the pinned leaf fingerprint — commonly routine renewal (~2 yrs). Use _Replace the trusted certificate_ to confirm and re-pin, or investigate.                            |
-| **Sign-in failed**          | Host reachable, credentials rejected.                                                                                                                                                                                |
-| **Different vCenter**       | The hostname now answers as a _different_ vCenter instance. Sync is blocked deliberately: cluster ids are only unique within one vCenter, so syncing would overwrite the wrong clusters' capacity.                   |
-| **Credential unreadable**   | `CONFIG_ENCRYPTION_KEY` is missing, wrong, or rotated. The encrypted password is **preserved** — restore the correct key and the connection recovers. Never re-enter it as a "fix" until you have ruled the key out. |
-| **Unreachable**             | No answer. Detail is in the server log, correlated by request id — the API response is deliberately coarse, because a precise one would let anyone reachable use this endpoint to map your internal network.         |
+| Status                      | Meaning                                                                                                                                                                                                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Not yet connected**       | Saved, never contacted. No certificate is pinned yet, so it **will not sync** until you confirm and pin the leaf certificate (fails closed — the credential is never sent to an unpinned peer).                                                                                 |
+| **Certificate not trusted** | No confirmed leaf pin — self-signed and not yet confirmed, or the pin was cleared (hostname change) or reset (leaf-pinning upgrade). Scheduled sync/poll/snapshot is **held closed** until you confirm and pin. Use _Check certificate_ (or _Replace the trusted certificate_). |
+| **Certificate changed**     | The presented certificate no longer matches the pinned leaf fingerprint — commonly routine renewal (~2 yrs). Use _Replace the trusted certificate_ to confirm and re-pin, or investigate.                                                                                       |
+| **Sign-in failed**          | Host reachable, credentials rejected.                                                                                                                                                                                                                                           |
+| **Different vCenter**       | The hostname now answers as a _different_ vCenter instance. Sync is blocked deliberately: cluster ids are only unique within one vCenter, so syncing would overwrite the wrong clusters' capacity.                                                                              |
+| **Credential unreadable**   | `CONFIG_ENCRYPTION_KEY` is missing, wrong, or rotated. The encrypted password is **preserved** — restore the correct key and the connection recovers. Never re-enter it as a "fix" until you have ruled the key out.                                                            |
+| **Unreachable**             | No answer. Detail is in the server log, correlated by request id — the API response is deliberately coarse, because a precise one would let anyone reachable use this endpoint to map your internal network.                                                                    |
 
 ## Upgrade
 

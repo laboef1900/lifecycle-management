@@ -2,6 +2,7 @@ import type { ClusterResponse, ForecastMonthPoint, ForecastResponse } from '@lcm
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { TooltipProvider } from '@/components/ui/tooltip';
 import type { ClusterForecastEntry } from '@/lib/forecast-summary';
 
 import { ClusterTile } from './cluster-tile';
@@ -37,8 +38,8 @@ vi.mock('@/lib/use-chart-colors', () => ({
     utilizationOk: '#525252',
     utilizationWarn: '#b45309',
     utilizationCrit: '#b91c1c',
-    eventNamed: {},
-    eventPalette: [],
+    eventAdds: '#176b45',
+    eventConsumes: '#c0343c',
   }),
 }));
 
@@ -126,21 +127,25 @@ describe('<ClusterTile>', () => {
     expect(screen.getByRole('link')).toHaveAttribute('href', '/clusters/c1');
   });
 
-  it('shows an "ORDER BY ... IN ..." chip when there is a projected order-by date', () => {
+  it('shows an "ORDER BY ..." chip when there is a projected order-by date', () => {
     render(
       <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
     );
     // "Dec 28", not the raw "2026-12-28" ISO string (#243 Part B copy item 1)
     // — still uppercased to match the chip's own ALL-CAPS convention.
-    expect(screen.getByText(/ORDER BY DEC 28/)).toBeInTheDocument();
-    expect(screen.getByText(/IN /)).toBeInTheDocument();
+    const chip = screen.getByText(/ORDER BY DEC 28/);
+    expect(chip).toBeInTheDocument();
+    // #290: the relative-days suffix ("· IN X D" / "· X D OVERDUE") is
+    // dropped from the visible chip label — the Badge's color tone already
+    // conveys urgency, and the tile's aria-label still carries the
+    // relative-days detail for assistive tech.
+    expect(chip.textContent).toBe('ORDER BY DEC 28');
   });
 
-  // Spec §4.4 amendment (2026-07-20, #268): two chips move up a row each so the
-  // bottom flag row can collapse and give its height to the chart. These assert
-  // DOM ADJACENCY rather than mere presence — every content assertion in this
-  // file passes wherever a chip happens to sit, so nothing else in the suite
-  // would catch a silent revert to the old arrangement.
+  // Spec §4.4 amendment (2026-07-20, #268): the ORDER BY chip moved up to the
+  // cluster-name row. #291 (2026-07-22) later removed the EVENT chip that had
+  // shared this describe block entirely, rather than merely relocating it —
+  // see the "EVENT chip removal (#291)" describe block below for its coverage.
   describe('chip placement (#268)', () => {
     const eventForecast = forecast({
       events: [
@@ -165,37 +170,12 @@ describe('<ClusterTile>', () => {
       expect(chip.parentElement).toBe(name.parentElement);
     });
 
-    it('places the EVENT chip on the runway row, where the order chip used to sit', () => {
-      render(
-        <ClusterTile
-          entry={entry()}
-          forecast={eventForecast}
-          thresholds={{ warn: 0.7, crit: 0.9 }}
-        />,
-      );
-      // The runway row is the numeral's parent — 'mo' is nested inside the
-      // numeral span, so step up twice to reach the row itself.
-      const runwayRow = screen.getByText('mo', { exact: true }).parentElement?.parentElement;
-      expect(screen.getByText(/EVENT/).parentElement).toBe(runwayRow);
-    });
-
-    it('keeps ORDER BY and EVENT on different rows', () => {
-      render(
-        <ClusterTile
-          entry={entry()}
-          forecast={eventForecast}
-          thresholds={{ warn: 0.7, crit: 0.9 }}
-        />,
-      );
-      expect(screen.getByText(/ORDER BY DEC 28/).parentElement).not.toBe(
-        screen.getByText(/EVENT/).parentElement,
-      );
-    });
-
     it('drops the bottom flag row entirely when nothing is left to put in it', () => {
       // A fresh baseline and no provisional hosts leave the row empty. Rendering
       // it anyway would keep its `gap` height — the space the chart is meant to
-      // reclaim — so absence, not emptiness, is the requirement.
+      // reclaim — so absence, not emptiness, is the requirement. Still exercised
+      // with a forecast carrying an event (#291: events no longer affect this
+      // row at all, so this also guards against the bottom row reappearing).
       const { container } = render(
         <ClusterTile
           entry={entry()}
@@ -218,10 +198,10 @@ describe('<ClusterTile>', () => {
       expect(screen.getByText(/BASELINE/)).toBeInTheDocument();
     });
 
-    it('names events in the tile aria-label so the moved EVENT chip is not silent to AT', () => {
-      // The tile's aria-label OVERRIDES its visible content, so the visible
-      // EVENT chip is invisible to assistive tech unless the label names it —
-      // more so after #268 moved the chip up to the prominent runway row.
+    it("names events in the tile aria-label — the console's only event-in-window signal now that the visible EVENT chip is gone (#291)", () => {
+      // The tile's aria-label OVERRIDES its visible content. Before #291 this
+      // segment backstopped a visible-but-easily-missed chip; after #291 it is
+      // the ONLY place the fleet console still surfaces this information.
       render(
         <ClusterTile
           entry={entry()}
@@ -270,6 +250,36 @@ describe('<ClusterTile>', () => {
         <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
       );
       expect(screen.getByRole('link').getAttribute('aria-label')).not.toContain('event');
+    });
+  });
+
+  // #291 (2026-07-22, owner decision): the fleet console's visible EVENT chip
+  // is removed outright — the fleet console thereby has no visible
+  // in-window event signal at all; only the aria-label (covered above) and
+  // the cluster detail panel's ForecastChart still carry it.
+  describe('EVENT chip removal (#291)', () => {
+    it('never renders a visible EVENT chip, however many events the forecast carries', () => {
+      const eventForecast = forecast({
+        events: [
+          {
+            id: 'e1',
+            effectiveDate: '2026-09-01',
+            category: 'hardware',
+            title: 'Decommission',
+            description: null,
+            consumptionDelta: null,
+            capacityDelta: -2000,
+          },
+        ],
+      });
+      render(
+        <ClusterTile
+          entry={entry()}
+          forecast={eventForecast}
+          thresholds={{ warn: 0.7, crit: 0.9 }}
+        />,
+      );
+      expect(screen.queryByText(/EVENT/)).toBeNull();
     });
   });
 
@@ -622,41 +632,93 @@ describe('<ClusterTile>', () => {
     expect(screen.queryByText(/2\+-month window/i)).toBeNull();
   });
 
+  // #302 (follow-up to #292/#300): the order-approval acknowledgment must
+  // also surface on the fleet console tile, not just the cluster detail
+  // panel's `RecommendationChip`. Reuses that exact component (same icon,
+  // same data, same testid) rather than inventing a new tile-only pattern.
+  describe('order-approval acknowledgment (#302)', () => {
+    const ack = {
+      note: 'PO raised — 2 nodes',
+      approvedByLabel: 'Ada Admin',
+      approvedAt: '2026-07-14T09:00:00.000Z',
+    };
+
+    it('shows the Acknowledged annotation on the tile when the forecast carries a covering approval', () => {
+      render(
+        <TooltipProvider>
+          <ClusterTile
+            entry={entry()}
+            forecast={forecast({ acknowledgment: ack })}
+            thresholds={{ warn: 0.7, crit: 0.9 }}
+          />
+        </TooltipProvider>,
+      );
+
+      // Same testid/component as RecommendationChip's detail-panel treatment
+      // (recommendation-chip.tsx) — this IS that component, reused.
+      const badge = screen.getByTestId('recommendation-acknowledged');
+      expect(badge).toHaveTextContent('Ada Admin');
+      expect(badge).toHaveTextContent('PO raised — 2 nodes');
+      // Never color alone: an icon accompanies the text (WCAG 1.4.1).
+      expect(badge.querySelector('svg')).not.toBeNull();
+    });
+
+    it("names the acknowledgment in the tile aria-label, since aria-label overrides the tile's visible content", () => {
+      render(
+        <TooltipProvider>
+          <ClusterTile
+            entry={entry()}
+            forecast={forecast({ acknowledgment: ack })}
+            thresholds={{ warn: 0.7, crit: 0.9 }}
+          />
+        </TooltipProvider>,
+      );
+
+      expect(screen.getByRole('link').getAttribute('aria-label')).toContain(
+        'order acknowledged by Ada Admin',
+      );
+    });
+
+    it('omits the Acknowledged annotation entirely when there is no covering approval (not-yet-acknowledged state)', () => {
+      render(
+        <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+
+      expect(screen.queryByTestId('recommendation-acknowledged')).toBeNull();
+      expect(screen.getByRole('link').getAttribute('aria-label')).not.toContain('acknowledged');
+    });
+  });
+
   // Finding: sub-10px micro text on tiles violates the design system's own
   // --text-label 10px floor (styles.css). Contrast passes, but 9px uppercase
   // tracked mono is hard to read on the primary console. This tile's own
   // portion: the order chip (was 9.5px) and FlagChip (was 9px).
   describe('micro-text floor', () => {
-    it('floors the order chip at 10px, not 9.5px', () => {
+    // #290: the order chip now renders via the shared `Badge` (`text-xs` =
+    // 12px), which clears the design system's 10px --text-label floor but no
+    // longer literally matches the old bespoke `text-[10px]` class.
+    it('renders the order chip via the shared Badge at text-xs (12px), clearing the 10px floor', () => {
       render(
         <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
       );
       const chip = screen.getByText(/ORDER BY DEC 28/);
-      expect(chip.className).toMatch(/text-\[10px\]/);
+      expect(chip.className).toMatch(/text-xs/);
       expect(chip.className).not.toMatch(/text-\[9\.5px\]/);
+      expect(chip.className).not.toMatch(/text-\[10px\]/);
     });
 
+    // Re-pointed at the stale-baseline chip (#291): the EVENT chip this test
+    // originally floored was removed from the tile, but FlagChip itself is
+    // still rendered here, so the 10px floor still needs a live assertion.
     it('floors the FlagChip at 10px, not 9px', () => {
       render(
         <ClusterTile
-          entry={entry()}
-          forecast={forecast({
-            events: [
-              {
-                id: 'e1',
-                effectiveDate: '2026-09-01',
-                category: 'hardware',
-                title: 'Decommission',
-                description: null,
-                consumptionDelta: null,
-                capacityDelta: -2000,
-              },
-            ],
-          })}
+          entry={entry({ cluster: cluster({ baselineDate: '2026-03-10' }) })}
+          forecast={forecast()}
           thresholds={{ warn: 0.7, crit: 0.9 }}
         />,
       );
-      const chip = screen.getByText(/EVENT/);
+      const chip = screen.getByText(/⚠ BASELINE/);
       expect(chip.className).toMatch(/text-\[10px\]/);
       expect(chip.className).not.toMatch(/text-\[9px\]/);
     });

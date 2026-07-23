@@ -55,8 +55,8 @@ vi.mock('@/lib/use-chart-colors', () => ({
     utilizationOk: '#525252',
     utilizationWarn: '#b45309',
     utilizationCrit: '#b91c1c',
-    eventNamed: {},
-    eventPalette: [],
+    eventAdds: '#176b45',
+    eventConsumes: '#c0343c',
   }),
 }));
 
@@ -607,9 +607,11 @@ describe('<FleetConsole> heading (every render branch has an h1)', () => {
     renderConsole();
 
     const link = await screen.findByRole('link', { name: /add a cluster in settings/i });
-    // The hash is load-bearing: /settings alone lands above the fold with the
-    // Add-cluster panel fourth down the page and focus left on <body>.
-    expect(link).toHaveAttribute('href', '/settings#add-cluster');
+    // The hash is load-bearing: /settings/inventory alone lands above the
+    // fold with the Add-cluster panel second down the Inventory sub-route and
+    // focus left on <body>. #293 moved this panel off the single flat
+    // `/settings` page onto its own Inventory sub-route.
+    expect(link).toHaveAttribute('href', '/settings/inventory#add-cluster');
   });
 
   it('hides the empty-state CTA link from viewers but still tells them what to do', async () => {

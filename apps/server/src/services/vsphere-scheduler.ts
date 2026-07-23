@@ -2,6 +2,7 @@ import { addUtcMonths, startOfUtcMonth, type VsphereSyncOutcome } from '@lcm/sha
 import { Prisma, type PrismaClient, type VsphereConnectionJob } from '@prisma/client';
 
 import { POLL_INTERVAL_MS } from './vsphere-live-usage.js';
+import { extractTlsErrorCode } from './vsphere-tls.js';
 
 /** Injectable clock. Production passes the real one; tests pin it. */
 export interface Clock {
@@ -242,6 +243,15 @@ export class VsphereScheduler {
       OR: [{ runningSince: null }, { runningSince: { lt: staleBefore } }],
     };
 
+    // Fail closed on an unestablished pin (#279): a connection whose leaf fingerprint
+    // is null (fresh create, hostname re-point, or a row nulled by the leaf-pinning
+    // migration) has no verified peer identity, so it is NOT eligible for unattended
+    // sync/poll/snapshot — running it would transmit the credential over the
+    // system-trust path. `tlsMode='system'` is unreachable, so a null pin
+    // unambiguously means "pinning intended, not yet established". The operator verify
+    // route establishes the pin; only then does the row become eligible here.
+    const pinEstablished = { tlsPinnedSha256: { not: null } };
+
     // Previously-connected vCenters get first claim on the budget. A caller who
     // can anonymously create never-connected rows must not be able to starve the
     // established inventory/snapshot path by keeping that queue non-empty.
@@ -249,7 +259,7 @@ export class VsphereScheduler {
       .findMany({
         where: {
           ...available,
-          connection: { enabled: true, lastConnectedAt: { not: null } },
+          connection: { enabled: true, lastConnectedAt: { not: null }, ...pinEstablished },
         },
         orderBy: [{ dueAt: 'asc' }, { connectionId: 'asc' }],
         take: MAX_DUE_JOBS_PER_TICK,
@@ -268,10 +278,12 @@ export class VsphereScheduler {
             .findMany({
               // Disabled connections keep their job history but never run. Live
               // claims are excluded before applying the limit so they cannot
-              // consume the scarce first-contact slot.
+              // consume the scarce first-contact slot. A first-contact row that has
+              // been probed+trusted carries a pin and is eligible; one with a null
+              // pin is gated out (#279) exactly like the established query.
               where: {
                 ...available,
-                connection: { enabled: true, lastConnectedAt: null },
+                connection: { enabled: true, lastConnectedAt: null, ...pinEstablished },
               },
               orderBy: [{ dueAt: 'asc' }, { connectionId: 'asc' }],
               take: firstContactBudget,
@@ -298,13 +310,15 @@ export class VsphereScheduler {
     // COMMITTED a concurrent writer blocks, then re-evaluates its WHERE against the
     // new row version, so the loser sees runningSince set and gets count === 0. The
     // enabled filter is repeated here so a connection disabled between select and
-    // claim is not run. The stale-lease clause self-heals a hard-killed process.
+    // claim is not run; the pin filter is repeated for the same reason (#279), so a
+    // connection whose pin is cleared between select and claim is not claimed. The
+    // stale-lease clause self-heals a hard-killed process.
     const staleBefore = new Date(now.getTime() - STALE_LEASE_MS);
     const claim = await this.prisma.vsphereConnectionJob.updateMany({
       where: {
         connectionId,
         dueAt: { lte: now },
-        connection: { enabled: true },
+        connection: { enabled: true, tlsPinnedSha256: { not: null } },
         OR: [{ runningSince: null }, { runningSince: { lt: staleBefore } }],
       },
       data: { runningSince: now, lockedBy: this.instanceId },
@@ -522,9 +536,22 @@ function delay(ms: number): Promise<void> {
 /**
  * @ai-warning Sanitized. `lastError` is stored and rendered — it must never carry a
  * credential, a stack, or a driver internal. Detail belongs in the server log.
+ *
+ * @ai-note #280: the `CERT_FINGERPRINT_MISMATCH` branch MUST be checked via
+ * `extractTlsErrorCode(err)`, not a message regex, and MUST come before the generic
+ * `/cert|tls/` branch below — mirroring `classify`/`sanitize` in vsphere-sync.ts,
+ * which is the reference behavior. The error `fingerprintPinnedConnection`
+ * (vsphere-tls.ts) throws does NOT contain the literal string
+ * `CERT_FINGERPRINT_MISMATCH` in its message, only in `err.code`; a message-regex
+ * "mirror" would silently miss it and fall through to the generic untrusted-cert
+ * message, losing the distinction that routes the operator to the "Replace the
+ * trusted certificate" dialog.
  */
 export function sanitizeJobError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
+  if (extractTlsErrorCode(err) === 'CERT_FINGERPRINT_MISMATCH') {
+    return 'vCenter is presenting a different certificate than the one you trusted.';
+  }
   if (/auth|login|credential/i.test(msg)) return 'vCenter rejected the credentials.';
   if (/cert|tls|self.signed/i.test(msg)) return 'vCenter presented an untrusted certificate.';
   if (/identity/i.test(msg)) return 'vCenter identity changed; sync is blocked pending re-adopt.';

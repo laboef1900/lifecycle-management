@@ -4,12 +4,14 @@ import type { CategoryResponse } from './category.js';
 import type { ClusterResponse, MetricStateResponse } from './cluster.js';
 import type {
   BaselineHistoryPoint,
+  ForecastAcknowledgment,
   ForecastEntityContribution,
   ForecastEventMarker,
   ForecastMonthPoint,
   ForecastResponse,
   ProcurementInfo,
 } from './forecast.js';
+import type { OrderApprovalResponse } from './order-approval.js';
 import { hostStateSchema } from './host-lifecycle.js';
 import type { HostLifecycleEventResponse } from './host-lifecycle.js';
 import type { HostReplacementResponse } from './host-replacement.js';
@@ -17,6 +19,7 @@ import type { CapacityResponseRow, HostResponse } from './host.js';
 import { itemKindSchema } from './item.js';
 import type {
   ItemAllocationResponseRow,
+  ItemBulkCreateQuarterlyGrowthResponse,
   ItemBulkShiftDatesResponse,
   ItemResponse,
 } from './item.js';
@@ -154,6 +157,12 @@ export const itemBulkShiftDatesResponseSchema: z.ZodType<ItemBulkShiftDatesRespo
   items: z.array(itemResponseSchema),
 });
 
+export const itemBulkCreateQuarterlyGrowthResponseSchema: z.ZodType<ItemBulkCreateQuarterlyGrowthResponse> =
+  z.object({
+    created: z.number().int().nonnegative(),
+    items: z.array(itemResponseSchema),
+  });
+
 // ---------- Forecast ----------
 
 export const forecastMonthPointSchema: z.ZodType<ForecastMonthPoint> = z.object({
@@ -196,6 +205,12 @@ export const procurementInfoSchema: z.ZodType<ProcurementInfo> = z.object({
   breachMonth: z.string().nullable(),
 });
 
+export const forecastAcknowledgmentSchema: z.ZodType<ForecastAcknowledgment> = z.object({
+  note: z.string().nullable(),
+  approvedByLabel: z.string(),
+  approvedAt: z.string(),
+});
+
 export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   fromMonth: z.string(),
   toMonth: z.string(),
@@ -206,6 +221,10 @@ export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   effectiveThresholds: effectiveThresholdsSchema,
   procurement: procurementInfoSchema,
   baselineHistory: z.array(baselineHistoryPointSchema),
+  // Additive (#292): `.exactOptional()` keeps older payloads that omit it valid,
+  // while `.nullable()` carries the "no/ superseded acknowledgment" case the
+  // current server always emits.
+  acknowledgment: forecastAcknowledgmentSchema.nullable().exactOptional(),
 });
 
 // ---------- Categories ----------
@@ -235,6 +254,23 @@ export const hostReplacementResponseSchema: z.ZodType<HostReplacementResponse> =
   newHostId: z.string(),
   swappedAt: z.string(),
   reason: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+// ---------- Order approvals (#292) ----------
+
+export const orderApprovalResponseSchema: z.ZodType<OrderApprovalResponse> = z.object({
+  id: z.string(),
+  clusterId: z.string(),
+  breachMonth: z.string(),
+  orderByDate: z.string(),
+  leadTimeWeeks: z.number(),
+  warnThreshold: z.number(),
+  capacitySignature: z.number(),
+  metricTypeId: z.string().nullable(),
+  approvedByUserId: z.string().nullable(),
+  approvedByLabel: z.string(),
+  note: z.string().nullable(),
   createdAt: z.string(),
 });
 

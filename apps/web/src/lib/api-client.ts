@@ -31,6 +31,7 @@ import {
   liveUsageListResponseSchema,
   hostCreateInputSchema,
   hostLifecycleEventResponseSchema,
+  hostMoveInputSchema,
   hostReplacementCreateInputSchema,
   hostReplacementResponseSchema,
   hostResponseSchema,
@@ -38,12 +39,16 @@ import {
   hostUpdateInputSchema,
   isApiErrorBody,
   itemAllocationRowInputSchema,
+  itemBulkCreateQuarterlyGrowthInputSchema,
+  itemBulkCreateQuarterlyGrowthResponseSchema,
   itemBulkShiftDatesInputSchema,
   itemBulkShiftDatesResponseSchema,
   itemCreateInputSchema,
   itemResponseSchema,
   itemUpdateInputSchema,
   localUserSummarySchema,
+  orderApprovalCreateInputSchema,
+  orderApprovalResponseSchema,
   paginatedSchema,
   rotateSigningSecretResponseSchema,
   scenarioSchema,
@@ -159,9 +164,14 @@ export type ItemCreateInputWire = z.input<typeof itemCreateInputSchema>;
 export type ItemUpdateInputWire = z.input<typeof itemUpdateInputSchema>;
 export type ItemAllocationAppendInputWire = z.input<typeof itemAllocationRowInputSchema>;
 export type ItemBulkShiftDatesInputWire = z.input<typeof itemBulkShiftDatesInputSchema>;
+export type ItemBulkCreateQuarterlyGrowthInputWire = z.input<
+  typeof itemBulkCreateQuarterlyGrowthInputSchema
+>;
 export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
+export type HostMoveInputWire = z.input<typeof hostMoveInputSchema>;
 export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
 export type HostCommissioningConfirmInputWire = z.input<typeof hostCommissioningConfirmInputSchema>;
+export type OrderApprovalCreateInputWire = z.input<typeof orderApprovalCreateInputSchema>;
 
 // ---------- Query string helper ----------
 
@@ -273,6 +283,15 @@ export const api = {
       }),
     listLifecycle: (id: string) =>
       request(`/api/hosts/${id}/lifecycle`, undefined, z.array(hostLifecycleEventResponseSchema)),
+    // Move a manual host to a different cluster with a time-scoped membership
+    // (#289/#301). `moveDate` must be first-of-month on the wire; the server
+    // enforces it too (400 otherwise). Returns the host under its new cluster.
+    move: (id: string, input: HostMoveInputWire) =>
+      request(
+        `/api/hosts/${id}/move`,
+        { method: 'POST', body: JSON.stringify(input) },
+        hostResponseSchema,
+      ),
   },
   hostReplacements: {
     create: (input: HostReplacementCreateInputWire) =>
@@ -282,6 +301,16 @@ export const api = {
         hostReplacementResponseSchema,
       ),
     delete: (id: string) => request<void>(`/api/host-replacements/${id}`, { method: 'DELETE' }),
+  },
+  orderApprovals: {
+    // Approve the current procurement recommendation for a cluster (#292). The
+    // server derives and snapshots the breach; the only input is an optional note.
+    create: (clusterId: string, input: OrderApprovalCreateInputWire) =>
+      request(
+        `/api/clusters/${clusterId}/order-approvals`,
+        { method: 'POST', body: JSON.stringify(input) },
+        orderApprovalResponseSchema,
+      ),
   },
   items: {
     listByCluster: (clusterId: string, params?: { limit?: number; offset?: number }) =>
@@ -318,6 +347,12 @@ export const api = {
           headers: { 'Idempotency-Key': idempotencyKey },
         },
         itemBulkShiftDatesResponseSchema,
+      ),
+    bulkCreateQuarterlyGrowth: (clusterId: string, input: ItemBulkCreateQuarterlyGrowthInputWire) =>
+      request(
+        `/api/clusters/${clusterId}/items/bulk-quarterly-growth`,
+        { method: 'POST', body: JSON.stringify(input) },
+        itemBulkCreateQuarterlyGrowthResponseSchema,
       ),
   },
   settings: {

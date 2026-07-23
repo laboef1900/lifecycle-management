@@ -313,7 +313,7 @@ export function ForecastChart({
                             <span
                               aria-hidden
                               className="h-2 w-2 rounded-full"
-                              style={{ background: eventColor(colors, event.category) }}
+                              style={{ background: eventColor(colors, event.capacityDelta) }}
                             />
                             <span className="flex-1 truncate">{event.title}</span>
                             <span className="font-mono tabular-nums text-fg-muted">
@@ -505,13 +505,13 @@ export function ForecastChart({
                 x={monthKey}
                 y={consumption}
                 r={5}
-                fill={eventColor(colors, event.category)}
+                fill={eventColor(colors, event.capacityDelta)}
                 stroke="var(--card)"
                 strokeWidth={1.5}
                 ifOverflow="extendDomain"
                 label={renderEventLabel(
                   event.title,
-                  eventColor(colors, event.category),
+                  eventColor(colors, event.capacityDelta),
                   compact,
                   eventLabelOffsets.get(event.id) ?? 0,
                 )}
@@ -685,7 +685,8 @@ interface ChartLegendProps {
 }
 
 function ChartLegend({ events, colors, showBaselineGhost }: ChartLegendProps): React.JSX.Element {
-  const categories = Array.from(new Set(events.map((e) => e.category)));
+  const hasAddsEvent = events.some((e) => (e.capacityDelta ?? 0) > 0);
+  const hasConsumesEvent = events.some((e) => !((e.capacityDelta ?? 0) > 0));
   return (
     <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
       {/* The solid/dashed convention (actual-to-now, then forecast) gets its
@@ -723,14 +724,27 @@ function ChartLegend({ events, colors, showBaselineGhost }: ChartLegendProps): R
       {showBaselineGhost ? (
         <LegendItem swatch={colors.utilizationOk} label="was: baseline" dashed />
       ) : null}
-      {categories.length > 0 ? (
+      {events.length > 0 ? (
         <span aria-hidden className="mx-1">
           ·
         </span>
       ) : null}
-      {categories.map((category) => (
-        <LegendItem key={category} swatch={eventColor(colors, category)} label={category} dot />
-      ))}
+      {hasAddsEvent ? (
+        <LegendItem
+          swatch={colors.eventAdds}
+          label="Adds capacity"
+          dot
+          testId="legend-swatch-event-adds"
+        />
+      ) : null}
+      {hasConsumesEvent ? (
+        <LegendItem
+          swatch={colors.eventConsumes}
+          label="Consumes capacity"
+          dot
+          testId="legend-swatch-event-consumes"
+        />
+      ) : null}
     </div>
   );
 }

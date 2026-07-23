@@ -436,6 +436,66 @@ describe('HostsTab', () => {
       expect(await screen.findByRole('menuitem', { name: /Replace/ })).toBeInTheDocument();
     });
 
+    describe('Move… (#301) — ADMIN-only, manual hosts only', () => {
+      it('offers Move… to an admin for a manual host', async () => {
+        const user = userEvent.setup();
+        renderTab(true);
+        await screen.findByText('esx-01');
+
+        await user.click(screen.getAllByRole('button', { name: 'More actions' })[0]!);
+        expect(await screen.findByRole('menuitem', { name: /Move/ })).toBeInTheDocument();
+      });
+
+      it('never renders Move… for a viewer — no path to the mutation, not just a hidden button', async () => {
+        const user = userEvent.setup();
+        renderTab(false);
+        await screen.findByText('esx-01');
+
+        await user.click(screen.getAllByRole('button', { name: 'More actions' })[0]!);
+        await screen.findByRole('menu');
+        expect(screen.queryByRole('menuitem', { name: /Move/ })).not.toBeInTheDocument();
+      });
+
+      it('does not offer Move… for a synced host, even to an admin', async () => {
+        const user = userEvent.setup();
+        vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+          items: [makeHost({ source: 'vsphere' })],
+          total: 1,
+          limit: 500,
+          offset: 0,
+        });
+        renderTab(true);
+        await screen.findByText('esx-01');
+
+        await user.click(screen.getByRole('button', { name: 'More actions' }));
+        await screen.findByRole('menu');
+        expect(screen.queryByRole('menuitem', { name: /Move/ })).not.toBeInTheDocument();
+      });
+
+      it('opens the HostMoveDialog from the menu', async () => {
+        const user = userEvent.setup();
+        vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+          items: [makeHost()],
+          total: 1,
+          limit: 500,
+          offset: 0,
+        });
+        vi.spyOn(api.clusters, 'list').mockResolvedValue({
+          items: [],
+          total: 0,
+          limit: 500,
+          offset: 0,
+        });
+        renderTab(true);
+        await screen.findByText('esx-01');
+
+        await user.click(screen.getByRole('button', { name: 'More actions' }));
+        await user.click(await screen.findByRole('menuitem', { name: /Move/ }));
+
+        expect(await screen.findByRole('dialog', { name: /move esx-01/i })).toBeInTheDocument();
+      });
+    });
+
     it('keeps a disabled Transition button focusable, with its reason reachable via the tooltip', async () => {
       const user = userEvent.setup();
       vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({

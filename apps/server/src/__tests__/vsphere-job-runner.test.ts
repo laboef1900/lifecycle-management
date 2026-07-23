@@ -105,7 +105,14 @@ function spies(overrides: Partial<JobRunnerServices> = {}): Spies {
 }
 
 async function makeConn(enabled = true): Promise<string> {
-  const { id } = await makeVsphereConnection(prisma, { key: KEY, name: uniq('conn'), enabled });
+  const { id } = await makeVsphereConnection(prisma, {
+    key: KEY,
+    name: uniq('conn'),
+    enabled,
+    // An established, pinned connection. Without a pin the null-pin fail-closed gate
+    // (#279) short-circuits the run before the D15a dispatch these tests exercise.
+    tlsPinnedSha256: 'AA:BB:CC:DD',
+  });
   made.push(id);
   return id;
 }
@@ -209,6 +216,41 @@ describe('⚠️ a sync failure aborts the snapshot deliberately', () => {
     expect(report.sync.outcome).toBe('ok');
     expect(report.snapshot).toEqual({ attempted: true, period: null, failed: true });
     expect(report.errorMessage).toBe('Could not reach vCenter.');
+  });
+});
+
+describe('#280 — poll-path leaf-pin mismatch classifies as cert_mismatch, mirroring sync', () => {
+  it('a poll-only tick whose collect throws the CERT_FINGERPRINT_MISMATCH code reports the specific cert_mismatch message, not the generic untrusted-cert one', async () => {
+    const id = await makeConn();
+    const s = spies({
+      collector: {
+        collect: async () => {
+          // The exact shape `fingerprintPinnedConnection` (vsphere-tls.ts) throws on a
+          // pinned leaf mismatch: the message itself does NOT contain the literal
+          // string CERT_FINGERPRINT_MISMATCH — only `err.code` does.
+          throw Object.assign(
+            new Error('vCenter presented a certificate that does not match the pinned fingerprint'),
+            { code: 'CERT_FINGERPRINT_MISMATCH' },
+          );
+        },
+      },
+    });
+    const report = await build(s).run(
+      id,
+      MEASURED_AT,
+      { poll: true, sync: false, snapshot: false },
+      new AbortController().signal,
+    );
+
+    expect(report.poll).toEqual({ ran: true, ok: false });
+    expect(report.errorMessage).toBe(
+      'vCenter is presenting a different certificate than the one you trusted.',
+    );
+    // Never the generic message a message-regex fallback would have produced.
+    expect(report.errorMessage).not.toBe('vCenter presented an untrusted certificate.');
+    // And never the raw code/driver text (lastError is stored + UI-rendered).
+    expect(report.errorMessage).not.toContain('CERT_FINGERPRINT_MISMATCH');
+    expect(report.errorMessage).not.toContain('pinned fingerprint');
   });
 });
 

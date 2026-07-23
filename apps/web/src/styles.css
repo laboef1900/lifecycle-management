@@ -118,9 +118,11 @@
 
   /* Chart colors — the single source of truth for Recharts, read at runtime by
      use-chart-colors.ts. Semantic roles reference the shared tokens so charts
-     track the palette in both themes; the categorical event scale (--chart-1..7)
-     is chart-only. Tokens built from var() below resolve per theme automatically
-     via the dark overrides above/below, so only genuinely independent literals
+     track the palette in both themes; the categorical scale (--chart-1..7) is
+     chart-only. Event markers are keyed by capacityDelta (issue #286) via the
+     chart-event-adds/consumes roles above, not this categorical scale. Tokens
+     built from var() below resolve per theme automatically via the dark
+     overrides above/below, so only genuinely independent literals
      (chart-consumption/capacity/grid/axis/1-4/7) are re-declared in html.dark. */
   /* Consumption line: a dedicated violet, NOT amber. Amber (--accent/--warning)
      is double-booked as the warn-threshold color, so on the forecast charts the
@@ -136,6 +138,8 @@
   --chart-utilization-ok: var(--fg-muted);
   --chart-utilization-warn: var(--warning);
   --chart-utilization-crit: var(--destructive);
+  --chart-event-adds: var(--success);
+  --chart-event-consumes: var(--destructive);
   --chart-1: #171c2c;
   --chart-2: #5a6478;
   --chart-3: #66708c;
@@ -200,9 +204,10 @@ html.dark {
   --meter-gradient: linear-gradient(90deg, #d9a32c, var(--accent));
 
   /* Categorical event-scale + independent chart roles (the var()-referencing
-     roles above — chart-5, chart-6, and the chart-utilization-* trio — resolve
-     automatically from the dark tokens above; consumption is an independent
-     literal per theme, see the :root note). */
+     roles above — chart-5, chart-6, the chart-utilization-* trio, and
+     chart-event-adds/consumes — resolve automatically from the dark tokens
+     above; consumption is an independent literal per theme, see the :root
+     note). */
   --chart-consumption: #c084fc;
   --chart-capacity: #c7d0e4;
   --chart-grid: #1b2236;
