@@ -113,17 +113,27 @@ describe('badge success/warning text meets AA on their real composited backgroun
   );
 });
 
-// --warning and --accent are deliberately distinct tokens (CLAUDE.md): they
-// resolve to the identical hex in dark theme by design (the meter fill is
-// amber and warn is also amber), but light theme keeps them as two separate
-// values in the same hue family. This --warning contrast fix must not
-// collapse that distinction.
-describe('--warning stays distinct from --accent in light theme (never re-aliased)', () => {
-  it('light --warning and light --accent remain different values', () => {
+// Cool-brand (2026-07-23): the brand/CTA accent is now STEEL, unified in value
+// with --steel so brand and interaction share one hue. Amber survives only as
+// the utilization/attention signal (--warning, the BulletMeter fill, the warn
+// ticks). So --accent and --warning are now deliberately DISTINCT in BOTH
+// themes — the former dark-theme amber collision is intentionally resolved.
+// Guard both directions: brand tracks steel, and amber never re-aliases onto
+// the brand accent (which would resurrect the collision this design removed).
+describe('cool-brand token model: --accent is steel, distinct from amber --warning', () => {
+  it('light --accent equals --steel (brand unified with interaction)', () => {
+    expect(lightProps.get('--accent')).toBe(lightProps.get('--steel'));
+  });
+
+  it('dark --accent equals --steel (brand unified with interaction)', () => {
+    expect(darkProps.get('--accent')).toBe(darkProps.get('--steel'));
+  });
+
+  it('light --warning stays distinct from --accent (amber attention ≠ steel brand)', () => {
     expect(lightProps.get('--warning')).not.toBe(lightProps.get('--accent'));
   });
 
-  it('dark --warning and dark --accent remain identical (the recorded, deliberate collision)', () => {
-    expect(darkProps.get('--warning')).toBe(darkProps.get('--accent'));
+  it('dark --warning stays distinct from --accent (the dark collision is resolved)', () => {
+    expect(darkProps.get('--warning')).not.toBe(darkProps.get('--accent'));
   });
 });

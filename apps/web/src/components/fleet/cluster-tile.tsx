@@ -407,7 +407,7 @@ export const ClusterTile = memo(function ClusterTile({
           </>
         ) : (
           <>
-            <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-accent">
+            <span className="font-mono text-[28px] font-bold leading-none tracking-tight text-foreground">
               {runway.value}
               {runway.plus ? '+' : ''}
               <span className="ml-1 text-xs font-semibold text-fg-muted">{RUNWAY_UNIT}</span>
