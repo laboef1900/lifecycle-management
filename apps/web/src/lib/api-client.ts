@@ -31,6 +31,7 @@ import {
   liveUsageListResponseSchema,
   hostCreateInputSchema,
   hostLifecycleEventResponseSchema,
+  hostMoveInputSchema,
   hostReplacementCreateInputSchema,
   hostReplacementResponseSchema,
   hostResponseSchema,
@@ -167,6 +168,7 @@ export type ItemBulkCreateQuarterlyGrowthInputWire = z.input<
   typeof itemBulkCreateQuarterlyGrowthInputSchema
 >;
 export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
+export type HostMoveInputWire = z.input<typeof hostMoveInputSchema>;
 export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
 export type HostCommissioningConfirmInputWire = z.input<typeof hostCommissioningConfirmInputSchema>;
 export type OrderApprovalCreateInputWire = z.input<typeof orderApprovalCreateInputSchema>;
@@ -281,6 +283,15 @@ export const api = {
       }),
     listLifecycle: (id: string) =>
       request(`/api/hosts/${id}/lifecycle`, undefined, z.array(hostLifecycleEventResponseSchema)),
+    // Move a manual host to a different cluster with a time-scoped membership
+    // (#289/#301). `moveDate` must be first-of-month on the wire; the server
+    // enforces it too (400 otherwise). Returns the host under its new cluster.
+    move: (id: string, input: HostMoveInputWire) =>
+      request(
+        `/api/hosts/${id}/move`,
+        { method: 'POST', body: JSON.stringify(input) },
+        hostResponseSchema,
+      ),
   },
   hostReplacements: {
     create: (input: HostReplacementCreateInputWire) =>

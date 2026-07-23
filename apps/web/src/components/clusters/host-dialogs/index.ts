@@ -5,5 +5,6 @@ export { ResizeHostDialog } from './resize-host-dialog';
 export { DecommissionHostDialog } from './decommission-host-dialog';
 export { HostTransitionDialog } from './host-transition-dialog';
 export { HostReplaceDialog } from './host-replace-dialog';
+export { HostMoveDialog } from './host-move-dialog';
 export { HostHistoryDialog } from './host-history-dialog';
 export { DeleteHostDialog } from './delete-host-dialog';
