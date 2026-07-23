@@ -5,6 +5,7 @@ import {
   CalendarClock,
   ChevronDown,
   ChevronRight,
+  FolderInput,
   History,
   MoreVertical,
   Pencil,
@@ -55,6 +56,7 @@ import {
   DeleteHostDialog,
   EditHostDialog,
   HostHistoryDialog,
+  HostMoveDialog,
   HostReplaceDialog,
   HostTransitionDialog,
   ResizeHostDialog,
@@ -71,7 +73,7 @@ interface HostsTabProps {
 }
 
 type DialogKind =
-  'edit' | 'resize' | 'decommission' | 'delete' | 'transition' | 'replace' | 'history';
+  'edit' | 'resize' | 'decommission' | 'delete' | 'transition' | 'replace' | 'history' | 'move';
 
 export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
@@ -227,10 +229,21 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
                           onTransition={() => setTarget({ host, kind: 'transition' })}
                           onReplace={() => setTarget({ host, kind: 'replace' })}
                           onHistory={() => setTarget({ host, kind: 'history' })}
+                          onMove={() => setTarget({ host, kind: 'move' })}
                           onDelete={() => setTarget({ host, kind: 'delete' })}
                           isDecommissioned={Boolean(host.decommissionedAt)}
                           canTransition={host.state !== 'disposed'}
                           canReplace={host.state === 'decommissioned'}
+                          // Move is ADMIN-only (#301) and, like the underlying
+                          // #289 move endpoint, only ever valid for a MANUAL
+                          // host — a synced host's cluster membership is
+                          // sync-owned and the server 409s SYNC_OWNED_FIELD.
+                          // Both gates are UX affordances only: hiding the
+                          // item entirely (not just disabling it) for a
+                          // VIEWER, matching the "Add host"/"Add app or
+                          // event" pattern elsewhere — the server remains the
+                          // real enforcement point either way.
+                          canMove={canManage && host.source !== 'vsphere'}
                         />
                       </TableCell>
                     </TableRow>
@@ -326,6 +339,15 @@ export function HostsTab({ clusterId, canManage = true }: HostsTabProps): React.
           host={target.host}
         />
       ) : null}
+      {target?.kind === 'move' ? (
+        <HostMoveDialog
+          key={target.host.id}
+          open
+          onOpenChange={(open) => !open && setTarget(null)}
+          clusterId={clusterId}
+          host={target.host}
+        />
+      ) : null}
     </div>
   );
 }
@@ -337,10 +359,19 @@ interface RowActionsProps {
   onTransition: () => void;
   onReplace: () => void;
   onHistory: () => void;
+  onMove: () => void;
   onDelete: () => void;
   isDecommissioned: boolean;
   canTransition: boolean;
   canReplace: boolean;
+  /**
+   * Whether "Move…" is offered at all (#301) — combines the ADMIN gate with
+   * the manual-host-only gate, both UX affordances only (see the call site).
+   * `false` omits the menu item entirely rather than rendering it disabled,
+   * so a VIEWER has no path to the mutation from this menu, not just a
+   * visually inert one.
+   */
+  canMove: boolean;
 }
 
 /**
@@ -360,10 +391,12 @@ function RowActions({
   onTransition,
   onReplace,
   onHistory,
+  onMove,
   onDelete,
   isDecommissioned,
   canTransition,
   canReplace,
+  canMove,
 }: RowActionsProps): React.JSX.Element {
   return (
     <div className="flex items-center justify-end gap-1">
@@ -418,6 +451,12 @@ function RowActions({
             <Scaling className="h-4 w-4" />
             Resize…
           </DropdownMenuItem>
+          {canMove ? (
+            <DropdownMenuItem onSelect={() => onMove()}>
+              <FolderInput className="h-4 w-4" />
+              Move…
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuSeparator />
           {/* PowerOff, not MoreVertical: the kebab now means "more actions"
               (this trigger) everywhere in the row, so Decommission needed an
