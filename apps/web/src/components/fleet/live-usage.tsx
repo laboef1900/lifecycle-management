@@ -184,7 +184,7 @@ export function LiveUsageInline({
   if (!cluster.connection) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 font-mono text-[9.5px] tracking-[0.04em]">
+    <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10px] tracking-[0.04em]">
       <span className="font-semibold text-fg-subtle">LIVE</span>
       {live ? (
         <LiveUsageInlineBody live={live} />
@@ -231,7 +231,7 @@ export function ProvisionalHostHint({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-sm border border-warning/35 px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-[0.05em] text-warning',
+        'inline-flex items-center gap-1 rounded-sm border border-warning/35 px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-[0.05em] text-warning',
         className,
       )}
     >

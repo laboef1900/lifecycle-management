@@ -292,7 +292,7 @@ export function ClusterTileChart({
             // Recharts paints tick text from `fill`; `colors.axis` is tuned as a
             // ~1.4:1 line color, unfit as label text — use the --fg-subtle text
             // token while the axis line itself keeps colors.grid.
-            tick={{ fontSize: 9, fill: 'var(--fg-subtle)' }}
+            tick={{ fontSize: 10, fill: 'var(--fg-subtle)' }}
             tickLine={false}
             stroke={colors.grid}
             interval="preserveStartEnd"
@@ -309,7 +309,7 @@ export function ClusterTileChart({
             // is the whole point of the per-tile scale.
             allowDataOverflow
             tickFormatter={(v: number) => `${Math.round(v)}%`}
-            tick={{ fontSize: 9, fill: 'var(--fg-subtle)' }}
+            tick={{ fontSize: 10, fill: 'var(--fg-subtle)' }}
             tickLine={false}
             axisLine={false}
           />

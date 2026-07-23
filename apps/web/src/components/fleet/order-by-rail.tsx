@@ -152,7 +152,7 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
         <>
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-3">
             {heading}
-            <span className="text-[9px] font-semibold uppercase tracking-[0.1em] text-fg-subtle">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-fg-subtle">
               {hint}
             </span>
           </div>
@@ -183,7 +183,7 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
             {showLeadZone ? (
               <span
                 aria-hidden
-                className="absolute bottom-[3px] -translate-x-full whitespace-nowrap pr-1.5 font-mono text-[9px] font-semibold tracking-[0.1em]"
+                className="absolute bottom-[3px] -translate-x-full whitespace-nowrap pr-1.5 font-mono text-[10px] font-semibold tracking-[0.1em]"
                 style={{ left: `${leadZonePct}%`, color: 'var(--accent-label)' }}
               >
                 LEAD {leadDays} D
@@ -194,7 +194,7 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
               className="absolute inset-y-0 left-0 w-0.5 bg-steel"
               style={{ boxShadow: '0 0 8px color-mix(in oklab, var(--steel) 50%, transparent)' }}
             />
-            <span className="absolute -top-px left-2 whitespace-nowrap text-[9.5px] font-semibold uppercase tracking-[0.1em] text-steel">
+            <span className="absolute -top-px left-2 whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.1em] text-steel">
               NOW
             </span>
             {ticks.map((tick) => {
@@ -226,7 +226,7 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
                     <span className="font-mono text-[10.5px] font-semibold text-foreground">
                       {tick.name}
                     </span>
-                    <span className="flex items-baseline gap-1.5 font-mono text-[9.5px]">
+                    <span className="flex items-baseline gap-1.5 font-mono text-[10px]">
                       <span className="text-foreground/85">
                         {formatDateShort(tick.orderByDate)}
                       </span>
@@ -250,7 +250,7 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
               <span
                 key={m.key}
                 data-testid="rail-month-label"
-                className="absolute translate-x-1 font-mono text-[9px] font-medium tracking-[0.08em] text-fg-subtle"
+                className="absolute translate-x-1 font-mono text-[10px] font-medium tracking-[0.08em] text-fg-subtle"
                 style={{ left: `${m.pct}%` }}
               >
                 {m.label}
