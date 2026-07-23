@@ -189,7 +189,7 @@ export async function probeCertificate(
       resolve(result);
     };
 
-    // nosemgrep
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
     const socket = tlsConnect({
       host: hostname,
       port,
@@ -255,7 +255,7 @@ export function fingerprintPinnedConnection(
   // the factory is assignable to `https` `createConnection`; on the error paths the
   // socket is passed but ignored by `http` (it reads only the error).
   return (_options, oncreate) => {
-    // nosemgrep
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
     const socket = tlsConnect({
       host: hostname,
       port,
