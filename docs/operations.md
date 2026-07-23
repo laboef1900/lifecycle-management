@@ -14,25 +14,25 @@ architecture context start with the [`README`](../README.md).
    ```
 3. **Configure** environment:
    ```bash
-   cp .env.example .env
+   cp docker/.env.example docker/.env
    # at minimum, set POSTGRES_PASSWORD; optionally LOG_LEVEL, HTTP_PORT
-   chmod 600 .env  # the file holds DB credentials
+   chmod 600 docker/.env  # the file holds DB credentials
    ```
 4. **Pull** the published images:
    ```bash
-   docker compose pull
+   docker compose -f docker/docker-compose.yml --env-file docker/.env pull
    ```
    The `server` and `web` containers run pre-built images from
    `ghcr.io/laboef1900/lcm-{server,web}:latest` — there is no local build
    step. To pin a specific release, set `LCM_IMAGE_TAG=0.1` (or `dev`) in
-   `.env`.
+   `docker/.env`.
 5. **First boot** with seed data:
    ```bash
-   SEED_ON_BOOT=true docker compose up -d
-   docker compose logs -f server   # confirm "No pending migrations to apply"
+   SEED_ON_BOOT=true docker compose -f docker/docker-compose.yml --env-file docker/.env up -d
+   docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f server   # confirm "No pending migrations to apply"
                                 # and "Server listening at http://..."
    ```
-6. **Disable the seed flag** in `.env` (set `SEED_ON_BOOT=false`) so future
+6. **Disable the seed flag** in `docker/.env` (set `SEED_ON_BOOT=false`) so future
    restarts skip the seeding step.
 7. **Verify** end-to-end:
    ```bash
@@ -908,9 +908,9 @@ docker compose logs -f server     # watch for migrations being applied
 If the new release adds a Prisma migration, you'll see it apply once and
 then continue. The DB volume persists, so the upgrade is non-destructive.
 
-To pin a specific release, set `LCM_IMAGE_TAG=0.2` (etc.) in `.env` instead
+To pin a specific release, set `LCM_IMAGE_TAG=0.2` (etc.) in `docker/.env` instead
 of relying on `:latest`. To roll back, set `LCM_IMAGE_TAG` to the prior tag
-and `docker compose up -d`. **Caveat:** if the bad release applied a schema
+and `docker compose -f docker/docker-compose.yml --env-file docker/.env up -d`. **Caveat:** if the bad release applied a schema
 migration, rolling back the image won't undo the schema change — restore
 the DB from backup before rolling back if the schema diverges.
 
@@ -922,7 +922,7 @@ Most likely a hand-edited migration file or a DB drift. Connect to the DB
 and inspect:
 
 ```bash
-docker compose exec db psql -U lcm -d lcm \
+docker compose -f docker/docker-compose.yml --env-file docker/.env exec db psql -U lcm -d lcm \
   -c "SELECT migration_name, finished_at, logs FROM _prisma_migrations ORDER BY finished_at DESC LIMIT 5;"
 ```
 
@@ -932,13 +932,13 @@ retry, or restore from backup.
 ### `web` is healthy but `/api/*` returns 502
 
 The Nginx upstream `server:8080` is unreachable. Check that the `server`
-container is `(healthy)` in `docker compose ps`. If it's restarting, tail
-its logs: `docker compose logs server`.
+container is `(healthy)` in `docker compose -f docker/docker-compose.yml --env-file docker/.env ps`. If it's restarting, tail
+its logs: `docker compose -f docker/docker-compose.yml --env-file docker/.env logs server`.
 
 ### Port conflict on `:80`
 
 Another service is bound to port 80 on the host. Set `HTTP_PORT=8080` (or
-anything free) in `.env` and re-run `docker compose up -d`.
+anything free) in `docker/.env` and re-run `docker compose -f docker/docker-compose.yml --env-file docker/.env up -d`.
 
 ### Dev DB collides with production DB
 
@@ -985,10 +985,10 @@ holds the issuer URL, client ID, client secret, and the rest of the OIDC
 settings, and is managed from the running app's **Settings →
 Authentication** panel (admin-only once oidc mode is active) rather than
 by editing env vars and redeploying. The `AUTH_MODE` / `OIDC_*` env vars
-documented in `.env.example` are **seed-only**: they're read exactly once,
+documented in `docker/.env.example` are **seed-only**: they're read exactly once,
 on first boot while the `auth_config` table is still empty, to pre-populate
 the row for unattended provisioning; every subsequent boot ignores them
-even if you change `.env` and restart. `CONFIG_ENCRYPTION_KEY` is required
+even if you change `docker/.env` and restart. `CONFIG_ENCRYPTION_KEY` is required
 to store a client secret — see below.
 
 **Role enforcement is deferred**: the OIDC role claim is mapped and stored
@@ -999,7 +999,7 @@ or IdP-side app assignment instead.
 
 ### Configuring authentication
 
-1. Make sure `CONFIG_ENCRYPTION_KEY` is set in `.env` — the compose file
+1. Make sure `CONFIG_ENCRYPTION_KEY` is set in `docker/.env` — the compose file
    refuses to start `server` without it (fail-closed, same as
    `POSTGRES_PASSWORD`). Generate one with `openssl rand -base64 32` and
    never change it casually; see "CONFIG_ENCRYPTION_KEY rotation" below.
@@ -1019,7 +1019,7 @@ or IdP-side app assignment instead.
 
 Alternatively, to provision OIDC without ever touching the UI (e.g.
 scripted first-boot setup), set `AUTH_MODE=oidc` plus the `OIDC_*` vars in
-`.env` _before_ the very first boot against an empty database — they seed
+`docker/.env` _before_ the very first boot against an empty database — they seed
 the row once. This only works while `auth_config` has no row yet; on any
 later boot, use Settings → Authentication instead.
 
@@ -1062,7 +1062,7 @@ treating this as a low-severity incident.
   "Break-glass: RECOVERY_DISABLE_AUTH" below, including the SSRF-adjacent
   settings endpoints. The stored `oidc` mode being preserved does **not**
   mean authentication is being enforced. The degrade is decided at boot, so
-  repairing `.env` alone changes nothing until the server is restarted — but a
+  repairing `docker/.env` alone changes nothing until the server is restarted — but a
   restart is not the only way out. **A successful save in Settings →
   Authentication closes the window immediately**: the degrade is recorded once
   at boot and never re-applied, so the reload that follows the write re-derives
@@ -1125,7 +1125,7 @@ treating this as a low-severity incident.
 
   1. **Fix or roll back `CONFIG_ENCRYPTION_KEY`** — restore the correct
      key (or revert to the previous one if the rotation was the cause)
-     and `docker compose up -d`. Nothing was written, so the stored mode
+     and `docker compose -f docker/docker-compose.yml --env-file docker/.env up -d`. Nothing was written, so the stored mode
      comes back exactly as configured with nothing to re-enter. This is
      the preferred path: it never opens the API.
   2. **`RECOVERY_DISABLE_AUTH=true`** — deliberately boot with an open,
@@ -1139,7 +1139,7 @@ treating this as a low-severity incident.
   into the `server` service.)
 
 - **Deliberately rotating to a new key**: do this in a maintenance window.
-  Update `CONFIG_ENCRYPTION_KEY` in `.env`, `docker compose up -d`, then go
+  Update `CONFIG_ENCRYPTION_KEY` in `docker/.env`, `docker compose -f docker/docker-compose.yml --env-file docker/.env up -d`, then go
   to **Settings → Authentication** and re-enter the client secret (the new
   key cannot decrypt ciphertext written under the old one) and save — this
   also re-tests discovery and generates a fresh login-state signing
@@ -1194,7 +1194,7 @@ treating this as a low-severity incident.
 
 If you're locked out (e.g. the only ADMIN account can't sign in, or the
 IdP is unreachable and there's no other way to get in) set
-`RECOVERY_DISABLE_AUTH=true` in `.env` and `docker compose up -d`. On that
+`RECOVERY_DISABLE_AUTH=true` in `docker/.env` and `docker compose -f docker/docker-compose.yml --env-file docker/.env up -d`. On that
 boot the server **overrides the effective mode to `disabled` in memory
 only** — the stored configuration in the database is left untouched. Every
 `/api/*` route becomes reachable without a session, so use this only for

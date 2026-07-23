@@ -49,6 +49,9 @@ jobs:
       - name: Generate web route tree
         run: pnpm --filter @lcm/web generate-routes
 
+      - name: Format check
+        run: pnpm format:check
+
       - name: Lint
         run: pnpm lint
 
@@ -60,6 +63,9 @@ jobs:
       # socket, so no extra service is needed.
       - name: Test
         run: pnpm test
+
+      - name: Build server bundle
+        run: pnpm --filter @lcm/server build
 
       - name: Build web bundle
         run: pnpm build
@@ -100,3 +106,17 @@ jobs:
       # oidc mode, then drives the real browser login/logout flow.
       - name: Run OIDC auth e2e
         run: pnpm --filter @lcm/web test:e2e:oidc
+
+  semgrep:
+    name: Semgrep security scan
+    runs-on: ubuntu-latest
+    container:
+      # Pinned tag@digest (same discipline as every other CI action) so a
+      # rotated/compromised :latest scanner can't run in CI. Bump deliberately.
+      image: semgrep/semgrep:1.170.0@sha256:c98f8829eea377274ee4b10656458b078b88232469b2ff913f091c2317347c9d
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Run Semgrep SAST scan
+        run: semgrep scan --config p/default apps packages --error

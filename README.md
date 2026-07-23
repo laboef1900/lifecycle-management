@@ -66,20 +66,19 @@ Open <http://localhost:5173>. The Vite dev server proxies `/api/*`,
 ## Run the production stack
 
 ```bash
-cp .env.example .env
-# edit .env — at least set POSTGRES_PASSWORD
+cp docker/.env.example docker/.env
+# edit docker/.env — at least set POSTGRES_PASSWORD
 
-docker compose pull
-SEED_ON_BOOT=true docker compose up -d
+docker compose -f docker/docker-compose.yml --env-file docker/.env pull
+SEED_ON_BOOT=true docker compose -f docker/docker-compose.yml --env-file docker/.env up -d
 # first boot: server applies migrations + seeds reference clusters
 ```
 
-`.env` sets `COMPOSE_FILE=docker/docker-compose.yml`, so the standard
-`docker compose ...` commands above pick up the production file from
-`docker/` without needing `-f`. Run all commands from the repo root.
+`docker/.env` configures the stack environment for `docker/docker-compose.yml`.
+Run commands from the repo root or inside `docker/`.
 
 The compose file pulls `lcm-server` and `lcm-web` from GHCR; set
-`LCM_IMAGE_TAG=0.5` in `.env` to pin a release instead of `:latest`.
+`LCM_IMAGE_TAG=0.5` in `docker/.env` to pin a release instead of `:latest`.
 
 The web container listens on `${HTTP_PORT:-80}` and serves both the SPA and a
 reverse proxy to the server at `/api/*`. After the first successful boot,
@@ -167,4 +166,4 @@ pnpm --filter @lcm/server db:import-xlsx [path]
 
 Short version: branch off `dev` as `feat/<short-slug>`, make a focused commit,
 open a PR against `dev` that closes the issue, ensure CI is green. Long
-version: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+version: [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).

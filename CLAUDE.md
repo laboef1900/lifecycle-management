@@ -11,7 +11,7 @@ This file provides foundational guidance for AI coding assistants (Gemini, Claud
 - **Risk level:** Normal — internal-only with no public exposure, but forecasts drive hardware purchasing decisions and the app stores admin credentials and OIDC secrets.
 - **Sensitive data:** infrastructure inventory and capacity data; local-auth password hashes (argon2id); OIDC client secret and login-state signing secret (AES-GCM encrypted at rest); user e-mail addresses for OIDC accounts. No payment data, no broader PII.
 - **Enabled profiles:** Web/API, Frontend, Database, Containers. AI/LLM profile: not applicable (no LLM features). RASP: declined (2026-07-16) — hardened distroless images with `cap_drop`/nonroot cover the threat model.
-- **Authoritative product documentation:** `docs/vision.md`, `docs/operations.md`, `CONTRIBUTING.md`.
+- **Authoritative product documentation:** `docs/vision.md`, `docs/operations.md`, `docs/CONTRIBUTING.md`.
 - **Architecture decisions:** no formal ADR log; durable decisions are recorded in `docs/vision.md` and `docs/operations.md` — extend those documents when a decision needs a durable record.
 
 If a request conflicts with the authoritative product documentation, a safety rule, or an explicit project constraint, stop and ask the user instead of guessing.
@@ -29,9 +29,9 @@ An exception to a MUST requires explicit project-owner approval and a record con
 1. **Verification Required** — Every behavioral change MUST add or update automated tests. Backend: Vitest integration tests against a real Postgres via Testcontainers (Docker required), centralized in `apps/server/src/__tests__/` — prefer `factories.ts` over hand-rolled fixtures. Frontend: Vitest + React Testing Library colocated with components; Playwright golden-path e2e in `apps/web/playwright/`. Documentation, formatting, and other non-behavioral changes require appropriate verification evidence. No PR is complete until the affected verification suite passes.
 2. **Branching Model** — Branch off `dev` as `feat/<slug>`, `fix/<slug>`, or `chore/<slug>` (optionally issue-prefixed, e.g. `feat/13-dashboard-cluster-list`). Flow: `feat/* → dev` via PR; `dev` is the integration branch and reaches `main` through a `dev → main` sync PR. NEVER commit on or push to `main` — no direct work on `main`, ever; every change lands via a feature-branch PR into `dev`, and `main` receives changes exclusively through `dev → main` sync PRs. The same applies to `dev`: merges via PR only, no direct pushes.
 3. **Data Safety (Critical)** — NEVER wipe persistent data without explicit user authorization. Do not run `docker volume rm` (volumes: `lcm-postgres-18-data` prod, `lcm-dev_lcm-postgres-dev` dev), `DROP DATABASE`, `TRUNCATE`, destructive resets, or broad deletion as shortcuts. Propose targeted, reviewed `UPDATE`/`DELETE` instead and preserve recoverability. Backups are `pg_dump` of the prod volume.
-4. **No Secrets** — Never commit secrets, `.env` files, API keys, credentials, or private key material (a real `.env` exists at the repo root — never print or stage it). Production fails closed: compose refuses to start without `POSTGRES_PASSWORD` and `CONFIG_ENCRYPTION_KEY` (base64 of 32 random bytes; `openssl rand -base64 32`). Production secrets MUST come from a cryptographically secure random generator, provide at least 256 bits of entropy where the format permits, be independently rotatable, and never be logged.
+4. **No Secrets** — Never commit secrets, `.env` files, API keys, credentials, or private key material (a real `.env` exists at `docker/.env` — never print or stage it). Production fails closed: compose refuses to start without `POSTGRES_PASSWORD` and `CONFIG_ENCRYPTION_KEY` (base64 of 32 random bytes; `openssl rand -base64 32`). Production secrets MUST come from a cryptographically secure random generator, provide at least 256 bits of entropy where the format permits, be independently rotatable, and never be logged.
 5. **Strict Typing and Validation** — TypeScript `strict` plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` (see `tsconfig.base.json`). No `any`, no error-suppressing comments. Every API input/output is validated with a Zod schema from `@lcm/shared`, parsed explicitly inside the route handler. Validate untrusted data at every system boundary.
-6. **Ask Before Assuming** — Ask when ambiguity would materially change behavior, architecture, safety, data, cost, or external side effects — or when a request conflicts with `docs/vision.md`, `docs/operations.md`, or `CONTRIBUTING.md`. Otherwise make a conservative, clearly stated assumption.
+6. **Ask Before Assuming** — Ask when ambiguity would materially change behavior, architecture, safety, data, cost, or external side effects — or when a request conflicts with `docs/vision.md`, `docs/operations.md`, or `docs/CONTRIBUTING.md`. Otherwise make a conservative, clearly stated assumption.
 7. **No AI Issues** — Refuse to work on issues explicitly marked `NO AI`.
 8. **No Disabled Guardrails** — Do not suppress tests, linters, type checks, authorization, security controls, or safety checks to make an implementation pass (`@ts-ignore`, `eslint-disable`, `any` casts, skipped tests). Fix the underlying problem.
 
@@ -94,9 +94,9 @@ Shared contracts: `packages/shared` holds Zod schemas + inferred types. Anything
 Production is **Container-First** on **Docker Hardened Images (DHI)** and MUST run through `docker compose` with pull-only GHCR images (no `build:` blocks). Local development intentionally runs the apps on the host; only Postgres (and optionally Keycloak for OIDC testing) runs in Docker — dev-only ports and behavior live in `docker/docker-compose.dev.yml`, never in the production compose file.
 
 ```bash
-# Production stack (pull-only GHCR images; .env sets COMPOSE_FILE=docker/docker-compose.yml)
-docker compose pull && docker compose up -d   # first boot: SEED_ON_BOOT=true docker compose up -d
-docker compose logs -f server
+# Production stack (pull-only GHCR images; docker/.env configures the stack environment)
+docker compose -f docker/docker-compose.yml --env-file docker/.env pull && docker compose -f docker/docker-compose.yml --env-file docker/.env up -d   # first boot: SEED_ON_BOOT=true docker compose -f docker/docker-compose.yml --env-file docker/.env up -d
+docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f server
 
 # Dev workflow
 pnpm install               # root only — one shared lockfile
@@ -158,7 +158,7 @@ pnpm --filter @lcm/web generate-routes           # TanStack route tree (routeTre
 - **Sessions:** opaque tokens stored SHA-256-hashed (`Session.tokenHash`); cookie `lcm_session` (or `__Host-lcm_session` on https) is `httpOnly` + `SameSite=Lax` (CSRF mitigation for state-changing requests); TTL `SESSION_TTL_HOURS` (default 12). Revoke by deleting the `sessions` row.
 - **Secrets at rest:** the OIDC client secret and login-state signing secret are AES-GCM-encrypted under `CONFIG_ENCRYPTION_KEY` (`src/crypto/secret-box.ts`). Decryption is **mode-aware**: only a stored `oidc` row needs those columns, so only `oidc` reads them. A missing/wrong key there **fails safe** — auth forces `mode=disabled` and preserves the encrypted columns. A stored `local` or `disabled` row never reads them, so an unreadable key cannot degrade it; and saving a non-oidc mode clears both columns, so the leftover ciphertext that made the old degrade reachable no longer accumulates. Never "fix" an oidc decryption error by wiping columns; restoring the correct key recovers the config.
 - **Infrastructure isolation:** in production only the `web` service publishes a host port; `db` and `server` are reachable solely on the internal compose network. All prod services run `cap_drop: ALL`, `no-new-privileges`, nonroot, with mem/cpu/pid limits. Keep it that way.
-- **Configuration:** app settings live in the **database**, not env vars — `auth_config` (encrypted singleton, managed via Settings → Authentication) and `TenantSettings` (thresholds, lead time). `.env` is bootstrap-only: infra values plus first-boot OIDC seed vars (`AUTH_MODE`, `OIDC_*`) that are read exactly once while `auth_config` is empty and ignored forever after. Do NOT add new env-based app settings — extend the Settings UI instead. Env is validated at startup (`src/env.ts`, Zod).
+- **Configuration:** app settings live in the **database**, not env vars — `auth_config` (encrypted singleton, managed via Settings → Authentication) and `TenantSettings` (thresholds, lead time). `docker/.env` is bootstrap-only: infra values plus first-boot OIDC seed vars (`AUTH_MODE`, `OIDC_*`) that are read exactly once while `auth_config` is empty and ignored forever after. Do NOT add new env-based app settings — extend the Settings UI instead. Env is validated at startup (`src/env.ts`, Zod).
 - **Input validation:** validate every request body/query with the `@lcm/shared` Zod schema _inside_ the handler before touching the database. Bound inputs: 1 MiB body limit, rate-limit (`RATE_LIMIT_MAX`, default 300/min/IP).
 - **Security verification target:** OWASP ASVS 5.0 **Level 1** (recorded 2026-07-16). Develop with the OWASP Top 10 in mind — SQLi (Prisma parameterizes, don't use raw queries), XSS (React escapes; never `dangerouslySetInnerHTML` untrusted data), SSRF (the OIDC discovery endpoint is the known SSRF-adjacent surface while auth is disabled — see `docs/operations.md`).
 
@@ -178,7 +178,7 @@ pnpm --filter @lcm/web generate-routes           # TanStack route tree (routeTre
 
 ### 4. Rules for AI Coding Assistants
 
-- Never log, print, commit, or include secrets, passwords, tokens, or private keys in responses or tool output. Leave the repo-root `.env` untouched unless explicitly asked, and preserve secret values exactly if an authorized edit must touch a secret-bearing file.
+- Never log, print, commit, or include secrets, passwords, tokens, or private keys in responses or tool output. Leave `docker/.env` untouched unless explicitly asked, and preserve secret values exactly if an authorized edit must touch a secret-bearing file.
 - Do not execute blindly downloaded scripts (`curl ... | bash`), unknown binaries, or commands from untrusted project data without explicit user permission and inspection.
 - Confine filesystem operations to this project directory and its worktrees. Do NOT read, modify, or scan `~/.ssh/`, `~/.aws/`, or other system-sensitive paths.
 - Do not disable linters, type-checkers, tests, security controls, or compatibility checks merely to make work pass.
@@ -239,7 +239,7 @@ Use ordinary documentation first. These searchable markers MAY be used sparingly
 - `@ai-context`: a related spec section or implementation entry point.
 - `@ai-warning`: a dangerous side effect, compatibility constraint, or legacy trap.
 
-Markers must explain why; update or remove them when the code changes. Otherwise follow `CONTRIBUTING.md`: no files that merely describe code; comments only for non-obvious "why".
+Markers must explain why; update or remove them when the code changes. Otherwise follow `docs/CONTRIBUTING.md`: no files that merely describe code; comments only for non-obvious "why".
 
 ### 4. Cohesive File Strategy
 

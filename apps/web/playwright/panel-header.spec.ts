@@ -234,6 +234,7 @@ test('unknown-capacity recommendation chip jumps focus to the Hosts tab (#243 Pa
   // Anchored to the end so this never also catches the forecast/settings
   // sub-paths under the same cluster id (golden-path.spec.ts's own route
   // convention).
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
   await page.route(new RegExp(`/api/clusters/${cluster.id}$`), (route) =>
     route.fulfill({ json: unknownCapacityBody }),
   );
