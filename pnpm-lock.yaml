@@ -7,6 +7,7 @@ settings:
 overrides:
   '@radix-ui/react-dialog': 1.1.16
   '@radix-ui/react-slot': 1.2.5
+  '@hono/node-server': '>=1.19.13'
   protobufjs: '>=8 <9'
   semver: ^7.7.0
 
@@ -681,9 +682,9 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@hono/node-server@1.19.11':
-    resolution: {integrity: sha512-dr8/3zEaB+p0D2n/IUrlPF1HZm586qgJNXK1a9fhg/PzdtkK7Ksd5l312tJX2yBuALqDYBlG20QEbayqPyxn+g==}
-    engines: {node: '>=18.14.1'}
+  '@hono/node-server@2.0.10':
+    resolution: {integrity: sha512-ZcnNVhKTmyDJeg0UlnZjvM73JBsTAuhrH/J4fjwGOw59PwOW51r4J+p6CsKZWXdKSme4MFqU62CZMOsdDrU4CA==}
+    engines: {node: '>=20'}
     peerDependencies:
       hono: ^4
 
@@ -4831,7 +4832,7 @@ snapshots:
       protobufjs: 8.7.1
       yargs: 17.7.3
 
-  '@hono/node-server@1.19.11(hono@4.12.30)':
+  '@hono/node-server@2.0.10(hono@4.12.30)':
     dependencies:
       hono: 4.12.30
 
@@ -5015,7 +5016,7 @@ snapshots:
       '@electric-sql/pglite': 0.4.1
       '@electric-sql/pglite-socket': 0.1.1(@electric-sql/pglite@0.4.1)
       '@electric-sql/pglite-tools': 0.3.1(@electric-sql/pglite@0.4.1)
-      '@hono/node-server': 1.19.11(hono@4.12.30)
+      '@hono/node-server': 2.0.10(hono@4.12.30)
       '@prisma/get-platform': 7.2.0
       '@prisma/query-plan-executor': 7.2.0
       '@prisma/streams-local': 0.1.2
