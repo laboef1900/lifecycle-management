@@ -4,6 +4,7 @@ import { Link } from '@tanstack/react-router';
 import { Archive } from 'lucide-react';
 import { memo } from 'react';
 
+import { AcknowledgedAnnotation } from '@/components/detail/recommendation-chip';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { utilStatus, type ClusterForecastEntry } from '@/lib/forecast-summary';
@@ -227,6 +228,12 @@ export const ClusterTile = memo(function ClusterTile({
   const stale = isBaselineStale(cluster.baselineDate);
   const ageDays = baselineAgeDays(cluster.baselineDate);
   const events = forecast?.events ?? [];
+  // The acknowledgment covering the live breach, or null (#292, surfaced on
+  // the fleet tile too by #302 — follow-up to #292/#300, which shipped it
+  // only in the detail panel's RecommendationChip). Server-side, this is
+  // already null unless a still-covering approval exists, so no extra
+  // "hasLiveBreach" gating is needed here.
+  const acknowledgment = !isArchived ? (forecast?.acknowledgment ?? null) : null;
 
   const runwaySub = runwayUnknown
     ? 'capacity unknown'
@@ -281,6 +288,10 @@ export const ClusterTile = memo(function ClusterTile({
       : orderUnknown
         ? 'order status unknown — capacity required'
         : 'no order needed',
+    // The visible AcknowledgedAnnotation's text doesn't otherwise reach
+    // assistive tech — the tile's aria-label overrides all visible content
+    // (#302, same rationale as every other segment in this array).
+    acknowledgment ? `order acknowledged by ${acknowledgment.approvedByLabel}` : null,
     // #291 (2026-07-22): the visible EVENT chip this segment used to describe
     // was removed from the tile entirely (owner decision — not merely
     // relocated, as it was under #268). This aria-label segment is now the
@@ -361,6 +372,16 @@ export const ClusterTile = memo(function ClusterTile({
               : 'ORDER STATUS UNKNOWN'}
           </Badge>
         ) : null}
+        {/*
+          #302 (follow-up to #292/#300): the order-approval acknowledgment
+          also needs to be visible on the fleet tile, not just the cluster
+          detail panel. Reuses `RecommendationChip`'s own
+          `AcknowledgedAnnotation` directly — same icon (`BadgeCheck`), same
+          success tone + "Ack" text (never color alone), same tooltip/sr-only
+          detail, and the same underlying `ForecastAcknowledgment` data —
+          rather than inventing a tile-only variant of the same treatment.
+        */}
+        {acknowledgment ? <AcknowledgedAnnotation acknowledgment={acknowledgment} /> : null}
       </div>
 
       {/*
