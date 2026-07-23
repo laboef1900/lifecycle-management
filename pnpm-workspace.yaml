@@ -4,6 +4,12 @@ packages:
 overrides:
   '@radix-ui/react-dialog': 1.1.16
   '@radix-ui/react-slot': 1.2.5
+  # Keep protobufjs on 8.x — without this bound the transitive requirement wins
+  # and it silently downgrades to 7.6.5 (dev resolves 8.x). A `>=7.6.3 <9` range
+  # would NOT restore 8.x once 7.6.5 is locked (it already satisfies the range),
+  # so the lower bound is pinned to the 8 major. Still clears the residual audit
+  # advisory (needs >=7.6.3; 8.x qualifies) and stays below the 9.x major.
+  protobufjs: '>=8 <9'
   semver: ^7.7.0
 allowBuilds:
   esbuild: true
