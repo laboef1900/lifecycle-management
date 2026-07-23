@@ -228,12 +228,12 @@ export function SignInCard({
   redirectTo: string | undefined;
 }): React.JSX.Element {
   return (
-    <Card className="w-full p-7 sm:p-8">
+    <Card className="w-full p-8">
       <BrandMark className="h-10 w-10" />
       <p className="mt-6 text-xs font-medium uppercase tracking-[0.12em] text-fg-subtle">
         Welcome back
       </p>
-      <h1 className="mt-2 font-display text-2xl font-semibold tracking-[-0.02em]">
+      <h1 className="mt-3 font-display text-2xl font-semibold tracking-[-0.02em]">
         Sign in to Capacity Forecast
       </h1>
       <p className="mt-2 text-sm text-muted-foreground">
