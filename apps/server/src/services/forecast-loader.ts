@@ -35,17 +35,27 @@ const DEFAULT_HORIZON_MONTHS = 24;
 interface LoadOptions {
   fromMonth?: Date;
   toMonth?: Date;
-  /**
-   * WRITE-PATH ONLY (#303). When no explicit `fromMonth` is given, clamp the
-   * default baseline anchor to `min(capturedAt, today)` before deriving the
-   * window. A no-op for the normal past/present-dated baseline (`min` returns
-   * `capturedAt`); for a FUTURE-dated baseline it pulls the window start back to
-   * today so the snapshotted `orderByDate` matches the today-anchored chip read
-   * instead of landing months later and falsely tripping the ≥ T supersede rule.
-   * The read path (`forCluster`/`forClusterWithScenario`) never sets this, so its
-   * baseline-anchored window — and the `all` view that depends on it — is
-   * unchanged (see the #300 window-alignment rejection in DESIGN.md §3).
-   */
+}
+
+/**
+ * Write-path-only superset of {@link LoadOptions}. `clampAnchorToToday` lives
+ * here — deliberately NOT on the public `LoadOptions` — so the read-path
+ * entry points (`forCluster`/`forClusterWithScenario`), whose signatures expose
+ * only `LoadOptions`, cannot thread the clamp through even by mistake (#303
+ * mechanical-review hardening). `liveBreachContext` is the sole constructor of
+ * this type; only `prepare` consumes it.
+ *
+ * `clampAnchorToToday` (WRITE-PATH ONLY, #303): when no explicit `fromMonth` is
+ * given, clamp the default baseline anchor to `min(capturedAt, today)` before
+ * deriving the window. A no-op for the normal past/present-dated baseline
+ * (`min` returns `capturedAt`); for a FUTURE-dated baseline it pulls the window
+ * start back to today so the snapshotted `orderByDate` matches the
+ * today-anchored chip read instead of landing months later and falsely tripping
+ * the ≥ T supersede rule. The read path never sees this option, so its
+ * baseline-anchored window — and the `all` view that depends on it — is
+ * unchanged (see the #300 window-alignment rejection in DESIGN.md §3).
+ */
+interface InternalLoadOptions extends LoadOptions {
   clampAnchorToToday?: boolean;
 }
 
@@ -197,7 +207,7 @@ export class ForecastService {
     tenantId: string,
     clusterId: string,
     metricKey: string,
-    options: LoadOptions,
+    options: InternalLoadOptions,
   ): Promise<PreparedForecastInput> {
     const metricType = await this.prisma.metricType.findUnique({ where: { key: metricKey } });
     if (!metricType) {

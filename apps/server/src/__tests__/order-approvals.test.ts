@@ -70,7 +70,7 @@ async function breachingCluster(hostCapacity = 10_000): Promise<string> {
  * starts ~9 months later than the chip's today-anchored read window — the exact
  * #303 repro.
  */
-async function futureBaselineBreachingCluster(): Promise<string> {
+async function futureBaselineBreachingCluster(baselineConsumption = 8000): Promise<string> {
   const now = new Date();
   const futureBaseline = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 9, 1));
   // Well in the past, so the host is active across BOTH the future write window
@@ -78,7 +78,7 @@ async function futureBaselineBreachingCluster(): Promise<string> {
   const past = new Date('2024-01-01T00:00:00.000Z');
   const cluster = await makeCluster(prisma, {
     baselineDate: futureBaseline,
-    baselineConsumption: 8000,
+    baselineConsumption,
     baselineCapacity: 0,
   });
   await makeHost(prisma, {
@@ -384,6 +384,54 @@ describe('forecast acknowledgment coverage (DESIGN.md §3)', () => {
     // supersedes, identically to before the fix.
     await setLeadTimeWeeks(14);
     expect((await getForecast(clusterId)).json().acknowledgment).toBeNull();
+  });
+
+  it('does not falsely supersede a fresh approval for a future-dated baseline with a borderline breach (#303)', async () => {
+    // Same #303 window-divergence repro as above, but the breach is BORDERLINE
+    // (util 7100/10_000 = 0.71, a hair over the 0.7 warn threshold) rather than a
+    // flat, obviously-breaching 0.8. The clamp fix must hold at the threshold edge
+    // too: the write path still snapshots a today-anchored orderByDate, so the ≥ T
+    // rule cannot falsely supersede the moment the approval is created.
+    const clusterId = await futureBaselineBreachingCluster(7100);
+
+    const res = await approve(clusterId, 'seen it — borderline');
+    expect(res.statusCode).toBe(201);
+
+    // The chip reads a TODAY-anchored 24-mo window (resolveWindow).
+    const from = monthFromNow(0);
+    const to = monthFromNow(23);
+    const body = (
+      await disabledServer.inject({
+        method: 'GET',
+        url: `/api/clusters/${clusterId}/forecast?metric=memory_gb&from=${from}&to=${to}`,
+      })
+    ).json() as ForecastBody;
+
+    // The today-anchored window shows a live (borderline) breach...
+    expect(body.procurement.orderByDate).not.toBeNull();
+    // ...and the fresh approval is NOT falsely superseded by the window divergence.
+    expect(body.acknowledgment).toMatchObject({ note: 'seen it — borderline' });
+  });
+
+  it('keeps the acknowledgment current in the baseline-anchored `all` view for a future-dated baseline (write-path-only clamp, #303/#300)', async () => {
+    // The clamp is WRITE-PATH ONLY and deliberately does NOT touch the read-path
+    // baseline-anchored (`all`) window (the #300 window-alignment rejection). For a
+    // FUTURE-dated baseline the default/`all` view stays anchored ~9 months out, so
+    // its live orderByDate is LATER than the today-anchored snapshot — a "drifts
+    // later / improving" divergence, which never supersedes (INV-5). Assert the
+    // acknowledgment therefore lingers as current in that view.
+    const clusterId = await futureBaselineBreachingCluster();
+
+    const approval = (await approve(clusterId, 'seen it — all view')).json() as ApprovalBody;
+    // The snapshot's orderByDate is TODAY-anchored (clamped), so its breach month is
+    // this month — provably earlier than the baseline-anchored `all` view below.
+    expect(approval.breachMonth).toBe(`${monthFromNow(0)}-01`);
+
+    // The default forecast (no from/to) IS the baseline-anchored `all` view: for a
+    // future baseline it starts ~9 months out, so its live orderByDate is later.
+    const body = (await getForecast(clusterId)).json() as ForecastBody;
+    expect(body.procurement.orderByDate).not.toBeNull(); // breach still live there
+    expect(body.acknowledgment).toMatchObject({ note: 'seen it — all view' });
   });
 
   it('does not surface an acknowledgment once the breach clears — INV-3', async () => {
