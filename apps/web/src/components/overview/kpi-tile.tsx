@@ -53,18 +53,16 @@ export function KpiTile({
   const meta = status && status !== 'ok' ? STATUS_META[status] : null;
   const StatusIcon = meta?.icon;
   return (
-    <Card className={cn(tileVariants({ status }), className)} {...props}>
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-          {label}
-        </p>
-        {meta && StatusIcon ? (
-          <span className={cn('mt-px shrink-0', meta.className)}>
-            <StatusIcon className="h-3.5 w-3.5" aria-hidden />
-            <span className="sr-only">{meta.label}</span>
-          </span>
-        ) : null}
-      </div>
+    <Card className={cn(tileVariants({ status }), 'relative', className)} {...props}>
+      {/* Absolutely positioned so label/value/caption stay direct children of
+          the tile (consumers select the tile via label.closest('div')). */}
+      {meta && StatusIcon ? (
+        <span className={cn('absolute right-3.5 top-3.5', meta.className)}>
+          <StatusIcon className="h-3.5 w-3.5" aria-hidden />
+          <span className="sr-only">{meta.label}</span>
+        </span>
+      ) : null}
+      <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">{label}</p>
       <p className="mt-2 font-mono text-xl font-medium tracking-tight tabular-nums text-foreground [overflow-wrap:anywhere] sm:text-2xl">
         {value}
       </p>
