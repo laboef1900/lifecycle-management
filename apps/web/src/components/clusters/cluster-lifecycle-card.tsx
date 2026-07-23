@@ -40,9 +40,6 @@ export function ClusterLifecycleCard({ clusterId }: ClusterLifecycleCardProps): 
       setArchiveDialogOpen(false);
       toast.success('Cluster archived.');
     },
-    onError: () => {
-      toast.error('Could not archive cluster.');
-    },
   });
 
   const unarchiveMutation = useMutation({
@@ -53,9 +50,6 @@ export function ClusterLifecycleCard({ clusterId }: ClusterLifecycleCardProps): 
       setUnarchiveDialogOpen(false);
       toast.success('Cluster unarchived.');
     },
-    onError: () => {
-      toast.error('Could not unarchive cluster.');
-    },
   });
 
   const deleteMutation = useMutation({
@@ -65,9 +59,6 @@ export function ClusterLifecycleCard({ clusterId }: ClusterLifecycleCardProps): 
       setDeleteDialogOpen(false);
       toast.success('Cluster deleted.');
       void navigate({ to: '/' });
-    },
-    onError: () => {
-      toast.error('Could not delete cluster.');
     },
   });
 
@@ -136,29 +127,44 @@ export function ClusterLifecycleCard({ clusterId }: ClusterLifecycleCardProps): 
 
       <ConfirmDialog
         open={archiveDialogOpen}
-        onOpenChange={setArchiveDialogOpen}
+        onOpenChange={(next) => {
+          setArchiveDialogOpen(next);
+          if (!next) archiveMutation.reset();
+        }}
         title="Archive cluster?"
         description="Archived clusters are hidden from the default list and from fleet KPIs. Forecast history is preserved and the cluster can be unarchived at any time."
         confirmLabel="Archive cluster"
+        error={archiveMutation.isError ? 'Could not archive the cluster. Please try again.' : null}
         pending={archiveMutation.isPending}
         onConfirm={() => archiveMutation.mutate()}
       />
       <ConfirmDialog
         open={unarchiveDialogOpen}
-        onOpenChange={setUnarchiveDialogOpen}
+        onOpenChange={(next) => {
+          setUnarchiveDialogOpen(next);
+          if (!next) unarchiveMutation.reset();
+        }}
         title="Unarchive cluster?"
         description="Restores this cluster to the active list and fleet KPIs."
         confirmLabel="Unarchive cluster"
+        error={
+          unarchiveMutation.isError ? 'Could not unarchive the cluster. Please try again.' : null
+        }
         pending={unarchiveMutation.isPending}
         onConfirm={() => unarchiveMutation.mutate()}
       />
       <ConfirmDialog
         open={deleteDialogOpen}
-        onOpenChange={setDeleteDialogOpen}
+        onOpenChange={(next) => {
+          setDeleteDialogOpen(next);
+          if (!next) deleteMutation.reset();
+        }}
         title="Delete cluster permanently?"
         description={`This removes ${clusterName} and all its hosts, applications, events, baselines, and settings. This cannot be undone.`}
         confirmLabel="Delete forever"
         destructive
+        confirmPhrase={clusterName}
+        error={deleteMutation.isError ? 'Could not delete the cluster. Please try again.' : null}
         pending={deleteMutation.isPending}
         onConfirm={() => deleteMutation.mutate()}
       />

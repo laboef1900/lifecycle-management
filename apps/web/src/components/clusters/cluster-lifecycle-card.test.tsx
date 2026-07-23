@@ -107,7 +107,7 @@ describe('<ClusterLifecycleCard>', () => {
     await waitFor(() => expect(unarchiveSpy).toHaveBeenCalledWith(CLUSTER_ID));
   });
 
-  it('delete opens confirm dialog and navigates on confirm', async () => {
+  it('delete is gated on typing the cluster name, then navigates on confirm', async () => {
     const deleteSpy = vi.spyOn(api.clusters, 'delete').mockResolvedValue(undefined);
     renderWithClient(<ClusterLifecycleCard clusterId={CLUSTER_ID} />);
     await waitFor(() =>
@@ -115,10 +115,32 @@ describe('<ClusterLifecycleCard>', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /^delete$/i }));
     expect(screen.getByRole('dialog', { name: /delete cluster permanently/i })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /delete forever/i }));
+    // Typed-name gate: "Delete forever" stays disabled until the exact name is typed.
+    const confirm = screen.getByRole('button', { name: /delete forever/i });
+    expect(confirm).toBeDisabled();
+    await userEvent.type(screen.getByLabelText(/type .* to confirm/i), 'CL-Active');
+    expect(confirm).toBeEnabled();
+    await userEvent.click(confirm);
     await waitFor(() => {
       expect(deleteSpy).toHaveBeenCalledWith(CLUSTER_ID);
       expect(navigateMock).toHaveBeenCalledWith({ to: '/' });
     });
+  });
+
+  it('delete surfaces an inline error and keeps the dialog open on failure', async () => {
+    vi.spyOn(api.clusters, 'delete').mockRejectedValue(new Error('boom'));
+    renderWithClient(<ClusterLifecycleCard clusterId={CLUSTER_ID} />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^delete$/i })).toBeInTheDocument(),
+    );
+    await userEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    await userEvent.type(screen.getByLabelText(/type .* to confirm/i), 'CL-Active');
+    await userEvent.click(screen.getByRole('button', { name: /delete forever/i }));
+    // A persistent inline alert, not a transient toast; the dialog stays open to retry.
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/could not delete the cluster/i),
+    );
+    expect(screen.getByRole('dialog', { name: /delete cluster permanently/i })).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 });
