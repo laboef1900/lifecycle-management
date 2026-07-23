@@ -39,17 +39,17 @@
   --input: #c9d2e4;
   --steel: #2f6bd8;
   --ring: var(--steel);
-  --accent: #8f6400;
+  --accent: #2f6bd8; /* cool-brand (2026-07-23): steel-led brand/CTA (was amber #8f6400) */
   --accent-foreground: #ffffff;
   --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
-  /* @ai-note accent-toned micro-labels sitting on an accent wash (the order-by
-     rail's lead-time zone label). Ratios below are measured against the wash
-     over the card, not the bare card, since that is what the text is painted
-     on. The mockup softens the label to 75% accent, which clears AA in dark
-     (5.6:1) but reaches only 2.97:1 in light — far short of the 4.5:1 floor for
-     9px text. Light therefore keeps the accent at full strength (4.67:1);
-     html.dark below restores the mockup's softening. */
-  --accent-label: var(--accent);
+  /* @ai-note amber attention label on an amber wash (the order-by rail's
+     lead-time zone). Under cool-brand (2026-07-23) the lead-time zone is an
+     attention surface, so it tracks --warning — NOT the steel brand --accent —
+     staying amber and distinct from the steel NOW marker beside it. Softened to
+     75% in dark (the mockup's treatment); kept full-strength in light, where
+     75% under-runs the 4.5:1 AA floor for 9px text. --warning (#865c0c light)
+     is a touch darker than the old amber, so light contrast only improves. */
+  --accent-label: var(--warning);
   --accent-gradient: linear-gradient(
     135deg,
     var(--accent),
@@ -68,8 +68,9 @@
      margin (the audit's "no headroom" note), close enough to the floor that
      ordinary rendering/anti-aliasing variance could tip it under 4.5:1.
      Darkened one step within the same amber hue family (37.2°→39.3°) to
-     #865C0C (5.147:1) for real headroom. Dark theme's #FFC53D is unaffected
-     (shared with --accent by deliberate design, see CLAUDE.md) and untouched. */
+     #865C0C (5.147:1) for real headroom. Dark theme's #FFC53D is untouched;
+     under cool-brand (2026-07-23) it is now distinct from the steel --accent —
+     amber is reserved for utilization/attention (see apps/web/DESIGN.md). */
   --warning: #865c0c;
   --warning-foreground: #ffffff;
   --destructive: #c0343c;
@@ -106,15 +107,11 @@
      Retune a stop and those have to be re-measured. */
   --hero-surface: linear-gradient(155deg, #fdfbf6 0%, #faf5ea 55%, #f6f0e4 100%);
   --hero-grid: rgb(143 100 0 / 0.06);
-  /* Bullet-meter fill (spec §3: "amber meter gradient"). Light theme has no
-     literal recipe in the spec ("derive from light --accent") — a darker
-     shade of the light --accent to --accent itself keeps the same ramp
-     direction as the dark value below. */
-  --meter-gradient: linear-gradient(
-    90deg,
-    color-mix(in oklab, var(--accent) 70%, black),
-    var(--accent)
-  );
+  /* Bullet-meter fill (spec §3: "amber meter gradient"). The utilization meter
+     stays amber, kept as a literal (#8F6400 light) and decoupled from --accent,
+     which became steel under cool-brand (2026-07-23): brand went steel, the
+     meter's amber utilization signal did not. Dark literal recipe below. */
+  --meter-gradient: linear-gradient(90deg, color-mix(in oklab, #8f6400 70%, black), #8f6400);
 
   /* Chart colors — the single source of truth for Recharts, read at runtime by
      use-chart-colors.ts. Semantic roles reference the shared tokens so charts
@@ -124,13 +121,13 @@
      built from var() below resolve per theme automatically via the dark
      overrides above/below, so only genuinely independent literals
      (chart-consumption/capacity/grid/axis/1-4/7) are re-declared in html.dark. */
-  /* Consumption line: a dedicated violet, NOT amber. Amber (--accent/--warning)
-     is double-booked as the warn-threshold color, so on the forecast charts the
-     usage line and the warn hairline were indistinguishable (identical hex in
-     dark). Violet clears warn amber, crit red, success green, and the steel
-     interaction hue in both themes (#7c3aed ~5.7:1 on white, #c084fc ~6.5:1 on
-     the dark card). House-style deviation recorded in the mission-bento spec
-     §4.4 amendment (2026-07-18). */
+  /* Consumption line: a dedicated violet, NOT amber. Amber (--warning) is the
+     warn-threshold color, so a usage line in that same amber would be
+     indistinguishable from the warn hairline on the forecast charts. Violet
+     clears warn amber, crit red, success green, and the steel brand/interaction
+     hue in both themes (#7c3aed ~5.7:1 on white, #c084fc ~6.5:1 on the dark
+     card). House-style deviation recorded in the mission-bento spec §4.4
+     amendment (2026-07-18). */
   --chart-consumption: #7c3aed;
   --chart-capacity: #3a455e;
   --chart-grid: #e3e8f2;
@@ -144,7 +141,7 @@
   --chart-2: #5a6478;
   --chart-3: #66708c;
   --chart-4: #a8b0c4;
-  --chart-5: var(--accent);
+  --chart-5: #8f6400; /* cool-brand (2026-07-23): categorical stays amber, decoupled from --accent */
   --chart-6: var(--warning);
   --chart-7: #0f766e;
 }
@@ -165,10 +162,10 @@ html.dark {
   --border-strong: #314063;
   --input: #10162a;
   --steel: #6ea8ff;
-  --accent: #ffc53d;
+  --accent: #6ea8ff; /* cool-brand (2026-07-23): steel-led brand/CTA (was amber #ffc53d) */
   --accent-foreground: #171c2c;
   --accent-soft: color-mix(in oklab, var(--accent) 15%, transparent);
-  --accent-label: color-mix(in oklab, var(--accent) 75%, transparent);
+  --accent-label: color-mix(in oklab, var(--warning) 75%, transparent);
   --accent-gradient: linear-gradient(
     135deg,
     var(--accent),
@@ -201,7 +198,11 @@ html.dark {
   --hero-surface: radial-gradient(900px 520px at 15% -10%, #161d33 0%, #0b0f1c 62%);
   --hero-grid: rgb(255 255 255 / 0.045);
   /* Exact spec §3 value: linear-gradient(90deg,#D9A32C,#FFC53D). */
-  --meter-gradient: linear-gradient(90deg, #d9a32c, var(--accent));
+  --meter-gradient: linear-gradient(
+    90deg,
+    #d9a32c,
+    #ffc53d
+  ); /* cool-brand (2026-07-23): meter stays amber */
 
   /* Categorical event-scale + independent chart roles (the var()-referencing
      roles above — chart-5, chart-6, the chart-utilization-* trio, and
@@ -216,6 +217,7 @@ html.dark {
   --chart-2: #8b93a7;
   --chart-3: #7c86a0;
   --chart-4: #4a5570;
+  --chart-5: #ffc53d; /* cool-brand (2026-07-23): categorical stays amber in dark too */
   --chart-7: #2dd4bf;
 }
 

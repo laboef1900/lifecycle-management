@@ -1,0 +1,320 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-23T12:00:00Z",
+  "title": "Design System: LCM — Capacity Command Deck",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Interface Steel (brand)",
+        "canonical": "#6ea8ff",
+        "light": "#2f6bd8",
+        "tonalRamp": [
+          "#0a1f45",
+          "#123163",
+          "#1a4488",
+          "#2258b0",
+          "#2f6bd8",
+          "#6ea8ff",
+          "#a3c8ff",
+          "#d6e6ff"
+        ]
+      },
+      "warning": {
+        "role": "secondary",
+        "displayName": "Signal Amber (attention)",
+        "canonical": "#ffc53d",
+        "light": "#865c0c",
+        "tonalRamp": [
+          "#3a2a00",
+          "#5c4300",
+          "#7d5c00",
+          "#a67900",
+          "#cc9600",
+          "#f0b52e",
+          "#ffce5c",
+          "#fff0c2"
+        ]
+      },
+      "steel": {
+        "role": "secondary",
+        "displayName": "Interface Steel",
+        "canonical": "#6ea8ff",
+        "light": "#2f6bd8",
+        "tonalRamp": [
+          "#0a1f45",
+          "#123163",
+          "#1a4488",
+          "#2258b0",
+          "#2f6bd8",
+          "#6ea8ff",
+          "#a3c8ff",
+          "#d6e6ff"
+        ]
+      },
+      "chart-consumption": {
+        "role": "tertiary",
+        "displayName": "Forecast Violet",
+        "canonical": "#c084fc",
+        "light": "#7c3aed",
+        "tonalRamp": [
+          "#2a0f4d",
+          "#3f1770",
+          "#56209b",
+          "#6f2bc7",
+          "#8a3ff0",
+          "#c084fc",
+          "#d6b0ff",
+          "#ece0ff"
+        ]
+      },
+      "background": {
+        "role": "neutral",
+        "displayName": "Deep Slate",
+        "canonical": "#0e1220",
+        "light": "#f4f6fa",
+        "tonalRamp": [
+          "#0e1220",
+          "#151b2c",
+          "#1a2136",
+          "#232b40",
+          "#314063",
+          "#5a6478",
+          "#8b93a7",
+          "#e8ecf5"
+        ]
+      },
+      "success": {
+        "role": "neutral",
+        "displayName": "Jade",
+        "canonical": "#3dd68c",
+        "light": "#176b45",
+        "tonalRamp": [
+          "#06301f",
+          "#0a482e",
+          "#0f6340",
+          "#148055",
+          "#199e6a",
+          "#3dd68c",
+          "#7ee6b4",
+          "#c2f3dc"
+        ]
+      },
+      "destructive": {
+        "role": "neutral",
+        "displayName": "Coral",
+        "canonical": "#ff6b6b",
+        "light": "#c0343c",
+        "tonalRamp": [
+          "#400f0f",
+          "#5e1717",
+          "#82211f",
+          "#a82c28",
+          "#d13a34",
+          "#ff6b6b",
+          "#ff9d9d",
+          "#ffd0d0"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Fleet verdict headline and page H1s. Space Grotesk, fluid clamp."
+      },
+      "numeric": {
+        "displayName": "Numeric",
+        "purpose": "All data values. JetBrains Mono, tabular-nums."
+      },
+      "label": {
+        "displayName": "Micro-label",
+        "purpose": "Uppercase tile/field labels. Inter 10px, 0.12em tracking."
+      }
+    },
+    "shadows": [
+      {
+        "name": "card",
+        "value": "0 1px 2px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.2)",
+        "purpose": "Every card and tile at rest (dark theme value)."
+      },
+      {
+        "name": "card-hover",
+        "value": "0 2px 4px rgba(0,0,0,0.35), 0 8px 24px rgba(0,0,0,0.3)",
+        "purpose": "Interactive cards on hover."
+      },
+      {
+        "name": "overlay",
+        "value": "0 2px 4px rgba(0,0,0,0.3), 0 16px 40px rgba(0,0,0,0.45)",
+        "purpose": "Dialogs, popovers, and the scenario glass card."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control",
+        "value": "150ms ease-out",
+        "purpose": "Button/control color + transform transitions; press is active:scale(0.98)."
+      },
+      { "name": "card", "value": "200ms", "purpose": "Card shadow transition on hover." },
+      {
+        "name": "shimmer",
+        "value": "1.8s ease-in-out infinite",
+        "purpose": "Skeleton loading shimmer (disabled under prefers-reduced-motion)."
+      }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "xl", "value": "1280px" },
+      { "name": "2xl", "value": "1536px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Button — Default",
+      "kind": "button",
+      "refersTo": "button-default",
+      "description": "Primary neutral action; ink fill on the surface.",
+      "html": "<button class=\"ds-btn-default\">Save changes</button>",
+      "css": ".ds-btn-default{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:32px;padding:6px 12px;border:none;border-radius:8px;background:var(--foreground);color:var(--background);font-family:var(--font-sans);font-size:14px;font-weight:500;box-shadow:var(--shadow-card);cursor:pointer;transition:background-color .15s ease-out,transform .15s ease-out}.ds-btn-default:hover{background:color-mix(in oklab,var(--foreground) 90%,transparent)}.ds-btn-default:active{transform:scale(.98)}.ds-btn-default:focus-visible{outline:2px solid var(--steel);outline-offset:2px;box-shadow:0 0 0 2px var(--background)}"
+    },
+    {
+      "name": "Button — Accent",
+      "kind": "button",
+      "refersTo": "button-accent",
+      "description": "Primary CTA in steel (brand).",
+      "html": "<button class=\"ds-btn-accent\">Run scenario</button>",
+      "css": ".ds-btn-accent{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:32px;padding:6px 12px;border:none;border-radius:8px;background:var(--accent);color:var(--accent-foreground);font-family:var(--font-sans);font-size:14px;font-weight:500;box-shadow:var(--shadow-card);cursor:pointer;transition:background-color .15s ease-out,transform .15s ease-out}.ds-btn-accent:hover{background:color-mix(in oklab,var(--accent) 90%,transparent)}.ds-btn-accent:active{transform:scale(.98)}.ds-btn-accent:focus-visible{outline:2px solid var(--steel);outline-offset:2px;box-shadow:0 0 0 2px var(--background)}"
+    },
+    {
+      "name": "Badge — Accent",
+      "kind": "chip",
+      "refersTo": "badge-accent",
+      "description": "Pill badge, amber-soft wash with amber text.",
+      "html": "<span class=\"ds-badge-accent\">On track</span>",
+      "css": ".ds-badge-accent{display:inline-flex;align-items:center;gap:6px;border:1px solid transparent;border-radius:9999px;padding:2px 10px;background:color-mix(in oklab,var(--accent) 15%,transparent);color:var(--accent);font-family:var(--font-sans);font-size:12px;font-weight:500}"
+    },
+    {
+      "name": "Badge — Warning",
+      "kind": "chip",
+      "refersTo": "badge-warning",
+      "description": "Status badge; tinted background, semantic border and text.",
+      "html": "<span class=\"ds-badge-warning\">Over 70%</span>",
+      "css": ".ds-badge-warning{display:inline-flex;align-items:center;gap:6px;border:1px solid color-mix(in oklab,var(--warning) 30%,transparent);border-radius:9999px;padding:2px 10px;background:color-mix(in oklab,var(--warning) 10%,transparent);color:var(--warning);font-family:var(--font-sans);font-size:12px;font-weight:500}"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Base surface container; 14px radius, soft shadow, hairline border.",
+      "html": "<div class=\"ds-card\"><p class=\"ds-card-title\">Cluster capacity</p><p class=\"ds-card-desc\">Measured from vCenter</p></div>",
+      "css": ".ds-card{border-radius:14px;border:1px solid var(--border);background:var(--card);box-shadow:var(--shadow-card);padding:14px;transition:box-shadow .2s}.ds-card:hover{box-shadow:var(--shadow-card-hover)}.ds-card-title{margin:0;font-family:var(--font-sans);font-size:14px;font-weight:600;letter-spacing:-.01em;color:var(--foreground)}.ds-card-desc{margin:4px 0 0;font-family:var(--font-sans);font-size:12px;color:var(--fg-muted)}"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Text field; hairline border, hover strengthens, global steel focus ring.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search clusters\" />",
+      "css": ".ds-input{height:32px;width:220px;border-radius:8px;border:1px solid var(--input);background:var(--background);padding:4px 10px;font-family:var(--font-sans);font-size:14px;color:var(--foreground);transition:border-color .15s}.ds-input::placeholder{color:var(--fg-subtle)}.ds-input:hover{border-color:var(--border-strong)}.ds-input:focus-visible{outline:2px solid var(--steel);outline-offset:2px;box-shadow:0 0 0 2px var(--background)}"
+    },
+    {
+      "name": "BulletMeter",
+      "kind": "custom",
+      "refersTo": "bullet-meter",
+      "description": "Signature utilization instrument: linear fill with warn/crit ticks; crit is taller so shape (not only hue) separates severity.",
+      "html": "<div class=\"ds-meter\" role=\"img\" aria-label=\"Utilization 72 percent of capacity. Warn threshold 70 percent, critical 90 percent.\"><span class=\"ds-meter-fill\"></span><span class=\"ds-meter-warn\"></span><span class=\"ds-meter-crit\"></span></div>",
+      "css": ".ds-meter{position:relative;height:8px;width:240px;border-radius:9999px;background:var(--muted)}.ds-meter-fill{position:absolute;top:0;bottom:0;left:0;width:72%;border-radius:9999px;background:var(--meter-gradient);box-shadow:0 0 8px color-mix(in oklab,var(--accent) 40%,transparent)}.ds-meter-warn{position:absolute;top:-2px;bottom:-2px;left:70%;width:2px;border-radius:9999px;background:var(--warning);box-shadow:0 0 0 1px var(--card)}.ds-meter-crit{position:absolute;top:-4px;bottom:-4px;left:90%;width:2px;border-radius:9999px;background:var(--destructive);box-shadow:0 0 0 1px var(--card)}"
+    },
+    {
+      "name": "KpiTile",
+      "kind": "custom",
+      "refersTo": "kpi-tile",
+      "description": "Signature stat tile: left status border, uppercase micro-label, large mono tabular value.",
+      "html": "<div class=\"ds-kpi\"><p class=\"ds-kpi-label\">Runway</p><p class=\"ds-kpi-value\">8.4 mo</p><p class=\"ds-kpi-caption\">to 70% utilization</p></div>",
+      "css": ".ds-kpi{border-radius:14px;border:1px solid var(--border);border-left:2px solid var(--warning);background:var(--card);box-shadow:var(--shadow-card);padding:14px;width:200px}.ds-kpi-label{margin:0;font-family:var(--font-sans);font-size:10px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-subtle)}.ds-kpi-value{margin:8px 0 0;font-family:var(--font-mono);font-size:20px;font-weight:500;font-variant-numeric:tabular-nums;color:var(--foreground)}.ds-kpi-caption{margin:6px 0 0;font-family:var(--font-sans);font-size:11px;font-weight:500;color:var(--fg-muted)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Capacity Command Deck",
+    "overview": "LCM is read the way an operator reads a control deck: a dark, gradient-lit chassis of compartmentalized instrument tiles, each reporting one measured truth. Steel marks the brand and everything interactive; amber is held back for attention. It is dark-primary by design — a near-black slate backdrop with a fully-designed light sibling in the same hue system — and it treats the numbers as the hero. The voice is quiet and analytical: a reference instrument for a small infrastructure team making hardware-purchasing decisions, not a persuasion surface. It favors restraint over flourish, exactness over emphasis, and honesty over reassurance — where a value is unknown or a month is a gap, it shows the gap rather than smoothing it into a confident line. The token system ships in code as 'Mission Bento'.",
+    "keyCharacteristics": [
+      "Dark-primary slate chassis, gradient-lit, with a designed light-theme sibling — every choice works in both.",
+      "Steel is the one brand + interaction accent; amber is reserved for utilization/attention (meter, warn ticks, order deadlines); hero data figures are neutral ink.",
+      "Monospace tabular numerals for all data; Space Grotesk for verdicts and headings; Inter for everything else.",
+      "Compartmentalized bento tiles and cards over one soft-shadow elevation; near-flat, honest surfaces.",
+      "One utilization visualization — the linear BulletMeter — everywhere.",
+      "Color is never the only signal; honesty about gaps and unknowns is a design rule, not a nicety."
+    ],
+    "rules": [
+      {
+        "name": "The Steel-Brand Rule",
+        "body": "Steel is the single brand + CTA + interaction accent (--accent unified with --steel). One calm hue carries identity and every actionable affordance; never introduce a second brand color.",
+        "section": "colors"
+      },
+      {
+        "name": "The Amber-Is-Attention Rule",
+        "body": "Amber appears in exactly three places — the BulletMeter fill, the warn/crit threshold ticks, and the order-by deadline emphasis when an order is due. It never brands, never CTAs, never decorates. --accent (steel) and --warning (amber) are distinct in both themes.",
+        "section": "colors"
+      },
+      {
+        "name": "The Data-Is-Ink Rule",
+        "body": "Hero data figures (utilization %, headroom, cluster runway) are neutral --foreground ink, not an accent color. Color is reserved for status and attention; the numbers stay quiet.",
+        "section": "colors"
+      },
+      {
+        "name": "The Violet Usage-Line Rule",
+        "body": "The forecast consumption/scenario line is --chart-consumption violet, never amber. Amber is already the warn hairline on the same chart.",
+        "section": "colors"
+      },
+      {
+        "name": "The Semantic-Token-Only Rule",
+        "body": "Status is expressed through semantic tokens via Badge, BulletMeter, RunwayPill, KpiTile. Never hardcode raw palette classes.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mono Numerals Rule",
+        "body": "Every data numeral is JetBrains Mono with tabular-nums; numbers align digit-to-digit down a column.",
+        "section": "typography"
+      },
+      {
+        "name": "The Display-for-Verdict Rule",
+        "body": "Space Grotesk is reserved for verdict text and headings; body and UI copy stay in Inter.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-Surface Rule",
+        "body": "Surfaces are near-flat and honest. Depth comes from soft shadow plus the lit gradient chassis, never stacked heavy shadows.",
+        "section": "elevation"
+      },
+      {
+        "name": "The One-Glass Rule",
+        "body": "Exactly one glass surface per view — the scenario controls card — on the floating-controls layer only. Never a page/pane surface, never glass-on-glass; ships an AA-passing near-opaque fallback.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Three-Radius Rule",
+        "body": "8 / 14 / 16 and pill is the whole radius vocabulary; match the element's role and don't invent intermediate radii.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "Do design every change for both light and dark themes; the light theme is a designed sibling, not an afterthought.",
+      "Do set all data numerals in JetBrains Mono with tabular-nums.",
+      "Do use the linear BulletMeter for utilization, everywhere.",
+      "Do pair color with text, icon, or shape — color is never the only signal (the crit tick is taller, not just redder).",
+      "Do route status through semantic tokens (--success / --warning / --destructive / --accent / --steel).",
+      "Do keep steel for brand/CTA/interaction and amber strictly for utilization/attention (meter, warn ticks, order deadlines); keep hero data figures neutral ink.",
+      "Do show gaps and unknowns honestly (neutral unknown states; no interpolated lines; no zero-as-healthy)."
+    ],
+    "donts": [
+      "Don't use glassmorphism beyond the single sanctioned scenario controls card; never glass-on-glass, never a page/pane glass surface.",
+      "Don't bring back the radial UtilizationGauge or any second utilization visualization.",
+      "Don't hardcode raw palette classes (bg-emerald-100, text-amber-500, …) — semantic tokens only.",
+      "Don't re-alias --accent (steel) onto --warning (amber), or brand anything amber — that resurrects the collision this design removed.",
+      "Don't repoint the forecast consumption line off --chart-consumption violet onto amber.",
+      "Don't animate blur radius, or add slide-in motion to the cluster panel (transform/opacity only).",
+      "Don't invent new radii, colors, or fonts outside the tokens in styles.css."
+    ]
+  }
+}

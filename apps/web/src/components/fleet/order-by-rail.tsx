@@ -162,11 +162,11 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
               <span
                 aria-hidden
                 data-testid="rail-lead-zone"
-                className="absolute inset-y-0 left-0 border-r border-dashed border-accent/45"
+                className="absolute inset-y-0 left-0 border-r border-dashed border-warning/45"
                 style={{
                   width: `${leadZonePct}%`,
                   background:
-                    'linear-gradient(90deg, color-mix(in oklab, var(--accent) 9%, transparent), color-mix(in oklab, var(--accent) 3%, transparent))',
+                    'linear-gradient(90deg, color-mix(in oklab, var(--warning) 9%, transparent), color-mix(in oklab, var(--warning) 3%, transparent))',
                 }}
               />
             ) : null}
