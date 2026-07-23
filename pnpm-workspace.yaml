@@ -4,6 +4,7 @@ packages:
 overrides:
   '@radix-ui/react-dialog': 1.1.16
   '@radix-ui/react-slot': 1.2.5
+  semver: ^7.7.0
 allowBuilds:
   esbuild: true
   '@prisma/client': true
@@ -12,3 +13,6 @@ allowBuilds:
   cpu-features: false
   protobufjs: true
   ssh2: false
+blockExoticSubdeps: true
+minimumReleaseAge: 10080
+trustPolicy: no-downgrade
