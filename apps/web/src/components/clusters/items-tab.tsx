@@ -4,11 +4,13 @@ import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   CalendarClock,
+  CalendarX,
   ChevronDown,
   ChevronRight,
   MoreVertical,
   Pencil,
   Plus,
+  Scaling,
   Trash2,
   TrendingUp,
 } from 'lucide-react';
@@ -17,6 +19,13 @@ import { Fragment, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -27,6 +36,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { api } from '@/lib/api-client';
 import { formatGb, formatNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -451,18 +461,42 @@ function AppRowActions({
 }: AppRowActionsProps): React.JSX.Element {
   return (
     <div className="flex items-center justify-end gap-1">
-      <IconButton onClick={onResize} title="Resize">
-        <Plus className="h-3.5 w-3.5" />
-      </IconButton>
-      <IconButton onClick={onEnd} title={isEnded ? 'Edit end date' : 'End'}>
-        <MoreVertical className="h-3.5 w-3.5" />
-      </IconButton>
-      <IconButton onClick={onEdit} title="Edit">
+      <IconButton onClick={onEdit} label="Edit">
         <Pencil className="h-3.5 w-3.5" />
       </IconButton>
-      <IconButton onClick={onDelete} title="Delete" destructive>
-        <Trash2 className="h-3.5 w-3.5" />
-      </IconButton>
+      {/* Mirrors hosts-tab RowActions: one inline Edit + a kebab for the rest,
+          honest glyphs, and a shared Radix-tooltip IconButton — one row-action
+          dialect across both tabs (WCAG SC 3.2.4). modal={false} for the same
+          dropdown→dialog focus-trap reason documented there. */}
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="More actions"
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-card-hover hover:text-foreground"
+          >
+            <MoreVertical className="h-3.5 w-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {/* Scaling, not Plus: Plus already means "add" on the header CTAs
+              (WCAG SC 3.2.4 consistent identification). */}
+          <DropdownMenuItem onSelect={() => onResize()}>
+            <Scaling className="h-4 w-4" />
+            Resize…
+          </DropdownMenuItem>
+          {/* CalendarX, not the kebab glyph: the kebab now means "more actions". */}
+          <DropdownMenuItem onSelect={() => onEnd()}>
+            <CalendarX className="h-4 w-4" />
+            {isEnded ? 'Edit end date' : 'End…'}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => onDelete()} destructive>
+            <Trash2 className="h-4 w-4" />
+            Delete…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
@@ -476,42 +510,49 @@ function EventRowActions({
 }): React.JSX.Element {
   return (
     <div className="flex items-center justify-end gap-1">
-      <IconButton onClick={onEdit} title="Edit">
+      <IconButton onClick={onEdit} label="Edit">
         <Pencil className="h-3.5 w-3.5" />
       </IconButton>
-      <IconButton onClick={onDelete} title="Delete" destructive>
+      <IconButton onClick={onDelete} label="Delete" destructive>
         <Trash2 className="h-3.5 w-3.5" />
       </IconButton>
     </div>
   );
 }
 
+// Shared row-action icon button — a Radix Tooltip (keyboard/AT reachable) plus
+// an aria-label, matching hosts-tab's IconButton exactly. Replaces the native
+// `title` tooltip, which is unreliable for keyboard and assistive-tech users.
 function IconButton({
   children,
-  title,
+  label,
   destructive,
   onClick,
 }: {
   children: React.ReactNode;
-  title: string;
+  label: string;
   destructive?: boolean;
   onClick: () => void;
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-label={title}
-      className={cn(
-        'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
-        destructive
-          ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-          : 'text-muted-foreground hover:bg-card-hover hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label={label}
+          className={cn(
+            'inline-flex h-7 w-7 items-center justify-center rounded transition-colors',
+            destructive
+              ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
+              : 'text-muted-foreground hover:bg-card-hover hover:text-foreground',
+          )}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
