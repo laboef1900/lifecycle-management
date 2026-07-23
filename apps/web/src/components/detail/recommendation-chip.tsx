@@ -246,13 +246,20 @@ function formatApprovedRelative(approvedAt: string, today: Date): string {
  * (truncated) and repeated in full via the sr-only text and hover tooltip. The
  * trigger is a NON-focusable span, so the tooltip is structurally hover-only —
  * same rationale as the urgency chip above.
+ *
+ * Exported (#302) so the fleet console tile (`cluster-tile.tsx`) can surface
+ * the exact same icon/semantics/data on the fleet console — issue #292's
+ * interim decision was for the ack to be visible there too, but PR #300
+ * narrowed the ship to the detail panel only (DESIGN.md §6). Reusing this
+ * component directly (rather than re-implementing the same treatment) is
+ * the fix, not a new pattern.
  */
-function AcknowledgedAnnotation({
+export function AcknowledgedAnnotation({
   acknowledgment,
-  today,
+  today = new Date(),
 }: {
   acknowledgment: ForecastAcknowledgment;
-  today: Date;
+  today?: Date;
 }): React.JSX.Element {
   const relative = formatApprovedRelative(acknowledgment.approvedAt, today);
   const detail = `${acknowledgment.approvedByLabel} · ${relative}${
