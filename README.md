@@ -166,4 +166,4 @@ pnpm --filter @lcm/server db:import-xlsx [path]
 
 Short version: branch off `dev` as `feat/<short-slug>`, make a focused commit,
 open a PR against `dev` that closes the issue, ensure CI is green. Long
-version: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+version: [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).

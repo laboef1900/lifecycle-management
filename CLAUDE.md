@@ -11,7 +11,7 @@ This file provides foundational guidance for AI coding assistants (Gemini, Claud
 - **Risk level:** Normal — internal-only with no public exposure, but forecasts drive hardware purchasing decisions and the app stores admin credentials and OIDC secrets.
 - **Sensitive data:** infrastructure inventory and capacity data; local-auth password hashes (argon2id); OIDC client secret and login-state signing secret (AES-GCM encrypted at rest); user e-mail addresses for OIDC accounts. No payment data, no broader PII.
 - **Enabled profiles:** Web/API, Frontend, Database, Containers. AI/LLM profile: not applicable (no LLM features). RASP: declined (2026-07-16) — hardened distroless images with `cap_drop`/nonroot cover the threat model.
-- **Authoritative product documentation:** `docs/vision.md`, `docs/operations.md`, `CONTRIBUTING.md`.
+- **Authoritative product documentation:** `docs/vision.md`, `docs/operations.md`, `docs/CONTRIBUTING.md`.
 - **Architecture decisions:** no formal ADR log; durable decisions are recorded in `docs/vision.md` and `docs/operations.md` — extend those documents when a decision needs a durable record.
 
 If a request conflicts with the authoritative product documentation, a safety rule, or an explicit project constraint, stop and ask the user instead of guessing.
@@ -31,7 +31,7 @@ An exception to a MUST requires explicit project-owner approval and a record con
 3. **Data Safety (Critical)** — NEVER wipe persistent data without explicit user authorization. Do not run `docker volume rm` (volumes: `lcm-postgres-18-data` prod, `lcm-dev_lcm-postgres-dev` dev), `DROP DATABASE`, `TRUNCATE`, destructive resets, or broad deletion as shortcuts. Propose targeted, reviewed `UPDATE`/`DELETE` instead and preserve recoverability. Backups are `pg_dump` of the prod volume.
 4. **No Secrets** — Never commit secrets, `.env` files, API keys, credentials, or private key material (a real `.env` exists at `docker/.env` — never print or stage it). Production fails closed: compose refuses to start without `POSTGRES_PASSWORD` and `CONFIG_ENCRYPTION_KEY` (base64 of 32 random bytes; `openssl rand -base64 32`). Production secrets MUST come from a cryptographically secure random generator, provide at least 256 bits of entropy where the format permits, be independently rotatable, and never be logged.
 5. **Strict Typing and Validation** — TypeScript `strict` plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` (see `tsconfig.base.json`). No `any`, no error-suppressing comments. Every API input/output is validated with a Zod schema from `@lcm/shared`, parsed explicitly inside the route handler. Validate untrusted data at every system boundary.
-6. **Ask Before Assuming** — Ask when ambiguity would materially change behavior, architecture, safety, data, cost, or external side effects — or when a request conflicts with `docs/vision.md`, `docs/operations.md`, or `CONTRIBUTING.md`. Otherwise make a conservative, clearly stated assumption.
+6. **Ask Before Assuming** — Ask when ambiguity would materially change behavior, architecture, safety, data, cost, or external side effects — or when a request conflicts with `docs/vision.md`, `docs/operations.md`, or `docs/CONTRIBUTING.md`. Otherwise make a conservative, clearly stated assumption.
 7. **No AI Issues** — Refuse to work on issues explicitly marked `NO AI`.
 8. **No Disabled Guardrails** — Do not suppress tests, linters, type checks, authorization, security controls, or safety checks to make an implementation pass (`@ts-ignore`, `eslint-disable`, `any` casts, skipped tests). Fix the underlying problem.
 
@@ -239,7 +239,7 @@ Use ordinary documentation first. These searchable markers MAY be used sparingly
 - `@ai-context`: a related spec section or implementation entry point.
 - `@ai-warning`: a dangerous side effect, compatibility constraint, or legacy trap.
 
-Markers must explain why; update or remove them when the code changes. Otherwise follow `CONTRIBUTING.md`: no files that merely describe code; comments only for non-obvious "why".
+Markers must explain why; update or remove them when the code changes. Otherwise follow `docs/CONTRIBUTING.md`: no files that merely describe code; comments only for non-obvious "why".
 
 ### 4. Cohesive File Strategy
 
