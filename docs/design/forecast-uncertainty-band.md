@@ -79,3 +79,13 @@ The only honest band is **empirical**: derived from how wrong past forecasts tur
 8. **Amend the spec** (§9.4) + record the high-risk approval (two AI reviewers or human) in the PR.
 
 Each step lands as its own commit on `feat/forecast-uncertainty-band`; steps 2 and 4 carry full high-risk rigor.
+
+## 11. Integration map (discovered 2026-07-24, for the wiring pass)
+
+- **Actuals**: `ForecastService.prepare()` already builds `baselineHistory[]` with per-period `utilization` — the measured actual per month. No new source needed.
+- **Attach**: in `finalize()`, exposed only through `forCluster` (real read). NEVER `forClusterWithScenario` — a hypothetical has no measured error (INV-1). Attaching an optional `uncertainty` is additive and must not alter the pure `computeForecast` output (a **characterization snapshot** test guards this — keep it green).
+- **Persist a `ForecastSnapshot`** at each re-anchor: the baseline-capture points — `clusters.ts` (manual baseline upsert ~L493) and `vsphere-snapshot.ts` (`createMany` ~L117). Compute the forecast once at capture and store per-horizon projected utilization %.
+- **Read path**: on `forCluster`, gather matured `ForecastSnapshot` rows (horizonMonth ≤ current), pair each with the actual utilization from `baselineHistory` at that month → `ForecastErrorSample[]`, then `computeForecastErrorBands(samples, distinctAnchorCount, bandWidth, minAnchors)` → apply per-horizon offsets to the current forecast's future months → `forecast.uncertainty`.
+- **DTO**: add optional `uncertainty?: { month, low, high }[]` to the forecast response schema in `@lcm/shared` (omit when the setting is off or the global floor is unmet — honest absence).
+- **Chart** (`apps/web/src/components/clusters/forecast-chart.tsx`): a muted-neutral Recharts band between low/high, empirical caption; tiles stay bandless. Won't visibly render until real snapshots accrue — verify via unit/integration tests + synthetic data.
+- **RISK**: `forecast-loader.ts` is invariant-heavy (INV-1, characterization snapshot, #292/#300/#303 anchor semantics). This wiring is the mandatory two-reviewer high-risk change (§7).
