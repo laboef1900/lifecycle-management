@@ -17,6 +17,7 @@ import { buildClusterForecastEntries, type ClusterForecastEntry } from '@/lib/fo
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 
 import { ClusterTile } from './cluster-tile';
+import { TileChartLegend } from './tile-chart-legend';
 import { FleetFilter } from './fleet-filter';
 import { FleetSort, type ClusterSortMode } from './fleet-sort';
 import { FleetVerdict } from './fleet-verdict';
@@ -319,6 +320,7 @@ export function FleetConsole(): React.JSX.Element {
               </div>
             </CardHeader>
             <CardContent>
+              <TileChartLegend />
               <div className="grid grid-cols-12 gap-3">
                 {sortedEntries.map((entry) => (
                   <div
