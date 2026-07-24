@@ -143,12 +143,22 @@ export class ForecastService {
   }
 
   /**
-   * Persist this cluster/metric's forecast — projected utilization per FUTURE
-   * month — as ForecastSnapshots keyed on the re-anchor month. Call at each
-   * re-anchor (baseline capture) so the empirical uncertainty band accrues over
-   * time (Option A1, snapshot-forward). Idempotent per
-   * (cluster, metric, anchor, horizon) via the unique index. BEST-EFFORT:
+   * Persist this cluster/metric's forecast as ForecastSnapshots keyed on the
+   * re-anchor month. Call at each re-anchor (baseline capture) so the empirical
+   * uncertainty band accrues over time (Option A1, snapshot-forward). Idempotent
+   * per (cluster, metric, anchor, horizon) via the unique index. BEST-EFFORT:
    * callers MUST NOT let a snapshot failure fail the capture that triggered it.
+   *
+   * Stores the anchor-month row (`horizonIndex === 0`) AS WELL AS the future
+   * projections. The horizon-0 row is the MEASURED actual utilization at the
+   * anchor month — it is `computeForecast`'s month-0 output, which folds host
+   * capacity exactly as the projections do. This is the band's source of
+   * "actuals": reading them back from `ClusterBaselineHistory` would divide by
+   * the raw baseline-capacity scalar, which is 0 for every vSphere-synced cluster
+   * (the hosts ARE the capacity), yielding a null utilization and a band that
+   * could NEVER appear for synced clusters — the product's primary case. Captured
+   * at the instant of re-anchor, so it never reconstructs historical host
+   * capacity (the "A2" minefield the design rejected, docs §4).
    */
   async snapshotForecast(tenantId: string, clusterId: string, metricKey: string): Promise<void> {
     const prepared = await this.prepare(tenantId, clusterId, metricKey, {});
@@ -157,7 +167,7 @@ export class ForecastService {
       if (m.utilization === null) return [];
       const horizonMonth = parseMonth(m.month);
       const horizonIndex = monthsBetweenUtc(prepared.anchorMonth, horizonMonth);
-      if (horizonIndex < 1) return []; // future projections only
+      if (horizonIndex < 0) return []; // the anchor month (0) and its future (≥1) only
       return [
         {
           clusterId,
@@ -515,17 +525,31 @@ export class ForecastService {
     });
     if (snapshots.length === 0) return undefined;
 
+    // Actuals come from each re-anchor's OWN month-0 capture (horizonIndex 0):
+    // the measured utilization at that month, folding host capacity exactly as
+    // the projection did. Deriving actuals from ClusterBaselineHistory instead
+    // would divide by the raw baseline scalar — 0 for synced clusters — and the
+    // band could never appear for them (see snapshotForecast's docstring).
     const actualByMonth = new Map<string, number>();
-    for (const b of prepared.baselineHistory) {
-      if (b.utilization !== null) actualByMonth.set(b.capturedAt, b.utilization);
+    for (const s of snapshots) {
+      if (s.horizonIndex === 0)
+        actualByMonth.set(formatDateIso(s.horizonMonth), s.projectedUtil.toNumber());
     }
     const samples: ForecastErrorSample[] = [];
+    // Distinct re-anchors that produced a PAIRED, measured error — the honest "N".
+    const sampledAnchors = new Set<string>();
     for (const s of snapshots) {
+      if (s.horizonIndex < 1) continue; // projections only; the h0 rows are actuals
       const actual = actualByMonth.get(formatDateIso(s.horizonMonth));
-      if (actual === undefined) continue;
+      if (actual === undefined) continue; // horizon fell in a data gap — no error to learn from
       samples.push({ horizonIndex: s.horizonIndex, projected: s.projectedUtil.toNumber(), actual });
+      sampledAnchors.add(formatDateIso(s.anchorMonth));
     }
-    const anchorCount = new Set(snapshots.map((s) => formatDateIso(s.anchorMonth))).size;
+    // The global floor AND the caption's "N" both mean re-anchors we actually
+    // LEARNED from (a paired measured error), not merely matured ones — a matured
+    // anchor whose horizon month was never measured contributes nothing and must
+    // not inflate either the gate or the evidence claimed to the user.
+    const anchorCount = sampledAnchors.size;
     const bands = computeForecastErrorBands(
       samples,
       anchorCount,

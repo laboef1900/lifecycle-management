@@ -5,20 +5,25 @@ import type { ForecastUncertaintyBandWidth } from '@lcm/shared';
  *
  * Pure, deterministic, no I/O — the band is derived ONLY from measured past
  * forecast error (never fabricated). Owner-confirmed methodology (2026-07-24):
- * bias-corrected, per-horizon with a global floor, on utilization %.
+ * bias-corrected, per-horizon with a global floor, on utilization fraction.
  */
 
-/** One matured past forecast-vs-actual observation, both in utilization %. */
+/**
+ * One matured past forecast-vs-actual observation. Both are utilization
+ * FRACTIONS (0..1), matching `ForecastMonthPoint.utilization` and the stored
+ * `projectedUtil` — the math is unit-agnostic, but every runtime value here is a
+ * fraction, never a percentage.
+ */
 export interface ForecastErrorSample {
   /** Months ahead the projection was made for (1 = the month after the anchor). */
   horizonIndex: number;
-  /** Projected utilization % at that horizon. */
+  /** Projected utilization fraction at that horizon. */
   projected: number;
-  /** Utilization % that actually occurred at that month. */
+  /** Utilization fraction that actually occurred at that month. */
   actual: number;
 }
 
-/** Low/high band offsets (percentage points) to add to a current projection. */
+/** Low/high band offsets (utilization fraction) to add to a current projection. */
 export interface ErrorBand {
   low: number;
   high: number;
@@ -60,7 +65,7 @@ function stddev(xs: number[], m: number): number {
 }
 
 /**
- * Per-horizon band OFFSETS (percentage points) to add to a current projection P
+ * Per-horizon band OFFSETS (utilization fraction) to add to a current projection P
  * so the band shows the ACTUAL's likely range: `[P + low, P + high]`.
  *
  * `error = projected - actual`, so `actual ≈ projected - error`:

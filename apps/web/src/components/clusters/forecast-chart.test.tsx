@@ -403,6 +403,46 @@ describe('ForecastChart props mapping', () => {
     expect(caption).toHaveTextContent(/not a guarantee/i);
   });
 
+  it('converts band fractions to GB per month, clamps low at 0, and omits non-forecast months', () => {
+    // today is the current month → with months starting this month, index 0 is the
+    // anchor and 1..N are forecast months. Bands attach to forecast months only.
+    renderChart(
+      makeForecast({
+        fromMonth: currentMonth,
+        months: [
+          { month: currentMonth, consumption: 500, capacity: 1000, utilization: 0.5 },
+          {
+            month: shiftMonth(currentMonth, 1),
+            consumption: 520,
+            capacity: 1000,
+            utilization: 0.52,
+          },
+          {
+            month: shiftMonth(currentMonth, 2),
+            consumption: 540,
+            capacity: 1000,
+            utilization: 0.54,
+          },
+        ],
+        uncertainty: [
+          { month: shiftMonth(currentMonth, 1), low: 0.4, high: 0.62 },
+          { month: shiftMonth(currentMonth, 2), low: -0.05, high: 0.7 }, // low must clamp to 0
+        ],
+        uncertaintyAnchorCount: 6,
+      }),
+    );
+    const rows = JSON.parse(
+      screen.getByTestId('chart').getAttribute('data-rows') ?? '[]',
+    ) as Array<{ month: string; bandRange: [number, number] | null }>;
+    const byMonth = new Map(rows.map((r) => [r.month, r.bandRange]));
+    // fraction * capacity, rounded.
+    expect(byMonth.get(shiftMonth(currentMonth, 1))).toEqual([400, 620]);
+    // low clamped at 0; high left to the axis.
+    expect(byMonth.get(shiftMonth(currentMonth, 2))).toEqual([0, 700]);
+    // The anchor (non-forecast) month carries no band.
+    expect(byMonth.get(currentMonth)).toBeNull();
+  });
+
   it('debounces container resize past the LONGEST pane transition so it settles in one window', () => {
     // At lg+ the scenario pane is a flex sibling whose width animates 0->340px,
     // resizing this container every frame. Without a debounce each frame

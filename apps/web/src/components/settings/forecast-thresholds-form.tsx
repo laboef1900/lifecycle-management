@@ -19,8 +19,10 @@ import { api, describeApiError } from '@/lib/api-client';
 type NumInput = number | '';
 
 const BAND_WIDTH_LABELS: Record<ForecastUncertaintyBandWidth, string> = {
-  p10_p90: 'p10–p90 (widest)',
-  p05_p95: 'p5–p95',
+  // p10–p90 spans 80% of the measured error; p5–p95 spans 90% and is the WIDER
+  // (more conservative) reading. Labels must not invert that on a purchasing UI.
+  p10_p90: 'p10–p90 (default)',
+  p05_p95: 'p5–p95 (widest)',
   stddev: '±1 std dev',
 };
 const BAND_WIDTHS = Object.keys(BAND_WIDTH_LABELS) as ForecastUncertaintyBandWidth[];

@@ -122,8 +122,28 @@ describe('POST /api/clusters', () => {
 
     const snapshots = await prisma.forecastSnapshot.findMany({ where: { clusterId: id } });
     expect(snapshots.length).toBeGreaterThan(0);
-    // Future horizons only, all keyed on the capture (re-anchor) month.
-    expect(snapshots.every((s) => s.horizonIndex >= 1)).toBe(true);
+    // The anchor-month actual (h0) plus future horizons; none negative.
+    expect(snapshots.some((s) => s.horizonIndex === 0)).toBe(true);
+    expect(snapshots.some((s) => s.horizonIndex >= 1)).toBe(true);
+    expect(snapshots.every((s) => s.horizonIndex >= 0)).toBe(true);
+
+    // The PUT re-anchor path accrues too: editing baselines for a NEW period
+    // captures a fresh anchor's snapshots (review F4 — previously untested).
+    const put = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${id}`,
+      payload: {
+        baselineDate: '2026-06-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 120, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(put.statusCode).toBe(200);
+    const afterPut = await prisma.forecastSnapshot.findMany({
+      where: { clusterId: id, anchorMonth: new Date('2026-06-01T00:00:00.000Z') },
+    });
+    expect(afterPut.length).toBeGreaterThan(0);
   });
 
   it('reports utilization null (never 0) for a zero-capacity cluster', async () => {

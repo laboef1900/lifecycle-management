@@ -104,7 +104,9 @@ describe('⚠️ the snapshot must not double-count capacity', () => {
     const cluster = await prisma.cluster.findFirstOrThrow({ where: { connectionId: conn } });
     const snaps = await prisma.forecastSnapshot.findMany({ where: { clusterId: cluster.id } });
     expect(snaps.length).toBeGreaterThan(0);
-    expect(snaps.every((s) => s.horizonIndex >= 1)).toBe(true);
+    // Anchor-month actual (h0) + future horizons; never negative.
+    expect(snaps.some((s) => s.horizonIndex === 0)).toBe(true);
+    expect(snaps.every((s) => s.horizonIndex >= 0)).toBe(true);
 
     // A same-period re-run re-anchors NOTHING: the baseline is a skipped duplicate
     // (written.count 0), so the hook is not fired and no new snapshots accrue.

@@ -6,7 +6,7 @@
 
 1. **Methodology: A1 (snapshot-forward).** The band appears once a cluster has enough real anchors of measured error; no risky backfill.
 2. **Minimum anchors (K): default 6, CONFIGURABLE** in Settings → Forecasting.
-3. **Band width: CONFIGURABLE** in Settings → Forecasting, with a sensible default (proposed p10/p90 — the widest honest reading; confirm during build).
+3. **Band width: CONFIGURABLE** in Settings → Forecasting, default **p10_p90** (spans 80% of the measured error). `p05_p95` spans 90% and is the WIDER/more-conservative option; `stddev` is the bias-corrected ±1σ reading. (Corrected 2026-07-24: an earlier draft called p10/p90 "the widest," which is wrong — p05/p95 is wider.)
 4. **Spec non-goal OVERRIDDEN.** Amend `2026-07-16-mission-bento-ui-design.md:107` to record "empirical, opt-in uncertainty band" as the superseding decision (cite this doc).
 
 So Settings → Forecasting gains **three** controls, not one: an on/off toggle, the minimum-anchors number, and the band-width selector.

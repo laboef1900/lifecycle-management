@@ -1,6 +1,8 @@
 import type { PrismaClient } from '@prisma/client';
 
 import {
+  DEFAULT_FORECAST_UNCERTAINTY_BAND_WIDTH,
+  forecastUncertaintyBandWidthSchema,
   resolveThresholds,
   SYSTEM_DEFAULTS,
   type ClusterSettingsInput,
@@ -10,6 +12,18 @@ import {
 } from '@lcm/shared';
 
 import { NotFoundError, UnprocessableError } from './errors.js';
+
+/**
+ * The band-width column is free `TEXT`; the API validates it on write, but a
+ * direct DB write could leave a value outside the enum. Reading it into
+ * `QUANTILES[bandWidth]` would then throw and 500 the forecast read (a
+ * purchasing surface), so an unrecognised value fails SAFE to the default
+ * instead of taking the read down (review F6).
+ */
+function coerceBandWidth(value: string): TenantSettings['forecastUncertaintyBandWidth'] {
+  const parsed = forecastUncertaintyBandWidthSchema.safeParse(value);
+  return parsed.success ? parsed.data : DEFAULT_FORECAST_UNCERTAINTY_BAND_WIDTH;
+}
 
 function decimalToNumber(value: unknown): number {
   if (value === null || value === undefined) {
@@ -42,8 +56,7 @@ export class SettingsService {
       idempotencyKeyRetentionHours: row.idempotencyKeyRetentionHours,
       forecastUncertaintyBandEnabled: row.forecastUncertaintyBandEnabled,
       forecastUncertaintyMinAnchors: row.forecastUncertaintyMinAnchors,
-      forecastUncertaintyBandWidth:
-        row.forecastUncertaintyBandWidth as TenantSettings['forecastUncertaintyBandWidth'],
+      forecastUncertaintyBandWidth: coerceBandWidth(row.forecastUncertaintyBandWidth),
     };
   }
 
@@ -77,8 +90,7 @@ export class SettingsService {
       idempotencyKeyRetentionHours: row.idempotencyKeyRetentionHours,
       forecastUncertaintyBandEnabled: row.forecastUncertaintyBandEnabled,
       forecastUncertaintyMinAnchors: row.forecastUncertaintyMinAnchors,
-      forecastUncertaintyBandWidth:
-        row.forecastUncertaintyBandWidth as TenantSettings['forecastUncertaintyBandWidth'],
+      forecastUncertaintyBandWidth: coerceBandWidth(row.forecastUncertaintyBandWidth),
     };
   }
 
