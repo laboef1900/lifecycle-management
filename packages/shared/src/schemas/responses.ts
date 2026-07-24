@@ -9,6 +9,7 @@ import type {
   ForecastEventMarker,
   ForecastMonthPoint,
   ForecastResponse,
+  ForecastUncertaintyPoint,
   ProcurementInfo,
 } from './forecast.js';
 import type { OrderApprovalResponse } from './order-approval.js';
@@ -213,6 +214,12 @@ export const forecastAcknowledgmentSchema: z.ZodType<ForecastAcknowledgment> = z
   approvedAt: z.string(),
 });
 
+export const forecastUncertaintyPointSchema: z.ZodType<ForecastUncertaintyPoint> = z.object({
+  month: z.string(),
+  low: z.number(),
+  high: z.number(),
+});
+
 export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   fromMonth: z.string(),
   toMonth: z.string(),
@@ -227,6 +234,9 @@ export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   // while `.nullable()` carries the "no/ superseded acknowledgment" case the
   // current server always emits.
   acknowledgment: forecastAcknowledgmentSchema.nullable().exactOptional(),
+  // Additive/optional: omitted when the setting is off or the anchor floor is
+  // unmet (honest absence), so an older server and the disabled case both parse.
+  uncertainty: z.array(forecastUncertaintyPointSchema).exactOptional(),
 });
 
 // ---------- Categories ----------

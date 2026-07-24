@@ -5,6 +5,8 @@ import {
   startOfUtcMonth,
   type BaselineHistoryPoint,
   type ForecastAcknowledgment,
+  type ForecastUncertaintyBandWidth,
+  type ForecastUncertaintyPoint,
   type ProcurementInfo,
   type Scenario,
 } from '@lcm/shared';
@@ -20,6 +22,7 @@ import {
   type ForecastResult,
   type HostMembershipInterval,
 } from './forecast.js';
+import { computeForecastErrorBands, type ForecastErrorSample } from './forecast-error.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import {
   computeCapacitySignature,
@@ -73,6 +76,14 @@ interface PreparedForecastInput {
    * REAL loaded hosts, so it never reflects a scenario transform.
    */
   capacitySignature: number;
+  /** Metric row id — used by the uncertainty band's snapshot lookup. */
+  metricTypeId: string;
+  /** The re-anchor month (first-of-month of the newest baseline). */
+  anchorMonth: Date;
+  /** Tenant uncertainty-band settings, snapshotted alongside the rest of prepare(). */
+  bandEnabled: boolean;
+  bandMinAnchors: number;
+  bandWidth: ForecastUncertaintyBandWidth;
 }
 
 /** Live procurement context for the order-approval write path (#292). */
@@ -98,7 +109,11 @@ export class ForecastService {
       warnThreshold: result.effectiveThresholds.warn,
       capacitySignature: prepared.capacitySignature,
     });
-    return { ...result, acknowledgment };
+    // Empirical uncertainty band — REAL read only (never scenarios, INV-1).
+    // Computed AFTER finalize, so the forecast maths and its characterization
+    // snapshot are untouched; omitted entirely when disabled or unearned.
+    const uncertainty = await this.computeUncertainty(clusterId, prepared, result.months);
+    return uncertainty ? { ...result, acknowledgment, uncertainty } : { ...result, acknowledgment };
   }
 
   /**
@@ -118,6 +133,38 @@ export class ForecastService {
     const prepared = await this.prepare(tenantId, clusterId, metricKey, options);
     const scenarioInput = applyScenario(prepared.input, scenario);
     return this.finalize(prepared, scenarioInput);
+  }
+
+  /**
+   * Persist this cluster/metric's forecast — projected utilization per FUTURE
+   * month — as ForecastSnapshots keyed on the re-anchor month. Call at each
+   * re-anchor (baseline capture) so the empirical uncertainty band accrues over
+   * time (Option A1, snapshot-forward). Idempotent per
+   * (cluster, metric, anchor, horizon) via the unique index. BEST-EFFORT:
+   * callers MUST NOT let a snapshot failure fail the capture that triggered it.
+   */
+  async snapshotForecast(tenantId: string, clusterId: string, metricKey: string): Promise<void> {
+    const prepared = await this.prepare(tenantId, clusterId, metricKey, {});
+    const computed = computeForecast(prepared.input, prepared.fromMonth, prepared.toMonth);
+    const rows = computed.months.flatMap((m) => {
+      if (m.utilization === null) return [];
+      const horizonMonth = parseMonth(m.month);
+      const horizonIndex = monthsBetweenUtc(prepared.anchorMonth, horizonMonth);
+      if (horizonIndex < 1) return []; // future projections only
+      return [
+        {
+          clusterId,
+          metricTypeId: prepared.metricTypeId,
+          tenantId,
+          anchorMonth: prepared.anchorMonth,
+          horizonMonth,
+          horizonIndex,
+          projectedUtil: m.utilization,
+        },
+      ];
+    });
+    if (rows.length === 0) return;
+    await this.prisma.forecastSnapshot.createMany({ data: rows, skipDuplicates: true });
   }
 
   /**
@@ -414,6 +461,11 @@ export class ForecastService {
       // From the REAL loaded hosts (metric-filtered by the include above) — the
       // change-detector an approval snapshots (#292). Never a scenario value.
       capacitySignature: computeCapacitySignature(hosts),
+      metricTypeId: metricType.id,
+      anchorMonth: firstOfMonth(anchor.capturedAt),
+      bandEnabled: tenantSettings.forecastUncertaintyBandEnabled,
+      bandMinAnchors: tenantSettings.forecastUncertaintyMinAnchors,
+      bandWidth: tenantSettings.forecastUncertaintyBandWidth,
     };
   }
 
@@ -434,6 +486,64 @@ export class ForecastService {
       acknowledgment: null,
     };
   }
+
+  /**
+   * Empirical uncertainty band for the projected months of the REAL forecast.
+   * Reads matured ForecastSnapshots (horizonMonth ≤ this month), pairs each with
+   * the measured actual utilization from baselineHistory, runs the pure error
+   * math, and applies the per-horizon offsets to this forecast's future months.
+   * Returns undefined when disabled or the anchor floor is unmet — an honest
+   * omission, never a fabricated band. Additive: never touches the forecast maths
+   * (INV-1); invoked only by `forCluster`, never scenarios.
+   */
+  private async computeUncertainty(
+    clusterId: string,
+    prepared: PreparedForecastInput,
+    months: ForecastResult['months'],
+  ): Promise<ForecastUncertaintyPoint[] | undefined> {
+    if (!prepared.bandEnabled) return undefined;
+    const thisMonth = firstOfMonth(new Date());
+    const snapshots = await this.prisma.forecastSnapshot.findMany({
+      where: { clusterId, metricTypeId: prepared.metricTypeId, horizonMonth: { lte: thisMonth } },
+    });
+    if (snapshots.length === 0) return undefined;
+
+    const actualByMonth = new Map<string, number>();
+    for (const b of prepared.baselineHistory) {
+      if (b.utilization !== null) actualByMonth.set(b.capturedAt, b.utilization);
+    }
+    const samples: ForecastErrorSample[] = [];
+    for (const s of snapshots) {
+      const actual = actualByMonth.get(formatDateIso(s.horizonMonth));
+      if (actual === undefined) continue;
+      samples.push({ horizonIndex: s.horizonIndex, projected: s.projectedUtil.toNumber(), actual });
+    }
+    const anchorCount = new Set(snapshots.map((s) => formatDateIso(s.anchorMonth))).size;
+    const bands = computeForecastErrorBands(
+      samples,
+      anchorCount,
+      prepared.bandWidth,
+      prepared.bandMinAnchors,
+    );
+    if (bands.size === 0) return undefined;
+
+    const points: ForecastUncertaintyPoint[] = [];
+    for (const m of months) {
+      if (m.utilization === null) continue;
+      const band = bands.get(monthsBetweenUtc(prepared.anchorMonth, parseMonth(m.month)));
+      if (!band) continue;
+      points.push({
+        month: m.month,
+        low: m.utilization + band.low,
+        high: m.utilization + band.high,
+      });
+    }
+    return points.length > 0 ? points : undefined;
+  }
+}
+
+function parseMonth(month: string): Date {
+  return new Date(`${month}T00:00:00.000Z`);
 }
 
 function firstOfMonth(date: Date): Date {

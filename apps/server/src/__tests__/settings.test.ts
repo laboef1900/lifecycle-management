@@ -62,6 +62,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.85,
         procurementLeadTimeWeeks: 10,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(res.statusCode).toBe(200);
@@ -79,6 +82,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.7,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(res.statusCode).toBe(400);
@@ -93,6 +99,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 0,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(res.statusCode).toBe(200);
@@ -107,6 +116,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 104,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(res.statusCode).toBe(200);
@@ -121,6 +133,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 105,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(res.statusCode).toBe(400);
@@ -135,6 +150,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: -1,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(res.statusCode).toBe(400);
@@ -149,6 +167,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 4.5,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(res.statusCode).toBe(400);
@@ -163,6 +184,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 1,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(low.statusCode).toBe(200);
@@ -178,6 +202,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 168,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(high.statusCode).toBe(200);
@@ -195,6 +222,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 0,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(tooLow.statusCode).toBe(400);
@@ -207,6 +237,9 @@ describe('PUT /api/settings/tenant', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 169,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       },
     });
     expect(tooHigh.statusCode).toBe(400);
