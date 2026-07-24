@@ -258,23 +258,31 @@ export const ClusterTile = memo(function ClusterTile({
         : runway.pastLabel === 'crit'
           ? `past crit ${runway.pastThresholdPct}%`
           : 'no breach';
-  const verdict = runwayUnknown
+  // The BulletMeter now carries utilization for every measured cluster, so the
+  // verdict no longer repeats "X% used" there — it leads with the forecast
+  // outcome instead. Only the no-capacity case (which has no meter) keeps the
+  // "utilization unknown" lead, so the tile still states the gap in words.
+  const verdictBody = runwayUnknown
     ? // Names the destination, not just the problem (#243 audit): a synced
       // cluster with no recorded host capacity is a dead end otherwise.
-      `${utilText} — add host capacity to calculate runway.`
+      'add host capacity to calculate runway.'
     : runway.breachLabel
-      ? `${utilText} — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
+      ? `reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
       : runway.pastLabel === 'warn'
         ? runway.pastCritDate
-          ? `${utilText} — already past warn; reaches crit ≈ ${formatMonthShort(runway.pastCritDate)}.`
-          : `${utilText} — already past warn; crit beyond the ${runway.value}-month window.`
+          ? `already past warn; reaches crit ≈ ${formatMonthShort(runway.pastCritDate)}.`
+          : `already past warn; crit beyond the ${runway.value}-month window.`
         : runway.pastLabel === 'crit'
-          ? `${utilText} — already past crit.`
+          ? 'already past crit.'
           : // `runway.value` is the exact horizon length here (the numeral's
             // own "+" marks an open-ended countdown; this sentence describes
             // a fixed window boundary and must not inherit it — it previously
             // read "no breach in the 24+-month window" on a 24-month window).
-            `${utilText} — no breach in the ${runway.value}-month window.`;
+            `no breach in the ${runway.value}-month window.`;
+  const verdict =
+    currentUtil === null
+      ? `${utilText} — ${verdictBody}`
+      : verdictBody.charAt(0).toUpperCase() + verdictBody.slice(1);
 
   // Live usage / sync summary, appended so assistive tech hears it — the tile's
   // aria-label overrides its visible content, so the visible LIVE line below

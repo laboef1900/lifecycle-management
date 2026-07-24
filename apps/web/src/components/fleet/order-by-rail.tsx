@@ -140,9 +140,9 @@ export function OrderByRail({ items, linkedId, onTickHover }: OrderByRailProps):
             <span className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-fg-muted">
               No order-by dates in the next 12 months
             </span>
-            {/* 10px, not the 9px the populated hint still uses: this span is
-                new copy, and the design system's own --text-label floor is
-                10px (#243 Part B micro-text finding). */}
+            {/* On the 10px --text-label floor — as is the populated hint now,
+                after the micro-text pass raised the last sub-10px rail labels
+                (#243 Part B finding). */}
             <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-fg-subtle">
               · each mark = a cluster's last safe order date
             </span>

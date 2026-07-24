@@ -152,6 +152,8 @@ describe('<ClusterTile>', () => {
       screen.getByRole('img', { name: /utilization 77\.7 percent of capacity/i }),
     ).toBeInTheDocument();
     expect(screen.getByText('78%')).toBeInTheDocument();
+    // The meter carries utilization, so the verdict no longer repeats "X% used".
+    expect(screen.queryByText(/77\.7% used/)).toBeNull();
   });
 
   it('drops the forecast chart in compact density but keeps the meter', () => {
