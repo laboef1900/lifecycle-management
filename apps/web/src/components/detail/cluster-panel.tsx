@@ -382,31 +382,19 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     openPane();
   }, [paneOpen, closePane, openPane]);
 
-  // Below `lg` the Scenario sheet covers the very chart a scenario edits
-  // (#243 Part B): a successful Apply/Clear closes the sheet so the user
-  // lands on the updated forecast with the header indicator visible. At
-  // `lg`+ the chart updates live beside the pane, so it stays open.
-  // The `paneOpen` guard cannot see a mid-exit change: AnimatePresence
-  // re-renders the exiting sheet with its last-open props, so an Apply
-  // clicked during the 200ms exit runs this closure with `paneOpen` frozen
-  // `true` and re-dispatches 'close' — harmless, because the reducer's
-  // 'close' is a value no-op while `{open: false, exiting: true}`. What the
-  // guard does protect is any future caller outside the pane (fresh
-  // closures): 'close' dispatched on a fully-closed pane would set
-  // `exiting: true` with no pane mounted to ever fire 'exit-complete',
-  // leaving the content column inert below `lg` for good.
-  // (Declared after `closePane` — it participates in the pane lifecycle.)
-  const paneCoversContent = paneLayout.coversContent;
-  const handleScenarioChange = useCallback(
-    (next: ScenarioWire | null): void => {
-      setScenario(next);
-      setAnnouncementOverride(
-        next ? `Scenario active: ${describeScenario(next)}.` : 'Baseline forecast restored.',
-      );
-      if (paneCoversContent && paneOpen) closePane();
-    },
-    [paneCoversContent, paneOpen, closePane],
-  );
+  // Scenario edits are LIVE (presets + sliders, no Apply): the forecast redraws
+  // as the user drags, so the pane STAYS OPEN during editing at every width —
+  // auto-closing on change would slam the sheet shut on the first slider tick.
+  // At `lg`+ the pane sits beside the chart, so live updates are fully visible;
+  // below `lg` (a v1 non-goal) the sheet covers the chart while editing and the
+  // user closes it (Esc / Close) to view the result. The change is still
+  // announced via the live region so the covered case still gets feedback.
+  const handleScenarioChange = useCallback((next: ScenarioWire | null): void => {
+    setScenario(next);
+    setAnnouncementOverride(
+      next ? `Scenario active: ${describeScenario(next)}.` : 'Baseline forecast restored.',
+    );
+  }, []);
 
   useEffect(() => {
     if (paneOpen) {
@@ -804,6 +792,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
               onChange={handleScenarioChange}
               onClose={closePane}
               closeRef={paneCloseRef}
+              maxHosts={forecastQuery.data?.hosts.length}
             />
           </m.aside>
         ) : null}
@@ -954,12 +943,14 @@ function ScenarioPaneBody({
   onChange,
   onClose,
   closeRef,
+  maxHosts,
 }: {
   headingId: string;
   scenario: ScenarioWire | null;
   onChange: (next: ScenarioWire | null) => void;
   onClose: () => void;
   closeRef: React.RefObject<HTMLButtonElement | null>;
+  maxHosts: number | undefined;
 }): React.JSX.Element {
   return (
     <m.div
@@ -1008,7 +999,7 @@ function ScenarioPaneBody({
         </Button>
       </div>
       <div className="w-full max-w-sm">
-        <ScenarioControls active={scenario} onChange={onChange} />
+        <ScenarioControls active={scenario} onChange={onChange} maxHosts={maxHosts} />
       </div>
     </m.div>
   );

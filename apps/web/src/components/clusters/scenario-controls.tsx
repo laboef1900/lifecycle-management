@@ -1,14 +1,7 @@
 import * as React from 'react';
 
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { Slider } from '@/components/ui/slider';
+import { cn } from '@/lib/utils';
 import type { ScenarioWire } from '@/lib/api-client';
 
 type ScenarioKind = 'lose_hosts' | 'add_vms' | 'delay_procurement';
@@ -16,230 +9,263 @@ type ScenarioKind = 'lose_hosts' | 'add_vms' | 'delay_procurement';
 interface ScenarioControlsProps {
   active: ScenarioWire | null;
   onChange: (scenario: ScenarioWire | null) => void;
+  /** Cluster's tracked-host count — bounds the "lose hosts" slider. */
+  maxHosts?: number | undefined;
 }
 
 interface DraftState {
-  kind: ScenarioKind;
-  loseCount: string;
-  addCount: string;
-  addSize: string;
-  delayMonths: string;
+  loseCount: number;
+  addCount: number;
+  addSize: number;
+  delayMonths: number;
 }
 
-const DEFAULT_DRAFT: DraftState = {
-  kind: 'lose_hosts',
-  loseCount: '1',
-  addCount: '20',
-  addSize: '16',
-  delayMonths: '2',
-};
+const DEFAULT_DRAFT: DraftState = { loseCount: 1, addCount: 20, addSize: 16, delayMonths: 2 };
 
-/**
- * Inverse of `draftToScenario`: seeds the form from the scenario that is
- * already applied. The pane unmounts on close (#226), so without this a reopen
- * showed the `lose_hosts` defaults next to "Active: Delay procurement by 6 mo"
- * and a single Apply click silently replaced the applied scenario with
- * "Lose 1 host" — forecast scenarios drive purchasing decisions, so the form
- * must show what is actually in effect.
- */
-export function scenarioToDraft(active: ScenarioWire | null): DraftState {
+const MAX_VMS = 100;
+const MAX_DELAY_MONTHS = 24;
+/** Standard VM RAM tiers — a what-if approximation, not free entry (#—). */
+const SIZE_TIERS = [8, 16, 32, 64] as const;
+/** Debounce for slider-driven live updates so a drag isn't one POST per pixel. */
+const LIVE_DEBOUNCE_MS = 200;
+
+const PRESETS: { kind: ScenarioKind; label: string }[] = [
+  { kind: 'lose_hosts', label: 'Lose hosts' },
+  { kind: 'add_vms', label: 'Add load' },
+  { kind: 'delay_procurement', label: 'Delay order' },
+];
+
+const MICRO_LABEL = 'text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle';
+
+/** Seed the draft from whatever scenario is already applied (pane remounts on open). */
+function scenarioToDraft(active: ScenarioWire | null): DraftState {
   if (!active) return DEFAULT_DRAFT;
   switch (active.kind) {
     case 'lose_hosts':
-      return { ...DEFAULT_DRAFT, kind: 'lose_hosts', loseCount: String(active.count) };
+      return { ...DEFAULT_DRAFT, loseCount: active.count };
     case 'add_vms':
-      return {
-        ...DEFAULT_DRAFT,
-        kind: 'add_vms',
-        addCount: String(active.count),
-        addSize: String(active.sizeGb),
-      };
+      return { ...DEFAULT_DRAFT, addCount: active.count, addSize: active.sizeGb };
     case 'delay_procurement':
-      return { ...DEFAULT_DRAFT, kind: 'delay_procurement', delayMonths: String(active.months) };
+      return { ...DEFAULT_DRAFT, delayMonths: active.months };
   }
 }
 
-function draftToScenario(d: DraftState): { scenario: ScenarioWire | null; error: string | null } {
-  switch (d.kind) {
-    case 'lose_hosts': {
-      const n = Number(d.loseCount);
-      if (!Number.isInteger(n) || n < 1) return { scenario: null, error: 'Count must be ≥ 1.' };
-      return { scenario: { kind: 'lose_hosts', count: n }, error: null };
-    }
-    case 'add_vms': {
-      const c = Number(d.addCount);
-      const s = Number(d.addSize);
-      if (!Number.isInteger(c) || c < 1) return { scenario: null, error: 'Count must be ≥ 1.' };
-      if (!(s > 0)) return { scenario: null, error: 'Size must be > 0 GB.' };
-      return { scenario: { kind: 'add_vms', count: c, sizeGb: s }, error: null };
-    }
-    case 'delay_procurement': {
-      const m = Number(d.delayMonths);
-      if (!Number.isInteger(m) || m < 1) return { scenario: null, error: 'Months must be ≥ 1.' };
-      return { scenario: { kind: 'delay_procurement', months: m }, error: null };
-    }
+function buildScenario(kind: ScenarioKind, d: DraftState): ScenarioWire {
+  switch (kind) {
+    case 'lose_hosts':
+      return { kind: 'lose_hosts', count: d.loseCount };
+    case 'add_vms':
+      return { kind: 'add_vms', count: d.addCount, sizeGb: d.addSize };
+    case 'delay_procurement':
+      return { kind: 'delay_procurement', months: d.delayMonths };
   }
 }
 
 /**
- * Scenario form. Since #226 it renders only inside the cluster panel's
- * Scenario pane, so the layout is stacked (one field per row) rather than the
- * old viewport-`sm:` twelve-column row, which squeezed the `add_vms` number
- * inputs to ~39px there. The pair of `add_vms` inputs is the one exception —
- * they still share a row.
+ * Scenario "presets + live sliders". A row of preset chips selects the active
+ * what-if; the tuning sliders below redraw the forecast LIVE (debounced) as you
+ * drag — no Apply step. Bounded sliders make an invalid value unreachable, so
+ * the old free-number-input error path is gone. Selecting the active preset
+ * again returns to the baseline forecast.
  *
- * Since #243 the pane is a floating glass card and this form is chrome-less:
- * the card (`ScenarioPaneBody`) owns the surface, the border, and the single
- * "Scenario" heading — this component rendering its own card + h3 was exactly
- * the duplication #243 removes. The inputs keep their solid fills (`Input`'s
- * `bg-background`), so entered values never sit on the glass math.
+ * Single scenario for now; stacking several into one compound what-if is the
+ * tracked follow-up (needs a composable Scenario contract server-side).
+ *
+ * Renders inside the cluster panel's one sanctioned glass card
+ * (`ScenarioPaneBody`), which owns the surface, border, and "Scenario" heading.
  */
-export function ScenarioControls({ active, onChange }: ScenarioControlsProps): React.JSX.Element {
-  // Initializer, not a sync effect: the draft is the user's in-progress edit
-  // and must not be clobbered while they type. A reopened pane is a fresh
-  // mount, which is exactly when re-seeding is wanted.
+export function ScenarioControls({
+  active,
+  onChange,
+  maxHosts = 8,
+}: ScenarioControlsProps): React.JSX.Element {
+  // Initializers, not sync effects: the draft is the user's in-progress edit
+  // and must not be clobbered mid-drag. A reopened pane is a fresh mount, which
+  // is exactly when re-seeding from the applied scenario is wanted.
+  const [kind, setKind] = React.useState<ScenarioKind | null>(active?.kind ?? null);
   const [draft, setDraft] = React.useState<DraftState>(() => scenarioToDraft(active));
-  const [error, setError] = React.useState<string | null>(null);
+  const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const updateDraft = (patch: Partial<DraftState>): void => {
-    setDraft((d) => ({ ...d, ...patch }));
+  React.useEffect(() => () => clearTimeout(timer.current), []);
+
+  const emit = React.useCallback(
+    (nextKind: ScenarioKind | null, nextDraft: DraftState, immediate: boolean): void => {
+      clearTimeout(timer.current);
+      const run = (): void => onChange(nextKind ? buildScenario(nextKind, nextDraft) : null);
+      if (immediate) run();
+      else timer.current = setTimeout(run, LIVE_DEBOUNCE_MS);
+    },
+    [onChange],
+  );
+
+  const selectPreset = (next: ScenarioKind): void => {
+    const nextKind = next === kind ? null : next; // re-tap the active preset → baseline
+    setKind(nextKind);
+    emit(nextKind, draft, true); // type change is immediate, not debounced
   };
 
-  const apply = (): void => {
-    const r = draftToScenario(draft);
-    if (r.error) {
-      setError(r.error);
-      return;
-    }
-    setError(null);
-    onChange(r.scenario);
+  const patch = (p: Partial<DraftState>, immediate = false): void => {
+    const next = { ...draft, ...p };
+    setDraft(next);
+    if (kind) emit(kind, next, immediate);
   };
 
-  const clear = (): void => {
-    setError(null);
-    onChange(null);
-  };
+  const maxLose = Math.max(1, maxHosts);
 
   return (
-    <section data-testid="scenario-controls" aria-label="Forecast scenarios">
-      <div data-testid="scenario-fields" className="space-y-2">
-        <label className="block">
-          <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            Type
-          </span>
-          <Select
-            value={draft.kind}
-            onValueChange={(v) => updateDraft({ kind: v as ScenarioKind })}
-          >
-            <SelectTrigger className="mt-1" aria-label="Scenario type">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="lose_hosts">Lose hosts</SelectItem>
-              <SelectItem value="add_vms">Add VMs</SelectItem>
-              <SelectItem value="delay_procurement">Delay procurement</SelectItem>
-            </SelectContent>
-          </Select>
-        </label>
-
-        {draft.kind === 'lose_hosts' ? (
-          <label className="block">
-            {/* "Hosts lost" (#243 Part B copy item 2), not "Hosts to drop" —
-                aligned with the "Lose hosts" scenario type above rather than
-                a near-synonym verb for the same field. */}
-            <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-              Hosts lost
-            </span>
-            <Input
-              type="number"
-              min={1}
-              step={1}
-              aria-label="Hosts lost"
-              value={draft.loseCount}
-              onChange={(e) => updateDraft({ loseCount: e.target.value })}
-              className="mt-1"
-            />
-          </label>
-        ) : null}
-
-        {draft.kind === 'add_vms' ? (
-          <div className="grid grid-cols-2 gap-2">
-            <label className="block">
-              <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-                VM count
-              </span>
-              <Input
-                type="number"
-                min={1}
-                step={1}
-                aria-label="VM count"
-                value={draft.addCount}
-                onChange={(e) => updateDraft({ addCount: e.target.value })}
-                className="mt-1"
-              />
-            </label>
-            <label className="block">
-              <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-                Size (GB)
-              </span>
-              <Input
-                type="number"
-                min={1}
-                step={1}
-                aria-label="Size (GB)"
-                value={draft.addSize}
-                onChange={(e) => updateDraft({ addSize: e.target.value })}
-                className="mt-1"
-              />
-            </label>
-          </div>
-        ) : null}
-
-        {draft.kind === 'delay_procurement' ? (
-          <label className="block">
-            <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-              Delay (months)
-            </span>
-            <Input
-              type="number"
-              min={1}
-              step={1}
-              aria-label="Delay (months)"
-              value={draft.delayMonths}
-              onChange={(e) => updateDraft({ delayMonths: e.target.value })}
-              className="mt-1"
-            />
-          </label>
-        ) : null}
-
-        <div className="flex items-center justify-end gap-2 pt-1">
-          {active ? (
-            <Button
+    <section data-testid="scenario-controls" aria-label="Forecast scenarios" className="space-y-3">
+      <div role="group" aria-label="Scenario type" className="grid grid-cols-3 gap-1.5">
+        {PRESETS.map((p) => {
+          const isActive = p.kind === kind;
+          return (
+            <button
+              key={p.kind}
               type="button"
-              variant="ghost"
-              size="sm"
-              onClick={clear}
-              data-testid="scenario-clear"
+              aria-pressed={isActive}
+              data-testid={`scenario-preset-${p.kind}`}
+              onClick={() => selectPreset(p.kind)}
+              className={cn(
+                'rounded-[var(--radius)] border px-2 py-1.5 text-xs font-medium transition-[background,border-color,color] duration-150',
+                'focus-visible:outline-none active:scale-[0.98]',
+                isActive
+                  ? 'border-accent bg-accent text-accent-foreground'
+                  : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
+              )}
             >
-              Clear
-            </Button>
-          ) : null}
-          <Button type="button" variant="accent" size="sm" onClick={apply}>
-            Apply
-          </Button>
-        </div>
+              {p.label}
+            </button>
+          );
+        })}
       </div>
-      {error ? (
-        <p role="alert" className="mt-2 text-sm text-destructive">
-          {error}
+
+      {kind === null ? (
+        <p className="text-xs leading-relaxed text-fg-subtle">
+          Pick a scenario to preview a what-if against the baseline forecast.
         </p>
       ) : null}
+
+      {kind === 'lose_hosts' ? (
+        <SliderRow
+          label="Hosts lost"
+          id="scenario-lose"
+          value={draft.loseCount}
+          min={1}
+          max={maxLose}
+          display={`${draft.loseCount}`}
+          valueText={`${draft.loseCount} host${draft.loseCount === 1 ? '' : 's'}`}
+          onValueChange={(v) => patch({ loseCount: v })}
+        />
+      ) : null}
+
+      {kind === 'add_vms' ? (
+        <div className="space-y-3">
+          <SliderRow
+            label="VM count"
+            id="scenario-vmcount"
+            value={draft.addCount}
+            min={1}
+            max={MAX_VMS}
+            display={`${draft.addCount}`}
+            valueText={`${draft.addCount} VMs`}
+            onValueChange={(v) => patch({ addCount: v })}
+          />
+          <div>
+            <span className={MICRO_LABEL}>VM size</span>
+            <div role="group" aria-label="VM size (GB)" className="mt-1.5 grid grid-cols-4 gap-1.5">
+              {SIZE_TIERS.map((gb) => {
+                const isSel = draft.addSize === gb;
+                return (
+                  <button
+                    key={gb}
+                    type="button"
+                    aria-pressed={isSel}
+                    data-testid={`scenario-size-${gb}`}
+                    onClick={() => patch({ addSize: gb }, true)}
+                    className={cn(
+                      'rounded-[var(--radius)] border py-1 font-mono text-xs tabular-nums transition-colors duration-150 active:scale-[0.98]',
+                      isSel
+                        ? 'border-accent bg-accent text-accent-foreground'
+                        : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
+                    )}
+                  >
+                    {gb}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <p
+            className="font-mono text-[11px] tabular-nums text-fg-muted"
+            data-testid="scenario-total"
+          >
+            = {draft.addCount * draft.addSize} GB added
+          </p>
+        </div>
+      ) : null}
+
+      {kind === 'delay_procurement' ? (
+        <SliderRow
+          label="Delay (months)"
+          id="scenario-delay"
+          value={draft.delayMonths}
+          min={1}
+          max={MAX_DELAY_MONTHS}
+          display={`${draft.delayMonths} mo`}
+          valueText={`${draft.delayMonths} month${draft.delayMonths === 1 ? '' : 's'}`}
+          onValueChange={(v) => patch({ delayMonths: v })}
+        />
+      ) : null}
+
       {active ? (
-        <p className="mt-2 text-[11px] text-fg-muted" data-testid="scenario-summary">
+        <p className="text-[11px] text-fg-muted" data-testid="scenario-summary">
           Active: {describeScenario(active)}
         </p>
       ) : null}
     </section>
+  );
+}
+
+/** Label + live mono value + steel slider — the one tuning row shape. */
+function SliderRow({
+  label,
+  id,
+  value,
+  min,
+  max,
+  display,
+  valueText,
+  onValueChange,
+}: {
+  label: string;
+  id: string;
+  value: number;
+  min: number;
+  max: number;
+  display: string;
+  valueText: string;
+  onValueChange: (value: number) => void;
+}): React.JSX.Element {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2">
+        <label htmlFor={id} className={MICRO_LABEL}>
+          {label}
+        </label>
+        <span className="font-mono text-sm font-medium tabular-nums text-foreground">
+          {display}
+        </span>
+      </div>
+      <Slider
+        id={id}
+        className="mt-2"
+        value={value}
+        min={min}
+        max={max}
+        aria-label={label}
+        aria-valuetext={valueText}
+        onValueChange={onValueChange}
+      />
+    </div>
   );
 }
 

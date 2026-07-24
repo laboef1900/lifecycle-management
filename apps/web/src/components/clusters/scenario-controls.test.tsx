@@ -1,22 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ScenarioControls, describeScenario } from './scenario-controls';
-
-// Radix Select uses pointer APIs jsdom doesn't implement; stub the lot.
-beforeAll(() => {
-  if (!('hasPointerCapture' in HTMLElement.prototype)) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (HTMLElement.prototype as any).hasPointerCapture = () => false;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (HTMLElement.prototype as any).setPointerCapture = () => {};
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (HTMLElement.prototype as any).releasePointerCapture = () => {};
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (HTMLElement.prototype as any).scrollIntoView = () => {};
-  }
-});
 
 describe('describeScenario', () => {
   it('produces singular/plural copy for lose_hosts', () => {
@@ -36,90 +22,91 @@ describe('describeScenario', () => {
 });
 
 describe('<ScenarioControls>', () => {
-  it('labels the lose_hosts field "Hosts lost", matching the "Lose hosts" scenario type (#243 Part B copy item 2)', () => {
-    // Was "Hosts to drop" beside the "Lose hosts" type option — a verb
-    // mismatch (drop vs lose) for the same field.
+  it('renders three preset chips, none active, and no tuning slider until one is picked', () => {
     render(<ScenarioControls active={null} onChange={() => {}} />);
-    expect(screen.getByText('Hosts lost')).toBeInTheDocument();
-    expect(screen.queryByText('Hosts to drop')).toBeNull();
+    for (const kind of ['lose_hosts', 'add_vms', 'delay_procurement'] as const) {
+      expect(screen.getByTestId(`scenario-preset-${kind}`)).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      );
+    }
+    expect(screen.queryByLabelText('Hosts lost')).toBeNull();
+  });
+
+  it('selecting a preset applies its scenario immediately — no Apply step', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<ScenarioControls active={null} onChange={onChange} />);
+
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'lose_hosts', count: 1 });
+    expect(screen.getByTestId('scenario-preset-lose_hosts')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     expect(screen.getByLabelText('Hosts lost')).toBeInTheDocument();
+    // The old dropdown + Apply button are gone.
+    expect(screen.queryByRole('button', { name: /apply/i })).toBeNull();
   });
 
-  it('emits a lose_hosts scenario with the typed count when Apply is clicked', async () => {
+  it('bounds the lose-hosts slider by the cluster host count and redraws live on drag', async () => {
     const onChange = vi.fn();
-    render(<ScenarioControls active={null} onChange={onChange} />);
-    const countInput = screen.getByLabelText(/hosts lost/i);
-    await userEvent.clear(countInput);
-    await userEvent.type(countInput, '2');
-    await userEvent.click(screen.getByRole('button', { name: /apply/i }));
-    expect(onChange).toHaveBeenLastCalledWith({ kind: 'lose_hosts', count: 2 });
+    render(
+      <ScenarioControls
+        active={{ kind: 'lose_hosts', count: 1 }}
+        onChange={onChange}
+        maxHosts={6}
+      />,
+    );
+    const slider = screen.getByLabelText('Hosts lost');
+    expect(slider).toHaveAttribute('max', '6');
+
+    fireEvent.change(slider, { target: { value: '3' } });
+
+    // Debounced: the forecast redraws without an Apply click.
+    await waitFor(() =>
+      expect(onChange).toHaveBeenLastCalledWith({ kind: 'lose_hosts', count: 3 }),
+    );
   });
 
-  it('rejects a count below 1 with an inline alert (no onChange)', async () => {
+  it('re-tapping the active preset returns to the baseline (null)', async () => {
+    const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<ScenarioControls active={null} onChange={onChange} />);
-    const countInput = screen.getByLabelText(/hosts lost/i);
-    await userEvent.clear(countInput);
-    await userEvent.type(countInput, '0');
-    await userEvent.click(screen.getByRole('button', { name: /apply/i }));
-    expect(screen.getByRole('alert')).toHaveTextContent(/count must be/i);
-    expect(onChange).not.toHaveBeenCalled();
-  });
+    render(<ScenarioControls active={{ kind: 'lose_hosts', count: 2 }} onChange={onChange} />);
 
-  it('shows the Clear button only when a scenario is active and emits null on click', async () => {
-    const onChange = vi.fn();
-    const { rerender } = render(<ScenarioControls active={null} onChange={onChange} />);
-    expect(screen.queryByTestId('scenario-clear')).not.toBeInTheDocument();
-    rerender(<ScenarioControls active={{ kind: 'lose_hosts', count: 1 }} onChange={onChange} />);
-    await userEvent.click(screen.getByTestId('scenario-clear'));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
-  it('renders the active scenario summary', () => {
+  it('seeds add_vms from the active scenario and emits on a size-tier tap', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ScenarioControls active={{ kind: 'add_vms', count: 30, sizeGb: 64 }} onChange={onChange} />,
+    );
+
+    expect(screen.getByLabelText('VM count')).toHaveAttribute('aria-valuetext', '30 VMs');
+    expect(screen.getByTestId('scenario-size-64')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('scenario-total')).toHaveTextContent(/1920 GB added/); // 30 × 64
+
+    await user.click(screen.getByTestId('scenario-size-32'));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'add_vms', count: 30, sizeGb: 32 });
+  });
+
+  it('seeds the delay slider from the active scenario and hides the others', () => {
+    render(
+      <ScenarioControls active={{ kind: 'delay_procurement', months: 6 }} onChange={() => {}} />,
+    );
+    expect(screen.getByLabelText('Delay (months)')).toHaveAttribute('aria-valuetext', '6 months');
+    expect(screen.queryByLabelText('Hosts lost')).toBeNull();
+  });
+
+  it('shows the active scenario summary', () => {
     render(
       <ScenarioControls active={{ kind: 'add_vms', count: 30, sizeGb: 16 }} onChange={() => {}} />,
     );
     expect(screen.getByTestId('scenario-summary')).toHaveTextContent(/Add 30 × 16 GB VMs/);
-  });
-
-  it('seeds the draft from the active scenario, so Apply cannot silently replace it with the defaults', async () => {
-    // The pane unmounts on close (#226), so every reopen is a fresh mount: a
-    // form showing "Lose hosts / 1" beside "Active: Delay procurement by 6 mo"
-    // turns one Apply click into an unintended scenario swap.
-    const onChange = vi.fn();
-    render(
-      <ScenarioControls active={{ kind: 'delay_procurement', months: 6 }} onChange={onChange} />,
-    );
-
-    expect(screen.getByLabelText(/delay \(months\)/i)).toHaveValue(6);
-    expect(screen.queryByLabelText(/hosts lost/i)).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: /apply/i }));
-    expect(onChange).toHaveBeenLastCalledWith({ kind: 'delay_procurement', months: 6 });
-  });
-
-  it('seeds both add_vms fields from the active scenario', () => {
-    render(
-      <ScenarioControls active={{ kind: 'add_vms', count: 30, sizeGb: 64 }} onChange={() => {}} />,
-    );
-    expect(screen.getByLabelText(/vm count/i)).toHaveValue(30);
-    expect(screen.getByLabelText(/size \(gb\)/i)).toHaveValue(64);
-  });
-
-  it('falls back to the defaults when no scenario is active', () => {
-    render(<ScenarioControls active={null} onChange={() => {}} />);
-    expect(screen.getByLabelText(/hosts lost/i)).toHaveValue(1);
-  });
-
-  it('stacks the fields instead of using the viewport-wide 12-column row', () => {
-    // The only host is the cluster panel's ~272px Scenario pane, where the old
-    // `sm:col-span-*` row squeezed the number inputs to ~39px. jsdom has no
-    // layout, so the guard is on the layout classes themselves.
-    render(
-      <ScenarioControls active={{ kind: 'add_vms', count: 30, sizeGb: 64 }} onChange={() => {}} />,
-    );
-    const fields = screen.getByTestId('scenario-fields');
-    expect(fields).not.toHaveClass('grid-cols-12');
-    expect(fields.querySelector('[class*="sm:col-span-"]')).toBeNull();
   });
 });

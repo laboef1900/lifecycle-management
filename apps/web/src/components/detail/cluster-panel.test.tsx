@@ -634,8 +634,8 @@ describe('<ClusterPanel>', () => {
 
   it('announces scenario activation and clearing via the live region (IMPORTANT #4)', async () => {
     vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(forecast());
-    // Side-by-side width: the pane stays open across Apply → Clear (below lg
-    // a successful change now dismisses the covering sheet, #243 Part B).
+    // Side-by-side width keeps the pane open across activate → clear; the pane
+    // now stays open on every scenario change (live presets + sliders, #226).
     stubViewportWidth(1280);
     const user = userEvent.setup();
     render(<Harness show />);
@@ -646,16 +646,21 @@ describe('<ClusterPanel>', () => {
     // ScenarioControls now lives in the slide-in pane (#226) — open it first.
     await user.click(screen.getByTestId('scenario-button'));
 
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    // Selecting a preset applies its default immediately — there is no Apply
+    // step; lose_hosts defaults to count 1.
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
     await waitFor(() =>
       expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
         'Scenario active: Lose 1 host.',
       ),
     );
 
-    await user.click(screen.getByTestId('scenario-clear'));
-    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
-      'Baseline forecast restored.',
+    // Re-tapping the now-active preset returns to the baseline forecast.
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Baseline forecast restored.',
+      ),
     );
   });
 });
@@ -691,40 +696,41 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(await screen.findByTestId('scenario-controls')).toBeInTheDocument();
   });
 
-  it('closes the covering sheet after Apply so the chart is visible (#243 Part B High-4)', async () => {
+  it('keeps the pane open after selecting a preset so live edits stay reachable (#226)', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
 
-    // The sheet dismisses itself — the user lands on the updated forecast…
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    // …with the change announced and the header indicator as the visible cue…
-    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
-      'Scenario active: Lose 1 host.',
+    // No Apply step and no auto-close: the pane stays open so the sliders keep
+    // driving the forecast live (#226 presets + live sliders)…
+    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
+    // …the change is announced…
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Lose 1 host.',
+      ),
     );
+    // …and the header indicator marks the active scenario.
     expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
-    // …and focus back on the toggle that reopens the pane.
-    await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
   });
 
   it('surfaces an inline error with retry when the scenario forecast fails, and stops claiming an active scenario (#243 Part B item 1)', async () => {
     vi.spyOn(api.clusters, 'forecastScenario').mockRejectedValue(new Error('boom'));
+    // lg+ so `panel-content` (with the inline error + Retry) stays visible
+    // beside the now-permanently-open pane (#226 — no auto-close on change).
+    stubViewportWidth(1280);
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
-
-    // Sub-lg (the default width here): Apply still dismisses the covering
-    // sheet on ANY submit — closePane() doesn't wait on the query — so the
-    // user is routed straight onto the chart the error must be visible on.
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    // Selecting a preset sets the scenario, whose forecast fetch rejects.
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
 
     // The correction is announced instead of the (never reached) "Scenario
     // active" text.
@@ -761,32 +767,33 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
   });
 
-  it('closes the covering sheet after Clear too, announcing the baseline restore (#243 Part B High-4)', async () => {
+  it('keeps the pane open after clearing the scenario, announcing the baseline restore', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
-    // Apply from the sheet (closes it), reopen, then Clear — the other
-    // "successful change" path must dismiss the covering sheet the same way.
+    // Activate a preset, then clear it by re-tapping the now-active preset —
+    // the pane stays open through both (#226 live editing, no auto-close).
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-
-    await user.click(screen.getByTestId('scenario-button'));
-    await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByTestId('scenario-clear'));
-
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
-      'Baseline forecast restored.',
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await waitFor(() =>
+      expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument(),
     );
-    // The scenario is gone: no active indicator remains on the toggle.
+
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+
+    // Still open, baseline restore announced, and the active indicator is gone.
+    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Baseline forecast restored.',
+      ),
+    );
     expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
   });
 
-  it('keeps the side-by-side pane open after Apply at lg+ — the chart updates live beside it', async () => {
+  it('keeps the side-by-side pane open after selecting a preset at lg+ — the chart updates live beside it', async () => {
     stubViewportWidth(1280);
     const user = userEvent.setup();
     render(<Harness show />);
@@ -794,7 +801,7 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
 
     await waitFor(() =>
       expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
@@ -803,46 +810,6 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     );
     expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
     expect(screen.getByTestId('scenario-summary')).toHaveTextContent('Active: Lose 1 host');
-  });
-
-  it('keeps the covering sheet open when Apply fails validation — the error must stay visible', async () => {
-    const user = userEvent.setup();
-    render(<Harness show />);
-    await screen.findByTestId('kpi-strip');
-
-    await user.click(screen.getByTestId('scenario-button'));
-    await screen.findByTestId('scenario-controls');
-    const count = screen.getByLabelText(/hosts lost/i);
-    await user.clear(count);
-    await user.type(count, '0');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
-
-    // No scenario change happened, so the sheet must NOT dismiss (#243 Part B
-    // High-4 closes it only on a *successful* Apply/Clear) — the inline error
-    // lives inside the sheet and would vanish with it.
-    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('Count must be ≥ 1.');
-    expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
-  });
-
-  it('auto-closes on Apply after a resize below lg mid-session — coversContent is read live', async () => {
-    const resizeTo = stubResizableViewport(1280);
-    const user = userEvent.setup();
-    render(<Harness show />);
-    await screen.findByTestId('kpi-strip');
-
-    await user.click(screen.getByTestId('scenario-button'));
-    await screen.findByTestId('scenario-controls');
-
-    // Cross below lg with the pane open: the side-by-side pane becomes the
-    // covering sheet, so the next Apply must dismiss it — a stale
-    // `paneCoversContent` closure would keep the sheet over the chart,
-    // exactly the High-4 failure this fix exists to prevent.
-    resizeTo(900);
-
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
   });
 
   it('opening the pane moves focus into it; closing returns focus to the Scenario button', async () => {
@@ -889,15 +856,17 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
     await waitFor(() =>
       expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
         'Scenario active: Lose 1 host.',
       ),
     );
 
-    // Applying from the covering sheet dismisses it (#243 Part B High-4); the
-    // applied scenario must survive and stay visible on the header button.
+    // The pane no longer auto-closes on change (#226); closing it explicitly
+    // must leave the applied scenario in place and visible on the header button.
+    await user.click(screen.getByRole('button', { name: 'Close scenario pane' }));
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
 
     const indicator = screen.getByTestId('scenario-active-indicator');
@@ -996,10 +965,11 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(content).toContainElement(backLink);
 
     // ...and the panel's own Tab trap agrees: Shift+Tab off the pane's first
-    // control wraps to the pane's last control, never onto a covered one.
+    // control (Close) wraps to the pane's last control — with no scenario
+    // active that is the last preset chip — never onto a covered one.
     await user.tab({ shift: true });
     expect(backLink).not.toHaveFocus();
-    expect(screen.getByRole('button', { name: 'Apply' })).toHaveFocus();
+    expect(screen.getByTestId('scenario-preset-delay_procurement')).toHaveFocus();
 
     // Closing the pane hands the column back.
     await user.keyboard('{Escape}');
@@ -1154,6 +1124,9 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    // Select the preset so its "Hosts lost" slider renders, then focus it.
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
     const countInput = await screen.findByLabelText(/hosts lost/i);
     countInput.focus();
 
@@ -1189,31 +1162,44 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
   });
 
   it('re-seeds the form from the applied scenario when the pane is reopened', async () => {
+    // Enough tracked hosts that the "Hosts lost" slider (bounded by maxHosts)
+    // can reach 3.
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({
+        hosts: [
+          { id: 'h1', name: 'h1', contributions: [] },
+          { id: 'h2', name: 'h2', contributions: [] },
+          { id: 'h3', name: 'h3', contributions: [] },
+          { id: 'h4', name: 'h4', contributions: [] },
+        ],
+      }),
+    );
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
     const countInput = await screen.findByLabelText(/hosts lost/i);
-    await user.clear(countInput);
-    await user.type(countInput, '3');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    // Sliders drive the scenario live (debounced ~200ms), no Apply step.
+    fireEvent.change(countInput, { target: { value: '3' } });
     await waitFor(() =>
       expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
         'Scenario active: Lose 3 hosts.',
       ),
     );
 
-    // At this (default, sub-lg) width the successful Apply itself dismisses
-    // the covering sheet (#243 Part B High-4) — no manual Escape, which would
-    // now hit the panel-close path instead (#243 Part B review).
+    // The pane no longer auto-closes on change (#226); close it explicitly,
+    // then reopen it.
+    await user.click(screen.getByRole('button', { name: 'Close scenario pane' }));
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    // Not the DEFAULT_DRAFT "1": a stray Apply must not silently replace the
-    // applied scenario with the defaults.
-    expect(screen.getByLabelText(/hosts lost/i)).toHaveValue(3);
+    // Not the DEFAULT_DRAFT "1": the reopened pane re-seeds from the applied
+    // scenario rather than silently resetting to the defaults.
+    expect(screen.getByLabelText(/hosts lost/i)).toHaveValue('3');
   });
 
   it('recovers cleanly when the pane is reopened mid-exit and closed again', async () => {
