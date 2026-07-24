@@ -1,4 +1,5 @@
 import { cva, type VariantProps } from 'class-variance-authority';
+import { AlertOctagon, AlertTriangle, CircleHelp, Info, type LucideIcon } from 'lucide-react';
 import * as React from 'react';
 
 import { Card } from '@/components/ui/card';
@@ -19,6 +20,21 @@ const tileVariants = cva('p-3.5 transition-colors', {
   defaultVariants: { status: 'ok' },
 });
 
+// Status is never the border colour alone (WCAG 1.4.1 + the house "color is
+// never the only signal" rule). Each non-ok status also carries a distinctly
+// SHAPED icon plus a screen-reader label, so warn/crit/attention/unknown stay
+// distinguishable in grayscale, forced-colors, and to assistive tech — the same
+// shape-not-hue discipline as the taller crit tick on the BulletMeter.
+const STATUS_META: Record<
+  'unknown' | 'attention' | 'warn' | 'crit',
+  { icon: LucideIcon; label: string; className: string }
+> = {
+  attention: { icon: Info, label: 'Attention', className: 'text-accent' },
+  warn: { icon: AlertTriangle, label: 'Warning', className: 'text-warning' },
+  crit: { icon: AlertOctagon, label: 'Critical', className: 'text-destructive' },
+  unknown: { icon: CircleHelp, label: 'Unknown', className: 'text-fg-subtle' },
+};
+
 export interface KpiTileProps
   extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof tileVariants> {
   label: string;
@@ -34,8 +50,18 @@ export function KpiTile({
   className,
   ...props
 }: KpiTileProps): React.JSX.Element {
+  const meta = status && status !== 'ok' ? STATUS_META[status] : null;
+  const StatusIcon = meta?.icon;
   return (
-    <Card className={cn(tileVariants({ status }), className)} {...props}>
+    <Card className={cn(tileVariants({ status }), 'relative', className)} {...props}>
+      {/* Absolutely positioned so label/value/caption stay direct children of
+          the tile (consumers select the tile via label.closest('div')). */}
+      {meta && StatusIcon ? (
+        <span className={cn('absolute right-3.5 top-3.5', meta.className)}>
+          <StatusIcon className="h-3.5 w-3.5" aria-hidden />
+          <span className="sr-only">{meta.label}</span>
+        </span>
+      ) : null}
       <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">{label}</p>
       <p className="mt-2 font-mono text-xl font-medium tracking-tight tabular-nums text-foreground [overflow-wrap:anywhere] sm:text-2xl">
         {value}

@@ -142,6 +142,43 @@ describe('<ClusterTile>', () => {
     expect(chip.textContent).toBe('ORDER BY DEC 28');
   });
 
+  it('renders a BulletMeter utilization anchor with the current % figure', () => {
+    render(
+      <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+    );
+    // The absolute anchor the per-tile-scaled chart lacks: a BulletMeter (role
+    // img, carries the exact utilization in its accessible name) + a mono %.
+    expect(
+      screen.getByRole('img', { name: /utilization 77\.7 percent of capacity/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('78%')).toBeInTheDocument();
+    // The meter carries utilization, so the verdict no longer repeats "X% used".
+    expect(screen.queryByText(/77\.7% used/)).toBeNull();
+  });
+
+  it('drops the forecast chart in compact density but keeps the meter', () => {
+    const { rerender } = render(
+      <ClusterTile
+        entry={entry()}
+        forecast={forecast()}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        compact={false}
+      />,
+    );
+    expect(screen.getByTestId('tile-chart')).toBeInTheDocument();
+    rerender(
+      <ClusterTile
+        entry={entry()}
+        forecast={forecast()}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        compact
+      />,
+    );
+    expect(screen.queryByTestId('tile-chart')).not.toBeInTheDocument();
+    // The BulletMeter stays — it's what makes compact viable (util at a glance).
+    expect(screen.getByText('78%')).toBeInTheDocument();
+  });
+
   // Spec §4.4 amendment (2026-07-20, #268): the ORDER BY chip moved up to the
   // cluster-name row. #291 (2026-07-22) later removed the EVENT chip that had
   // shared this describe block entirely, rather than merely relocating it —

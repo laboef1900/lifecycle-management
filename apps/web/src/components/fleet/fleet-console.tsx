@@ -2,7 +2,7 @@ import type { ClusterResponse, ProcurementInfo } from '@lcm/shared';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { AlertTriangle, Boxes } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { AdminOnly } from '@/components/auth/admin-only';
 import { resolveWindow } from '@/components/clusters/window-controls';
@@ -13,10 +13,16 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ADD_CLUSTER_HASH } from '@/lib/anchors';
 import { api } from '@/lib/api-client';
 import { collectForecastState, earliestOrderByFromFleet } from '@/lib/collect-forecast-state';
-import { buildClusterForecastEntries, type ClusterForecastEntry } from '@/lib/forecast-summary';
+import {
+  buildClusterForecastEntries,
+  type ClusterForecastEntry,
+  utilStatus,
+} from '@/lib/forecast-summary';
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 
 import { ClusterTile } from './cluster-tile';
+import { FleetDensityToggle, type FleetDensity } from './fleet-density';
+import { TileChartLegend } from './tile-chart-legend';
 import { FleetFilter } from './fleet-filter';
 import { FleetSort, type ClusterSortMode } from './fleet-sort';
 import { FleetVerdict } from './fleet-verdict';
@@ -60,6 +66,24 @@ function clusterTotalCapacity(cluster: ClusterResponse): number {
 }
 
 /**
+ * The "Needs attention only" filter's inclusion test: a cluster is worth
+ * surfacing when its current utilization is at/over the warn threshold, or its
+ * order-by date is due now or soon. Mirrors the tile's own attention signals
+ * (status badge + order-by urgency) so the filter and the tiles agree.
+ */
+export function entryNeedsAttention(
+  entry: ClusterForecastEntry,
+  procurement: ProcurementInfo | undefined,
+  thresholds: { warn: number; crit: number },
+): boolean {
+  const util = entry.cluster.metrics[0]?.utilization ?? null;
+  const status = utilStatus(util, thresholds);
+  if (status === 'warn' || status === 'crit') return true;
+  const urgency = orderByUrgency(procurement?.orderByDate ?? null);
+  return urgency === 'now' || urgency === 'soon';
+}
+
+/**
  * Sorts cluster entries by the selected mode (#267). `orderBy` is procurement
  * urgency (the default, delegated to {@link sortClustersByUrgency}); `name` is
  * alphabetical; `size` is total memory capacity, largest first. Name and size
@@ -86,6 +110,12 @@ export function sortClusters(entries: SortEntry[], mode: ClusterSortMode): SortE
 export function FleetConsole(): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false);
   const [sortMode, setSortMode] = useState<ClusterSortMode>('orderBy');
+  const [attentionOnly, setAttentionOnly] = useState(false);
+  const [density, setDensity] = useState<FleetDensity>(() =>
+    typeof localStorage !== 'undefined' && localStorage.getItem('fleet-density') === 'compact'
+      ? 'compact'
+      : 'comfortable',
+  );
   // Whether the user has operated the archived filter at least once this
   // mount: gates the sr-only announcement below so the status region never
   // "announces" the default state on load.
@@ -100,6 +130,33 @@ export function FleetConsole(): React.JSX.Element {
   const handleShowArchivedChange = useCallback((next: boolean) => {
     setShowArchived(next);
     setArchivedTouched(true);
+  }, []);
+  const handleDensityChange = useCallback((next: FleetDensity) => {
+    setDensity(next);
+    try {
+      localStorage.setItem('fleet-density', next);
+    } catch {
+      // Non-fatal: the density preference just won't persist (storage disabled).
+    }
+  }, []);
+
+  // Arrow-key tile-to-tile navigation (critique 6c): Tab already reaches every
+  // tile, but a power user scanning a large fleet wants to step between tiles
+  // without tabbing through each tile's inner content. Left/Right move focus to
+  // the previous/next tile link, scoped to the grid (so the topbar/rail/controls
+  // are unaffected). Reading-order linear, which matches the visual flow.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const handleGridKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const grid = gridRef.current;
+    if (!grid) return;
+    const links = Array.from(grid.querySelectorAll<HTMLAnchorElement>('a[href^="/clusters/"]'));
+    const idx = links.indexOf(document.activeElement as HTMLAnchorElement);
+    if (idx === -1) return;
+    const next = links[e.key === 'ArrowRight' ? idx + 1 : idx - 1];
+    if (!next) return;
+    e.preventDefault();
+    next.focus();
   }, []);
 
   const clustersQuery = useQuery({
@@ -179,6 +236,11 @@ export function FleetConsole(): React.JSX.Element {
   const sortedEntries = sortClusters(sortInput, sortMode)
     .map((s) => entryById.get(s.cluster.id))
     .filter((e): e is ClusterForecastEntry => e !== undefined);
+  const visibleEntries = attentionOnly
+    ? sortedEntries.filter((e) =>
+        entryNeedsAttention(e, procurementByClusterId[e.cluster.id], thresholds),
+      )
+    : sortedEntries;
 
   const pendingCount = clusters.length - clusterEntries.length;
 
@@ -308,10 +370,13 @@ export function FleetConsole(): React.JSX.Element {
             <CardHeader className="flex-row items-center justify-between gap-3">
               <h2 className="text-sm font-semibold leading-none tracking-tight">Clusters</h2>
               <div className="flex items-center gap-2">
+                <FleetDensityToggle value={density} onValueChange={handleDensityChange} />
                 <FleetSort value={sortMode} onValueChange={setSortMode} />
                 <FleetFilter
                   showArchived={showArchived}
                   onShowArchivedChange={handleShowArchivedChange}
+                  attentionOnly={attentionOnly}
+                  onAttentionOnlyChange={setAttentionOnly}
                   archivedCount={archivedCount}
                   open={filterOpen}
                   onOpenChange={setFilterOpen}
@@ -319,8 +384,14 @@ export function FleetConsole(): React.JSX.Element {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-12 gap-3">
-                {sortedEntries.map((entry) => (
+              {density === 'comfortable' && visibleEntries.length > 0 ? <TileChartLegend /> : null}
+              {attentionOnly && visibleEntries.length === 0 && sortedEntries.length > 0 ? (
+                <p className="py-6 text-center text-sm text-fg-muted">
+                  No clusters need attention — all are within thresholds with no order due soon.
+                </p>
+              ) : null}
+              <div ref={gridRef} className="grid grid-cols-12 gap-3" onKeyDown={handleGridKeyDown}>
+                {visibleEntries.map((entry) => (
                   <div
                     key={entry.cluster.id}
                     className="col-span-12 min-[820px]:col-span-6 min-[1280px]:col-span-4"
@@ -336,6 +407,7 @@ export function FleetConsole(): React.JSX.Element {
                       linked={linkedClusterId === entry.cluster.id}
                       live={liveUsageById.get(entry.cluster.id)}
                       liveUsagePending={liveUsagePending}
+                      compact={density === 'compact'}
                     />
                   </div>
                 ))}
@@ -346,7 +418,11 @@ export function FleetConsole(): React.JSX.Element {
                         key={`skeleton-${i}`}
                         className="col-span-12 min-[820px]:col-span-6 min-[1280px]:col-span-4"
                       >
-                        <Skeleton className="h-[260px] w-full" />
+                        <Skeleton
+                          className={
+                            density === 'compact' ? 'h-[120px] w-full' : 'h-[260px] w-full'
+                          }
+                        />
                       </div>
                     ))
                   : null}
@@ -366,6 +442,7 @@ export function FleetConsole(): React.JSX.Element {
                           }}
                           forecast={undefined}
                           thresholds={thresholds}
+                          compact={density === 'compact'}
                         />
                       </div>
                     ))

@@ -1,7 +1,7 @@
 import type { ForecastResponse, LiveUsage } from '@lcm/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { Archive } from 'lucide-react';
+import { AlertTriangle, Archive } from 'lucide-react';
 import { memo } from 'react';
 
 import { AcknowledgedAnnotation } from '@/components/detail/recommendation-chip';
@@ -12,6 +12,7 @@ import { RUNWAY_UNIT } from '@/lib/format';
 import { formatDateShort, formatMonthShort } from '@/lib/format-month';
 import { cn } from '@/lib/utils';
 
+import { BulletMeter } from './bullet-meter';
 import { ClusterTileChart } from './cluster-tile-chart';
 import {
   describeLiveUsage,
@@ -36,6 +37,8 @@ export interface ClusterTileProps {
    */
   live?: LiveUsage | undefined;
   liveUsagePending?: boolean;
+  /** Compact density: drop the per-tile chart (the BulletMeter carries util). */
+  compact?: boolean;
 }
 
 const STATUS_BADGE: Record<
@@ -49,10 +52,17 @@ const STATUS_BADGE: Record<
   unknown: { variant: 'outline', label: 'UNKNOWN' },
 };
 
-const ORDER_BADGE_VARIANT: Record<'now' | 'soon' | 'planned', 'danger' | 'warning' | 'outline'> = {
-  now: 'danger',
-  soon: 'warning',
-  planned: 'outline',
+// Urgency rides the visible label VERB (and an alert icon for now/soon), with
+// the badge hue as redundant reinforcement — never the sole signal (WCAG 1.4.1
+// + the house "color is never the only signal" rule). This reverses the #290
+// decision to drop the visible urgency cue and lean on color tone alone.
+const ORDER_BADGE: Record<
+  'now' | 'soon' | 'planned',
+  { variant: 'danger' | 'warning' | 'outline'; verb: string; urgent: boolean }
+> = {
+  now: { variant: 'danger', verb: 'ORDER NOW', urgent: true },
+  soon: { variant: 'warning', verb: 'ORDER SOON', urgent: true },
+  planned: { variant: 'outline', verb: 'ORDER BY', urgent: false },
 };
 
 interface RunwayInfo {
@@ -176,6 +186,7 @@ export const ClusterTile = memo(function ClusterTile({
   linked = false,
   live,
   liveUsagePending = false,
+  compact = false,
 }: ClusterTileProps): React.JSX.Element {
   const { cluster } = entry;
   const queryClient = useQueryClient();
@@ -220,6 +231,7 @@ export const ClusterTile = memo(function ClusterTile({
       : `${(currentUtil * 100).toFixed(1)}% used`;
   const orderByDate = forecast?.procurement.orderByDate ?? null;
   const urgency = orderByUrgency(orderByDate);
+  const orderBadgeKey = urgency === 'none' ? 'planned' : urgency;
   const isArchived = Boolean(cluster.archivedAt);
   const runway = computeRunway(entry, thresholds);
   const runwayUnknown =
@@ -246,23 +258,31 @@ export const ClusterTile = memo(function ClusterTile({
         : runway.pastLabel === 'crit'
           ? `past crit ${runway.pastThresholdPct}%`
           : 'no breach';
-  const verdict = runwayUnknown
+  // The BulletMeter now carries utilization for every measured cluster, so the
+  // verdict no longer repeats "X% used" there — it leads with the forecast
+  // outcome instead. Only the no-capacity case (which has no meter) keeps the
+  // "utilization unknown" lead, so the tile still states the gap in words.
+  const verdictBody = runwayUnknown
     ? // Names the destination, not just the problem (#243 audit): a synced
       // cluster with no recorded host capacity is a dead end otherwise.
-      `${utilText} — add host capacity to calculate runway.`
+      'add host capacity to calculate runway.'
     : runway.breachLabel
-      ? `${utilText} — reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
+      ? `reaches ${runway.breachLabel} ≈ ${formatMonthShort(runway.breachDate!)}.`
       : runway.pastLabel === 'warn'
         ? runway.pastCritDate
-          ? `${utilText} — already past warn; reaches crit ≈ ${formatMonthShort(runway.pastCritDate)}.`
-          : `${utilText} — already past warn; crit beyond the ${runway.value}-month window.`
+          ? `already past warn; reaches crit ≈ ${formatMonthShort(runway.pastCritDate)}.`
+          : `already past warn; crit beyond the ${runway.value}-month window.`
         : runway.pastLabel === 'crit'
-          ? `${utilText} — already past crit.`
+          ? 'already past crit.'
           : // `runway.value` is the exact horizon length here (the numeral's
             // own "+" marks an open-ended countdown; this sentence describes
             // a fixed window boundary and must not inherit it — it previously
             // read "no breach in the 24+-month window" on a 24-month window).
-            `${utilText} — no breach in the ${runway.value}-month window.`;
+            `no breach in the ${runway.value}-month window.`;
+  const verdict =
+    currentUtil === null
+      ? `${utilText} — ${verdictBody}`
+      : verdictBody.charAt(0).toUpperCase() + verdictBody.slice(1);
 
   // Live usage / sync summary, appended so assistive tech hears it — the tile's
   // aria-label overrides its visible content, so the visible LIVE line below
@@ -284,7 +304,7 @@ export const ClusterTile = memo(function ClusterTile({
           'runway unknown — add host capacity to calculate breach timing'
         : `runway ${runway.value}${runway.plus ? '+' : ''} months ${runwaySub}`,
     orderByDate
-      ? `order by ${formatDateShort(orderByDate)} (${formatRelativeDays(orderByDate)})`
+      ? `${ORDER_BADGE[orderBadgeKey].verb.toLowerCase()} ${formatDateShort(orderByDate)} (${formatRelativeDays(orderByDate)})`
       : orderUnknown
         ? 'order status unknown — capacity required'
         : 'no order needed',
@@ -359,18 +379,15 @@ export const ClusterTile = memo(function ClusterTile({
           badge's color tone already conveys urgency, and the aria-label
           below still carries the relative-days detail for assistive tech.
         */}
-        {orderByDate || orderUnknown ? (
-          <Badge
-            variant={
-              orderByDate
-                ? ORDER_BADGE_VARIANT[urgency === 'none' ? 'planned' : urgency]
-                : 'outline'
-            }
-          >
-            {orderByDate
-              ? `ORDER BY ${formatDateShort(orderByDate).toUpperCase()}`
-              : 'ORDER STATUS UNKNOWN'}
+        {orderByDate ? (
+          <Badge variant={ORDER_BADGE[orderBadgeKey].variant}>
+            {ORDER_BADGE[orderBadgeKey].urgent ? (
+              <AlertTriangle className="h-3 w-3" aria-hidden />
+            ) : null}
+            {`${ORDER_BADGE[orderBadgeKey].verb} ${formatDateShort(orderByDate).toUpperCase()}`}
           </Badge>
+        ) : orderUnknown ? (
+          <Badge variant="outline">ORDER STATUS UNKNOWN</Badge>
         ) : null}
         {/*
           #302 (follow-up to #292/#300): the order-approval acknowledgment
@@ -417,6 +434,25 @@ export const ClusterTile = memo(function ClusterTile({
         )}
       </div>
 
+      {/* The one utilization viz, per DESIGN.md — an absolute anchor the
+          per-tile-scaled chart lacks (two clusters at very different loads draw
+          near-identical shapes, so the meter is what makes them comparable at a
+          glance). Mono % gives the exact figure; the meter places it against
+          warn/crit. */}
+      {!isArchived && currentUtil !== null ? (
+        <div className="flex items-center gap-2">
+          <BulletMeter
+            value={currentUtil * 100}
+            warn={thresholds.warn * 100}
+            crit={thresholds.crit * 100}
+            className="flex-1"
+          />
+          <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-foreground">
+            {Math.round(currentUtil * 100)}%
+          </span>
+        </div>
+      ) : null}
+
       <p className="text-[11px] leading-[1.45] text-fg-muted">
         {isArchived ? 'Archived — no forecast.' : verdict}
       </p>
@@ -448,9 +484,15 @@ export const ClusterTile = memo(function ClusterTile({
         </div>
       ) : null}
 
-      <div className="mt-auto">
-        <ClusterTileChart months={entry.months} thresholds={thresholds} orderByDate={orderByDate} />
-      </div>
+      {!compact ? (
+        <div className="mt-auto" data-testid="tile-chart">
+          <ClusterTileChart
+            months={entry.months}
+            thresholds={thresholds}
+            orderByDate={orderByDate}
+          />
+        </div>
+      ) : null}
     </Link>
   );
 });
