@@ -91,7 +91,7 @@ describe('LoginHero', () => {
   it('renders the approved brand copy and the 2x2 checklist', () => {
     render(<LoginHero />);
 
-    expect(screen.getByText(/secure capacity intelligence/i)).toBeInTheDocument();
+    expect(screen.getByText(/reads vcenter — never writes/i)).toBeInTheDocument();
     expect(screen.getByText(/capacity you can see coming\./i)).toBeInTheDocument();
     expect(
       screen.getByText(/one source of truth for every purchasing decision/i),
