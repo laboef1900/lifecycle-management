@@ -10,6 +10,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { api } from '@/lib/api-client';
 
 import { FleetConsole, sortClusters, sortClustersByUrgency } from './fleet-console';
@@ -300,7 +301,11 @@ function renderConsole(): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <FleetConsole />
+      {/* app.tsx mounts TooltipProvider app-wide; the density toggle uses Radix
+          Tooltip, so isolated console renders need it too. */}
+      <TooltipProvider delayDuration={0}>
+        <FleetConsole />
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }

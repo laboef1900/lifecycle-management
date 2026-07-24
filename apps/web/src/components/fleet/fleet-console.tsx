@@ -17,6 +17,7 @@ import { buildClusterForecastEntries, type ClusterForecastEntry } from '@/lib/fo
 import { useEffectiveThresholds } from '@/lib/use-effective-thresholds';
 
 import { ClusterTile } from './cluster-tile';
+import { FleetDensityToggle, type FleetDensity } from './fleet-density';
 import { TileChartLegend } from './tile-chart-legend';
 import { FleetFilter } from './fleet-filter';
 import { FleetSort, type ClusterSortMode } from './fleet-sort';
@@ -87,6 +88,11 @@ export function sortClusters(entries: SortEntry[], mode: ClusterSortMode): SortE
 export function FleetConsole(): React.JSX.Element {
   const [showArchived, setShowArchived] = useState(false);
   const [sortMode, setSortMode] = useState<ClusterSortMode>('orderBy');
+  const [density, setDensity] = useState<FleetDensity>(() =>
+    typeof localStorage !== 'undefined' && localStorage.getItem('fleet-density') === 'compact'
+      ? 'compact'
+      : 'comfortable',
+  );
   // Whether the user has operated the archived filter at least once this
   // mount: gates the sr-only announcement below so the status region never
   // "announces" the default state on load.
@@ -101,6 +107,14 @@ export function FleetConsole(): React.JSX.Element {
   const handleShowArchivedChange = useCallback((next: boolean) => {
     setShowArchived(next);
     setArchivedTouched(true);
+  }, []);
+  const handleDensityChange = useCallback((next: FleetDensity) => {
+    setDensity(next);
+    try {
+      localStorage.setItem('fleet-density', next);
+    } catch {
+      // Non-fatal: the density preference just won't persist (storage disabled).
+    }
   }, []);
 
   const clustersQuery = useQuery({
@@ -309,6 +323,7 @@ export function FleetConsole(): React.JSX.Element {
             <CardHeader className="flex-row items-center justify-between gap-3">
               <h2 className="text-sm font-semibold leading-none tracking-tight">Clusters</h2>
               <div className="flex items-center gap-2">
+                <FleetDensityToggle value={density} onValueChange={handleDensityChange} />
                 <FleetSort value={sortMode} onValueChange={setSortMode} />
                 <FleetFilter
                   showArchived={showArchived}
@@ -320,7 +335,7 @@ export function FleetConsole(): React.JSX.Element {
               </div>
             </CardHeader>
             <CardContent>
-              <TileChartLegend />
+              {density === 'comfortable' ? <TileChartLegend /> : null}
               <div className="grid grid-cols-12 gap-3">
                 {sortedEntries.map((entry) => (
                   <div
@@ -338,6 +353,7 @@ export function FleetConsole(): React.JSX.Element {
                       linked={linkedClusterId === entry.cluster.id}
                       live={liveUsageById.get(entry.cluster.id)}
                       liveUsagePending={liveUsagePending}
+                      compact={density === 'compact'}
                     />
                   </div>
                 ))}
@@ -348,7 +364,11 @@ export function FleetConsole(): React.JSX.Element {
                         key={`skeleton-${i}`}
                         className="col-span-12 min-[820px]:col-span-6 min-[1280px]:col-span-4"
                       >
-                        <Skeleton className="h-[260px] w-full" />
+                        <Skeleton
+                          className={
+                            density === 'compact' ? 'h-[120px] w-full' : 'h-[260px] w-full'
+                          }
+                        />
                       </div>
                     ))
                   : null}
@@ -368,6 +388,7 @@ export function FleetConsole(): React.JSX.Element {
                           }}
                           forecast={undefined}
                           thresholds={thresholds}
+                          compact={density === 'compact'}
                         />
                       </div>
                     ))

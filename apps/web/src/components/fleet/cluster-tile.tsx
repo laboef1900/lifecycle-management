@@ -37,6 +37,8 @@ export interface ClusterTileProps {
    */
   live?: LiveUsage | undefined;
   liveUsagePending?: boolean;
+  /** Compact density: drop the per-tile chart (the BulletMeter carries util). */
+  compact?: boolean;
 }
 
 const STATUS_BADGE: Record<
@@ -184,6 +186,7 @@ export const ClusterTile = memo(function ClusterTile({
   linked = false,
   live,
   liveUsagePending = false,
+  compact = false,
 }: ClusterTileProps): React.JSX.Element {
   const { cluster } = entry;
   const queryClient = useQueryClient();
@@ -473,9 +476,15 @@ export const ClusterTile = memo(function ClusterTile({
         </div>
       ) : null}
 
-      <div className="mt-auto">
-        <ClusterTileChart months={entry.months} thresholds={thresholds} orderByDate={orderByDate} />
-      </div>
+      {!compact ? (
+        <div className="mt-auto" data-testid="tile-chart">
+          <ClusterTileChart
+            months={entry.months}
+            thresholds={thresholds}
+            orderByDate={orderByDate}
+          />
+        </div>
+      ) : null}
     </Link>
   );
 });
