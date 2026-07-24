@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { Check, ShieldCheck } from 'lucide-react';
+import { Check, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { z } from 'zod';
 
 import { type LoginErrorCode, loginErrorCodeSchema, safeRedirectPath } from '@lcm/shared';
@@ -106,9 +106,12 @@ export function LocalLoginForm({
       {error ? (
         <p
           role="alert"
-          className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
         >
-          {error}
+          {/* Icon pairs shape with the red so the error never leans on color
+              alone (SC 1.4.1); aria-hidden — the text carries the meaning. */}
+          <TriangleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
         </p>
       ) : null}
       <Field
@@ -131,11 +134,12 @@ export function LocalLoginForm({
         required
       />
       {/* `variant="accent"` matches the app-wide primary-CTA convention (every
-          other submit button in settings/dialogs uses it) and the house style's
-          "amber --accent for brand + CTAs". @ai-warning this must stay the only
-          <button> inside this form: login-local.test.tsx's last case queries a
-          bare getByRole('button'), which throws on multiple matches — a
-          password show/hide toggle is the obvious temptation here. */}
+          other submit button in settings/dialogs uses it): under cool-brand,
+          `--accent` is the steel brand + CTA hue, so this renders steel, not the
+          retired amber. @ai-warning this must stay the only <button> inside this
+          form: login-local.test.tsx's last case queries a bare
+          getByRole('button'), which throws on multiple matches — a password
+          show/hide toggle is the obvious temptation here. */}
       <Button type="submit" variant="accent" size="lg" className="w-full" disabled={pending}>
         {pending ? 'Signing in…' : 'Sign in'}
       </Button>
@@ -170,13 +174,15 @@ export function LoginHero(): React.JSX.Element {
       </div>
 
       <div className="max-w-xl">
-        {/* Opaque chip, not the accent-soft `Badge` variant: over the light
-            hero's warm wash that variant measures 3.57:1 for the amber label —
-            under the 4.5:1 floor. On the card surface it is 5.26:1 light /
-            10.86:1 dark. */}
+        {/* Opaque `bg-card` chip, deliberately NOT the accent-soft `Badge`
+            variant: the steel `--accent` label needs to sit on the solid card
+            surface, where it clears AA 4.5:1 in both themes — the translucent
+            wash over the hero grid would not guarantee that. Copy is a factual
+            honesty proof (the PRODUCT.md "reads vCenter, never writes" voice),
+            not a marketing tagline. */}
         <span className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-card px-3 py-1 text-xs font-medium text-accent shadow-[var(--shadow-card)]">
           <ShieldCheck aria-hidden className="h-3.5 w-3.5" />
-          Secure capacity intelligence
+          Reads vCenter — never writes
         </span>
 
         {/* A display-styled paragraph rather than a heading: the hero is
@@ -245,9 +251,11 @@ export function SignInCard({
       {message ? (
         <p
           role="alert"
-          className="mt-6 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          className="mt-6 flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
         >
-          {message}
+          {/* Shape + color, not color alone (SC 1.4.1); aria-hidden icon. */}
+          <TriangleAlert aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{message}</span>
         </p>
       ) : null}
 
@@ -315,6 +323,14 @@ function LoginPage(): React.JSX.Element {
           <p className="mt-6 text-center text-xs text-fg-subtle">
             Protected workspace · access is logged
           </p>
+          {/* Local accounts have admin-side reset only (no self-serve), so a
+              locked-out admin needs a next step rather than a dead end. OIDC
+              recovery lives at the IdP, so this is local-mode only. */}
+          {showLocal ? (
+            <p className="mt-2 text-center text-xs text-fg-subtle">
+              Locked out? Ask another admin to reset your account.
+            </p>
+          ) : null}
         </div>
       </main>
     </div>

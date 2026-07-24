@@ -105,8 +105,13 @@
      element sitting on the hero clears AA in both themes. --fg-muted (the
      supporting sentence) is the tightest at 4.87:1 light / 4.81:1 dark.
      Retune a stop and those have to be re-measured. */
-  --hero-surface: linear-gradient(155deg, #fdfbf6 0%, #faf5ea 55%, #f6f0e4 100%);
-  --hero-grid: rgb(143 100 0 / 0.06);
+  /* Cool steel-tinted wash mirroring the dark radial (cool-brand, 2026-07-24):
+     the light hero was the last surface still on the retired warm-amber palette
+     (#8f6400 grid), which contradicted the steel-led brand it introduces. Now a
+     subtle cool slate radial + a low-alpha steel grid, coherent with the dark
+     hero and the steel chip/CTA/ring that sit on it. */
+  --hero-surface: radial-gradient(900px 520px at 15% -10%, #e9eff8 0%, #f1f4fa 62%);
+  --hero-grid: rgb(47 107 216 / 0.05);
   /* Bullet-meter fill (spec §3: "amber meter gradient"). The utilization meter
      stays amber, kept as a literal (#8F6400 light) and decoupled from --accent,
      which became steel under cool-brand (2026-07-23): brand went steel, the
