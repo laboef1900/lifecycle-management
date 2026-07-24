@@ -128,6 +128,9 @@ async function setLeadTimeWeeks(weeks: number): Promise<void> {
     critThreshold: 0.9,
     procurementLeadTimeWeeks: weeks,
     idempotencyKeyRetentionHours: 24,
+    forecastUncertaintyBandEnabled: false,
+    forecastUncertaintyMinAnchors: 6,
+    forecastUncertaintyBandWidth: 'p10_p90',
   });
 }
 
@@ -277,6 +280,9 @@ describe('forecast acknowledgment coverage (DESIGN.md §3)', () => {
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
       idempotencyKeyRetentionHours: 24,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
     });
 
     expect((await getForecast(clusterId)).json().acknowledgment).toBeNull();

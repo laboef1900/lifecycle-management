@@ -9,6 +9,7 @@ import type {
   ForecastEventMarker,
   ForecastMonthPoint,
   ForecastResponse,
+  ForecastUncertaintyPoint,
   ProcurementInfo,
 } from './forecast.js';
 import type { OrderApprovalResponse } from './order-approval.js';
@@ -26,6 +27,8 @@ import type {
 import type { Paginated } from './pagination.js';
 import {
   effectiveThresholdsSchema,
+  forecastUncertaintyBandWidthSchema,
+  forecastUncertaintyMinAnchorsSchema,
   idempotencyKeyRetentionHoursSchema,
   percentSchema,
   procurementLeadTimeWeeksSchema,
@@ -211,6 +214,12 @@ export const forecastAcknowledgmentSchema: z.ZodType<ForecastAcknowledgment> = z
   approvedAt: z.string(),
 });
 
+export const forecastUncertaintyPointSchema: z.ZodType<ForecastUncertaintyPoint> = z.object({
+  month: z.string(),
+  low: z.number(),
+  high: z.number(),
+});
+
 export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   fromMonth: z.string(),
   toMonth: z.string(),
@@ -225,6 +234,10 @@ export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   // while `.nullable()` carries the "no/ superseded acknowledgment" case the
   // current server always emits.
   acknowledgment: forecastAcknowledgmentSchema.nullable().exactOptional(),
+  // Additive/optional: omitted when the setting is off or the anchor floor is
+  // unmet (honest absence), so an older server and the disabled case both parse.
+  uncertainty: z.array(forecastUncertaintyPointSchema).exactOptional(),
+  uncertaintyAnchorCount: z.number().int().nonnegative().exactOptional(),
 });
 
 // ---------- Categories ----------
@@ -283,6 +296,9 @@ export const tenantSettingsResponseSchema: z.ZodType<TenantSettings> = z.object(
   critThreshold: percentSchema,
   procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
   idempotencyKeyRetentionHours: idempotencyKeyRetentionHoursSchema,
+  forecastUncertaintyBandEnabled: z.boolean(),
+  forecastUncertaintyMinAnchors: forecastUncertaintyMinAnchorsSchema,
+  forecastUncertaintyBandWidth: forecastUncertaintyBandWidthSchema,
 });
 
 // ---------- Pagination envelope ----------

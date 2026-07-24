@@ -64,6 +64,7 @@ const ROLE_TOKENS: Record<keyof ChartFallback, string> = {
   utilizationCrit: '--chart-utilization-crit',
   eventAdds: '--chart-event-adds',
   eventConsumes: '--chart-event-consumes',
+  band: '--chart-band',
 };
 
 describe.each([

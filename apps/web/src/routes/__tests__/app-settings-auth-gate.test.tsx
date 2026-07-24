@@ -124,6 +124,9 @@ describe('/_app/settings/access route guard (#293)', () => {
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
       idempotencyKeyRetentionHours: 24,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
     });
     vi.spyOn(api.settings.categories, 'list').mockResolvedValue([]);
     vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([]);

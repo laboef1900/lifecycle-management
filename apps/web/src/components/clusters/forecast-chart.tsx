@@ -110,6 +110,16 @@ export function ForecastChart({
     measuredByMonth.set(h.capturedAt, Math.round(h.consumption));
   }
 
+  // Empirical uncertainty band (opt-in, cluster detail only). Bounds are
+  // utilization FRACTIONS; converted to GB per month via that month's capacity so
+  // the band hugs the projection. Naturally absent on a scenario: `activeForecast`
+  // is then the scenario forecast, which never carries `uncertainty` (INV-1).
+  const bandByMonth = new Map<string, { low: number; high: number }>();
+  for (const p of activeForecast.uncertainty ?? []) {
+    bandByMonth.set(p.month, { low: p.low, high: p.high });
+  }
+  const hasBand = bandByMonth.size > 0;
+
   // History predating the forecast window gets its own leading rows: the window
   // opens at the NEWEST baseline, so without these every older measurement would
   // be invisible — which is precisely what #172 exists to fix.
@@ -126,11 +136,20 @@ export function ForecastChart({
       critLevel: null,
       baselineConsumption: null,
       measured: Math.round(h.consumption),
+      bandRange: null as [number, number] | null,
     }));
 
   const windowData = activeForecast.months.map((point, index) => {
     const capacity = Math.round(point.capacity);
     const consumption = Math.round(point.consumption);
+    // Band → GB around the projection, on FORECAST months only (index >= now).
+    // Fraction bounds may run below 0 or above 1; clamp the low at 0 and let the
+    // y-axis clip a high above capacity (an honest "uncertainty exceeds capacity").
+    const band = index >= currentIndex ? bandByMonth.get(point.month) : undefined;
+    const bandRange: [number, number] | null =
+      band && capacity > 0
+        ? [Math.max(0, Math.round(band.low * capacity)), Math.round(band.high * capacity)]
+        : null;
     return {
       month: point.month,
       consumption,
@@ -145,6 +164,7 @@ export function ForecastChart({
       baselineConsumption: scenario ? (baselineByMonth.get(point.month) ?? null) : null,
       // null (not 0) for months with no measurement — see the `measured` <Line>.
       measured: measuredByMonth.get(point.month) ?? null,
+      bandRange,
     };
   });
 
@@ -327,6 +347,25 @@ export function ForecastChart({
                 );
               }}
             />
+            {/* Empirical uncertainty band (opt-in, cluster detail only). A ranged
+                Area between [low, high] GB, drawn FIRST so it sits behind every
+                series — it is measured context around the projection, not a line.
+                Muted neutral, translucent; both themes via the --chart-band token.
+                Absent by default and on scenarios (bandRange is null there). */}
+            {hasBand ? (
+              <Area
+                type="monotone"
+                dataKey="bandRange"
+                name="Forecast range"
+                stroke="none"
+                fill={colors.band}
+                fillOpacity={0.18}
+                connectNulls={false}
+                isAnimationActive={false}
+                legendType="none"
+                activeDot={false}
+              />
+            ) : null}
             <Area
               type="monotone"
               dataKey="consumption"
@@ -525,6 +564,7 @@ export function ForecastChart({
         events={activeForecast.events}
         colors={colors}
         showBaselineGhost={Boolean(scenario)}
+        bandAnchorCount={hasBand ? activeForecast.uncertaintyAnchorCount : undefined}
       />
       {scenarioDeltaLabel ? (
         <p
@@ -682,70 +722,100 @@ interface ChartLegendProps {
   colors: ReturnType<typeof useChartColors>;
   /** True when a scenario is active — adds the "was: baseline" ghost entry. */
   showBaselineGhost: boolean;
+  /**
+   * Distinct past re-anchors the uncertainty band was measured from, when the
+   * band is shown; undefined otherwise. Drives the empirical caption's "N".
+   */
+  bandAnchorCount?: number | undefined;
 }
 
-function ChartLegend({ events, colors, showBaselineGhost }: ChartLegendProps): React.JSX.Element {
+function ChartLegend({
+  events,
+  colors,
+  showBaselineGhost,
+  bandAnchorCount,
+}: ChartLegendProps): React.JSX.Element {
   const hasAddsEvent = events.some((e) => (e.capacityDelta ?? 0) > 0);
   const hasConsumesEvent = events.some((e) => !((e.capacityDelta ?? 0) > 0));
+  const showBand = bandAnchorCount !== undefined;
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
-      {/* The solid/dashed convention (actual-to-now, then forecast) gets its
+    <>
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
+        {/* The solid/dashed convention (actual-to-now, then forecast) gets its
           own two entries instead of one ambiguous "Consumption" swatch. */}
-      <LegendItem swatch={colors.consumption} label="Actual —" testId="legend-swatch-actual" />
-      <LegendItem
-        swatch={colors.consumption}
-        label="Forecast ⌁"
-        dashed
-        testId="legend-swatch-forecast"
-      />
-      {/* The dotted measured-baseline series (rendered whenever there's
+        <LegendItem swatch={colors.consumption} label="Actual —" testId="legend-swatch-actual" />
+        <LegendItem
+          swatch={colors.consumption}
+          label="Forecast ⌁"
+          dashed
+          testId="legend-swatch-forecast"
+        />
+        {/* The dotted measured-baseline series (rendered whenever there's
           history) previously had no legend entry at all. */}
-      <LegendItem
-        swatch={colors.consumption}
-        label="Measured baseline"
-        dotted
-        testId="legend-swatch-measured"
-      />
-      <LegendItem
-        swatch={colors.capacity}
-        label="Capacity ceiling"
-        dashed
-        testId="legend-swatch-capacity"
-      />
-      {/* Headroom is a filled band on the chart, not a line — swatch it as a
+        <LegendItem
+          swatch={colors.consumption}
+          label="Measured baseline"
+          dotted
+          testId="legend-swatch-measured"
+        />
+        <LegendItem
+          swatch={colors.capacity}
+          label="Capacity ceiling"
+          dashed
+          testId="legend-swatch-capacity"
+        />
+        {/* Headroom is a filled band on the chart, not a line — swatch it as a
           small filled square so it isn't mis-swatched as another dashed line. */}
-      <LegendItem
-        swatch={colors.capacity}
-        label="Headroom"
-        area
-        faint
-        testId="legend-swatch-headroom"
-      />
-      {showBaselineGhost ? (
-        <LegendItem swatch={colors.utilizationOk} label="was: baseline" dashed />
-      ) : null}
-      {events.length > 0 ? (
-        <span aria-hidden className="mx-1">
-          ·
-        </span>
-      ) : null}
-      {hasAddsEvent ? (
         <LegendItem
-          swatch={colors.eventAdds}
-          label="Adds capacity"
-          dot
-          testId="legend-swatch-event-adds"
+          swatch={colors.capacity}
+          label="Headroom"
+          area
+          faint
+          testId="legend-swatch-headroom"
         />
+        {showBand ? (
+          <LegendItem
+            swatch={colors.band}
+            label="Forecast range"
+            area
+            faint
+            testId="legend-swatch-band"
+          />
+        ) : null}
+        {showBaselineGhost ? (
+          <LegendItem swatch={colors.utilizationOk} label="was: baseline" dashed />
+        ) : null}
+        {events.length > 0 ? (
+          <span aria-hidden className="mx-1">
+            ·
+          </span>
+        ) : null}
+        {hasAddsEvent ? (
+          <LegendItem
+            swatch={colors.eventAdds}
+            label="Adds capacity"
+            dot
+            testId="legend-swatch-event-adds"
+          />
+        ) : null}
+        {hasConsumesEvent ? (
+          <LegendItem
+            swatch={colors.eventConsumes}
+            label="Consumes capacity"
+            dot
+            testId="legend-swatch-event-consumes"
+          />
+        ) : null}
+      </div>
+      {/* Empirical labeling is mandatory (design §uncertainty): the band is
+          MEASURED past error, stated as such and never as a guarantee. */}
+      {showBand ? (
+        <p data-testid="forecast-band-caption" className="mt-1.5 text-[11px] text-fg-subtle">
+          Shaded range: the spread of this cluster&rsquo;s {bandAnchorCount} past forecast
+          {bandAnchorCount === 1 ? '' : 's'}&rsquo; measured error — not a guarantee.
+        </p>
       ) : null}
-      {hasConsumesEvent ? (
-        <LegendItem
-          swatch={colors.eventConsumes}
-          label="Consumes capacity"
-          dot
-          testId="legend-swatch-event-consumes"
-        />
-      ) : null}
-    </div>
+    </>
   );
 }
 

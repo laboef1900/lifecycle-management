@@ -137,6 +137,10 @@
   --chart-utilization-crit: var(--destructive);
   --chart-event-adds: var(--success);
   --chart-event-consumes: var(--destructive);
+  /* Empirical forecast-uncertainty band (opt-in, cluster detail only). A muted
+     NEUTRAL — deliberately not amber/violet/steel, since the band is measured
+     context around the projection, never a data series. Rendered translucent. */
+  --chart-band: #6b7488;
   --chart-1: #171c2c;
   --chart-2: #5a6478;
   --chart-3: #66708c;
@@ -213,6 +217,7 @@ html.dark {
   --chart-capacity: #c7d0e4;
   --chart-grid: #1b2236;
   --chart-axis: #2a3450;
+  --chart-band: #8b93a7; /* empirical uncertainty band — neutral, translucent (see :root) */
   --chart-1: #e8ecf5;
   --chart-2: #8b93a7;
   --chart-3: #7c86a0;

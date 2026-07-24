@@ -1,4 +1,8 @@
-import type { BaselineHistoryPoint, ForecastAcknowledgment } from '@lcm/shared';
+import type {
+  BaselineHistoryPoint,
+  ForecastAcknowledgment,
+  ForecastUncertaintyPoint,
+} from '@lcm/shared';
 import type { EffectiveThresholds, ProcurementInfo } from '@lcm/shared';
 
 import { formatDate } from '../lib/dates.js';
@@ -124,6 +128,16 @@ export interface ForecastResult {
    * back into the forecast maths — hence its absence from `ComputedForecast`.
    */
   acknowledgment: ForecastAcknowledgment | null;
+  /**
+   * Empirical uncertainty band over the projected months (loader-assembled from
+   * ForecastSnapshots vs measured actuals). Optional/omitted when disabled or the
+   * anchor floor is unmet. INV-1: additive, never affects the forecast maths, and
+   * never set on a scenario (a what-if has no measured error). Absent from
+   * `ComputedForecast` for the same reason as `acknowledgment`.
+   */
+  uncertainty?: ForecastUncertaintyPoint[];
+  /** Distinct past re-anchors the band was measured from — the caption's "N". */
+  uncertaintyAnchorCount?: number;
 }
 
 /**
@@ -136,7 +150,12 @@ export interface ForecastResult {
  */
 export type ComputedForecast = Omit<
   ForecastResult,
-  'effectiveThresholds' | 'procurement' | 'baselineHistory' | 'acknowledgment'
+  | 'effectiveThresholds'
+  | 'procurement'
+  | 'baselineHistory'
+  | 'acknowledgment'
+  | 'uncertainty'
+  | 'uncertaintyAnchorCount'
 >;
 
 export function computeForecast(

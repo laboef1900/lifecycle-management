@@ -28,12 +28,18 @@ describe('<ForecastThresholdsForm>', () => {
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
       idempotencyKeyRetentionHours: 24,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
     });
     vi.spyOn(api.settings.tenant, 'update').mockResolvedValue({
       warnThreshold: 0.65,
       critThreshold: 0.85,
       procurementLeadTimeWeeks: 6,
       idempotencyKeyRetentionHours: 12,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
     });
   });
 
@@ -72,6 +78,9 @@ describe('<ForecastThresholdsForm>', () => {
         critThreshold: 0.85,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       });
     });
   });
@@ -124,6 +133,9 @@ describe('<ForecastThresholdsForm>', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 12,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       });
     });
   });
@@ -200,6 +212,9 @@ describe('<ForecastThresholdsForm>', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 48,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       });
     });
   });

@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
 
 import {
   clusterCreateInputSchema,
@@ -9,11 +9,36 @@ import {
 } from '@lcm/shared';
 
 import { ClustersService } from '../services/clusters.js';
+import { ForecastService } from '../services/forecast-loader.js';
 import { VsphereLiveUsageService } from '../services/vsphere-live-usage.js';
 
 export const clusterRoutes: FastifyPluginAsync = async (fastify) => {
   const service = new ClustersService(fastify.prisma);
+  const forecast = new ForecastService(fastify.prisma);
   const liveUsage = new VsphereLiveUsageService(fastify.prisma);
+
+  /**
+   * Re-anchor hook (Option A1, snapshot-forward): after a manual baseline
+   * capture, persist the current forecast so the empirical uncertainty band can
+   * later measure projected-vs-actual. BEST-EFFORT — a snapshot failure MUST NOT
+   * fail the baseline write it follows; it only means the band skips this period.
+   */
+  const accrueSnapshots = async (
+    request: { tenantId: string; log: FastifyBaseLogger },
+    clusterId: string,
+    metricKeys: readonly string[],
+  ): Promise<void> => {
+    for (const metricKey of new Set(metricKeys)) {
+      try {
+        await forecast.snapshotForecast(request.tenantId, clusterId, metricKey);
+      } catch (err) {
+        request.log.warn(
+          { err, clusterId, metricKey },
+          'forecast snapshot skipped (best-effort, uncertainty band)',
+        );
+      }
+    }
+  };
 
   fastify.get('/clusters', async (request) => {
     const query = clustersListQuerySchema.parse(request.query);
@@ -38,6 +63,11 @@ export const clusterRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post('/clusters', async (request, reply) => {
     const input = clusterCreateInputSchema.parse(request.body);
     const created = await service.create(request.tenantId, input);
+    await accrueSnapshots(
+      request,
+      created.id,
+      input.baselines.map((b) => b.metricTypeKey),
+    );
     reply.status(201);
     return created;
   });
@@ -45,7 +75,15 @@ export const clusterRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.put('/clusters/:id', async (request) => {
     const { id } = clusterIdParamsSchema.parse(request.params);
     const input = clusterUpdateInputSchema.parse(request.body);
-    return service.update(request.tenantId, id, input);
+    const updated = await service.update(request.tenantId, id, input);
+    if (input.baselines !== undefined) {
+      await accrueSnapshots(
+        request,
+        id,
+        input.baselines.map((b) => b.metricTypeKey),
+      );
+    }
+    return updated;
   });
 
   fastify.delete('/clusters/:id', async (request, reply) => {

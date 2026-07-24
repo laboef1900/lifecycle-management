@@ -44,6 +44,9 @@ describe('SettingsService.updateTenant', () => {
       critThreshold: 0.85,
       procurementLeadTimeWeeks: 6,
       idempotencyKeyRetentionHours: 24,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
     });
     expect(result.warnThreshold).toBeCloseTo(0.65);
     expect(result.critThreshold).toBeCloseTo(0.85);
@@ -57,6 +60,9 @@ describe('SettingsService.updateTenant', () => {
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 12,
       idempotencyKeyRetentionHours: 24,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
     });
     const result = await svc.getTenant(TENANT_ID);
     expect(result.procurementLeadTimeWeeks).toBe(12);
@@ -98,6 +104,9 @@ describe('SettingsService.updateCluster', () => {
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
       idempotencyKeyRetentionHours: 24,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
     });
     await expect(
       svc.updateCluster(TENANT_ID, clusterId, {

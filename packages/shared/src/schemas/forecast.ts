@@ -103,6 +103,20 @@ export interface ForecastAcknowledgment {
   approvedAt: string;
 }
 
+/**
+ * One projected month's empirical uncertainty band, derived from measured past
+ * forecast error (docs/design/forecast-uncertainty-band.md). Bounds are in the
+ * SAME unit as {@link ForecastMonthPoint.utilization} (fraction of capacity), so
+ * a renderer reads them off the same axis with no conversion. Raw bounds may
+ * fall below 0 or above 1 — renderers clamp for display; the stored math is not
+ * clamped so the spread stays honest.
+ */
+export interface ForecastUncertaintyPoint {
+  month: string;
+  low: number;
+  high: number;
+}
+
 export interface ForecastResponse {
   fromMonth: string;
   toMonth: string;
@@ -128,6 +142,20 @@ export interface ForecastResponse {
    * current server always sets it (to an object or `null`).
    */
   acknowledgment?: ForecastAcknowledgment | null;
+  /**
+   * Empirical uncertainty band over the FUTURE (projected) months. Present only
+   * when the tenant setting is enabled AND enough matured re-anchors exist —
+   * omitted otherwise (honest absence, never a fabricated zero-width band).
+   * Additive/optional (an older server simply omits it). A scenario response
+   * never carries a band: a hypothetical has no measured error history (INV-1).
+   */
+  uncertainty?: ForecastUncertaintyPoint[];
+  /**
+   * How many distinct past re-anchors the band was measured from — the "N" in the
+   * chart's empirical caption ("Range from N past forecasts' measured error").
+   * Present exactly when `uncertainty` is; ≥ the configured minimum-anchors floor.
+   */
+  uncertaintyAnchorCount?: number;
 }
 
 // ---------- What-if scenarios ----------

@@ -264,6 +264,9 @@ function makeTenantSettings(overrides: Partial<TenantSettings> = {}): TenantSett
     critThreshold: 0.9,
     procurementLeadTimeWeeks: 13,
     idempotencyKeyRetentionHours: 24,
+    forecastUncertaintyBandEnabled: false,
+    forecastUncertaintyMinAnchors: 6,
+    forecastUncertaintyBandWidth: 'p10_p90',
     ...overrides,
   };
 }

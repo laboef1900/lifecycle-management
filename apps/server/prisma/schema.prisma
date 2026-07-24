@@ -38,18 +38,24 @@ model Tenant {
   settings               TenantSettings?
   users                  User[]
   orderApprovals         OrderApproval[]
+  forecastSnapshots      ForecastSnapshot[]
 
   @@map("tenants")
 }
 
 model TenantSettings {
-  tenantId                     String   @id @map("tenant_id")
-  warnThreshold                Decimal  @default(0.70) @map("warn_threshold") @db.Decimal(4, 3)
-  critThreshold                Decimal  @default(0.90) @map("crit_threshold") @db.Decimal(4, 3)
-  procurementLeadTimeWeeks     Int      @default(8) @map("procurement_lead_time_weeks")
-  idempotencyKeyRetentionHours Int      @default(24) @map("idempotency_key_retention_hours")
-  createdAt                    DateTime @default(now()) @map("created_at")
-  updatedAt                    DateTime @updatedAt @map("updated_at")
+  tenantId                       String   @id @map("tenant_id")
+  warnThreshold                  Decimal  @default(0.70) @map("warn_threshold") @db.Decimal(4, 3)
+  critThreshold                  Decimal  @default(0.90) @map("crit_threshold") @db.Decimal(4, 3)
+  procurementLeadTimeWeeks       Int      @default(8) @map("procurement_lead_time_weeks")
+  idempotencyKeyRetentionHours   Int      @default(24) @map("idempotency_key_retention_hours")
+  // Opt-in empirical forecast uncertainty band (docs/design/forecast-uncertainty-band.md).
+  // Defaults mirror @lcm/shared DEFAULT_FORECAST_UNCERTAINTY_* constants.
+  forecastUncertaintyBandEnabled Boolean  @default(false) @map("forecast_uncertainty_band_enabled")
+  forecastUncertaintyMinAnchors  Int      @default(6) @map("forecast_uncertainty_min_anchors")
+  forecastUncertaintyBandWidth   String   @default("p10_p90") @map("forecast_uncertainty_band_width")
+  createdAt                      DateTime @default(now()) @map("created_at")
+  updatedAt                      DateTime @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -62,10 +68,11 @@ model MetricType {
   displayName String @map("display_name")
   unit        String
 
-  baselineHistory ClusterBaselineHistory[]
-  hostCapacities  HostMetricCapacity[]
-  itemAllocations ItemAllocation[]
-  items           Item[]
+  baselineHistory   ClusterBaselineHistory[]
+  hostCapacities    HostMetricCapacity[]
+  itemAllocations   ItemAllocation[]
+  items             Item[]
+  forecastSnapshots ForecastSnapshot[]
 
   @@map("metric_types")
 }
@@ -99,7 +106,7 @@ model Cluster {
   updatedAt    DateTime  @updatedAt @map("updated_at")
   archivedAt   DateTime? @map("archived_at")
 
-  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant            Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// @ai-warning `onDelete: Restrict`, NEVER Cascade. ClusterBaselineHistory
   /// cascades from Cluster, so a cascade here would
   /// chain: delete connection -> delete clusters -> DELETE EVERY BASELINE. One
@@ -111,14 +118,15 @@ model Cluster {
   /// SetNull is also wrong: it would leave source='vsphere' with a null
   /// connectionId — a row no code path expects — and would make the destructive
   /// path automatic rather than deliberate.
-  connection      VsphereConnection?       @relation(fields: [connectionId], references: [id], onDelete: Restrict)
-  baselineHistory ClusterBaselineHistory[]
-  hosts           Host[]
-  hostMemberships HostClusterMembership[]
-  items           Item[]
-  settings        ClusterSettings?
-  usageSample     VsphereUsageSample?
-  orderApprovals  OrderApproval[]
+  connection        VsphereConnection?       @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  baselineHistory   ClusterBaselineHistory[]
+  hosts             Host[]
+  hostMemberships   HostClusterMembership[]
+  items             Item[]
+  settings          ClusterSettings?
+  usageSample       VsphereUsageSample?
+  orderApprovals    OrderApproval[]
+  forecastSnapshots ForecastSnapshot[]
 
   @@unique([tenantId, name], map: "clusters_tenant_name_unique")
   /// Cluster identity WITHIN a vCenter. A MoRef (`domain-c123`) is unique only
@@ -193,6 +201,36 @@ model ClusterBaselineHistory {
 
   @@unique([clusterId, metricTypeId, capturedAt], map: "cluster_baseline_history_period_unique")
   @@map("cluster_baseline_history")
+}
+
+/// Append-only record of what the forecast PROJECTED, captured at each monthly
+/// re-anchor (baseline capture). Compared later against the measured actual
+/// (ClusterBaselineHistory) to derive the empirical uncertainty band — the only
+/// non-fabricated band on a deterministic engine. See
+/// docs/design/forecast-uncertainty-band.md.
+///
+/// @ai-warning `projectedUtil` is a FRACTION of capacity (0..1+), same unit as
+/// ForecastMonthPoint.utilization — NOT a percentage. `anchorMonth` /
+/// `horizonMonth` are first-of-month period labels (like capturedAt);
+/// `horizonIndex` is months(anchor -> horizon), the key the error math groups by.
+model ForecastSnapshot {
+  id            String   @id @default(cuid())
+  clusterId     String   @map("cluster_id")
+  metricTypeId  String   @map("metric_type_id")
+  tenantId      String   @default("default") @map("tenant_id")
+  anchorMonth   DateTime @map("anchor_month") @db.Date
+  horizonMonth  DateTime @map("horizon_month") @db.Date
+  horizonIndex  Int      @map("horizon_index")
+  projectedUtil Decimal  @map("projected_util") @db.Decimal(9, 6)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  cluster    Cluster    @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  metricType MetricType @relation(fields: [metricTypeId], references: [id])
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+
+  @@unique([clusterId, metricTypeId, anchorMonth, horizonMonth], map: "forecast_snapshot_unique")
+  @@index([clusterId, metricTypeId], map: "forecast_snapshot_cluster_metric_idx")
+  @@map("forecast_snapshot")
 }
 
 /// Per-breach-episode order approval / acknowledgment (#292). An immutable,

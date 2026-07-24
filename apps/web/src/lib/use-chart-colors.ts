@@ -15,6 +15,8 @@ export interface ChartColors {
   eventAdds: string;
   /** Event marker color for everything else — see {@link eventColor}. */
   eventConsumes: string;
+  /** Empirical uncertainty-band base (neutral); rendered translucent. */
+  band: string;
 }
 
 /**
@@ -38,6 +40,7 @@ export interface ChartFallback {
   utilizationCrit: string;
   eventAdds: string;
   eventConsumes: string;
+  band: string;
 }
 
 export const FALLBACK_LIGHT: ChartFallback = {
@@ -50,6 +53,7 @@ export const FALLBACK_LIGHT: ChartFallback = {
   utilizationCrit: '#c0343c', // --destructive
   eventAdds: '#176b45', // --success
   eventConsumes: '#c0343c', // --destructive
+  band: '#6b7488', // --chart-band (neutral)
 };
 
 export const FALLBACK_DARK: ChartFallback = {
@@ -62,6 +66,7 @@ export const FALLBACK_DARK: ChartFallback = {
   utilizationCrit: '#ff6b6b', // --destructive
   eventAdds: '#3dd68c', // --success
   eventConsumes: '#ff6b6b', // --destructive
+  band: '#8b93a7', // --chart-band (neutral)
 };
 
 /**
@@ -111,6 +116,7 @@ function resolveChartColors(isDark: boolean): ChartColors {
     utilizationCrit: read('--chart-utilization-crit', fb.utilizationCrit),
     eventAdds: read('--chart-event-adds', fb.eventAdds),
     eventConsumes: read('--chart-event-consumes', fb.eventConsumes),
+    band: read('--chart-band', fb.band),
   };
 }
 
