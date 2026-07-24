@@ -100,6 +100,32 @@ describe('POST /api/clusters', () => {
     });
   });
 
+  it('accrues forecast snapshots on baseline capture (uncertainty-band re-anchor)', async () => {
+    // The route's best-effort re-anchor hook persists the current forecast so the
+    // empirical uncertainty band can later measure projected-vs-actual (Option A1).
+    // A snapshot failure must not fail the write, so this asserts the happy path
+    // actually accrued rows rather than silently swallowing.
+    const name = uniqueName('snapshot-hook');
+    const created = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name,
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const { id } = created.json() as { id: string };
+
+    const snapshots = await prisma.forecastSnapshot.findMany({ where: { clusterId: id } });
+    expect(snapshots.length).toBeGreaterThan(0);
+    // Future horizons only, all keyed on the capture (re-anchor) month.
+    expect(snapshots.every((s) => s.horizonIndex >= 1)).toBe(true);
+  });
+
   it('reports utilization null (never 0) for a zero-capacity cluster', async () => {
     // A cluster with capacity 0 — a synced cluster before its hosts carry capacity,
     // or any zero-capacity month. Rendering "0% used" here reads as "healthy, plenty

@@ -53,7 +53,9 @@ const vsphereSchedulerPluginFn: FastifyPluginAsync<VsphereSchedulerPluginOptions
     info: (details, message) => fastify.log.info(details, message),
     warn: (details, message) => fastify.log.warn(details, message),
   });
-  const snapshot = new VsphereSnapshotService(fastify.prisma, collector);
+  const snapshot = new VsphereSnapshotService(fastify.prisma, collector, {
+    warn: (details, message) => fastify.log.warn(details, message),
+  });
   const liveUsage = new VsphereLiveUsageService(fastify.prisma);
 
   const runner = new VsphereJobRunner({

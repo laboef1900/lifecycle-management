@@ -96,6 +96,23 @@ describe('⚠️ the snapshot must not double-count capacity', () => {
     expect(row.baselineConsumption.toNumber()).toBe(500);
   });
 
+  it('accrues a forecast snapshot when a new baseline is captured (uncertainty-band re-anchor)', async () => {
+    const conn = await makeConn();
+    const svc = new VsphereSnapshotService(prisma, collector(inventory()));
+    await svc.runSnapshot('default', conn, CREDS, new Date('2026-08-01T00:00:00Z'));
+
+    const cluster = await prisma.cluster.findFirstOrThrow({ where: { connectionId: conn } });
+    const snaps = await prisma.forecastSnapshot.findMany({ where: { clusterId: cluster.id } });
+    expect(snaps.length).toBeGreaterThan(0);
+    expect(snaps.every((s) => s.horizonIndex >= 1)).toBe(true);
+
+    // A same-period re-run re-anchors NOTHING: the baseline is a skipped duplicate
+    // (written.count 0), so the hook is not fired and no new snapshots accrue.
+    await svc.runSnapshot('default', conn, CREDS, new Date('2026-08-17T09:30:00Z'));
+    const after = await prisma.forecastSnapshot.count({ where: { clusterId: cluster.id } });
+    expect(after).toBe(snaps.length);
+  });
+
   it('sums only hosts that are actually reporting', async () => {
     const conn = await makeConn();
     // One host disconnected: counting it as 0 would look like consumption dropped.
