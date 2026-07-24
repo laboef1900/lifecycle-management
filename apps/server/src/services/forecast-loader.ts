@@ -113,7 +113,14 @@ export class ForecastService {
     // Computed AFTER finalize, so the forecast maths and its characterization
     // snapshot are untouched; omitted entirely when disabled or unearned.
     const uncertainty = await this.computeUncertainty(clusterId, prepared, result.months);
-    return uncertainty ? { ...result, acknowledgment, uncertainty } : { ...result, acknowledgment };
+    return uncertainty
+      ? {
+          ...result,
+          acknowledgment,
+          uncertainty: uncertainty.points,
+          uncertaintyAnchorCount: uncertainty.anchorCount,
+        }
+      : { ...result, acknowledgment };
   }
 
   /**
@@ -500,7 +507,7 @@ export class ForecastService {
     clusterId: string,
     prepared: PreparedForecastInput,
     months: ForecastResult['months'],
-  ): Promise<ForecastUncertaintyPoint[] | undefined> {
+  ): Promise<{ points: ForecastUncertaintyPoint[]; anchorCount: number } | undefined> {
     if (!prepared.bandEnabled) return undefined;
     const thisMonth = firstOfMonth(new Date());
     const snapshots = await this.prisma.forecastSnapshot.findMany({
@@ -538,7 +545,7 @@ export class ForecastService {
         high: m.utilization + band.high,
       });
     }
-    return points.length > 0 ? points : undefined;
+    return points.length > 0 ? { points, anchorCount } : undefined;
   }
 }
 

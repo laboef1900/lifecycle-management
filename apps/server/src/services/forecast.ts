@@ -136,6 +136,8 @@ export interface ForecastResult {
    * `ComputedForecast` for the same reason as `acknowledgment`.
    */
   uncertainty?: ForecastUncertaintyPoint[];
+  /** Distinct past re-anchors the band was measured from — the caption's "N". */
+  uncertaintyAnchorCount?: number;
 }
 
 /**
@@ -148,7 +150,12 @@ export interface ForecastResult {
  */
 export type ComputedForecast = Omit<
   ForecastResult,
-  'effectiveThresholds' | 'procurement' | 'baselineHistory' | 'acknowledgment' | 'uncertainty'
+  | 'effectiveThresholds'
+  | 'procurement'
+  | 'baselineHistory'
+  | 'acknowledgment'
+  | 'uncertainty'
+  | 'uncertaintyAnchorCount'
 >;
 
 export function computeForecast(

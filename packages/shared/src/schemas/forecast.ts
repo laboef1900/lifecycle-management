@@ -150,6 +150,12 @@ export interface ForecastResponse {
    * never carries a band: a hypothetical has no measured error history (INV-1).
    */
   uncertainty?: ForecastUncertaintyPoint[];
+  /**
+   * How many distinct past re-anchors the band was measured from — the "N" in the
+   * chart's empirical caption ("Range from N past forecasts' measured error").
+   * Present exactly when `uncertainty` is; ≥ the configured minimum-anchors floor.
+   */
+  uncertaintyAnchorCount?: number;
 }
 
 // ---------- What-if scenarios ----------

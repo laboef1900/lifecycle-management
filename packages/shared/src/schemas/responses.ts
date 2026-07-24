@@ -237,6 +237,7 @@ export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   // Additive/optional: omitted when the setting is off or the anchor floor is
   // unmet (honest absence), so an older server and the disabled case both parse.
   uncertainty: z.array(forecastUncertaintyPointSchema).exactOptional(),
+  uncertaintyAnchorCount: z.number().int().nonnegative().exactOptional(),
 });
 
 // ---------- Categories ----------

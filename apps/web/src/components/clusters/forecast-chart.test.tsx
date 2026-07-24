@@ -382,6 +382,27 @@ describe('ForecastChart props mapping', () => {
     expect(capacitySwatch.className).not.toContain('rounded-sm');
   });
 
+  it('shows the uncertainty-band legend + empirical caption (naming N) only when the band is present', () => {
+    // Opt-in: nothing by default.
+    const { unmount } = renderChart(makeForecast());
+    expect(screen.queryByTestId('legend-swatch-band')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('forecast-band-caption')).not.toBeInTheDocument();
+    unmount();
+
+    // Present with measured bounds + anchor count → labeled empirical, names N,
+    // and states it is not a guarantee (mandatory empirical labeling).
+    renderChart(
+      makeForecast({
+        uncertainty: [{ month: '2026-07-01', low: 0.12, high: 0.24 }],
+        uncertaintyAnchorCount: 6,
+      }),
+    );
+    expect(screen.getByTestId('legend-swatch-band')).toBeInTheDocument();
+    const caption = screen.getByTestId('forecast-band-caption');
+    expect(caption).toHaveTextContent('6 past forecasts');
+    expect(caption).toHaveTextContent(/not a guarantee/i);
+  });
+
   it('debounces container resize past the LONGEST pane transition so it settles in one window', () => {
     // At lg+ the scenario pane is a flex sibling whose width animates 0->340px,
     // resizing this container every frame. Without a debounce each frame
