@@ -12,6 +12,7 @@ import { RUNWAY_UNIT } from '@/lib/format';
 import { formatDateShort, formatMonthShort } from '@/lib/format-month';
 import { cn } from '@/lib/utils';
 
+import { BulletMeter } from './bullet-meter';
 import { ClusterTileChart } from './cluster-tile-chart';
 import {
   describeLiveUsage,
@@ -421,6 +422,25 @@ export const ClusterTile = memo(function ClusterTile({
           </>
         )}
       </div>
+
+      {/* The one utilization viz, per DESIGN.md — an absolute anchor the
+          per-tile-scaled chart lacks (two clusters at very different loads draw
+          near-identical shapes, so the meter is what makes them comparable at a
+          glance). Mono % gives the exact figure; the meter places it against
+          warn/crit. */}
+      {!isArchived && currentUtil !== null ? (
+        <div className="flex items-center gap-2">
+          <BulletMeter
+            value={currentUtil * 100}
+            warn={thresholds.warn * 100}
+            crit={thresholds.crit * 100}
+            className="flex-1"
+          />
+          <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-foreground">
+            {Math.round(currentUtil * 100)}%
+          </span>
+        </div>
+      ) : null}
 
       <p className="text-[11px] leading-[1.45] text-fg-muted">
         {isArchived ? 'Archived — no forecast.' : verdict}
