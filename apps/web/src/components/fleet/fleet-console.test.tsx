@@ -12,8 +12,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { api } from '@/lib/api-client';
+import type { ClusterForecastEntry } from '@/lib/forecast-summary';
 
-import { FleetConsole, sortClusters, sortClustersByUrgency } from './fleet-console';
+import {
+  entryNeedsAttention,
+  FleetConsole,
+  sortClusters,
+  sortClustersByUrgency,
+} from './fleet-console';
 
 vi.mock('@tanstack/react-router', () => ({
   Link: ({
@@ -309,6 +315,33 @@ function renderConsole(): ReturnType<typeof render> {
     </QueryClientProvider>,
   );
 }
+
+describe('entryNeedsAttention', () => {
+  const thresholds = { warn: 0.7, crit: 0.9 };
+  const mkEntry = (utilization: number | null): ClusterForecastEntry =>
+    ({
+      cluster: { metrics: utilization === null ? [] : [{ utilization }] },
+    }) as unknown as ClusterForecastEntry;
+
+  it('flags a cluster at or over the warn threshold', () => {
+    expect(entryNeedsAttention(mkEntry(0.72), undefined, thresholds)).toBe(true);
+    expect(entryNeedsAttention(mkEntry(0.95), undefined, thresholds)).toBe(true);
+  });
+
+  it('flags a cluster whose order-by date is due now or soon', () => {
+    const soon = new Date(Date.now() + 40 * 86_400_000).toISOString().slice(0, 10);
+    expect(
+      entryNeedsAttention(mkEntry(0.4), { orderByDate: soon } as ProcurementInfo, thresholds),
+    ).toBe(true);
+  });
+
+  it('does not flag a healthy cluster with no imminent order', () => {
+    expect(entryNeedsAttention(mkEntry(0.4), undefined, thresholds)).toBe(false);
+    expect(
+      entryNeedsAttention(mkEntry(0.4), { orderByDate: null } as ProcurementInfo, thresholds),
+    ).toBe(false);
+  });
+});
 
 describe('<FleetConsole> (render)', () => {
   beforeEach(() => {
