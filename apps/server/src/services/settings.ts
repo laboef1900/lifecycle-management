@@ -40,6 +40,10 @@ export class SettingsService {
       critThreshold: decimalToNumber(row.critThreshold),
       procurementLeadTimeWeeks: row.procurementLeadTimeWeeks,
       idempotencyKeyRetentionHours: row.idempotencyKeyRetentionHours,
+      forecastUncertaintyBandEnabled: row.forecastUncertaintyBandEnabled,
+      forecastUncertaintyMinAnchors: row.forecastUncertaintyMinAnchors,
+      forecastUncertaintyBandWidth:
+        row.forecastUncertaintyBandWidth as TenantSettings['forecastUncertaintyBandWidth'],
     };
   }
 
@@ -52,12 +56,18 @@ export class SettingsService {
         critThreshold: input.critThreshold,
         procurementLeadTimeWeeks: input.procurementLeadTimeWeeks,
         idempotencyKeyRetentionHours: input.idempotencyKeyRetentionHours,
+        forecastUncertaintyBandEnabled: input.forecastUncertaintyBandEnabled,
+        forecastUncertaintyMinAnchors: input.forecastUncertaintyMinAnchors,
+        forecastUncertaintyBandWidth: input.forecastUncertaintyBandWidth,
       },
       update: {
         warnThreshold: input.warnThreshold,
         critThreshold: input.critThreshold,
         procurementLeadTimeWeeks: input.procurementLeadTimeWeeks,
         idempotencyKeyRetentionHours: input.idempotencyKeyRetentionHours,
+        forecastUncertaintyBandEnabled: input.forecastUncertaintyBandEnabled,
+        forecastUncertaintyMinAnchors: input.forecastUncertaintyMinAnchors,
+        forecastUncertaintyBandWidth: input.forecastUncertaintyBandWidth,
       },
     });
     return {
@@ -65,6 +75,10 @@ export class SettingsService {
       critThreshold: decimalToNumber(row.critThreshold),
       procurementLeadTimeWeeks: row.procurementLeadTimeWeeks,
       idempotencyKeyRetentionHours: row.idempotencyKeyRetentionHours,
+      forecastUncertaintyBandEnabled: row.forecastUncertaintyBandEnabled,
+      forecastUncertaintyMinAnchors: row.forecastUncertaintyMinAnchors,
+      forecastUncertaintyBandWidth:
+        row.forecastUncertaintyBandWidth as TenantSettings['forecastUncertaintyBandWidth'],
     };
   }
 

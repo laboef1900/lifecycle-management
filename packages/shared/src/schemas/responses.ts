@@ -26,6 +26,8 @@ import type {
 import type { Paginated } from './pagination.js';
 import {
   effectiveThresholdsSchema,
+  forecastUncertaintyBandWidthSchema,
+  forecastUncertaintyMinAnchorsSchema,
   idempotencyKeyRetentionHoursSchema,
   percentSchema,
   procurementLeadTimeWeeksSchema,
@@ -283,6 +285,9 @@ export const tenantSettingsResponseSchema: z.ZodType<TenantSettings> = z.object(
   critThreshold: percentSchema,
   procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
   idempotencyKeyRetentionHours: idempotencyKeyRetentionHoursSchema,
+  forecastUncertaintyBandEnabled: z.boolean(),
+  forecastUncertaintyMinAnchors: forecastUncertaintyMinAnchorsSchema,
+  forecastUncertaintyBandWidth: forecastUncertaintyBandWidthSchema,
 });
 
 // ---------- Pagination envelope ----------

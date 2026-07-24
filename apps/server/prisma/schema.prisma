@@ -48,6 +48,11 @@ model TenantSettings {
   critThreshold                Decimal  @default(0.90) @map("crit_threshold") @db.Decimal(4, 3)
   procurementLeadTimeWeeks     Int      @default(8) @map("procurement_lead_time_weeks")
   idempotencyKeyRetentionHours Int      @default(24) @map("idempotency_key_retention_hours")
+  // Opt-in empirical forecast uncertainty band (docs/design/forecast-uncertainty-band.md).
+  // Defaults mirror @lcm/shared DEFAULT_FORECAST_UNCERTAINTY_* constants.
+  forecastUncertaintyBandEnabled Boolean @default(false) @map("forecast_uncertainty_band_enabled")
+  forecastUncertaintyMinAnchors  Int     @default(6) @map("forecast_uncertainty_min_anchors")
+  forecastUncertaintyBandWidth   String  @default("p10_p90") @map("forecast_uncertainty_band_width")
   createdAt                    DateTime @default(now()) @map("created_at")
   updatedAt                    DateTime @updatedAt @map("updated_at")
 

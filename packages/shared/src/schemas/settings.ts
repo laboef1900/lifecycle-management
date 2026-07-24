@@ -22,12 +22,25 @@ export const DEFAULT_IDEMPOTENCY_KEY_RETENTION_HOURS = 24;
  */
 export const idempotencyKeyRetentionHoursSchema = z.number().int().min(1).max(168);
 
+/**
+ * Opt-in forecast uncertainty band (see docs/design/forecast-uncertainty-band.md).
+ * The band is EMPIRICAL — derived from measured past forecast error — never
+ * fabricated, so it stays off by default and needs a minimum number of real
+ * re-anchors before it can be shown.
+ */
+export const forecastUncertaintyBandWidthSchema = z.enum(['p10_p90', 'p05_p95', 'stddev']);
+/** Minimum measured re-anchors before a cluster shows a band; 3–24, default 6. */
+export const forecastUncertaintyMinAnchorsSchema = z.number().int().min(3).max(24);
+
 export const tenantSettingsSchema = z
   .strictObject({
     warnThreshold: percentSchema,
     critThreshold: percentSchema,
     procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
     idempotencyKeyRetentionHours: idempotencyKeyRetentionHoursSchema,
+    forecastUncertaintyBandEnabled: z.boolean(),
+    forecastUncertaintyMinAnchors: forecastUncertaintyMinAnchorsSchema,
+    forecastUncertaintyBandWidth: forecastUncertaintyBandWidthSchema,
   })
   .refine((s) => s.warnThreshold < s.critThreshold, {
     message: 'warnThreshold must be less than critThreshold',
@@ -63,6 +76,11 @@ export const clusterSettingsResponseSchema = z.object({
 });
 
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
+export type ForecastUncertaintyBandWidth = z.infer<typeof forecastUncertaintyBandWidthSchema>;
+
+/** Defaults for the opt-in uncertainty band, mirrored by the Prisma column defaults. */
+export const DEFAULT_FORECAST_UNCERTAINTY_MIN_ANCHORS = 6;
+export const DEFAULT_FORECAST_UNCERTAINTY_BAND_WIDTH: ForecastUncertaintyBandWidth = 'p10_p90';
 export type ClusterSettingsInput = z.infer<typeof clusterSettingsInputSchema>;
 export type EffectiveThresholds = z.infer<typeof effectiveThresholdsSchema>;
 export type ClusterSettingsResponse = z.infer<typeof clusterSettingsResponseSchema>;

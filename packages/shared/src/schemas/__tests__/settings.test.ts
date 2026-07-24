@@ -28,12 +28,18 @@ describe('tenantSettingsSchema', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
       }),
     ).toEqual({
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
       idempotencyKeyRetentionHours: 24,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
     });
   });
 
@@ -84,7 +90,14 @@ describe('tenantSettingsSchema', () => {
 });
 
 describe('tenantSettingsSchema — idempotencyKeyRetentionHours', () => {
-  const base = { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 8 };
+  const base = {
+    warnThreshold: 0.7,
+    critThreshold: 0.9,
+    procurementLeadTimeWeeks: 8,
+    forecastUncertaintyBandEnabled: false,
+    forecastUncertaintyMinAnchors: 6,
+    forecastUncertaintyBandWidth: 'p10_p90',
+  };
 
   it('accepts the default of 24', () => {
     expect(tenantSettingsSchema.parse({ ...base, idempotencyKeyRetentionHours: 24 })).toMatchObject(

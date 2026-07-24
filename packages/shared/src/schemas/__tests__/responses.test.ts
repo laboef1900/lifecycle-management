@@ -399,6 +399,9 @@ describe('tenantSettingsResponseSchema', () => {
     critThreshold: 0.9,
     procurementLeadTimeWeeks: 6,
     idempotencyKeyRetentionHours: 24,
+    forecastUncertaintyBandEnabled: false,
+    forecastUncertaintyMinAnchors: 6,
+    forecastUncertaintyBandWidth: 'p10_p90',
   };
 
   it('round-trips a representative tenant settings response', () => {
