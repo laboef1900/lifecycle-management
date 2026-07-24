@@ -104,7 +104,9 @@ WCAG 2.2 AA: global `:focus-visible` two-layer ring (≥2 px, ≥3:1 on every su
 
 ## 7. Out of scope (recorded)
 
-Forecast uncertainty bands (engine is deterministic — do not fabricate), action-queue view (removed by user), per-cluster lead times, chart PNG export, mockup-only calm/dramatized toggle (the real app's calm state emerges from real data), `FleetUtilizationHeatmap` successor, new backend endpoints.
+~~Forecast uncertainty bands (engine is deterministic — do not fabricate)~~ **[AMENDED 2026-07-24, owner-approved]** — action-queue view (removed by user), per-cluster lead times, chart PNG export, mockup-only calm/dramatized toggle (the real app's calm state emerges from real data), `FleetUtilizationHeatmap` successor, new backend endpoints.
+
+**Amendment — forecast uncertainty band (opt-in, empirical).** The original non-goal stood on a correct premise: the forecast is a deterministic pure function, so there is no _model_ uncertainty to draw, and fabricating a band ("do not fabricate") remains banned. The owner reconciled this with the critique finding that "the honesty stance stops exactly where the money is spent" by adding a band that is **measured, not modelled**: it is the empirical spread of this cluster's own **past** forecast errors (projected-vs-actual at each matured re-anchor), off by default and shown only once enough real re-anchors exist. It never fabricates — an absent history shows no band. Design + invariants: `docs/design/forecast-uncertainty-band.md`. Rendering (cluster-detail `ForecastChart` only, muted-neutral `--chart-band`, mandatory empirical caption) follows the §3 token rules and §6 quality floor above; it introduces no new backend endpoint (the band rides the existing forecast response as an optional field).
 
 ## 8. Verification
 
