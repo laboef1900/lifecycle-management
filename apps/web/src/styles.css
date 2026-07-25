@@ -224,14 +224,13 @@ html.dark {
      defaults are rem-based (--breakpoint-lg: 64rem …), and rem in a media
      query resolves against the user's BROWSER default font size — while the
      app's JS layout queries (PANE_SIDE_BY_SIDE_QUERY '(min-width: 1024px)'
-     and isWide '(min-width: 640px)' in cluster-panel.tsx) and the
-     .scenario-card AA fallback below are fixed px. At e.g. a 20px browser
-     font, `lg:` would fire at 1280px, opening a 1024–1280px band where JS
-     declared the scenario pane side-by-side (content column NOT inert) while
-     CSS still rendered the sheet layout — a near-viewport-wide glass card
-     over live, tabbable content. Pinning every breakpoint keeps utilities
-     and matchMedia in lockstep at any font size; new JS media queries MUST
-     use the same px values. */
+     and isWide '(min-width: 640px)' in cluster-panel.tsx) are fixed px. At
+     e.g. a 20px browser font, `lg:` would fire at 1280px, opening a
+     1024–1280px band where JS renders one layout and the `lg:` utilities
+     style the other — for the Scenario rail, JS docking it as a side column
+     while CSS still lays the panel out as if it were stacked. Pinning every
+     breakpoint keeps utilities and matchMedia in lockstep at any font size;
+     new JS media queries MUST use the same px values. */
   --breakpoint-sm: 640px;
   --breakpoint-md: 768px;
   --breakpoint-lg: 1024px;
@@ -361,14 +360,11 @@ body {
   }
 }
 
-/* Cluster detail slide-in panel (spec §5): fullscreen takeover — 100vw at
-   every width (user decision 2026-07-17, superseding the former 58vw side
-   panel with its 1100px breakpoint). The console beneath is fully covered.
-
-   @ai-warning `scenarioPaneLayout` (components/detail/cluster-panel.tsx) sizes
-   the below-`lg` Scenario sheet to 100vw so that it covers this panel exactly,
-   which is what makes the `inert` it applies to the content column honest.
-   Narrow this and the sheet would leave part of an inert column on screen. */
+/* Cluster detail panel (spec §5): fullscreen takeover — 100vw at every width
+   (user decision 2026-07-17, superseding the former 58vw side panel with its
+   1100px breakpoint). The console beneath is fully covered. The panel root is a
+   non-scrolling flex shell, so this width is shared by the content column and,
+   at `lg`+, the docked Scenario rail beside it. */
 .cluster-panel {
   width: 100vw;
 }
@@ -385,14 +381,26 @@ body {
     var(--hero-surface);
 }
 
-/* Single-thumb range slider (Slider primitive). Steel value fill up to the
-   thumb via --slider-pct (set inline from the value); muted track behind it —
-   steel is the interaction accent, per the house style. Thumb is steel with a
-   card-colored ring so it reads on any track. */
+/* Single-thumb range slider (Slider primitive). The value fill runs up to the
+   thumb via --slider-pct (set inline from the value) with the muted track
+   behind it; fill and thumb are --accent, which since the cool-brand decision
+   IS steel — the interaction accent, per the house style. Amber stays on the
+   BulletMeter, where it means "utilization", not "draggable".
+
+   @ai-warning The input box is 24px tall while the visible track is 8px: the
+   track is painted on the ::-*-track pseudo-elements, NOT on the input, so the
+   pointer target clears WCAG 2.2 AA 2.5.8's 24×24 floor. Putting a `height`
+   (or the gradient) back on `.range-slider` itself shrinks the hit area to the
+   height of the visible track and silently fails that criterion. */
 .range-slider {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
+  height: 24px;
+  background: transparent;
+  cursor: pointer;
+}
+.range-slider::-webkit-slider-runnable-track {
   height: 8px;
   border-radius: var(--radius-pill, 9999px);
   background: linear-gradient(
@@ -400,13 +408,25 @@ body {
     var(--accent) 0 var(--slider-pct, 0%),
     var(--muted) var(--slider-pct, 0%) 100%
   );
-  cursor: pointer;
+}
+.range-slider::-moz-range-track {
+  height: 8px;
+  border-radius: var(--radius-pill, 9999px);
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--slider-pct, 0%),
+    var(--muted) var(--slider-pct, 0%) 100%
+  );
 }
 .range-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
+  box-sizing: border-box;
   width: 16px;
   height: 16px;
+  /* Centres the 16px thumb on the 8px track: (8 − 16) / 2. Chrome positions a
+     webkit thumb from the track's top edge; Firefox centres it for us. */
+  margin-top: -4px;
   border-radius: 9999px;
   background: var(--accent);
   border: 2px solid var(--card);
@@ -414,6 +434,7 @@ body {
   cursor: pointer;
 }
 .range-slider::-moz-range-thumb {
+  box-sizing: border-box;
   width: 16px;
   height: 16px;
   border: 2px solid var(--card);
@@ -422,13 +443,22 @@ body {
   box-shadow: var(--shadow-card);
   cursor: pointer;
 }
-.range-slider::-moz-range-track {
-  background: transparent;
+/* Disabled = the bound isn't known yet (see ScenarioControls' maxHosts). Dimmed
+   and not-allowed, but still focusable so keyboard users can read the hint the
+   control is described by. */
+.range-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
-.range-slider:focus-visible {
-  outline: 2px solid var(--steel);
-  outline-offset: 3px;
+.range-slider:disabled::-webkit-slider-thumb {
+  cursor: not-allowed;
 }
+.range-slider:disabled::-moz-range-thumb {
+  cursor: not-allowed;
+}
+/* No `.range-slider:focus-visible` rule: the global two-layer ring above is the
+   single source for focus, and a local override drifted its offset off the
+   house-style 2px. */
 
 /* (The scenario controls were the app's one glass surface, #243. The scenario
    pane is a plain docked rail now — no glass — so `.scenario-card` and the

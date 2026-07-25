@@ -9,7 +9,12 @@ type ScenarioKind = 'lose_hosts' | 'add_vms' | 'delay_procurement';
 interface ScenarioControlsProps {
   active: ScenarioWire | null;
   onChange: (scenario: ScenarioWire | null) => void;
-  /** Cluster's tracked-host count — bounds the "lose hosts" slider. */
+  /**
+   * Cluster's tracked-host count — bounds the "lose hosts" slider. `undefined`
+   * means the baseline forecast that carries it hasn't resolved (or failed), in
+   * which case the slider is disabled rather than guessing a bound: a guessed
+   * maximum is how an out-of-range count reaches the parent.
+   */
   maxHosts?: number | undefined;
 }
 
@@ -24,7 +29,7 @@ const DEFAULT_DRAFT: DraftState = { loseCount: 1, addCount: 20, addSize: 16, del
 
 const MAX_VMS = 100;
 const MAX_DELAY_MONTHS = 24;
-/** Standard VM RAM tiers — a what-if approximation, not free entry (#—). */
+/** Standard VM RAM tiers — a what-if approximation, not free entry. */
 const SIZE_TIERS = [8, 16, 32, 64] as const;
 /** Debounce for slider-driven live updates so a drag isn't one POST per pixel. */
 const LIVE_DEBOUNCE_MS = 200;
@@ -50,10 +55,13 @@ function scenarioToDraft(active: ScenarioWire | null): DraftState {
   }
 }
 
-function buildScenario(kind: ScenarioKind, d: DraftState): ScenarioWire {
+function buildScenario(kind: ScenarioKind, d: DraftState, maxLose: number): ScenarioWire {
   switch (kind) {
     case 'lose_hosts':
-      return { kind: 'lose_hosts', count: d.loseCount };
+      // Clamped here as well as in the slider's `max`: the bound can narrow
+      // under a draft that was already seeded from an applied scenario, and
+      // nothing may leave this component claiming more lost hosts than exist.
+      return { kind: 'lose_hosts', count: Math.min(d.loseCount, maxLose) };
     case 'add_vms':
       return { kind: 'add_vms', count: d.addCount, sizeGb: d.addSize };
     case 'delay_procurement':
@@ -71,13 +79,13 @@ function buildScenario(kind: ScenarioKind, d: DraftState): ScenarioWire {
  * Single scenario for now; stacking several into one compound what-if is the
  * tracked follow-up (needs a composable Scenario contract server-side).
  *
- * Renders inside the cluster panel's one sanctioned glass card
- * (`ScenarioPaneBody`), which owns the surface, border, and "Scenario" heading.
+ * Renders inside `ScenarioPaneBody`, the docked Scenario rail, which owns the
+ * surface, border, and "Scenario" heading.
  */
 export function ScenarioControls({
   active,
   onChange,
-  maxHosts = 8,
+  maxHosts,
 }: ScenarioControlsProps): React.JSX.Element {
   // Initializers, not sync effects: the draft is the user's in-progress edit
   // and must not be clobbered mid-drag. A reopened pane is a fresh mount, which
@@ -85,17 +93,48 @@ export function ScenarioControls({
   const [kind, setKind] = React.useState<ScenarioKind | null>(active?.kind ?? null);
   const [draft, setDraft] = React.useState<DraftState>(() => scenarioToDraft(active));
   const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pendingEmit = React.useRef<(() => void) | undefined>(undefined);
 
-  React.useEffect(() => () => clearTimeout(timer.current), []);
+  // The "lose hosts" bound. When the host count is unknown the slider is pinned
+  // to its current value and disabled rather than being given an invented
+  // maximum: an invented bound is exactly how a count larger than the cluster's
+  // real host list reaches the parent (and the chart) while the baseline
+  // forecast that carries the count is still in flight.
+  const hostCountKnown = maxHosts !== undefined && maxHosts >= 1;
+  const maxLose = hostCountKnown ? maxHosts : Math.max(1, draft.loseCount);
+  const loseCount = Math.min(draft.loseCount, maxLose);
+
+  // Flush on unmount, never drop. This component unmounts on two paths the user
+  // does not think of as "discard": closing the rail, and the rail moving
+  // between its docked (`lg`+) and inline (below `lg`) render sites when the
+  // viewport crosses the breakpoint — those are different DOM parents, so React
+  // remounts. Dropping a pending debounce there would silently throw away the
+  // last slider movement. The parent owns the scenario state and outlives this
+  // component on both paths; when it doesn't (the whole panel unmounting), the
+  // resulting setState is a no-op.
+  React.useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+      pendingEmit.current?.();
+    },
+    [],
+  );
 
   const emit = React.useCallback(
     (nextKind: ScenarioKind | null, nextDraft: DraftState, immediate: boolean): void => {
       clearTimeout(timer.current);
-      const run = (): void => onChange(nextKind ? buildScenario(nextKind, nextDraft) : null);
-      if (immediate) run();
-      else timer.current = setTimeout(run, LIVE_DEBOUNCE_MS);
+      const run = (): void => {
+        pendingEmit.current = undefined;
+        onChange(nextKind ? buildScenario(nextKind, nextDraft, maxLose) : null);
+      };
+      if (immediate) {
+        run();
+        return;
+      }
+      pendingEmit.current = run;
+      timer.current = setTimeout(run, LIVE_DEBOUNCE_MS);
     },
-    [onChange],
+    [onChange, maxLose],
   );
 
   const selectPreset = (next: ScenarioKind): void => {
@@ -110,10 +149,11 @@ export function ScenarioControls({
     if (kind) emit(kind, next, immediate);
   };
 
-  const maxLose = Math.max(1, maxHosts);
-
   return (
-    <section data-testid="scenario-controls" aria-label="Forecast scenarios" className="space-y-3">
+    // A plain div, not a labelled <section>: the rail that contains this is
+    // already a landmark named "Scenario", and a nested region repeating the
+    // same thing is landmark noise for screen-reader users, not structure.
+    <div data-testid="scenario-controls" className="space-y-3">
       <div role="group" aria-label="Scenario type" className="grid grid-cols-3 gap-1.5">
         {PRESETS.map((p) => {
           const isActive = p.kind === kind;
@@ -126,7 +166,7 @@ export function ScenarioControls({
               onClick={() => selectPreset(p.kind)}
               className={cn(
                 'rounded-[var(--radius)] border px-2 py-1.5 text-xs font-medium transition-[background,border-color,color] duration-150',
-                'focus-visible:outline-none active:scale-[0.98]',
+                'active:scale-[0.98]',
                 isActive
                   ? 'border-accent bg-accent text-accent-foreground'
                   : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
@@ -148,12 +188,14 @@ export function ScenarioControls({
         <SliderRow
           label="Hosts lost"
           id="scenario-lose"
-          value={draft.loseCount}
+          value={loseCount}
           min={1}
           max={maxLose}
-          display={`${draft.loseCount}`}
-          valueText={`${draft.loseCount} host${draft.loseCount === 1 ? '' : 's'}`}
+          display={`${loseCount}`}
+          valueText={`${loseCount} host${loseCount === 1 ? '' : 's'}`}
           onValueChange={(v) => patch({ loseCount: v })}
+          disabled={!hostCountKnown}
+          hint={hostCountKnown ? undefined : 'Waiting for the forecast to report the host count.'}
         />
       ) : null}
 
@@ -221,7 +263,7 @@ export function ScenarioControls({
           Active: {describeScenario(active)}
         </p>
       ) : null}
-    </section>
+    </div>
   );
 }
 
@@ -235,6 +277,8 @@ function SliderRow({
   display,
   valueText,
   onValueChange,
+  disabled = false,
+  hint,
 }: {
   label: string;
   id: string;
@@ -244,7 +288,11 @@ function SliderRow({
   display: string;
   valueText: string;
   onValueChange: (value: number) => void;
+  disabled?: boolean;
+  /** Shown under the slider and wired up as its description (e.g. why it's off). */
+  hint?: string | undefined;
 }): React.JSX.Element {
+  const hintId = `${id}-hint`;
   return (
     <div>
       <div className="flex items-baseline justify-between gap-2">
@@ -264,7 +312,14 @@ function SliderRow({
         aria-label={label}
         aria-valuetext={valueText}
         onValueChange={onValueChange}
+        disabled={disabled}
+        {...(hint ? { 'aria-describedby': hintId } : {})}
       />
+      {hint ? (
+        <p id={hintId} className="mt-1.5 text-[11px] text-fg-muted">
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }

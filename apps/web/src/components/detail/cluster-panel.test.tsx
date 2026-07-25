@@ -769,6 +769,97 @@ describe('<ClusterPanel> scenario pane (#226, docked rail)', () => {
     expect(screen.getByTestId('scenario-summary')).toHaveTextContent('Active: Lose 1 host');
   });
 
+  it('holds the previous scenario forecast on screen while the next slider value fetches', async () => {
+    stubViewportWidth(1280);
+    // Enough hosts for the "Hosts lost" slider to be enabled and movable.
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({
+        hosts: [
+          { id: 'h1', name: 'h1', contributions: [] },
+          { id: 'h2', name: 'h2', contributions: [] },
+          { id: 'h3', name: 'h3', contributions: [] },
+          { id: 'h4', name: 'h4', contributions: [] },
+        ],
+      }),
+    );
+    // The second scenario fetch is held open so the in-flight window is
+    // observable rather than a race.
+    let releaseSecond: (value: ForecastResponse) => void = () => {};
+    const second = new Promise<ForecastResponse>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const scenarioSpy = vi
+      .spyOn(api.clusters, 'forecastScenario')
+      .mockResolvedValueOnce(forecast())
+      .mockReturnValueOnce(second);
+
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    // First scenario resolved: the KPI strip says the numbers are hypothetical.
+    await screen.findByTestId('scenario-badge');
+
+    // Drag to a new value. Every debounced settle is a NEW query key, so
+    // without `placeholderData: keepPreviousData` the scenario data would go
+    // undefined here and the whole panel would blink back to the baseline
+    // mid-drag — the exact flicker the live redesign exists to avoid.
+    fireEvent.change(screen.getByLabelText(/hosts lost/i), { target: { value: '3' } });
+    await waitFor(() => expect(scenarioSpy).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByTestId('scenario-badge')).toBeInTheDocument();
+
+    releaseSecond(forecast());
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Lose 3 hosts.',
+      ),
+    );
+    expect(screen.getByTestId('scenario-badge')).toBeInTheDocument();
+  });
+
+  it('drops the held scenario forecast when the next one fails — the chart must match the error', async () => {
+    stubViewportWidth(1280);
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({
+        hosts: [
+          { id: 'h1', name: 'h1', contributions: [] },
+          { id: 'h2', name: 'h2', contributions: [] },
+          { id: 'h3', name: 'h3', contributions: [] },
+          { id: 'h4', name: 'h4', contributions: [] },
+        ],
+      }),
+    );
+    vi.spyOn(api.clusters, 'forecastScenario')
+      .mockResolvedValueOnce(forecast())
+      .mockRejectedValueOnce(new Error('boom'));
+
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await screen.findByTestId('scenario-badge');
+
+    fireEvent.change(screen.getByLabelText(/hosts lost/i), { target: { value: '3' } });
+
+    // The inline error says "showing baseline forecast", so the panel must
+    // actually fall back to the baseline — NOT keep the previous slider
+    // position's what-if on screen under an error that contradicts it.
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario could not be computed — showing baseline.',
+      ),
+    );
+    expect(screen.queryByTestId('scenario-badge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
+  });
+
   it('opening the rail moves focus into it; closing returns focus to the Scenario button', async () => {
     const user = userEvent.setup();
     render(<Harness show />);

@@ -1,14 +1,15 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * Sub-`lg` Scenario pane: the modal-sheet behaviour that jsdom cannot verify.
+ * The Scenario rail (redesigned 2026-07-24): what only a real browser can prove.
  *
- * The unit suite asserts the *attributes* (`inert` on the content column, the
- * pane body's declared width) because jsdom has no layout and does not implement
- * `inert` at all. What it cannot show is the thing the user actually
- * experiences: that the sheet really paints over the whole panel, that the
- * covered column really stops receiving pointer input, and that Escape really
- * hands focus back. This spec covers exactly that gap.
+ * The unit suite asserts the *structure* — which element the rail renders into
+ * at each breakpoint, its classes, focus moves, announcements — because jsdom
+ * has no layout. What it cannot show is the thing the redesign is actually
+ * about: that the rail is genuinely part of the layout rather than an overlay.
+ * "Never covers the content column" is a geometry-and-hit-testing claim, and
+ * so are the target size of the sliders and the absence of any glass material.
+ * This spec covers exactly that gap.
  *
  * NOT run by CI. `.github/workflows/ci.yml` runs only the OIDC e2e job
  * (`test:e2e:oidc`, its own config); this default `playwright/` suite needs a
@@ -19,6 +20,9 @@ import { expect, test, type Page } from '@playwright/test';
 
 const SUB_LG = { width: 900, height: 800 };
 const SIDE_BY_SIDE = { width: 1280, height: 800 };
+
+/** The docked rail at `lg`+. Below `lg` this element does not exist at all. */
+const DOCKED_RAIL = 'aside:has([data-testid="scenario-pane-body"])';
 
 /** Opens the first seeded cluster's detail panel, or skips the test. */
 async function openFirstCluster(page: Page): Promise<void> {
@@ -35,11 +39,11 @@ async function openFirstCluster(page: Page): Promise<void> {
 }
 
 /**
- * Opens the Scenario pane and waits for the 280ms enter animation to settle.
- * The pane's width is animated, so a bounding box read too early reports a
- * partially-open sheet — poll until it stops growing rather than sleeping.
+ * Opens the Scenario rail. No animation to wait out — the rail is part of the
+ * layout and appears on the next frame (#243 instant-transition rule), which is
+ * itself why the old width-polling helper is gone.
  */
-async function openScenarioPane(page: Page, expectedWidth: number): Promise<void> {
+async function openScenarioRail(page: Page): Promise<void> {
   const scenarioButton = page.getByTestId('scenario-button');
   const hasScenario = await scenarioButton
     .waitFor({ state: 'visible', timeout: 10_000 })
@@ -49,84 +53,123 @@ async function openScenarioPane(page: Page, expectedWidth: number): Promise<void
 
   await scenarioButton.click();
   await expect(page.getByTestId('scenario-pane-body')).toBeVisible();
-  await expect
-    .poll(async () => {
-      const box = await page.locator('aside:has([data-testid="scenario-pane-body"])').boundingBox();
-      return box === null ? 0 : Math.round(box.width);
-    })
-    .toBeGreaterThanOrEqual(expectedWidth - 2);
 }
 
-test.describe('scenario pane as a modal sheet below lg', () => {
-  test.use({ viewport: SUB_LG });
+/** What `document.elementFromPoint` lands on at the centre of the panel. */
+async function hitTestPanelCentre(
+  page: Page,
+): Promise<{ insideRail: boolean; insideColumn: boolean }> {
+  const panelBox = await page.getByRole('dialog').boundingBox();
+  expect(panelBox).not.toBeNull();
+  return page.evaluate(
+    ({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      return {
+        insideRail: el?.closest('[data-testid="scenario-pane-body"]') !== null,
+        insideColumn: el?.closest('[data-testid="panel-content"]') !== null,
+      };
+    },
+    { x: panelBox!.x + panelBox!.width / 2, y: panelBox!.y + panelBox!.height / 2 },
+  );
+}
 
-  test('the sheet covers the whole panel and the column stops taking pointer input', async ({
+test.describe('scenario rail docked beside the content column at lg and up', () => {
+  test.use({ viewport: SIDE_BY_SIDE });
+
+  test('is a 340px side column that never overlaps the still-interactive content', async ({
     page,
   }) => {
     await openFirstCluster(page);
-    await openScenarioPane(page, SUB_LG.width);
+    await openScenarioRail(page);
 
-    const panelBox = await page.getByRole('dialog').boundingBox();
-    expect(panelBox).not.toBeNull();
-    const sheetBox = await page
-      .locator('aside:has([data-testid="scenario-pane-body"])')
-      .boundingBox();
-    expect(sheetBox).not.toBeNull();
+    const railBox = await page.locator(DOCKED_RAIL).boundingBox();
+    expect(railBox).not.toBeNull();
+    expect(Math.round(railBox!.width)).toBe(340);
 
-    // The sheet spans the panel, not a 340px strip of it — the round-1
-    // regression was a narrow pane over a fully `inert` panel, which left most
-    // of the column visible on screen but unreachable. Since #243 the sheet is
-    // a scrim-tinted aside carrying the floating glass card, but its geometry
-    // contract is identical: the aside spans the whole panel.
-    expect(Math.round(sheetBox!.width)).toBeGreaterThanOrEqual(Math.round(panelBox!.width) - 2);
-    expect(Math.round(sheetBox!.x)).toBeLessThanOrEqual(Math.round(panelBox!.x) + 2);
-
-    // The column is contained...
-    await expect(page.getByTestId('panel-content')).toHaveAttribute('inert', '');
-
-    // ...and pointer input genuinely cannot reach it: hit-testing the middle
-    // of the panel lands on the sheet layer (the scrim aside or the glass card
-    // — whichever paints there), never on a control in the column behind it.
-    // `inert` alone would not prove this — a transparent, pointer-events-none
-    // sheet would still carry the attribute.
-    const hit = await page.evaluate(
-      ({ x, y }) => {
-        const el = document.elementFromPoint(x, y);
-        return {
-          insideSheetLayer: el?.closest('aside') !== null,
-          insideColumn: el?.closest('[data-testid="panel-content"]') !== null,
-        };
-      },
-      { x: panelBox!.x + panelBox!.width / 2, y: panelBox!.y + panelBox!.height / 2 },
+    // Side by side, not overlapping: the column ends where the rail begins.
+    // This is the whole point of the redesign — the rail is layout, not an
+    // overlay, so there is nothing to contain and nothing to make `inert`.
+    const columnBox = await page.getByTestId('panel-content').boundingBox();
+    expect(columnBox).not.toBeNull();
+    expect(Math.round(columnBox!.x + columnBox!.width)).toBeLessThanOrEqual(
+      Math.round(railBox!.x) + 2,
     );
-    expect(hit.insideSheetLayer).toBe(true);
-    expect(hit.insideColumn).toBe(false);
+
+    // The containment machinery is gone and must stay gone: a docked rail that
+    // covers nothing may never strip the visible half of the panel from the
+    // accessibility tree.
+    await expect(page.getByTestId('panel-content')).not.toHaveAttribute('inert', '');
+
+    // …and the centre of the panel is live column content, not rail.
+    const hit = await hitTestPanelCentre(page);
+    expect(hit.insideColumn).toBe(true);
+    expect(hit.insideRail).toBe(false);
   });
 
-  test('Escape closes the sheet and returns focus to the Scenario button', async ({ page }) => {
+  test('the rail stays open while a preset is applied — the chart redraws beside it', async ({
+    page,
+  }) => {
     await openFirstCluster(page);
-    await openScenarioPane(page, SUB_LG.width);
+    await openScenarioRail(page);
 
-    // Opening moves focus into the sheet, so the covered column never holds it.
+    await page.getByTestId('scenario-preset-lose_hosts').click();
+
+    // No Apply step, and no auto-dismiss: nothing is covered, so throwing away
+    // the editing context after every change would be pure loss.
+    await expect(page.getByTestId('scenario-pane-body')).toBeVisible();
+    await expect(page.getByTestId('scenario-summary')).toHaveText(/^Active:/);
+    await expect(page.getByTestId('scenario-active-indicator')).toBeVisible();
+  });
+});
+
+test.describe('scenario rail stacked inline below lg', () => {
+  test.use({ viewport: SUB_LG });
+
+  test('renders inside the content column instead of docking, and covers nothing', async ({
+    page,
+  }) => {
+    await openFirstCluster(page);
+    await openScenarioRail(page);
+
+    // There is no aside below `lg` — the single rail instance renders inline in
+    // the content flow, under the chart it edits.
+    await expect(page.locator(DOCKED_RAIL)).toHaveCount(0);
+
+    const body = page.getByTestId('scenario-pane-body');
+    const railBox = await body.boundingBox();
+    const columnBox = await page.getByTestId('panel-content').boundingBox();
+    expect(railBox).not.toBeNull();
+    expect(columnBox).not.toBeNull();
+
+    // Contained by the column, horizontally and vertically — an overlay would
+    // sit outside it (the old sheet spanned the whole 100vw panel).
+    expect(railBox!.x).toBeGreaterThanOrEqual(columnBox!.x - 1);
+    expect(railBox!.x + railBox!.width).toBeLessThanOrEqual(columnBox!.x + columnBox!.width + 1);
+
+    // The scrim + `inert` containment the old modal sheet needed is gone.
+    await expect(page.getByTestId('panel-content')).not.toHaveAttribute('inert', '');
+    const hit = await hitTestPanelCentre(page);
+    expect(hit.insideColumn).toBe(true);
+  });
+
+  test('Escape closes the rail and returns focus to the Scenario button', async ({ page }) => {
+    await openFirstCluster(page);
+    await openScenarioRail(page);
+
+    // Opening moves focus into the rail.
     await expect(page.getByRole('button', { name: 'Close scenario pane' })).toBeFocused();
 
     await page.keyboard.press('Escape');
 
-    // The panel itself must survive — the pane swallows the first Escape.
+    // The panel itself must survive — the rail swallows the first Escape.
     await expect(page.getByTestId('scenario-pane-body')).toHaveCount(0);
     await expect(page.getByRole('dialog')).toBeVisible();
-
-    // Focus lands back on the trigger rather than on <body>. This is the one
-    // jsdom cannot really check: the restore target lives *inside* the column,
-    // and `focus()` on an element in an inert subtree is a no-op in a real
-    // browser, so restoring before the exit finished would strand focus.
-    await expect(page.getByTestId('panel-content')).not.toHaveAttribute('inert', '');
     await expect(page.getByTestId('scenario-button')).toBeFocused();
   });
 
   test('the close control shows a visible Esc keycap', async ({ page }) => {
     await openFirstCluster(page);
-    await openScenarioPane(page, SUB_LG.width);
+    await openScenarioRail(page);
 
     // aria-keyshortcuts is not an affordance — no browser renders it — so the
     // keycap has to be on screen for sighted pointer users.
@@ -134,43 +177,90 @@ test.describe('scenario pane as a modal sheet below lg', () => {
     await expect(close.locator('kbd')).toBeVisible();
     await expect(close.locator('kbd')).toHaveText('Esc');
   });
+});
 
-  test('Apply closes the sheet and lands on the chart with the scenario indicator visible', async ({
+/**
+ * The material guards that replaced the `.scenario-card` glass pair. The old
+ * tests pinned the 70%-fill/near-opaque-fallback boundary at 1023/1024px; the
+ * No-Glass Rule means the assertion is now simply that no blur exists anywhere
+ * on the rail, at either side of that same boundary.
+ */
+test.describe('no-glass rule at the lg boundary', () => {
+  for (const width of [1023, 1024]) {
+    test(`the rail carries no backdrop-filter at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await openFirstCluster(page);
+      await openScenarioRail(page);
+
+      const blurred = await page.getByTestId('scenario-pane-body').evaluate((el) => {
+        // Walk up from the rail body: neither it nor its container may be glass.
+        const filters: string[] = [];
+        for (let node: Element | null = el; node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          // The unprefixed property is empty in Safari/older WebKit, which only
+          // exposes the prefixed one; read both through getPropertyValue so the
+          // prefixed name doesn't need a DOM lib cast.
+          const filter =
+            style.backdropFilter || style.getPropertyValue('-webkit-backdrop-filter') || 'none';
+          filters.push(filter);
+          if (node.classList.contains('cluster-panel')) break;
+        }
+        return filters.filter((f) => f !== 'none');
+      });
+      expect(blurred).toEqual([]);
+    });
+  }
+});
+
+/**
+ * Live tuning. The sliders are the redesign's headline: dragging redraws the
+ * forecast with no Apply step, and the rail stays put while it happens.
+ */
+test.describe('live slider tuning', () => {
+  test.use({ viewport: SIDE_BY_SIDE });
+
+  test('a keyboard slider step re-runs the forecast and updates the header indicator', async ({
     page,
   }) => {
     await openFirstCluster(page);
-    await openScenarioPane(page, SUB_LG.width);
+    await openScenarioRail(page);
 
-    await page.getByRole('button', { name: 'Apply' }).click();
+    await page.getByTestId('scenario-preset-lose_hosts').click();
+    const slider = page.getByLabel('Hosts lost');
+    await expect(slider).toBeVisible();
 
-    // The sheet dismisses itself (#243 Part B High-4): the chart the scenario
-    // edits is now on screen, the column is interactive again…
-    await expect(page.getByTestId('scenario-pane-body')).toHaveCount(0);
-    await expect(page.getByTestId('panel-content')).not.toHaveAttribute('inert', '');
-    // …the header indicator carries the "hypothetical forecast" cue…
-    await expect(page.getByTestId('scenario-active-indicator')).toBeVisible();
-    // …and focus is back on the toggle that reopens the pane.
-    await expect(page.getByTestId('scenario-button')).toBeFocused();
+    // The slider is disabled until the baseline forecast reports the host count,
+    // and a cluster with a single host has nowhere to step to.
+    const max = Number(await slider.getAttribute('max'));
+    const isDisabled = await slider.isDisabled();
+    test.skip(isDisabled || max < 2, 'requires a cluster with at least 2 tracked hosts');
+
+    await expect(page.getByTestId('scenario-active-indicator')).toHaveText(/Lose 1 host/);
+
+    // Keyboard-operable for free, which is half the reason this is a native
+    // range input rather than a div with a drag handler.
+    await slider.focus();
+    await page.keyboard.press('ArrowRight');
+
+    await expect(page.getByTestId('scenario-active-indicator')).toHaveText(/Lose 2 hosts/);
+    // No Apply was clicked and the rail never closed.
+    await expect(page.getByTestId('scenario-pane-body')).toBeVisible();
   });
 
-  test('Clear closes the sheet too and drops the scenario indicator', async ({ page }) => {
+  test('the slider hit area clears the WCAG 2.2 AA 24px target-size floor', async ({ page }) => {
     await openFirstCluster(page);
-    await openScenarioPane(page, SUB_LG.width);
+    await openScenarioRail(page);
 
-    await page.getByRole('button', { name: 'Apply' }).click();
-    await expect(page.getByTestId('scenario-pane-body')).toHaveCount(0);
+    await page.getByTestId('scenario-preset-add_vms').click();
+    const slider = page.getByLabel('VM count');
+    await expect(slider).toBeVisible();
 
-    // Reopen: the pane re-seeds from the applied scenario and offers Clear.
-    await openScenarioPane(page, SUB_LG.width);
-    await page.getByTestId('scenario-clear').click();
-
-    // The other "successful change" path (#243 Part B High-4) dismisses the
-    // covering sheet the same way — landing on the baseline forecast with the
-    // indicator gone and the column interactive again.
-    await expect(page.getByTestId('scenario-pane-body')).toHaveCount(0);
-    await expect(page.getByTestId('scenario-active-indicator')).toHaveCount(0);
-    await expect(page.getByTestId('panel-content')).not.toHaveAttribute('inert', '');
-    await expect(page.getByTestId('scenario-button')).toBeFocused();
+    // SC 2.5.8. The visible track is 8px; the input's box is padded out to 24
+    // so the pointer target is not the hairline (see .range-slider in
+    // styles.css — putting a height back on the input silently breaks this).
+    const box = await slider.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThanOrEqual(24);
   });
 });
 
@@ -182,23 +272,18 @@ test.describe('scenario pane as a modal sheet below lg', () => {
  * indicator and the chart telling two different stories.
  */
 test.describe('scenario forecast fetch failure', () => {
-  test.use({ viewport: SUB_LG });
+  test.use({ viewport: SIDE_BY_SIDE });
 
   test('clears the header indicator, surfaces a retryable inline error over the baseline chart, and corrects the announcement', async ({
     page,
   }) => {
     await openFirstCluster(page);
-    await openScenarioPane(page, SUB_LG.width);
+    await openScenarioRail(page);
 
     await page.route(/\/api\/clusters\/[^/]+\/forecast\/scenario/, (route) =>
       route.fulfill({ status: 500, json: { message: 'boom' } }),
     );
-    await page.getByRole('button', { name: 'Apply' }).click();
-
-    // Sub-lg: Apply still dismisses the covering sheet on any submit (the
-    // dismissal doesn't wait on the query), so the user lands squarely on the
-    // surface the error must be visible on.
-    await expect(page.getByTestId('scenario-pane-body')).toHaveCount(0);
+    await page.getByTestId('scenario-preset-lose_hosts').click();
 
     // The header no longer claims a hypothetical forecast is on screen…
     await expect(page.getByTestId('scenario-active-indicator')).toHaveCount(0);
@@ -207,7 +292,8 @@ test.describe('scenario forecast fetch failure', () => {
     await expect(page.getByTestId('panel-live-region')).toHaveText(
       'Scenario could not be computed — showing baseline.',
     );
-    // …and an inline, retryable error sits over the still-baseline chart.
+    // …and an inline, retryable error sits over the still-baseline chart, which
+    // is visible beside the rail rather than behind it.
     const retry = page.getByRole('button', { name: 'Retry' });
     await expect(page.getByText(/scenario could not be computed/i).last()).toBeVisible();
     await expect(retry).toBeVisible();
@@ -218,111 +304,5 @@ test.describe('scenario forecast fetch failure', () => {
     await retry.click();
     await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
     await expect(page.getByTestId('scenario-active-indicator')).toBeVisible();
-  });
-});
-
-test.describe('scenario pane beside the content column at lg and up', () => {
-  test.use({ viewport: SIDE_BY_SIDE });
-
-  test('the pane is a 340px sibling and the column stays interactive', async ({ page }) => {
-    await openFirstCluster(page);
-    await openScenarioPane(page, 340);
-
-    const sheetBox = await page
-      .locator('aside:has([data-testid="scenario-pane-body"])')
-      .boundingBox();
-    expect(sheetBox).not.toBeNull();
-    expect(Math.round(sheetBox!.width)).toBe(340);
-
-    // Nothing is covered here, so containing the column would strip a fully
-    // visible half of the panel from the accessibility tree.
-    await expect(page.getByTestId('panel-content')).not.toHaveAttribute('inert', '');
-
-    const columnBox = await page.getByTestId('panel-content').boundingBox();
-    expect(columnBox).not.toBeNull();
-    // Side by side, not overlapping — the GUTTER never covers the column.
-    expect(Math.round(columnBox!.x + columnBox!.width)).toBeLessThanOrEqual(
-      Math.round(sheetBox!.x) + 2,
-    );
-
-    // The glass card (#243) floats inside that gutter: 348px wide — 16px
-    // right inset plus a deliberate 24px overlap past the gutter's left edge,
-    // under the column's 24px right padding, so real content sits behind the
-    // blur. The overlapped strip is padding, not controls (recorded residual:
-    // on classic-scrollbar platforms the column's scrollbar renders in that
-    // strip and loses direct thumb drags along the card's height — see the
-    // ScenarioPaneBody docblock), so the column stays fully interactive.
-    const cardBox = await page.getByTestId('scenario-pane-body').boundingBox();
-    expect(cardBox).not.toBeNull();
-    expect(Math.round(cardBox!.width)).toBe(348);
-    expect(Math.round(sheetBox!.x) - Math.round(cardBox!.x)).toBe(24);
-  });
-
-  test('Apply keeps the pane open beside the live-updating chart', async ({ page }) => {
-    await openFirstCluster(page);
-    await openScenarioPane(page, 340);
-
-    await page.getByRole('button', { name: 'Apply' }).click();
-
-    // Nothing is covered at lg+ — the chart updates live beside the pane, so
-    // auto-dismissing here would just throw away the user's editing context.
-    await expect(page.getByTestId('scenario-pane-body')).toBeVisible();
-    await expect(page.getByTestId('scenario-summary')).toHaveText(/^Active:/);
-  });
-});
-
-/**
- * Glass-material guards at the `lg` boundary itself (#243 review). Running at
- * 1023/1024 — not 900/1280 — pins the styles.css `max-width: 1023.98px` AA
- * override into [1023, 1024): a drift of that literal in EITHER direction now
- * fails one of the pair (900/1280 viewports would silently tolerate any drift
- * inside (900, 1280), including e.g. 1000px — which reopens 70%-glass-over-
- * scrim at widths 1000–1023, the exact ~3.7:1 AA failure the override exists
- * to prevent). Playwright's default color scheme is light, which is the only
- * theme the override targets (`html:not(.dark)`).
- */
-test.describe('glass material at the lg boundary — 1023px (last sub-lg width)', () => {
-  test.use({ viewport: { width: 1023, height: 800 } });
-
-  test('light theme forces the near-opaque AA fallback, blur off', async ({ page }) => {
-    // Sub-lg: the card is the sheet body over the black/40 scrim, where the
-    // 70% glass fill fails AA (~3.7:1) — the override MUST swap in
-    // `--glass-fallback` (rgba(255,255,255,.94)) and drop the pointless blur.
-    await openFirstCluster(page);
-    await openScenarioPane(page, 1023);
-
-    const material = await page.getByTestId('scenario-pane-body').evaluate((el) => {
-      const style = getComputedStyle(el);
-      return {
-        background: style.backgroundColor,
-        backdrop: style.backdropFilter || style.webkitBackdropFilter || 'none',
-      };
-    });
-    expect(material.background).toBe('rgba(255, 255, 255, 0.94)');
-    expect(material.backdrop).toBe('none');
-  });
-});
-
-test.describe('glass material at the lg boundary — 1024px (first lg width)', () => {
-  test.use({ viewport: { width: 1024, height: 800 } });
-
-  test('light theme keeps the real glass: 70% fill plus backdrop blur', async ({ page }) => {
-    // lg+: no scrim behind the card (the gutter is transparent over the panel
-    // surface), the fg-muted-on-card pairing passes AA (~4.8:1), and the
-    // @supports block's glass MUST be active — if this reads the fallback,
-    // the @supports layer, the `--glass-fill` token, or the boundary
-    // regressed.
-    await openFirstCluster(page);
-    await openScenarioPane(page, 340);
-
-    const material = await page.getByTestId('scenario-pane-body').evaluate((el) => {
-      const style = getComputedStyle(el);
-      return {
-        background: style.backgroundColor,
-        backdrop: style.backdropFilter || style.webkitBackdropFilter || 'none',
-      };
-    });
-    expect(material.background).toBe('rgba(255, 255, 255, 0.7)');
-    expect(material.backdrop).toContain('blur(14px)');
   });
 });

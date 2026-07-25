@@ -5,7 +5,7 @@ import type {
   MetricStateResponse,
   ProcurementInfo,
 } from '@lcm/shared';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { AlertTriangle, SlidersHorizontal, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
@@ -56,10 +56,11 @@ const PANE_SIDE_BY_SIDE_QUERY = '(min-width: 1024px)';
 
 /**
  * Active-scenario tone for the Scenario toggle. It uses the consumption token
- * rather than the amber accent so the indicator points at the violet scenario
- * line it labels — amber is double-booked as the warn-threshold color
- * (styles.css §chart tokens). Everything else about the chip look comes from
- * `Button`'s `chip` variant + `chip` size, which is the single source.
+ * so the indicator is coloured like the violet scenario line it labels, rather
+ * than like the steel `--accent` (which would read as a generic CTA) or amber
+ * `--warning` (which is the warn hairline on the very same chart). Everything
+ * else about the chip look comes from `Button`'s `chip` variant + `chip` size,
+ * which is the single source.
  */
 const SCENARIO_ACTIVE_TONE =
   'border-[var(--chart-consumption)] text-[var(--chart-consumption)] hover:border-[var(--chart-consumption)]';
@@ -74,10 +75,14 @@ type PanelTab = 'hosts' | 'items' | 'settings';
  *
  * Two exclusions, both about elements that exist but must not receive focus:
  * `getClientRects()` drops `display: none` subtrees (e.g. the inactive tab
- * panels), and `[inert]` drops the content column while the Scenario pane's
- * modal sheet covers it below `lg` — covered elements still report client
- * rects, so without the `inert` filter Tab would park focus on controls hidden
- * behind the sheet (WCAG 2.2 AA 2.4.11 Focus Not Obscured).
+ * panels), and `[inert]` drops anything inside an inert subtree, since inert
+ * elements still report client rects and Tab must not park focus on them.
+ *
+ * Nothing the panel renders is inert today — the Scenario rail is a docked
+ * column that covers nothing, so the covering-sheet containment that first
+ * motivated the `[inert]` filter is gone. It is kept as a general rule about
+ * what "focusable" means rather than a fact about the current layout, so a
+ * future overlay inside the panel can't quietly reintroduce the bug.
  *
  * @ai-note jsdom has no layout, so `getClientRects()` is empty for every
  * element there; tests that exercise the trap must stub it.
@@ -236,14 +241,11 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   }, []);
 
   // The dialog names itself rather than pointing `aria-labelledby` at the
-  // cluster heading: that heading lives in the content column, which is `inert`
-  // whenever the Scenario sheet covers it below `lg`, and inert subtrees are
-  // removed from the accessibility tree. Whether a node referenced *directly*
-  // by aria-labelledby survives that removal is implementation-defined (accname
-  // only guarantees it for `hidden` nodes), so the label would be at the mercy
-  // of the engine exactly when the sheet is open. An attribute on the dialog
-  // itself always resolves, in every state, and carries more context than the
-  // bare cluster name would.
+  // cluster heading. That heading only exists once the cluster query resolves,
+  // so a referenced-node label would be unresolvable through the whole pending
+  // and error states — exactly when a dialog most needs a name. An attribute on
+  // the dialog itself always resolves, in every state, and carries more context
+  // than the bare cluster name would.
   const dialogLabel = clusterName ? `Cluster ${clusterName} detail` : 'Cluster detail';
 
   // Instant close (#243): navigate on the same frame — no exit animation, no
@@ -255,18 +257,17 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     void navigate({ to: '/' });
   }, [navigate]);
 
-  // Scenario pane (#226): the header button toggles it; Esc and the pane's own
-  // close control return focus to the button. Closing the pane never clears an
-  // active scenario — the header button keeps that visible. Pane open/close is
+  // Scenario rail (#226): the header button toggles it; Esc and the rail's own
+  // close control return focus to the button. Closing the rail never clears an
+  // active scenario — the header button keeps that visible. Open/close is
   // deliberately NOT announced on the shared polite live region: it would clobber
-  // the scenario-change announcements, and moving focus into the labeled pane is
+  // the scenario-change announcements, and moving focus into the labeled rail is
   // itself the assistive-tech cue.
   //
-  // Focus is driven from the `paneOpen` *state*, not from the pane's mount
-  // (review finding): AnimatePresence recycles a same-key child that re-enters
-  // while its 200ms exit is still running, so a fast close→reopen never
-  // remounts the body and a mount-only effect would silently skip moving focus
-  // into the pane.
+  // Focus is driven from the `paneOpen` *state* rather than the rail body's
+  // mount, because the body has two mount sites (docked at `lg`+, inline below)
+  // and remounts when the viewport crosses the breakpoint — a mount-keyed effect
+  // would re-steal focus on a resize the user never asked anything of.
   const closePane = useCallback(() => {
     // Only reclaim focus if it currently sits inside the rail that is about to
     // hide (or nowhere at all). At `lg` and up the content column stays
@@ -293,12 +294,12 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   }, [paneOpen, closePane, openPane]);
 
   // Scenario edits are LIVE (presets + sliders, no Apply): the forecast redraws
-  // as the user drags, so the pane STAYS OPEN during editing at every width —
-  // auto-closing on change would slam the sheet shut on the first slider tick.
-  // At `lg`+ the pane sits beside the chart, so live updates are fully visible;
-  // below `lg` (a v1 non-goal) the sheet covers the chart while editing and the
-  // user closes it (Esc / Close) to view the result. The change is still
-  // announced via the live region so the covered case still gets feedback.
+  // as the user drags, so the rail STAYS OPEN during editing at every width —
+  // auto-closing on change would slam it shut on the first slider tick. The
+  // rail never covers the chart at either width (docked column at `lg`+, inline
+  // under the chart below `lg`), so the redraw is visible while editing in both
+  // layouts. The change is announced on the live region regardless, since the
+  // chart is not an assistive-tech affordance.
   const handleScenarioChange = useCallback((next: ScenarioWire | null): void => {
     setScenario(next);
     setAnnouncementOverride(
@@ -380,6 +381,24 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
         scenario!,
       ),
     enabled: Boolean(metric && range && scenario),
+    // Scenario edits are LIVE: every debounced slider settle is a new `scenario`
+    // object, hence a new query key, hence — without this — an `undefined` data
+    // window on every single tick. That window collapses `activeForecast` back
+    // to the baseline, so the violet scenario line, the "Scenario active" KPI
+    // badge, and all four KPI numbers would blink out and back on each edit.
+    // Holding the last good scenario forecast across the refetch is what makes
+    // dragging read as one continuously redrawing chart.
+    //
+    // @ai-note The placeholder must NOT survive a failure: the inline error
+    // below says "showing baseline forecast", so the chart under it has to
+    // actually BE the baseline, never the previous slider position's what-if.
+    // TanStack substitutes a placeholder only while the query is `pending` — so
+    // it correctly rides out the `retry` attempt and is dropped once the query
+    // settles into `error`, leaving `data` undefined and the gates below intact.
+    // That is library behaviour this panel's honesty depends on, so it is pinned
+    // by a test ("drops the held scenario forecast when the next one fails"),
+    // not by a redundant conditional here.
+    placeholderData: keepPreviousData,
   });
 
   const activeForecast = scenario && scenarioQuery.data ? scenarioQuery.data : forecastQuery.data;
@@ -425,10 +444,11 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
             !event.defaultPrevented &&
             isEscapeTargetInsidePanel(panelRef.current, event.target)
           ) {
-            // Esc layering (#226): an open pane swallows the first Esc and
+            // Esc layering (#226): an open rail swallows the first Esc and
             // closes itself; only then does Esc dismiss the whole panel. The
-            // scoping guard above still lets nested Radix overlays (e.g. the
-            // Scenario type Select) handle their own Escape first.
+            // scoping guard above still lets nested Radix overlays (e.g. a
+            // host dialog opened from the Hosts tab) handle their own Escape
+            // first.
             if (paneOpen) {
               closePane();
             } else {
@@ -724,9 +744,9 @@ function forecastHeading(procurement: ProcurementInfo, capacityKnown: boolean): 
  * expose the disclosure state to assistive tech.
  *
  * The active tint is `--chart-consumption` (violet), matching the scenario
- * series on the forecast chart directly below it. It used to be the amber
- * `--accent`, which since the chart-color split is the *warn threshold* hue —
- * the chip color-associated with the hairline it does not describe.
+ * series on the forecast chart directly below it — deliberately neither the
+ * steel brand accent nor the amber warn hue, so the chip is colour-associated
+ * with the line it actually describes.
  */
 function ScenarioButton({
   active,
@@ -768,27 +788,20 @@ function ScenarioButton({
 }
 
 /**
- * The floating glass Scenario card (#243) — the one sanctioned glass surface
- * (`.scenario-card`, styles.css). Anchored to the aside's top-right corner
- * with a 16px inset, auto height, and its own opacity/x enter/exit (never the
- * blur radius); at `lg`+ it is 348px wide — the 340px gutter minus the 16px
- * right inset plus a 24px overlap under the content column's 24px right
- * padding, so real content peeks through the blur. (Recorded residual, #243
- * review: on classic-scrollbar platforms — Windows/Linux, macOS "always
- * show" — the column's vertical scrollbar renders inside that overlapped
- * strip, so the card blocks direct thumb drags along its own height while
- * the pane is open; wheel/trackpad/keyboard scrolling and the exposed track
- * below the card still work.) Because the card hangs off
- * the aside's fixed right edge, the aside's width animation never moves or
- * reflows it. Below `lg` it is a full-width sheet body (16px insets) over the
- * aside's scrim. Focus-into-pane on open is owned by the parent's `paneOpen`
- * effect, not by this component's mount — AnimatePresence can recycle the
- * body instead of remounting it (see `closePane`).
+ * Body of the docked Scenario rail (redesigned 2026-07-24). Deliberately
+ * chrome-less: the container that renders it owns the surface, border, radius,
+ * and scrolling — the `<aside>` docked beside the content column at `lg`+, or
+ * the inline `<section>` under the chart below `lg`. There is no glass, no
+ * scrim, no floating card, and no motion; the rail is part of the layout, so it
+ * appears and disappears with the toggle on the next frame.
  *
- * The single "Scenario" heading lives here (labels the aside via
- * `aria-labelledby`); `ScenarioControls` no longer renders its own (#243
- * de-duplication). Only the form is width-capped below `lg`, because number
- * inputs stretched across ~900px read as broken.
+ * Focus-into-rail on open is owned by the parent's `paneOpen` effect rather
+ * than this component's mount: it has two mount sites and genuinely remounts
+ * when the viewport crosses `lg`, which must not be mistaken for an open.
+ *
+ * The single "Scenario" heading lives here and labels the container via
+ * `aria-labelledby`; `ScenarioControls` renders no heading of its own (#243
+ * de-duplication).
  */
 function ScenarioPaneBody({
   headingId,
