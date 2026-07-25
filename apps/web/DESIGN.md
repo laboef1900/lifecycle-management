@@ -98,7 +98,7 @@ LCM is read the way an operator reads a control deck: a dark, gradient-lit chass
 
 The voice is **quiet and analytical**. This is a reference instrument for a five-person infrastructure team making hardware-purchasing decisions, not a persuasion surface — so it favors restraint over flourish, exactness over emphasis, and honesty over reassurance. Where a value is unknown or a month is a gap, the system shows the gap rather than smoothing it into a confident line; a zero capacity is never painted as "healthy." Trust is earned through accuracy and legibility, and the design's job is to never get in the way of either.
 
-Expression lives in precise details, not decoration: the two-layer steel focus ring on every interactive surface, the taller crit tick that separates severity by shape as well as hue, the single sanctioned glass surface. The implemented token system ships in code as **"Mission Bento"** (`apps/web/src/styles.css`); this document is its design-authority record.
+Expression lives in precise details, not decoration: the two-layer steel focus ring on every interactive surface and the taller crit tick that separates severity by shape as well as hue. The implemented token system ships in code as **"Mission Bento"** (`apps/web/src/styles.css`); this document is its design-authority record.
 
 **Key Characteristics:**
 
@@ -185,19 +185,19 @@ Breakpoints are pinned to px in the `@theme` block (`--breakpoint-sm/md/lg/xl/2x
 
 ## Elevation & Depth
 
-A near-flat system: surfaces rest on **one soft card shadow** and gain depth from a gradient-lit chassis rather than heavy elevation. Dark theme lights the backdrop with a top radial gradient (`--surface-backdrop`) and cards with a faint vertical gradient (`--surface-card`); light theme is flat. Cards lift on hover (`--shadow-card` → `--shadow-card-hover`, 200ms). Modals and the one glass surface use `--overlay-shadow`.
+A near-flat system: surfaces rest on **one soft card shadow** and gain depth from a gradient-lit chassis rather than heavy elevation. Dark theme lights the backdrop with a top radial gradient (`--surface-backdrop`) and cards with a faint vertical gradient (`--surface-card`); light theme is flat. Cards lift on hover (`--shadow-card` → `--shadow-card-hover`, 200ms). Modals use `--overlay-shadow`.
 
 ### Shadow Vocabulary
 
 - **Card at rest** (`--shadow-card`): every `Card`, tile, and KPI.
 - **Card hover** (`--shadow-card-hover`): interactive cards on hover only.
-- **Overlay** (`--overlay-shadow`): dialogs, popovers, and the scenario glass card.
+- **Overlay** (`--overlay-shadow`): dialogs and popovers.
 
 ### Named Rules
 
 **The Flat-Surface Rule.** Surfaces are near-flat and honest. Depth comes from soft shadow + the lit gradient chassis, never from stacked heavy shadows.
 
-**The One-Glass Rule.** Exactly one glass (backdrop-blur) surface per view — the scenario controls card (`.scenario-card`, #243), on the floating-controls layer only. Never a page/pane surface, never glass-on-glass. It ships a near-opaque fallback that passes AA on its own (for no-`backdrop-filter` and `prefers-reduced-transparency`) and a mandatory 1px border. Otherwise `backdrop-blur` is reserved for modal scrims; never animate a blur radius.
+**The No-Glass Rule.** There are no glass (backdrop-blur) surfaces. The one former exception — the scenario controls card (`.scenario-card`, #243) — was removed 2026-07-24 when the scenario pane became a plain **docked rail** (no float, no glass). `backdrop-blur` is reserved for modal overlay scrims only; never animate a blur radius.
 
 ## Shapes
 
@@ -270,7 +270,7 @@ A `Badge` whose variant is derived in one shared place (`deriveRunwayTone`): `da
 
 ### Don't:
 
-- **Don't** use glassmorphism beyond the single sanctioned scenario controls card; never glass-on-glass, never a page/pane glass surface.
+- **Don't** use glassmorphism (there are no glass surfaces; the scenario pane is a plain docked rail).
 - **Don't** bring back the radial `UtilizationGauge` or any second utilization visualization.
 - **Don't** hardcode raw palette classes (`bg-emerald-100`, `text-amber-500`, …) — semantic tokens only.
 - **Don't** re-alias `--accent` (steel) onto `--warning` (amber), or brand anything amber — that resurrects the collision this design removed.

@@ -8,9 +8,7 @@ import type {
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { AlertTriangle, SlidersHorizontal, X } from 'lucide-react';
-import { useCallback, useEffect, useId, useReducer, useRef, useState } from 'react';
-import { AnimatePresence } from 'motion/react';
-import * as m from 'motion/react-m';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { ForecastChart } from '@/components/clusters/forecast-chart';
 import { HostsTab } from '@/components/clusters/hosts-tab';
@@ -50,51 +48,11 @@ export interface ClusterPanelProps {
 
 const numberFormat = new Intl.NumberFormat('en-US');
 
-/**
- * Scenario pane motion (spec §3): enter 280ms ease-out, exit 200ms ease-in.
- * The PANEL itself no longer animates (#243): open and close render on the
- * next frame. The asymmetry is deliberate and recorded in the spec §5
- * amendment — the panel is high-frequency navigation where animation is pure
- * wait time (NN/g, Apple HIG); the pane is an occasional mode change.
- */
-const ENTER_TRANSITION = { duration: 0.28, ease: [0, 0, 0.38, 0.9] as const };
-const EXIT_TRANSITION = { duration: 0.2, ease: [0.4, 0, 1, 1] as const };
-
-/** Width of the slide-in Scenario pane (#226) at `lg` and up, in px. Animated
- *  from 0 → this so the forecast/tabs content column compresses to its left. */
-const SCENARIO_PANE_WIDTH = 340;
-
-/** Below this width the pane cannot sit beside the content column, so it
- *  overlays it instead (mirrors the `lg:` utilities on the `m.aside`). Kept as
- *  one constant so the media query and the Tailwind class can't drift apart. */
+/** Below this width the Scenario rail can't dock beside the content column, so
+ *  it stacks inline under the chart instead. One constant so the JS media query
+ *  and the render gate can't drift apart. Nothing animates (#243): the panel
+ *  and the rail both render on the next frame. */
 const PANE_SIDE_BY_SIDE_QUERY = '(min-width: 1024px)';
-
-/**
- * Pane geometry per breakpoint. The two facts here MUST agree and are returned
- * together so they cannot drift: how wide the pane is, and whether it covers
- * the content column behind it.
- *
- * At `lg` and up the pane is a 340px flex sibling and the column simply
- * compresses beside it — nothing is covered, so the column stays interactive.
- * Below `lg` there is no room for a side-by-side editor, so the pane becomes a
- * modal sheet across the whole panel. It is `coversContent` that licenses the
- * `inert` on the column: a 340px strip over a 100vw panel would leave the rest
- * of the column visible on screen while unclickable and stripped from the
- * accessibility tree — worse than the focus-obscured bug the `inert` fixes.
- *
- * `100vw` rather than `100%`: the pane body is anchored inside the animating
- * `m.aside`, so a percentage would resolve against the pane's *current* width
- * and reflow the text on every animation frame. `.cluster-panel` is itself
- * `width: 100vw` (styles.css), so the viewport unit is the panel's width.
- */
-export function scenarioPaneLayout(sideBySide: boolean): {
-  width: number | string;
-  coversContent: boolean;
-} {
-  return sideBySide
-    ? { width: SCENARIO_PANE_WIDTH, coversContent: false }
-    : { width: '100vw', coversContent: true };
-}
 
 /**
  * Active-scenario tone for the Scenario toggle. It uses the consumption token
@@ -106,52 +64,10 @@ export function scenarioPaneLayout(sideBySide: boolean): {
 const SCENARIO_ACTIVE_TONE =
   'border-[var(--chart-consumption)] text-[var(--chart-consumption)] hover:border-[var(--chart-consumption)]';
 
-/**
- * The Scenario pane's presence state machine.
- *
- * Two booleans rather than one because AnimatePresence keeps the pane mounted —
- * and painting over the content column — for its 200ms exit *after* `open` has
- * already flipped false. `onScreen` (open OR exiting) is what the column's
- * `inert` and the focus restore must key on; `open` alone would hand the column
- * back while the sheet is still covering it.
- *
- * Extracted as a pure reducer (like `scenarioPaneLayout` and `collectFocusable`
- * below) because the `open` transition encodes an invariant that is otherwise
- * unobservable from outside the component: see the comment on that case.
- */
-export type PanePresence = { open: boolean; exiting: boolean };
-export type PanePresenceEvent = 'open' | 'close' | 'exit-complete';
-
 /** The panel's own tab set. Controlled (not `Tabs`' uncontrolled `defaultValue`)
  *  so the unknown-capacity recommendation chip can switch to 'hosts' itself
  *  (#243 Part B item 4). */
 type PanelTab = 'hosts' | 'items' | 'settings';
-
-export const PANE_CLOSED: PanePresence = { open: false, exiting: false };
-
-export function panePresenceReducer(state: PanePresence, event: PanePresenceEvent): PanePresence {
-  switch (event) {
-    case 'open':
-      // `exiting: false` is load-bearing, not incidental. A re-entry cancels
-      // the exit, and a cancelled exit never calls `onExitComplete`:
-      // AnimatePresence drops the key from its `exitComplete` map and stops
-      // passing the callback down (framer-motion 12.42, AnimatePresence/
-      // index.mjs). Nothing else would ever clear the flag, so a mid-exit
-      // reopen would leave `exiting` true for the life of the recycled pane —
-      // making `exiting` mean something other than what its name says, and
-      // handing the next close a state it did not produce.
-      return { open: true, exiting: false };
-    case 'close':
-      return { open: false, exiting: true };
-    case 'exit-complete':
-      return { ...state, exiting: false };
-  }
-}
-
-/** The pane is on screen while it is open *or* still painting its exit. */
-export function paneIsOnScreen(state: PanePresence): boolean {
-  return state.open || state.exiting;
-}
 
 /**
  * Focusable elements the panel's Tab trap may cycle through.
@@ -213,9 +129,9 @@ export function isEscapeTargetInsidePanel(
  * behavior instead of the reverse). Owns the entire former detail-page
  * composition: header (with the Scenario pane toggle), recommendation banner,
  * KPI strip, forecast chart, the Hosts/Apps & Events/Settings tabs, and the
- * slide-in Scenario pane (#226) — which compresses the content column beside
- * it at `lg` and up, and becomes a full-panel modal sheet below that
- * (`scenarioPaneLayout`).
+ * Scenario rail (redesigned 2026-07-24) — a plain docked side column at `lg`+
+ * and an inline section under the chart below `lg`; it never covers the content
+ * column, so there is no `inert`/focus-trap/slide-in machinery here anymore.
  */
 export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Element {
   const navigate = useNavigate();
@@ -229,8 +145,10 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const restorePaneFocusRef = useRef(false);
   const hostsTabRef = useRef<HTMLButtonElement>(null);
 
-  const [pane, dispatchPane] = useReducer(panePresenceReducer, PANE_CLOSED);
-  const paneOpen = pane.open;
+  // The Scenario rail is a plain docked column now (not a slide-in modal sheet),
+  // so its presence is a single boolean — no exit-animation "exiting" state to
+  // track, no covering, no inert.
+  const [paneOpen, setPaneOpen] = useState(false);
   // Overridden by close/scenario-change event handlers; otherwise derived
   // from the loaded cluster name each render (no effect needed for the
   // "opened" announcement — it falls out of the query resolving).
@@ -241,14 +159,9 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   const [approveOpen, setApproveOpen] = useState(false);
   const isWide = useMediaQuery('(min-width: 640px)');
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
+  // Below `lg` the rail stacks inline under the chart; at `lg`+ it docks as a
+  // side column. This drives WHERE the single rail instance renders.
   const paneIsSideBySide = useMediaQuery(PANE_SIDE_BY_SIDE_QUERY);
-  const paneLayout = scenarioPaneLayout(paneIsSideBySide);
-  // Derived from the pane being *on screen*, not merely open: dropping the
-  // containment the instant `paneOpen` flips false would hand the column back
-  // while the sheet is still painted over it for the exit animation — exactly
-  // the focus-obscured condition the `inert` exists to prevent.
-  const paneIsPresent = paneIsOnScreen(pane);
-  const paneOverlaysContent = paneIsPresent && paneLayout.coversContent;
   const canManage = useIsAdmin();
 
   const clusterQuery = useQuery({
@@ -355,10 +268,10 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // remounts the body and a mount-only effect would silently skip moving focus
   // into the pane.
   const closePane = useCallback(() => {
-    // Only reclaim focus if it currently sits inside the pane that is about to
-    // disappear (or nowhere at all). At `lg` and up the content column stays
-    // interactive beside the pane, so an Esc pressed while the user is working
-    // in the hosts table must close the pane without yanking them back up to
+    // Only reclaim focus if it currently sits inside the rail that is about to
+    // hide (or nowhere at all). At `lg` and up the content column stays
+    // interactive beside the rail, so an Esc pressed while the user is working
+    // in the hosts table must close the rail without yanking them back up to
     // the header (review finding: the unconditional focus steal).
     const active = document.activeElement;
     const focusInsidePane =
@@ -366,13 +279,10 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       (paneRef.current?.contains(active) ?? false) &&
       document.contains(active);
     restorePaneFocusRef.current = focusInsidePane || active === document.body || active === null;
-    dispatchPane('close');
+    setPaneOpen(false);
   }, []);
   const openPane = useCallback(() => {
-    // The `open` case of `panePresenceReducer` also clears `exiting` — see the
-    // invariant documented there (a mid-exit re-entry cancels the exit, and a
-    // cancelled exit never fires `onExitComplete`).
-    dispatchPane('open');
+    setPaneOpen(true);
   }, []);
   const togglePane = useCallback(() => {
     if (paneOpen) {
@@ -401,38 +311,14 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       paneCloseRef.current?.focus();
       return;
     }
-    // Restore only once the pane is fully gone, not the moment it starts
-    // closing: below `lg` the Scenario button sits in the column that stays
-    // inert until the exit finishes, and `focus()` on an element inside an
-    // inert subtree is a no-op in a real browser — restoring early would drop
-    // focus on <body> with nothing left to recover it.
-    if (!paneIsPresent && restorePaneFocusRef.current) {
+    // On close, hand focus back to the Scenario toggle — but only if the rail
+    // held it (see `closePane`). The rail hides immediately now (no exit
+    // animation), so there is no "wait for the exit" gate.
+    if (restorePaneFocusRef.current) {
       restorePaneFocusRef.current = false;
       scenarioButtonRef.current?.focus();
     }
-  }, [paneOpen, paneIsPresent]);
-
-  // Re-home focus when the content column *becomes* covered. Crossing below
-  // `lg` with the pane open (rotate, resize, split view) makes the column inert
-  // under whatever the user had focused there; the browser blurs it and focus
-  // falls to <body>. Nothing else recovers it — the effect above keys on
-  // `paneOpen`, which did not change — and because the Tab trap is a React
-  // `onKeyDown` on the panel root, a Tab from <body> never reaches it, so focus
-  // would escape the `aria-modal` dialog entirely.
-  //
-  // Declared after the open effect so opening below `lg` is a no-op here: focus
-  // is already inside the pane by then. The `[inert]` branch covers engines (and
-  // jsdom) that leave `document.activeElement` on the now-inert element instead
-  // of blurring it.
-  useEffect(() => {
-    if (!paneOverlaysContent) return;
-    const active = document.activeElement;
-    const focusWasLost =
-      active === null ||
-      active === document.body ||
-      (active instanceof HTMLElement && active.closest('[inert]') !== null);
-    if (focusWasLost) paneCloseRef.current?.focus();
-  }, [paneOverlaysContent]);
+  }, [paneOpen]);
 
   // Hosts-tab deep link (#243 Part B item 4): the unknown-capacity
   // recommendation chip requests this anchor when clicked, so the panel
@@ -558,55 +444,13 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
         {liveMessage}
       </div>
 
-      {/* Non-scrolling shell (#226): the panel root no longer scrolls — this
-          content column does — so the Scenario pane can sit beside it as a
-          full-height flex sibling. */}
-      {/* `inert` exactly while the Scenario sheet covers this column (below
-          `lg`, see `scenarioPaneLayout`): the sheet — since #243 a scrim-
-          tinted aside carrying the floating glass card — spans the whole
-          panel, so nothing here is reachable by pointer (the scrim eats every
-          hit). Covered controls keep their client rects, so without this they
-          stay in the Tab cycle and focus lands on elements the user cannot
-          operate — WCAG 2.2 AA 2.4.11 (Focus Not Obscured). `inert` also
-          removes them from the accessibility tree — the honest description of
-          a column that is dimmed under a modal sheet (the same contract as the
-          app's Dialog overlays); the sheet's own close control and Esc are the
-          way out. At
-          `lg`+ the pane is a flex sibling that covers nothing, so the column
-          stays fully interactive. `collectFocusable` skips `[inert]` subtrees
-          so the hand-rolled Tab trap agrees with the browser.
-
-          DELIBERATELY ASYMMETRIC between enter and exit. On exit the
-          containment is held until `onExitComplete` (see below); on enter it is
-          applied immediately, so for the 280ms `ENTER_TRANSITION` part of the
-          column is still visible while already inert. That asymmetry is the
-          safe direction, and deferring the enter side to match would be a
-          regression:
-
-          - Exit, released early: the Scenario button the focus restore targets
-            is *inside* this column, and `focus()` on an element in an inert
-            subtree is a no-op in a real browser. Focus lands on <body>, and a
-            Tab from <body> never reaches the panel's React `onKeyDown` trap —
-            focus escapes the `aria-modal` dialog with nothing to recover it.
-            A hard, unrecoverable failure.
-          - Enter, deferred: the column would stay *interactive* while the sheet
-            progressively covers it, which is precisely the WCAG 2.2 AA 2.4.11
-            (Focus Not Obscured) condition this `inert` exists to prevent — Tab
-            could park focus on a control that is already behind the sheet.
-
-          What the enter side actually costs is a ≤280ms window in which a
-          pointer click on the not-yet-covered strip does nothing. It strands no
-          focus (the open effect has already moved focus into the pane), it is
-          user-initiated on the control that starts it, and it self-resolves
-          when the sheet finishes painting. No enter animation can remove the
-          window entirely — any transition that reveals the sheet over time has
-          one — so the only alternative is dropping the sub-`lg` open animation,
-          which is a design change and not this fix's call. */}
-      <div
-        data-testid="panel-content"
-        inert={paneOverlaysContent}
-        className="min-w-0 flex-1 overflow-y-auto"
-      >
+      {/* Non-scrolling shell (#226): the panel root doesn't scroll — this
+          content column does — so the Scenario rail can dock beside it as a
+          full-height flex sibling at `lg`+. The rail is a plain docked column
+          now (not a covering modal sheet), so this column is never `inert` and
+          needs no focus containment against it; below `lg` the rail stacks
+          inline inside this column (rendered after the chart). */}
+      <div data-testid="panel-content" className="min-w-0 flex-1 overflow-y-auto">
         <div className="space-y-6 p-5 sm:p-6">
           {/* Two-line page header (#243, the Polaris/Primer/Carbon anatomy):
             line 1 is one flex row — icon-only back link hard left, h1 name,
@@ -734,6 +578,28 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                 />
               )}
 
+              {/* Below `lg`, the Scenario rail stacks inline right under the
+                  chart it edits (no float, no cover). At `lg`+ it docks as a
+                  side column instead — see the render below panel-content. */}
+              {paneOpen && !paneIsSideBySide ? (
+                <section
+                  ref={paneRef}
+                  id={paneId}
+                  aria-labelledby={paneHeadingId}
+                  className="rounded-[var(--radius-card)] border border-border"
+                  style={{ background: 'var(--surface-card)' }}
+                >
+                  <ScenarioPaneBody
+                    headingId={paneHeadingId}
+                    scenario={scenario}
+                    onChange={handleScenarioChange}
+                    onClose={closePane}
+                    closeRef={paneCloseRef}
+                    maxHosts={forecastQuery.data?.hosts.length}
+                  />
+                </section>
+              ) : null}
+
               <Tabs
                 value={activeTab}
                 onValueChange={(value) => setActiveTab(value as PanelTab)}
@@ -761,42 +627,29 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
         </div>
       </div>
 
-      {/* `onExitComplete` is the paint-accurate end of the pane's life: it is
-          what releases the content column, so the containment above outlives
-          `paneOpen` for exactly as long as the sheet is still on screen (and no
-          longer — a fixed timer would over-hold it for reduced-motion users,
-          whose exit finishes immediately). */}
-      <AnimatePresence onExitComplete={() => dispatchPane('exit-complete')}>
-        {paneOpen ? (
-          /* Since #243 the aside is no longer a visible surface: at `lg`+ it
-             is the transparent 340px reserved gutter that compresses the
-             content column (width animation unchanged); below `lg` it spans
-             the panel with a scrim tint. The visible surface is the floating
-             glass card (`ScenarioPaneBody`). `overflow-hidden` is gone so the
-             card can overlap the column's right padding — the card carries
-             its own enter/exit animation instead of relying on the clip. */
-          <m.aside
-            key="scenario-pane"
-            ref={paneRef}
-            id={paneId}
-            aria-labelledby={paneHeadingId}
-            className="absolute inset-y-0 right-0 z-10 max-lg:bg-black/40 lg:relative lg:inset-auto lg:z-auto"
-            initial={{ width: 0 }}
-            animate={{ width: paneLayout.width }}
-            exit={{ width: 0, transition: EXIT_TRANSITION }}
-            transition={ENTER_TRANSITION}
-          >
-            <ScenarioPaneBody
-              headingId={paneHeadingId}
-              scenario={scenario}
-              onChange={handleScenarioChange}
-              onClose={closePane}
-              closeRef={paneCloseRef}
-              maxHosts={forecastQuery.data?.hosts.length}
-            />
-          </m.aside>
-        ) : null}
-      </AnimatePresence>
+      {/* At `lg`+ the Scenario rail docks as a real side column of the panel
+          grid — a fixed-width flex sibling of the content column, part of the
+          layout (no float, no slide, no glass, no cover). It appears/disappears
+          instantly on toggle; the content column simply reflows beside it.
+          Below `lg` this is null — the rail renders inline under the chart
+          instead (see panel-content above). */}
+      {paneOpen && paneIsSideBySide ? (
+        <aside
+          ref={paneRef}
+          id={paneId}
+          aria-labelledby={paneHeadingId}
+          className="flex w-[340px] shrink-0 flex-col overflow-y-auto border-l border-border"
+        >
+          <ScenarioPaneBody
+            headingId={paneHeadingId}
+            scenario={scenario}
+            onChange={handleScenarioChange}
+            onClose={closePane}
+            closeRef={paneCloseRef}
+            maxHosts={forecastQuery.data?.hosts.length}
+          />
+        </aside>
+      ) : null}
       {/* Approve-order flow (#292). Keyed on the cluster so state resets across
           clusters; only mounted for admins with a resolved base forecast. The
           server re-derives the breach, so a stale open dialog cannot approve a
@@ -952,15 +805,11 @@ function ScenarioPaneBody({
   closeRef: React.RefObject<HTMLButtonElement | null>;
   maxHosts: number | undefined;
 }): React.JSX.Element {
+  // Plain docked body: the container (the docked `<aside>` at lg+, or the
+  // inline `<section>` below lg) owns the surface, border, and scroll. No glass,
+  // no motion — the rail is part of the layout now, not a floating popup.
   return (
-    <m.div
-      data-testid="scenario-pane-body"
-      className="scenario-card absolute right-4 top-4 flex max-h-[calc(100%-2rem)] w-[calc(100vw-2rem)] flex-col overflow-y-auto p-4 lg:w-[348px]"
-      initial={{ opacity: 0, x: 12 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 12, transition: EXIT_TRANSITION }}
-      transition={ENTER_TRANSITION}
-    >
+    <div data-testid="scenario-pane-body" className="flex flex-col p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         {/* h2 like the other panel sections (#243 review — the outline under
             the cluster-name h1 must not skip a level); still labels the
@@ -998,10 +847,8 @@ function ScenarioPaneBody({
           </Kbd>
         </Button>
       </div>
-      <div className="w-full max-w-sm">
-        <ScenarioControls active={scenario} onChange={onChange} maxHosts={maxHosts} />
-      </div>
-    </m.div>
+      <ScenarioControls active={scenario} onChange={onChange} maxHosts={maxHosts} />
+    </div>
   );
 }
 
