@@ -70,6 +70,19 @@ async function seedThreeYears(): Promise<{ id: string; metricTypeId: string }> {
   return cluster;
 }
 
+/**
+ * Two tests below spy on the SHARED `prisma` client. The server suite runs
+ * `isolate: false` with a single worker and sets no `restoreMocks`, so a spy
+ * that outlives its test stays installed on that client for every remaining
+ * file in the run — and the damage surfaces somewhere with no visible link back
+ * here. A trailing `mockRestore()` is not enough: it is skipped whenever an
+ * assertion above it throws, which is exactly when a test is already failing and
+ * least deserves to take the rest of the suite with it.
+ */
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('ForecastSnapshotCleanup (#318)', () => {
   it('deletes NOTHING when retention is off — the default', async () => {
     const { id } = await seedThreeYears();
@@ -92,7 +105,6 @@ describe('ForecastSnapshotCleanup (#318)', () => {
     await new ForecastSnapshotCleanup(prisma).sweep(NOW);
 
     expect(deleteMany).not.toHaveBeenCalled();
-    deleteMany.mockRestore();
   });
 
   it('deletes only rows whose horizon month is older than the window', async () => {
@@ -223,9 +235,9 @@ describe('ForecastSnapshotCleanup (#318)', () => {
     const warn = vi.fn();
     await seedThreeYears();
     await setRetention(12);
-    const deleteMany = vi
-      .spyOn(prisma.forecastSnapshot, 'deleteMany')
-      .mockRejectedValueOnce(new Error('connection lost'));
+    vi.spyOn(prisma.forecastSnapshot, 'deleteMany').mockRejectedValueOnce(
+      new Error('connection lost'),
+    );
 
     const results = await new ForecastSnapshotCleanup(prisma, { info: vi.fn(), warn }).sweep(NOW);
 
@@ -234,7 +246,23 @@ describe('ForecastSnapshotCleanup (#318)', () => {
       { err: expect.any(Error), tenantId: TENANT },
       'forecast-snapshot cleanup sweep failed',
     );
-    deleteMany.mockRestore();
+  });
+
+  it('joins the run already in flight rather than sweeping twice at once', async () => {
+    // A second concurrent sweep would overwrite `activeRun`, and whichever
+    // settled first would clear it — leaving `stop()` draining a finished run
+    // while a live one kept deleting through shutdown.
+    await seedThreeYears();
+    await setRetention(12);
+    const deleteMany = vi.spyOn(prisma.forecastSnapshot, 'deleteMany');
+    const cleanup = new ForecastSnapshotCleanup(prisma);
+
+    const [a, b] = await Promise.all([cleanup.sweep(NOW), cleanup.sweep(NOW)]);
+
+    expect(deleteMany).toHaveBeenCalledTimes(1);
+    // Both callers get the same answer, so the join is invisible to them.
+    expect(b).toBe(a);
+    expect(a[0]!.deleted).toBeGreaterThan(0);
   });
 });
 

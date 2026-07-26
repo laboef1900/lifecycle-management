@@ -10,8 +10,14 @@ const DRAIN_TIMEOUT_MS = 5_000;
  * How often the sweep runs. Fixed, not a setting: retention is measured in
  * MONTHS, so the tick rate is immaterial to correctness — a row that ages out is
  * already excluded from the band's read the moment it crosses the cutoff,
- * whether or not the sweep has caught up. Six hours keeps the delete batches
- * small without pretending to be prompt.
+ * whether or not the sweep has caught up. The tick only decides when the disk
+ * catches up with the read.
+ *
+ * `start()` schedules the first run one interval out rather than sweeping
+ * immediately, so a freshly booted server prunes nothing for up to six hours.
+ * That is deliberate for the same reason: nothing observable waits on it, and a
+ * destructive job that fires during boot is harder to reason about than one that
+ * fires on a predictable cadence.
  */
 export const FORECAST_SNAPSHOT_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -93,8 +99,17 @@ export class ForecastSnapshotCleanup {
    * Logs at INFO on every tenant it deleted from. Pruning is destructive and
    * otherwise leaves no trace — an operator must be able to reconstruct what was
    * removed and when from the server log alone.
+   *
+   * Not re-entrant by design: an overlapping call joins the run already in
+   * flight rather than starting a second one. Two concurrent sweeps would be
+   * harmless in themselves (the delete is idempotent), but the second would
+   * overwrite `activeRun` and the first to settle would clear it — leaving
+   * `stop()` draining a run that had already finished while a live one kept
+   * deleting through shutdown.
    */
   async sweep(now: Date = new Date()): Promise<ForecastSnapshotSweepResult[]> {
+    const inFlight = this.activeRun;
+    if (inFlight) return inFlight;
     const run = this.runSweep(now);
     this.activeRun = run;
     try {
@@ -124,6 +139,12 @@ export class ForecastSnapshotCleanup {
       // refactor of either side cannot turn "retention off" into "delete all".
       if (!cutoff) continue;
 
+      // No index serves this predicate — both indexes on `forecast_snapshot`
+      // lead with `cluster_id` — so each sweep sequentially scans the table.
+      // Accepted deliberately: at <= 300 rows/cluster/year (design doc §12) on a
+      // six-hour tick, the scan costs less than maintaining an index on every
+      // snapshot write for this one query's benefit. Revisit if either the row
+      // budget or the tick rate changes materially.
       const deleted = await this.prisma.forecastSnapshot
         .deleteMany({
           where: { tenantId: tenant.tenantId, horizonMonth: { lt: cutoff } },
