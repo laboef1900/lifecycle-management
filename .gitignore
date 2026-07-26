@@ -60,6 +60,10 @@ apps/web/src/routeTree.gen.ts
 # Claude Code session-local state
 .claude/
 
+# Impeccable design-plugin state (critique snapshots, live sessions, hook cache).
+# Local-only, matching .claude/ above — the plugin is installed per-machine.
+.impeccable/
+
 # Playwright test artefacts
 apps/web/playwright-report/
 apps/web/test-results/
