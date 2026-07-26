@@ -13,28 +13,50 @@ const API_BASE = 'http://localhost:8090';
  *      (`/clusters/:id`), save an override, verify the cluster's forecast
  *      chart picks up the new percentages, then reset back to inherited.
  *
- * `afterEach` resets tenant defaults to 70/90 so subsequent runs are
- * deterministic, even if a test bails mid-flow.
+ * State handling is snapshot/restore, NOT "reset to the seeded 70/90":
+ *
+ * `tenantSettingsSchema` is a `strictObject` with no partial-update support, so
+ * a PUT must carry every field the contract currently has. The previous version
+ * of this block hand-listed them, and #316 then added three
+ * `forecastUncertainty*` fields — which the list never gained. Every reset PUT
+ * had been 400ing silently ever since, so 65/85 leaked into the database and the
+ * `toHaveValue('70')` precondition below failed on every subsequent run. One
+ * stale payload, two permanently-red tests, and a self-poisoning suite: an
+ * interrupted run left state that guaranteed the next one failed too.
+ *
+ * Round-tripping the whole object fixes that by construction — the payload is
+ * whatever the contract currently is, and the GET response carries exactly the
+ * writable shape (`tenantSettingsResponseSchema` mirrors `tenantSettingsSchema`).
+ * If those two ever diverge, the `strictObject` rejects the extra key loudly
+ * instead of leaking again. `beforeEach` then imposes the precondition rather
+ * than *asserting* a global seed value, so the suite heals itself after a run
+ * that was killed mid-flow.
  */
+interface TenantSettingsSnapshot {
+  warnThreshold: number;
+  critThreshold: number;
+  [key: string]: unknown;
+}
+
 test.describe('configurable thresholds', () => {
-  test.afterEach(async ({ request }) => {
-    // The PUT schema requires the full settings object, so read the current
-    // lead time and echo it back — omitting it fails validation (400) and
-    // would silently leak 65/85 into subsequent runs.
+  let saved: TenantSettingsSnapshot;
+
+  test.beforeEach(async ({ request }) => {
     const current = await request.get(`${API_BASE}/api/settings/tenant`);
-    const { procurementLeadTimeWeeks, idempotencyKeyRetentionHours } = (await current.json()) as {
-      procurementLeadTimeWeeks: number;
-      idempotencyKeyRetentionHours: number;
-    };
-    const reset = await request.put(`${API_BASE}/api/settings/tenant`, {
-      data: {
-        warnThreshold: 0.7,
-        critThreshold: 0.9,
-        procurementLeadTimeWeeks,
-        idempotencyKeyRetentionHours,
-      },
+    expect(current.ok()).toBe(true);
+    saved = (await current.json()) as TenantSettingsSnapshot;
+
+    const seed = await request.put(`${API_BASE}/api/settings/tenant`, {
+      data: { ...saved, warnThreshold: 0.7, critThreshold: 0.9 },
     });
-    expect(reset.ok()).toBe(true);
+    expect(seed.ok()).toBe(true);
+  });
+
+  test.afterEach(async ({ request }) => {
+    // Restores exactly what was there, including any field this spec has never
+    // heard of — the whole point of snapshotting rather than hand-listing.
+    const restore = await request.put(`${API_BASE}/api/settings/tenant`, { data: saved });
+    expect(restore.ok()).toBe(true);
   });
 
   test('saves tenant thresholds and fleet tiles reflect new values', async ({ page }) => {
@@ -334,11 +356,22 @@ test.describe('cluster lifecycle', () => {
     const panel = page.locator('.cluster-panel');
     await panel.getByRole('tab', { name: 'Cluster settings' }).click();
     await page.getByRole('button', { name: /^delete$/i }).click();
+
+    // `ClusterLifecycleCard` passes `confirmPhrase={clusterName}`, so the
+    // confirm button stays disabled until the cluster's own name is typed —
+    // friction proportional to an irreversible, whole-cluster delete. This spec
+    // predates that gate and clicked straight through, which is why it failed
+    // with "element is not enabled" rather than anything about deletion.
+    const confirm = page.getByRole('button', { name: /delete forever/i });
+    await expect(confirm).toBeDisabled();
+    await page.getByLabel(`Type ${name} to confirm`).fill(name);
+    await expect(confirm).toBeEnabled();
+
     const deleteResponse = page.waitForResponse(
       (r) =>
         new URL(r.url()).pathname === `/api/clusters/${id}` && r.request().method() === 'DELETE',
     );
-    await page.getByRole('button', { name: /delete forever/i }).click();
+    await confirm.click();
     await deleteResponse;
 
     // The lifecycle card now navigates to `/` (spec §5.6), not `/clusters`.

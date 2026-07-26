@@ -48,9 +48,23 @@ test.describe('mobile layout at 390x844', () => {
     const first = tiles.first();
     const firstBox = await first.boundingBox();
     expect(firstBox).not.toBeNull();
-    // 1-up grid (spec §4.4: col-span-12 below the 820px breakpoint) — the
-    // tile spans essentially the full viewport width.
-    expect(firstBox!.width).toBeGreaterThan(340);
+    // 1-up grid (spec §4.4: col-span-12 below the 820px breakpoint) — the tile
+    // fills its grid track.
+    //
+    // Measured against the track rather than a magic pixel floor: the old
+    // `> 340` was a viewport-derived number that quietly went stale as the
+    // shell's and card's padding changed around it (the tile is 328px wide at
+    // this 390px viewport — 16px of shell padding and ~15px of card padding per
+    // side). That number never described the invariant; "spans its whole track"
+    // does, and it cannot drift when padding is retuned.
+    const trackWidth = await first.evaluate(
+      (el) => el.parentElement?.getBoundingClientRect().width ?? 0,
+    );
+    expect(trackWidth).toBeGreaterThan(0);
+    expect(firstBox!.width).toBeGreaterThan(trackWidth - 1);
+    // Sanity floor so a genuinely collapsed layout still fails: whatever the
+    // padding, one tile per row must dominate a 390px viewport.
+    expect(firstBox!.width).toBeGreaterThan(390 * 0.8);
 
     if (count > 1) {
       const secondBox = await tiles.nth(1).boundingBox();
