@@ -34,8 +34,14 @@ const initialState: FormState = {
   name: '',
   description: '',
   baselineDate: `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-01`,
-  baselineConsumption: '0',
-  baselineCapacity: '0',
+  // Blank, NOT '0'. Guarding the *cleared* field while pre-filling the same
+  // fabricated zero would have closed the rarer path and left the likely one
+  // open: an operator who accepts the default creates a cluster whose baseline
+  // capacity is 0, which is not "unknown" downstream — it is a measurement,
+  // and `cluster-panel.tsx` calls a 0-width bar "the '0% used, healthy' lie".
+  // `parseRequiredAmount` is what keeps the blank from becoming that same 0.
+  baselineConsumption: '',
+  baselineCapacity: '',
 };
 
 export function CreateClusterDialog({ trigger }: CreateClusterDialogProps): React.JSX.Element {

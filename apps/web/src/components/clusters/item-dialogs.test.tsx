@@ -95,6 +95,39 @@ describe('<EditItemDialog> validation', () => {
   });
 });
 
+function renderCreateItemDialog(): void {
+  render(
+    <QueryClientProvider
+      client={
+        new QueryClient({
+          defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+        })
+      }
+    >
+      <CreateItemDialog open onOpenChange={vi.fn()} clusterId="cl-1" />
+    </QueryClientProvider>,
+  );
+}
+
+/**
+ * Fill everything `CreateItemDialog` requires of an application.
+ *
+ * The allocation starts BLANK on purpose (a pre-filled 0 would be a measurement
+ * nobody made), so every test that expects to reach the API has to supply it —
+ * the same way an operator does.
+ */
+async function fillRequiredItemFields(
+  user: ReturnType<typeof userEvent.setup>,
+  { name = 'openshift-lab', category = 'OpenShift', allocation = '512' } = {},
+): Promise<void> {
+  await user.type(screen.getByRole('textbox', { name: 'Name' }), name);
+  await user.type(screen.getByLabelText('Category'), category);
+  await user.type(
+    screen.getByRole('spinbutton', { name: 'Initial memory allocation (GB)' }),
+    allocation,
+  );
+}
+
 describe('<CreateItemDialog> invalidation', () => {
   beforeEach(() => {
     vi.spyOn(api.settings.categories, 'list').mockResolvedValue([{ id: 'c1', name: 'OpenShift' }]);
@@ -118,8 +151,7 @@ describe('<CreateItemDialog> invalidation', () => {
       </QueryClientProvider>,
     );
 
-    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'openshift-lab');
-    await user.type(screen.getByLabelText('Category'), 'OpenShift');
+    await fillRequiredItemFields(user);
     await user.click(screen.getByRole('button', { name: /add application/i }));
 
     await waitFor(() => {
@@ -128,24 +160,61 @@ describe('<CreateItemDialog> invalidation', () => {
     });
   });
 
-  it('rejects a cleared allocation instead of posting it as 0', async () => {
-    const user = userEvent.setup();
-    render(
-      <QueryClientProvider
-        client={
-          new QueryClient({
-            defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-          })
-        }
-      >
-        <CreateItemDialog open onOpenChange={vi.fn()} clusterId="cl-1" />
-      </QueryClientProvider>,
-    );
+  it('starts the allocation blank rather than pre-filling a 0 nobody measured', () => {
+    renderCreateItemDialog();
 
+    // The blank guard closes the *cleared* path; this closes the likelier one,
+    // where the operator simply accepts the default and creates an application
+    // recorded as consuming nothing.
+    expect(screen.getByRole('spinbutton', { name: 'Initial memory allocation (GB)' })).toHaveValue(
+      null,
+    );
+  });
+
+  it('blocks submit on an untouched allocation instead of posting it as 0', async () => {
+    const user = userEvent.setup();
+    renderCreateItemDialog();
+
+    // Name and category filled, allocation never touched: the ONLY thing wrong
+    // is the field the operator never answered.
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'openshift-lab');
     await user.type(screen.getByLabelText('Category'), 'OpenShift');
-    // `Number('')` is 0 and the shared `positiveAmount` accepts 0, so without the
-    // blank guard this would create an application that consumes nothing.
+    await user.click(screen.getByRole('button', { name: /add application/i }));
+
+    const allocation = screen.getByRole('spinbutton', { name: 'Initial memory allocation (GB)' });
+    await waitFor(() => expect(allocation).toHaveAttribute('aria-invalid', 'true'));
+    expect(
+      document.getElementById(allocation.getAttribute('aria-describedby') ?? '')?.textContent,
+    ).toBe('Enter a value');
+    expect(api.items.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an allocation of 0 the operator typed deliberately', async () => {
+    const user = userEvent.setup();
+    renderCreateItemDialog();
+
+    await fillRequiredItemFields(user, { allocation: '0' });
+    await user.click(screen.getByRole('button', { name: /add application/i }));
+
+    await waitFor(() =>
+      expect(api.items.create).toHaveBeenCalledWith(
+        'cl-1',
+        expect.objectContaining({
+          allocations: [expect.objectContaining({ amount: 0 })],
+        }),
+      ),
+    );
+  });
+
+  it('rejects a cleared allocation instead of posting it as 0', async () => {
+    const user = userEvent.setup();
+    renderCreateItemDialog();
+
+    // Typed, then cleared — the field an operator changed their mind about, as
+    // opposed to the untouched-default case above. `Number('')` is 0 and the
+    // shared `positiveAmount` accepts 0, so without the blank guard this would
+    // create an application recorded as consuming nothing.
+    await fillRequiredItemFields(user);
     const allocation = screen.getByRole('spinbutton', { name: 'Initial memory allocation (GB)' });
     await user.clear(allocation);
 
@@ -160,24 +229,9 @@ describe('<CreateItemDialog> invalidation', () => {
 
   it('blames the date field, not the allocation field, for a cleared start date', async () => {
     const user = userEvent.setup();
-    render(
-      <QueryClientProvider
-        client={
-          new QueryClient({
-            defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-          })
-        }
-      >
-        <CreateItemDialog open onOpenChange={vi.fn()} clusterId="cl-1" />
-      </QueryClientProvider>,
-    );
+    renderCreateItemDialog();
 
-    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'openshift-lab');
-    await user.type(screen.getByLabelText('Category'), 'OpenShift');
-    await user.type(
-      screen.getByRole('spinbutton', { name: 'Initial memory allocation (GB)' }),
-      '512',
-    );
+    await fillRequiredItemFields(user);
     // `allocations[0].effectiveFrom` mirrors this date, so a bad value also raises
     // an issue under `allocations` — which maps to the allocation AMOUNT slot.
     fireEvent.change(screen.getByLabelText('Started at'), { target: { value: '' } });

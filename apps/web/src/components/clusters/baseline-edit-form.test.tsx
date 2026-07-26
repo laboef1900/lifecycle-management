@@ -1,6 +1,6 @@
-import type { ClusterResponse } from '@lcm/shared';
+import type { ClusterResponse, MetricStateResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -218,5 +218,65 @@ describe('<BaselineEditForm>', () => {
     // difference, and it is what advertises the extra step.
     expect(confirmButton()).toBeInTheDocument();
     expect(trigger).toHaveAccessibleName(`${confirmButton().textContent ?? ''}…`);
+  });
+});
+
+describe('<BaselineEditForm> errors follow the metric, not its position', () => {
+  const memory = baseCluster.metrics[0] as MetricStateResponse;
+  const cpu: MetricStateResponse = {
+    metricTypeKey: 'cpu_cores',
+    metricTypeDisplayName: 'CPU',
+    unit: 'cores',
+    baselineConsumption: 8,
+    baselineCapacity: 32,
+    currentConsumption: 8,
+    currentCapacity: 32,
+    utilization: 0.25,
+  };
+  const twoMetrics: ClusterResponse = { ...baseCluster, metrics: [memory, cpu] };
+
+  beforeEach(() => {
+    vi.spyOn(api.clusters, 'get').mockResolvedValue(twoMetrics);
+    vi.spyOn(api.clusters, 'update').mockResolvedValue(twoMetrics);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a blocked field’s error on that field when a refetch reorders the metrics', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <BaselineEditForm clusterId={CLUSTER_ID} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByLabelText(/cpu.*consumption/i)).toHaveValue(8));
+
+    // Blank the SECOND metric's field, so a positional key and an identity key
+    // disagree the moment the order changes.
+    await userEvent.clear(screen.getByLabelText(/cpu.*consumption/i));
+    await userEvent.click(screen.getByRole('button', { name: /rewrite baseline…/i }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/cpu.*consumption/i)).toHaveAttribute('aria-invalid', 'true'),
+    );
+    expect(screen.getByLabelText(/memory.*consumption/i)).not.toHaveAttribute('aria-invalid');
+
+    // The query has a 5-minute staleTime but refetches on focus/reconnect, and
+    // the server does not promise a stable metric order. Simulate that landing
+    // while the error is on screen: keyed by index, the message would jump onto
+    // Memory — a field the operator never touched — and read as valid.
+    act(() => {
+      client.setQueryData(['cluster', CLUSTER_ID], { ...twoMetrics, metrics: [cpu, memory] });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/cpu.*consumption/i)).toHaveAttribute('aria-invalid', 'true'),
+    );
+    expect(screen.getByLabelText(/cpu.*consumption/i)).toHaveAccessibleDescription('Enter a value');
+    expect(screen.getByLabelText(/memory.*consumption/i)).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByLabelText(/memory.*capacity/i)).not.toHaveAttribute('aria-invalid');
   });
 });

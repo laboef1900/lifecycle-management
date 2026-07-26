@@ -65,16 +65,29 @@ describe('CreateClusterDialog validation', () => {
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Name' })).toHaveFocus());
   });
 
+  it('starts both baselines blank rather than pre-filling a 0 nobody measured', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await openDialog(user);
+
+    // Guarding the cleared field while pre-filling '0' would have closed the
+    // rarer path and left the likely one open: accepting the default would
+    // create a cluster whose baseline capacity is a measured 0, not "unknown".
+    expect(screen.getByRole('spinbutton', { name: 'Consumption (GB)' })).toHaveValue(null);
+    expect(screen.getByRole('spinbutton', { name: 'Capacity (GB)' })).toHaveValue(null);
+  });
+
   it('rejects a cleared baseline instead of posting it as 0', async () => {
     const user = userEvent.setup();
     renderDialog();
     await openDialog(user);
 
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'CL-Unit-1');
-    // `Number('')` is 0 and the shared `positiveAmount` accepts 0, so without the
-    // blank guard a cleared capacity would post a real "this cluster has 0 GB".
+    // Consumption filled so the capacity is the ONLY thing wrong. `Number('')` is
+    // 0 and the shared `positiveAmount` accepts 0, so without the blank guard
+    // this would post a real "this cluster has 0 GB".
+    await user.type(screen.getByRole('spinbutton', { name: 'Consumption (GB)' }), '100');
     const capacity = screen.getByRole('spinbutton', { name: 'Capacity (GB)' });
-    await user.clear(capacity);
 
     await user.click(screen.getByRole('button', { name: 'Create cluster' }));
 
@@ -82,7 +95,31 @@ describe('CreateClusterDialog validation', () => {
     expect(
       document.getElementById(capacity.getAttribute('aria-describedby') ?? '')?.textContent,
     ).toBe('Enter a value');
+    expect(screen.getByRole('spinbutton', { name: 'Consumption (GB)' })).not.toHaveAttribute(
+      'aria-invalid',
+    );
     expect(api.clusters.create).not.toHaveBeenCalled();
+  });
+
+  it('still accepts a baseline the operator deliberately typed as 0', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await openDialog(user);
+
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'CL-Unit-0');
+    await user.type(screen.getByRole('spinbutton', { name: 'Consumption (GB)' }), '0');
+    await user.type(screen.getByRole('spinbutton', { name: 'Capacity (GB)' }), '0');
+
+    await user.click(screen.getByRole('button', { name: 'Create cluster' }));
+
+    // A typed zero is a statement; only an omitted one is a fabrication.
+    await waitFor(() =>
+      expect(api.clusters.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baselines: [expect.objectContaining({ baselineConsumption: 0, baselineCapacity: 0 })],
+        }),
+      ),
+    );
   });
 
   it('calls api.clusters.create with the wire payload on valid input', async () => {
@@ -91,9 +128,7 @@ describe('CreateClusterDialog validation', () => {
     await openDialog(user);
 
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'CL-Unit-1');
-    await user.clear(screen.getByRole('spinbutton', { name: 'Consumption (GB)' }));
     await user.type(screen.getByRole('spinbutton', { name: 'Consumption (GB)' }), '100');
-    await user.clear(screen.getByRole('spinbutton', { name: 'Capacity (GB)' }));
     await user.type(screen.getByRole('spinbutton', { name: 'Capacity (GB)' }), '500');
 
     await user.click(screen.getByRole('button', { name: 'Create cluster' }));

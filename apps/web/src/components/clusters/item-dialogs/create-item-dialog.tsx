@@ -73,7 +73,11 @@ const blankCreateForm = (): CreateFormState => ({
   category: '',
   description: '',
   effectiveDate: todayIso(),
-  allocationAmount: '0',
+  // Blank, NOT '0' — same reason as `create-host-dialog`'s capacity and
+  // `create-cluster-dialog`'s baselines: an application that allocates 0 is a
+  // measurement nobody made, and it reads downstream as headroom rather than as
+  // missing data. `parseRequiredAmount` keeps the blank from becoming that 0.
+  allocationAmount: '',
   consumptionDelta: '',
   capacityDelta: '',
 });

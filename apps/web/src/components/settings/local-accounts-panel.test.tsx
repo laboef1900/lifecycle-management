@@ -128,6 +128,27 @@ describe('<LocalAccountsPanel>', () => {
     expect(toast.success).toHaveBeenCalledWith('Password reset');
   });
 
+  it('lets the visible label be the accessible name on the create form', async () => {
+    renderWithClient(<LocalAccountsPanel />);
+    await screen.findByText('admin');
+
+    // These two carried an `aria-label` duplicating their own `<label>`. A
+    // duplicate that overrides the visible text is one edit away from
+    // disagreeing with it (SC 2.5.3 Label in Name), so the label is the single
+    // source now — and these assertions fail if an `aria-label` comes back
+    // saying something else.
+    expect(screen.getByLabelText(/^username$/i)).toHaveAccessibleName('Username');
+    expect(screen.getByLabelText(/^password$/i)).toHaveAccessibleName('Password');
+
+    // The reset row keeps its own `aria-label` deliberately: one panel renders
+    // many rows, so the name has to say WHICH admin. It still starts with the
+    // visible label, which is what SC 2.5.3 requires.
+    await userEvent.click(screen.getByRole('button', { name: /^reset$/i }));
+    expect(screen.getByLabelText(/new password for admin/i)).toHaveAccessibleName(
+      'New password for admin',
+    );
+  });
+
   it('opts both credential forms out of native constraint validation', async () => {
     const { container } = renderWithClient(<LocalAccountsPanel />);
     await screen.findByText('admin');

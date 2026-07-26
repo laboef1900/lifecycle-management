@@ -23,17 +23,37 @@ interface MetricEdit {
 
 type MetricField = 'consumption' | 'capacity';
 
-/** Keyed by control id, so a key doubles as the DOM hook the error paragraph uses. */
+/**
+ * Keyed by *metric identity*, not by position: `DATE_ID` for the date, and
+ * `${field}:${metricTypeKey}` for a metric cell.
+ *
+ * @ai-warning Do not key this by array index. The errors set by one submit are
+ * read back on a later render, and `metrics` comes from a live query with a
+ * 5-minute `staleTime` — a refetch that reordered the array between the two
+ * would leave every message attached to the wrong control while still looking
+ * perfectly valid. The index→key translation therefore happens at submit time,
+ * inside the handler that also built the payload, where the array is provably
+ * the same one the Zod issue paths refer to.
+ *
+ * The DOM `id` stays positional (see `metricControlId`) precisely because it is
+ * regenerated from the current array on every render, so it always describes
+ * what is actually on screen.
+ */
 type FieldErrors = Record<string, string | undefined>;
 
 const DATE_ID = 'baseline-date';
 
+/** Stable error key for one metric cell. `field` is a closed set with no `:`. */
+function metricErrorKey(metricTypeKey: string, field: MetricField): string {
+  return `${field}:${metricTypeKey}`;
+}
+
 /**
  * Positional rather than keyed by `metricTypeKey`: the key is server-supplied
  * with no format contract (`z.string().min(1)` in `@lcm/shared`), and it would
- * be interpolated straight into an `id`/`htmlFor` pair here. The index is also
- * what a Zod issue path carries (`baselines[i].baselineCapacity`), so mapping an
- * issue onto a control needs no lookup table.
+ * be interpolated straight into an `id`/`htmlFor` pair here — where whitespace
+ * alone would break the `aria-describedby` token list. Position is safe for the
+ * id because it is derived during the same render that emits the markup.
  */
 function metricControlId(index: number, field: MetricField): string {
   return `baseline-metric-${index}-${field}`;
@@ -154,14 +174,14 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
     const next: FieldErrors = {};
     if (dateChanged && date.trim().length === 0) next[DATE_ID] = 'Enter a baseline date.';
     if (baselinesChanged) {
-      metrics.forEach((m, index) => {
+      for (const m of metrics) {
         for (const field of ['consumption', 'capacity'] as const) {
           const raw = metricEdits[m.metricTypeKey]?.[field];
           if (raw !== undefined && raw !== null && raw.trim().length === 0) {
-            next[metricControlId(index, field)] = REQUIRED_AMOUNT_MESSAGE;
+            next[metricErrorKey(m.metricTypeKey, field)] = REQUIRED_AMOUNT_MESSAGE;
           }
         }
-      });
+      }
     }
 
     const unowned: string[] = [];
@@ -179,8 +199,14 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
             : leaf === 'baselineCapacity'
               ? 'capacity'
               : null;
-        if (root === 'baselines' && typeof index === 'number' && field !== null) {
-          next[metricControlId(index, field)] ??= issue.message;
+        // `input.baselines` was built from `metrics` a few lines up, so the issue
+        // index still addresses the same entry — translate it to that metric's
+        // key here, while that is still guaranteed, rather than storing a
+        // position a later refetch could invalidate.
+        const issueMetricKey =
+          typeof index === 'number' ? metrics[index]?.metricTypeKey : undefined;
+        if (root === 'baselines' && issueMetricKey !== undefined && field !== null) {
+          next[metricErrorKey(issueMetricKey, field)] ??= issue.message;
           continue;
         }
         // The "at least one field" refine, or a metricTypeKey the server sent —
@@ -255,8 +281,11 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
                   ['capacity', 'Baseline capacity'],
                 ] as ReadonlyArray<readonly [MetricField, string]>
               ).map(([field, caption]) => {
+                // The id follows the metric's position in THIS render; the error
+                // follows the metric itself. A refetch that reorders the array
+                // therefore moves each message along with its own metric.
                 const id = metricControlId(index, field);
-                const error = errors[id];
+                const error = errors[metricErrorKey(m.metricTypeKey, field)];
                 return (
                   <div key={field}>
                     <label htmlFor={id} className="block text-[11px] text-fg-muted">

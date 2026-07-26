@@ -35,13 +35,46 @@ describe('<CategoriesForm>', () => {
   });
 
   it('opts out of native constraint validation', async () => {
-    // Nothing here can raise a bubble today — the input has `maxLength` (which
-    // caps typing rather than validating) and no `required`. The assertion
-    // guards the invariant, so a constraint added later cannot silently hand
-    // this form's error path back to the browser.
+    // Load-bearing now that the input carries `required`: without the opt-out
+    // the browser's transient bubble would preempt the inline error below.
     const { container } = renderWithClient(<CategoriesForm />);
     await screen.findByText('Growth');
     expect(container.querySelector('form')?.noValidate).toBe(true);
+    expect(screen.getByLabelText(/new category/i)).toHaveAttribute('aria-required', 'true');
+  });
+
+  it('names the blank field instead of sitting behind a dead button', async () => {
+    renderWithClient(<CategoriesForm />);
+    await screen.findByText('Growth');
+
+    // The button used to be disabled on a blank name and the handler `return`ed
+    // silently, so an operator who clicked got no explanation from any surface.
+    const add = screen.getByRole('button', { name: /^add$/i });
+    expect(add).toBeEnabled();
+    await userEvent.click(add);
+
+    const input = screen.getByLabelText(/new category/i);
+    await waitFor(() => expect(input).toHaveAttribute('aria-invalid', 'true'));
+    expect(input).toHaveAccessibleDescription(/enter a category name/i);
+    // SC 3.3.1 — focus lands on the field that needs fixing.
+    expect(input).toHaveFocus();
+    expect(api.settings.categories.create).not.toHaveBeenCalled();
+  });
+
+  it('clears the blank-name error once a real name is submitted', async () => {
+    renderWithClient(<CategoriesForm />);
+    await screen.findByText('Growth');
+
+    await userEvent.click(screen.getByRole('button', { name: /^add$/i }));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/new category/i)).toHaveAttribute('aria-invalid', 'true'),
+    );
+
+    await userEvent.type(screen.getByLabelText(/new category/i), 'Migration');
+    await userEvent.click(screen.getByRole('button', { name: /^add$/i }));
+
+    await waitFor(() => expect(api.settings.categories.create).toHaveBeenCalledWith('Migration'));
+    expect(screen.getByLabelText(/new category/i)).not.toHaveAttribute('aria-invalid');
   });
 
   it('creates a category with the typed name when Add is clicked', async () => {
@@ -99,6 +132,39 @@ describe('<CategoriesForm>', () => {
 
     // Retrying cannot help here, so the reason must survive dismissing the dialog.
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('alert')).toHaveTextContent(/used by 2 item\(s\)/i);
+  });
+
+  it('reopens the confirm clean, without restating a failure the user has not retried', async () => {
+    vi.mocked(api.settings.categories.delete).mockRejectedValue(
+      new ApiError(409, {
+        error: {
+          code: 'CATEGORY_IN_USE',
+          message: 'Category "Growth" is used by 2 item(s). Reassign them first.',
+        },
+      }),
+    );
+    renderWithClient(<CategoriesForm />);
+    await screen.findByText('Growth');
+
+    await userEvent.click(screen.getByRole('button', { name: /remove growth/i }));
+    await userEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove category' }),
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Remove Growth?' });
+    expect(await within(dialog).findByText(/used by 2 item\(s\)/i)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    // Reopening asks the question again; it must not answer it in advance. The
+    // durable row alert is what carries the previous reason.
+    await userEvent.click(screen.getByRole('button', { name: /remove growth/i }));
+    const reopened = await screen.findByRole('dialog', { name: 'Remove Growth?' });
+    expect(within(reopened).queryByText(/used by 2 item\(s\)/i)).not.toBeInTheDocument();
+
+    // And dismissing again restores it, so the reason is never lost.
+    await userEvent.click(within(reopened).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByRole('alert')).toHaveTextContent(/used by 2 item\(s\)/i);
   });

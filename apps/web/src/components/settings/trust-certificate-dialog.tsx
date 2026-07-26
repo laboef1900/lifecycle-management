@@ -102,8 +102,15 @@ export function TrustCertificateDialog({
   const onSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
     setErrors({});
-    // There is nothing to pin until the probe has produced a fingerprint; the
-    // confirm button is disabled in that state too.
+    // There is nothing to pin until the probe has produced a fingerprint.
+    //
+    // Deliberately silent, and deliberately not reachable from the UI: the only
+    // submit button is the disabled footer one, and HTML implicit submission
+    // (Enter in the password field) is a no-op when the form's default button is
+    // disabled. So this is a defensive guard, not a user-facing path — and the
+    // reason is already on screen above, as a permanent `text-destructive`
+    // paragraph naming the probe failure. Do not "fix" this by adding a second
+    // message; it would duplicate that one.
     if (fingerprint === null) return;
     // The form is `noValidate`, so this is the only gate. The blank case gets the
     // dialog's own words; the bound comes from the contract, not from here.

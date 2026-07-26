@@ -370,7 +370,9 @@ export function LocalAccountsPanel(): React.JSX.Element {
             </div>
             <Input
               id="local-account-username"
-              aria-label="Username"
+              // No `aria-label`: the `<label htmlFor>` above is the accessible
+              // name now, and a duplicate that overrides it is one edit away
+              // from disagreeing with the visible text (SC 2.5.3).
               placeholder="e.g. jsmith"
               value={form.username}
               onChange={(e) => setForm((prev) => ({ ...prev, username: e.target.value }))}
@@ -396,7 +398,7 @@ export function LocalAccountsPanel(): React.JSX.Element {
             <Input
               id="local-account-password"
               type="password"
-              aria-label="Password"
+              // No `aria-label` — see the username field above.
               value={form.password}
               onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
               required
