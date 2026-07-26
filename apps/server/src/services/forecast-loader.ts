@@ -12,6 +12,8 @@ import {
 } from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
 
+import { retentionCutoffMonth } from '../lib/forecast-retention.js';
+
 import { NotFoundError, UnprocessableError } from './errors.js';
 import {
   computeForecast,
@@ -84,6 +86,12 @@ interface PreparedForecastInput {
   bandEnabled: boolean;
   bandMinAnchors: number;
   bandWidth: ForecastUncertaintyBandWidth;
+  /**
+   * Months of snapshot evidence the band may consider; 0 = unbounded (#318).
+   * Bounds the READ as well as the sweep, so the band is a function of the
+   * setting rather than of when the sweep last ran.
+   */
+  snapshotRetentionMonths: number;
 }
 
 /** Live procurement context for the order-approval write path (#292). */
@@ -483,6 +491,7 @@ export class ForecastService {
       bandEnabled: tenantSettings.forecastUncertaintyBandEnabled,
       bandMinAnchors: tenantSettings.forecastUncertaintyMinAnchors,
       bandWidth: tenantSettings.forecastUncertaintyBandWidth,
+      snapshotRetentionMonths: tenantSettings.forecastSnapshotRetentionMonths,
     };
   }
 
@@ -506,9 +515,12 @@ export class ForecastService {
 
   /**
    * Empirical uncertainty band for the projected months of the REAL forecast.
-   * Reads matured ForecastSnapshots (horizonMonth ≤ this month), pairs each with
-   * the measured actual utilization from baselineHistory, runs the pure error
-   * math, and applies the per-horizon offsets to this forecast's future months.
+   * Reads matured ForecastSnapshots (horizonMonth ≤ this month, and ≥ the
+   * retention cutoff when retention is on), pairs each with the measured actual
+   * from that month's OWN horizon-0 snapshot row — NOT from baselineHistory,
+   * whose baseline scalar is 0 for synced clusters (see `snapshotForecast`) —
+   * runs the pure error math, and applies the per-horizon offsets to this
+   * forecast's future months.
    * Returns undefined when disabled or the anchor floor is unmet — an honest
    * omission, never a fabricated band. Additive: never touches the forecast maths
    * (INV-1); invoked only by `forCluster`, never scenarios.
@@ -520,8 +532,20 @@ export class ForecastService {
   ): Promise<{ points: ForecastUncertaintyPoint[]; anchorCount: number } | undefined> {
     if (!prepared.bandEnabled) return undefined;
     const thisMonth = firstOfMonth(new Date());
+    // The retention window bounds the READ, not just the sweep (#318): the band
+    // must be a function of the configured window, never of how recently the
+    // sweep last ran — otherwise the same cluster yields a different band before
+    // and after a tick. `snapshotRetentionMonths === 0` keeps it unbounded, which
+    // is the default (nothing is deleted, so nothing is hidden).
+    const retentionCutoff = retentionCutoffMonth(thisMonth, prepared.snapshotRetentionMonths);
     const snapshots = await this.prisma.forecastSnapshot.findMany({
-      where: { clusterId, metricTypeId: prepared.metricTypeId, horizonMonth: { lte: thisMonth } },
+      where: {
+        clusterId,
+        metricTypeId: prepared.metricTypeId,
+        horizonMonth: retentionCutoff
+          ? { gte: retentionCutoff, lte: thisMonth }
+          : { lte: thisMonth },
+      },
     });
     if (snapshots.length === 0) return undefined;
 

@@ -402,6 +402,7 @@ describe('tenantSettingsResponseSchema', () => {
     forecastUncertaintyBandEnabled: false,
     forecastUncertaintyMinAnchors: 6,
     forecastUncertaintyBandWidth: 'p10_p90',
+    forecastSnapshotRetentionMonths: 0,
   };
 
   it('round-trips a representative tenant settings response', () => {

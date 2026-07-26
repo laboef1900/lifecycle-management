@@ -65,6 +65,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -85,6 +86,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(res.statusCode).toBe(400);
@@ -102,6 +104,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -119,6 +122,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -136,6 +140,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(res.statusCode).toBe(400);
@@ -153,6 +158,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(res.statusCode).toBe(400);
@@ -170,6 +176,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(res.statusCode).toBe(400);
@@ -187,6 +194,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(low.statusCode).toBe(200);
@@ -205,6 +213,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(high.statusCode).toBe(200);
@@ -225,6 +234,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(tooLow.statusCode).toBe(400);
@@ -240,6 +250,7 @@ describe('PUT /api/settings/tenant', () => {
         forecastUncertaintyBandEnabled: false,
         forecastUncertaintyMinAnchors: 6,
         forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       },
     });
     expect(tooHigh.statusCode).toBe(400);

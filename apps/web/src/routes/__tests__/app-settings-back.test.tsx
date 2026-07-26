@@ -133,6 +133,7 @@ describe('/_app/settings Back button + Esc', () => {
       forecastUncertaintyBandEnabled: false,
       forecastUncertaintyMinAnchors: 6,
       forecastUncertaintyBandWidth: 'p10_p90',
+      forecastSnapshotRetentionMonths: 0,
     });
     vi.spyOn(api.settings.categories, 'list').mockResolvedValue([]);
     vi.spyOn(api.settings.auth, 'get').mockResolvedValue({ ...baseAuthConfig });

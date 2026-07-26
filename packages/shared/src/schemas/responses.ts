@@ -27,6 +27,7 @@ import type {
 import type { Paginated } from './pagination.js';
 import {
   effectiveThresholdsSchema,
+  forecastSnapshotRetentionMonthsSchema,
   forecastUncertaintyBandWidthSchema,
   forecastUncertaintyMinAnchorsSchema,
   idempotencyKeyRetentionHoursSchema,
@@ -299,6 +300,7 @@ export const tenantSettingsResponseSchema: z.ZodType<TenantSettings> = z.object(
   forecastUncertaintyBandEnabled: z.boolean(),
   forecastUncertaintyMinAnchors: forecastUncertaintyMinAnchorsSchema,
   forecastUncertaintyBandWidth: forecastUncertaintyBandWidthSchema,
+  forecastSnapshotRetentionMonths: forecastSnapshotRetentionMonthsSchema,
 });
 
 // ---------- Pagination envelope ----------

@@ -57,6 +57,7 @@ export class SettingsService {
       forecastUncertaintyBandEnabled: row.forecastUncertaintyBandEnabled,
       forecastUncertaintyMinAnchors: row.forecastUncertaintyMinAnchors,
       forecastUncertaintyBandWidth: coerceBandWidth(row.forecastUncertaintyBandWidth),
+      forecastSnapshotRetentionMonths: row.forecastSnapshotRetentionMonths,
     };
   }
 
@@ -72,6 +73,7 @@ export class SettingsService {
         forecastUncertaintyBandEnabled: input.forecastUncertaintyBandEnabled,
         forecastUncertaintyMinAnchors: input.forecastUncertaintyMinAnchors,
         forecastUncertaintyBandWidth: input.forecastUncertaintyBandWidth,
+        forecastSnapshotRetentionMonths: input.forecastSnapshotRetentionMonths,
       },
       update: {
         warnThreshold: input.warnThreshold,
@@ -81,6 +83,7 @@ export class SettingsService {
         forecastUncertaintyBandEnabled: input.forecastUncertaintyBandEnabled,
         forecastUncertaintyMinAnchors: input.forecastUncertaintyMinAnchors,
         forecastUncertaintyBandWidth: input.forecastUncertaintyBandWidth,
+        forecastSnapshotRetentionMonths: input.forecastSnapshotRetentionMonths,
       },
     });
     return {
@@ -91,6 +94,7 @@ export class SettingsService {
       forecastUncertaintyBandEnabled: row.forecastUncertaintyBandEnabled,
       forecastUncertaintyMinAnchors: row.forecastUncertaintyMinAnchors,
       forecastUncertaintyBandWidth: coerceBandWidth(row.forecastUncertaintyBandWidth),
+      forecastSnapshotRetentionMonths: row.forecastSnapshotRetentionMonths,
     };
   }
 
