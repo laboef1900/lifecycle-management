@@ -216,13 +216,13 @@ Three corner radii and one pill: **8px** for controls (`--radius`: buttons, inpu
 - **Accent:** Steel fill (`bg-accent text-accent-foreground`; `--accent` is steel under cool-brand) for the primary CTA.
 - **Destructive:** Coral fill for irreversible actions.
 - **Outline / Ghost:** hairline or transparent; hover fills with `card-hover`.
-- **Link:** amber text, underline on hover.
+- **Link:** steel text (`text-accent`), underline on hover.
 - **Chip:** transparent, hairline-bordered mono uppercase micro-label control (pair `variant="chip"` + `size="chip"`) that reads as a label until hovered.
 
 ### Badges & Chips
 
 - **Shape:** pill (`rounded-full`), 1px border, 12px text, `px-2.5 py-0.5`.
-- **Variants:** default (muted), accent (amber-soft wash + amber text), outline, success, warning, danger — status variants use a `/10` tinted background, `/30` border, and the solid semantic text color.
+- **Variants:** default (muted), accent (steel-soft wash + steel text), outline, success, warning, danger — status variants use a `/10` tinted background, `/30` border, and the solid semantic text color.
 - **Optional dot:** a leading status dot with a `color-mix` halo; carries the same semantic hue as the variant.
 
 ### Cards / Containers
