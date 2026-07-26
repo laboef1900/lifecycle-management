@@ -35,6 +35,21 @@ function quarterStartDate(year: number, quarter: Quarter): string {
 
 const currentYear = (): number => new Date().getUTCFullYear();
 
+/** Message for a Year box that cannot be turned into row dates. */
+const YEAR_ERROR = 'Enter a 4-digit year';
+
+/**
+ * The Year box is a *derivation control*, not a submitted field — it rewrites
+ * every row's `effectiveDate`. Only a complete 4-digit year can do that: the
+ * shared `dateOnly` contract is `YYYY-MM-DD`, so accepting `Number.parseInt`'s
+ * take on a half-typed `'202'` would stamp `202-01-01` on all four rows and turn
+ * one fixable mistake into four confusing per-row date errors.
+ */
+function parseYear(raw: string): number | null {
+  const trimmed = raw.trim();
+  return /^\d{4}$/.test(trimmed) ? Number.parseInt(trimmed, 10) : null;
+}
+
 interface QuarterRowState {
   quarter: Quarter;
   included: boolean;
@@ -71,8 +86,15 @@ export function BulkQuarterlyGrowthDialog({
   const categories = useCategories();
   const [category, setCategory] = useState('Growth');
   const [description, setDescription] = useState('');
-  const [year, setYear] = useState(currentYear);
+  // Held as the raw string the operator typed, NOT as a number. As a number,
+  // clearing the box parsed to NaN and bailed out without calling `setYear`, so
+  // React re-rendered nothing and the DOM kept the empty value: the field LOOKED
+  // blank while the rows silently kept the previous year's (valid) dates. The
+  // browser's `required` check was the only thing stopping that submit, and this
+  // form now opts out of it — so the string is what makes the input honest.
+  const [year, setYear] = useState(() => String(currentYear()));
   const [rows, setRows] = useState<QuarterRowState[]>(() => blankRows(currentYear()));
+  const [yearError, setYearError] = useState<string | undefined>();
   const [categoryError, setCategoryError] = useState<string | undefined>();
   const [formError, setFormError] = useState<string | undefined>();
   const [rowErrors, setRowErrors] = useState<Partial<Record<Quarter, RowErrors>>>({});
@@ -84,6 +106,7 @@ export function BulkQuarterlyGrowthDialog({
   // from whichever field the operator is actively fixing.
   const focusErrors = useMemo(
     () => ({
+      year: yearError,
       category: categoryError,
       ...Object.fromEntries(
         Object.entries(rowErrors).flatMap(([quarter, errors]) =>
@@ -91,7 +114,7 @@ export function BulkQuarterlyGrowthDialog({
         ),
       ),
     }),
-    [categoryError, rowErrors],
+    [yearError, categoryError, rowErrors],
   );
   useFocusFirstInvalidField(formRef, focusErrors);
 
@@ -99,8 +122,9 @@ export function BulkQuarterlyGrowthDialog({
     const year0 = currentYear();
     setCategory('Growth');
     setDescription('');
-    setYear(year0);
+    setYear(String(year0));
     setRows(blankRows(year0));
+    setYearError(undefined);
     setCategoryError(undefined);
     setFormError(undefined);
     setRowErrors({});
@@ -126,9 +150,11 @@ export function BulkQuarterlyGrowthDialog({
   };
 
   const onYearChange = (raw: string): void => {
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed)) return;
-    setYear(parsed);
+    setYear(raw);
+    const parsed = parseYear(raw);
+    // A half-typed or empty year leaves the rows on their current dates rather
+    // than stamping a malformed one; submit refuses until the box is usable.
+    if (parsed === null) return;
     // Re-derive every row's default date for the new year. An operator who
     // already hand-edited a date can just re-edit it after switching years —
     // silently keeping a stale date tied to the old year would be more
@@ -142,6 +168,7 @@ export function BulkQuarterlyGrowthDialog({
 
   const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
+    setYearError(undefined);
     setCategoryError(undefined);
     setFormError(undefined);
     setRowErrors({});
@@ -160,10 +187,10 @@ export function BulkQuarterlyGrowthDialog({
     };
 
     const parsed = itemBulkCreateQuarterlyGrowthInputSchema.safeParse(payload);
+    const nextRowErrors: Partial<Record<Quarter, RowErrors>> = {};
+    let nextCategoryError: string | undefined;
+    let nextFormError: string | undefined;
     if (!parsed.success) {
-      const nextRowErrors: Partial<Record<Quarter, RowErrors>> = {};
-      let nextCategoryError: string | undefined;
-      let nextFormError: string | undefined;
       for (const issue of parsed.error.issues) {
         const [root, index, field] = issue.path;
         if (root === 'category') {
@@ -181,6 +208,15 @@ export function BulkQuarterlyGrowthDialog({
           nextFormError = issue.message;
         }
       }
+    }
+    // The Year box is never submitted, so no schema issue can speak for it: an
+    // unusable year leaves the rows on the PREVIOUS year's dates, which parse
+    // clean and would commit a whole year of growth against the wrong year.
+    // Checked alongside the parse (not before it) so one failed submit reports
+    // every problem at once.
+    const nextYearError = parseYear(year) === null ? YEAR_ERROR : undefined;
+    if (!parsed.success || nextYearError !== undefined) {
+      setYearError(nextYearError);
       setCategoryError(nextCategoryError);
       setRowErrors(nextRowErrors);
       setFormError(nextFormError);
@@ -207,14 +243,19 @@ export function BulkQuarterlyGrowthDialog({
             one per quarter, sharing the same category and metric.
           </DialogDescription>
         </DialogHeader>
-        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
+        {/* noValidate: the browser's bubble fires before submit and would preempt the
+            Field errors below — transient, unstyled, first-field-only, and invisible to
+            a re-read. Safe because every `required` field here fails the parse too (the
+            Year box is checked explicitly in onSubmit — it is never submitted). */}
+        <form ref={formRef} noValidate onSubmit={onSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <Field
               label="Year"
               type="number"
               inputMode="numeric"
-              value={String(year)}
+              value={year}
               onChange={(e) => onYearChange(e.target.value)}
+              error={yearError}
               required
             />
             <CategoryCombobox

@@ -137,7 +137,10 @@ export function HostReplaceDialog({
             </DialogFooter>
           </div>
         ) : (
-          <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
+          // noValidate: the browser's bubble fires before submit and would preempt the
+          // Field errors below — transient, unstyled, first-field-only, and invisible to
+          // a re-read. Safe because every `required` field here fails the parse too.
+          <form ref={formRef} noValidate onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label htmlFor="replace-new-host" className="text-sm font-medium">
                 Replacement host

@@ -1,9 +1,12 @@
 import type { MetricStateResponse } from '@lcm/shared';
+import { clusterUpdateInputSchema } from '@lcm/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
 import { toast } from 'sonner';
 
 import { ConfirmDialog } from '@/components/form/confirm-dialog';
+import { useFocusFirstInvalidField } from '@/components/form/field';
+import { REQUIRED_AMOUNT_MESSAGE, parseRequiredAmount } from '@/components/form/required-amount';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -18,10 +21,54 @@ interface MetricEdit {
   capacity: string | null;
 }
 
-function parseNumber(value: string): number | null {
-  if (value === '') return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
+type MetricField = 'consumption' | 'capacity';
+
+/**
+ * Keyed by *metric identity*, not by position: `DATE_ID` for the date, and
+ * `${field}:${metricTypeKey}` for a metric cell.
+ *
+ * @ai-warning Do not key this by array index. The errors set by one submit are
+ * read back on a later render, and `metrics` comes from a live query with a
+ * 5-minute `staleTime` — a refetch that reordered the array between the two
+ * would leave every message attached to the wrong control while still looking
+ * perfectly valid. The index→key translation therefore happens at submit time,
+ * inside the handler that also built the payload, where the array is provably
+ * the same one the Zod issue paths refer to.
+ *
+ * The DOM `id` stays positional (see `metricControlId`) precisely because it is
+ * regenerated from the current array on every render, so it always describes
+ * what is actually on screen.
+ */
+type FieldErrors = Record<string, string | undefined>;
+
+const DATE_ID = 'baseline-date';
+
+/** Stable error key for one metric cell. `field` is a closed set with no `:`. */
+function metricErrorKey(metricTypeKey: string, field: MetricField): string {
+  return `${field}:${metricTypeKey}`;
+}
+
+/**
+ * Positional rather than keyed by `metricTypeKey`: the key is server-supplied
+ * with no format contract (`z.string().min(1)` in `@lcm/shared`), and it would
+ * be interpolated straight into an `id`/`htmlFor` pair here — where whitespace
+ * alone would break the `aria-describedby` token list. Position is safe for the
+ * id because it is derived during the same render that emits the markup.
+ */
+function metricControlId(index: number, field: MetricField): string {
+  return `baseline-metric-${index}-${field}`;
+}
+
+/**
+ * Whether a raw edit differs from the number the server holds.
+ *
+ * `Object.is` rather than `!==` so the NaN case is stated rather than relied on:
+ * a blank or unparseable edit is *always* a change, which is the point — it must
+ * enable the submit so the operator gets an error, instead of being silently
+ * ignored and re-sending the old value.
+ */
+function differsFromServer(raw: string, serverValue: number): boolean {
+  return !Object.is(parseRequiredAmount(raw), serverValue);
 }
 
 export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JSX.Element {
@@ -33,17 +80,23 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
 
   const [dateEdit, setDateEdit] = React.useState<string | null>(null);
   const [metricEdits, setMetricEdits] = React.useState<Record<string, MetricEdit>>({});
-  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [errors, setErrors] = React.useState<FieldErrors>({});
+  /**
+   * The exact wire payload the confirm dialog is asking about — non-null is what
+   * opens the dialog. Snapshotting it (rather than rebuilding at confirm time)
+   * keeps the confirm honest: this query can refetch while the modal is up, and
+   * a rebuild would then send numbers the operator never saw on the summary.
+   */
+  const [pendingInput, setPendingInput] = React.useState<ClusterUpdateInputWire | null>(null);
+  const formRef = React.useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const serverDate = clusterQuery.data?.baselineDate ?? '';
   const metrics = clusterQuery.data?.metrics ?? [];
 
   const date = dateEdit ?? serverDate;
 
-  const getMetricRawValue = (
-    metric: MetricStateResponse,
-    field: 'consumption' | 'capacity',
-  ): string => {
+  const getMetricRawValue = (metric: MetricStateResponse, field: MetricField): string => {
     const edit = metricEdits[metric.metricTypeKey];
     if (edit && edit[field] !== null) return edit[field] as string;
     const serverValue =
@@ -51,16 +104,19 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
     return String(serverValue);
   };
 
-  const getMetricNumericValue = (
-    metric: MetricStateResponse,
-    field: 'consumption' | 'capacity',
-  ): number | null => {
+  /**
+   * The value this field would post. `NaN` for a blank or unparseable edit — see
+   * `parseRequiredAmount`: `Number('')` is `0` and `positiveAmount` accepts `0`,
+   * so coercing here would post a fabricated zero baseline as if the operator
+   * had typed it.
+   */
+  const getMetricNumericValue = (metric: MetricStateResponse, field: MetricField): number => {
     const edit = metricEdits[metric.metricTypeKey];
-    if (edit && edit[field] !== null) return parseNumber(edit[field] as string);
+    if (edit && edit[field] !== null) return parseRequiredAmount(edit[field] as string);
     return field === 'consumption' ? metric.baselineConsumption : metric.baselineCapacity;
   };
 
-  const setMetricValue = (key: string, field: 'consumption' | 'capacity', raw: string): void => {
+  const setMetricValue = (key: string, field: MetricField, raw: string): void => {
     setMetricEdits((prev) => {
       const current = prev[key] ?? { consumption: null, capacity: null };
       return { ...prev, [key]: { ...current, [field]: raw } };
@@ -75,7 +131,8 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
       void queryClient.invalidateQueries({ queryKey: ['clusters'] });
       setDateEdit(null);
       setMetricEdits({});
-      setConfirmOpen(false);
+      setErrors({});
+      setPendingInput(null);
     },
     onError: (err) => toast.error(describeApiError(err, 'Could not save baseline')),
   });
@@ -84,48 +141,90 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
   const baselinesChanged = metrics.some((m) => {
     const edit = metricEdits[m.metricTypeKey];
     if (!edit) return false;
-    const consumption = edit.consumption !== null ? parseNumber(edit.consumption) : null;
-    const capacity = edit.capacity !== null ? parseNumber(edit.capacity) : null;
     return (
-      (consumption !== null && consumption !== m.baselineConsumption) ||
-      (capacity !== null && capacity !== m.baselineCapacity)
+      (edit.consumption !== null && differsFromServer(edit.consumption, m.baselineConsumption)) ||
+      (edit.capacity !== null && differsFromServer(edit.capacity, m.baselineCapacity))
     );
   });
   const dirty = dateChanged || baselinesChanged;
 
+  /**
+   * The form is `noValidate`, so this is the only gate — and it runs *before*
+   * the confirm dialog opens, so the operator is never asked to confirm a
+   * rewrite that cannot happen.
+   *
+   * Blank fields get the form's own words; everything else is judged by the
+   * shared `clusterUpdateInputSchema`, which is the same contract the server
+   * enforces. Nothing about the bounds is restated here.
+   */
   const handleSave = (e: React.FormEvent): void => {
     e.preventDefault();
     if (!dirty) return;
-    setConfirmOpen(true);
-  };
 
-  const handleConfirm = (): void => {
-    const invalidMetric = metrics.find((m) => {
-      const edit = metricEdits[m.metricTypeKey];
-      return (
-        (edit?.consumption !== null &&
-          edit?.consumption !== undefined &&
-          parseNumber(edit.consumption) === null) ||
-        (edit?.capacity !== null &&
-          edit?.capacity !== undefined &&
-          parseNumber(edit.capacity) === null)
-      );
-    });
-    if (invalidMetric) {
-      toast.error(`Invalid number for ${invalidMetric.metricTypeKey}`);
-      setConfirmOpen(false);
-      return;
-    }
     const input: ClusterUpdateInputWire = {};
     if (dateChanged) input.baselineDate = date;
     if (baselinesChanged) {
       input.baselines = metrics.map((m) => ({
         metricTypeKey: m.metricTypeKey,
-        baselineConsumption: getMetricNumericValue(m, 'consumption') ?? m.baselineConsumption,
-        baselineCapacity: getMetricNumericValue(m, 'capacity') ?? m.baselineCapacity,
+        baselineConsumption: getMetricNumericValue(m, 'consumption'),
+        baselineCapacity: getMetricNumericValue(m, 'capacity'),
       }));
     }
-    mutation.mutate(input);
+
+    const next: FieldErrors = {};
+    if (dateChanged && date.trim().length === 0) next[DATE_ID] = 'Enter a baseline date.';
+    if (baselinesChanged) {
+      for (const m of metrics) {
+        for (const field of ['consumption', 'capacity'] as const) {
+          const raw = metricEdits[m.metricTypeKey]?.[field];
+          if (raw !== undefined && raw !== null && raw.trim().length === 0) {
+            next[metricErrorKey(m.metricTypeKey, field)] = REQUIRED_AMOUNT_MESSAGE;
+          }
+        }
+      }
+    }
+
+    const unowned: string[] = [];
+    const parsed = clusterUpdateInputSchema.safeParse(input);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        const [root, index, leaf] = issue.path;
+        if (root === 'baselineDate') {
+          next[DATE_ID] ??= issue.message;
+          continue;
+        }
+        const field =
+          leaf === 'baselineConsumption'
+            ? 'consumption'
+            : leaf === 'baselineCapacity'
+              ? 'capacity'
+              : null;
+        // `input.baselines` was built from `metrics` a few lines up, so the issue
+        // index still addresses the same entry — translate it to that metric's
+        // key here, while that is still guaranteed, rather than storing a
+        // position a later refetch could invalidate.
+        const issueMetricKey =
+          typeof index === 'number' ? metrics[index]?.metricTypeKey : undefined;
+        if (root === 'baselines' && issueMetricKey !== undefined && field !== null) {
+          next[metricErrorKey(issueMetricKey, field)] ??= issue.message;
+          continue;
+        }
+        // The "at least one field" refine, or a metricTypeKey the server sent —
+        // no control to point at, so it would otherwise fail silently.
+        unowned.push(issue.message);
+      }
+    }
+
+    const hasFieldError = Object.values(next).some((message) => message !== undefined);
+    if (hasFieldError || unowned.length > 0) {
+      // A fresh object every failed submit, which is what re-fires the focus move.
+      setErrors(next);
+      if (!hasFieldError) toast.error(unowned[0] ?? 'Could not save baseline');
+      return;
+    }
+
+    setErrors({});
+    setPendingInput(input);
   };
 
   return (
@@ -136,20 +235,38 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
           The starting date and per-metric values that every forecast point is computed from.
         </p>
       </header>
-      <form onSubmit={handleSave} className="space-y-3">
-        <label className="block">
-          <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+      {/* `noValidate`: the browser's own bubble fires *before* the submit event,
+          so it preempts the error path below — transient, unstyled, one field at
+          a time, and gone on the next keystroke. `min={0}` stays on the number
+          inputs: with native validation off it can no longer raise a bubble, and
+          it still clamps the stepper. The contract, not the attribute, is what
+          rejects a negative value now. */}
+      <form ref={formRef} onSubmit={handleSave} className="space-y-3" noValidate>
+        {/* Label and control are siblings, not nested: a wrapping `<label>`
+            would fold the error paragraph into the field's own label text. */}
+        <div>
+          <label
+            htmlFor={DATE_ID}
+            className="block text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle"
+          >
             Baseline date
-          </span>
+          </label>
           <Input
+            id={DATE_ID}
             type="date"
-            aria-label="Baseline date"
             value={date}
             onChange={(e) => setDateEdit(e.target.value)}
+            aria-invalid={errors[DATE_ID] ? 'true' : undefined}
+            aria-describedby={errors[DATE_ID] ? `${DATE_ID}-error` : undefined}
             className="mt-1"
           />
-        </label>
-        {metrics.map((m) => (
+          {errors[DATE_ID] ? (
+            <p id={`${DATE_ID}-error`} className="mt-1 text-xs text-destructive">
+              {errors[DATE_ID]}
+            </p>
+          ) : null}
+        </div>
+        {metrics.map((m, index) => (
           <div
             key={m.metricTypeKey}
             className="space-y-2 rounded-[var(--radius)] border border-border p-3"
@@ -158,53 +275,72 @@ export function BaselineEditForm({ clusterId }: BaselineEditFormProps): React.JS
               {m.metricTypeDisplayName} ({m.unit})
             </p>
             <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-[11px] text-fg-muted">Baseline consumption</span>
-                <Input
-                  type="number"
-                  step="any"
-                  min={0}
-                  aria-label={`${m.metricTypeDisplayName} baseline consumption`}
-                  value={getMetricRawValue(m, 'consumption')}
-                  onChange={(e) => setMetricValue(m.metricTypeKey, 'consumption', e.target.value)}
-                  className="mt-1"
-                />
-              </label>
-              <label className="block">
-                <span className="text-[11px] text-fg-muted">Baseline capacity</span>
-                <Input
-                  type="number"
-                  step="any"
-                  min={0}
-                  aria-label={`${m.metricTypeDisplayName} baseline capacity`}
-                  value={getMetricRawValue(m, 'capacity')}
-                  onChange={(e) => setMetricValue(m.metricTypeKey, 'capacity', e.target.value)}
-                  className="mt-1"
-                />
-              </label>
+              {(
+                [
+                  ['consumption', 'Baseline consumption'],
+                  ['capacity', 'Baseline capacity'],
+                ] as ReadonlyArray<readonly [MetricField, string]>
+              ).map(([field, caption]) => {
+                // The id follows the metric's position in THIS render; the error
+                // follows the metric itself. A refetch that reorders the array
+                // therefore moves each message along with its own metric.
+                const id = metricControlId(index, field);
+                const error = errors[metricErrorKey(m.metricTypeKey, field)];
+                return (
+                  <div key={field}>
+                    <label htmlFor={id} className="block text-[11px] text-fg-muted">
+                      {caption}
+                    </label>
+                    <Input
+                      id={id}
+                      type="number"
+                      step="any"
+                      min={0}
+                      // The caption alone reads as "Baseline consumption" on
+                      // every metric card; the accessible name has to say which
+                      // metric, so it names the metric too.
+                      aria-label={`${m.metricTypeDisplayName} ${caption.toLowerCase()}`}
+                      value={getMetricRawValue(m, field)}
+                      onChange={(e) => setMetricValue(m.metricTypeKey, field, e.target.value)}
+                      aria-invalid={error ? 'true' : undefined}
+                      aria-describedby={error ? `${id}-error` : undefined}
+                      className="mt-1"
+                    />
+                    {error ? (
+                      <p id={`${id}-error`} className="mt-1 text-xs text-destructive">
+                        {error}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}
         <div className="flex items-center justify-end">
-          <Button
-            type="submit"
-            variant="destructive"
-            size="sm"
-            disabled={!dirty || mutation.isPending}
-          >
-            Save baseline
+          {/* Not `destructive`: coral is the delete token (the Delete button two
+              cards below wears it), and spending it on a save teaches users to
+              discount red. This submit opens the confirm dialog below, which is
+              where the weight of the action belongs — hence the ellipsis, and
+              hence a label that names the real consequence instead of "Save". */}
+          <Button type="submit" variant="accent" size="sm" disabled={!dirty || mutation.isPending}>
+            Rewrite baseline…
           </Button>
         </div>
       </form>
       <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
+        open={pendingInput !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingInput(null);
+        }}
         title="Rewrite baseline?"
         description="Changing the baseline date or values rewrites every forecast point for this cluster. Confirm only if you intentionally want to reset historical assumptions."
         confirmLabel="Rewrite baseline"
         destructive
         pending={mutation.isPending}
-        onConfirm={handleConfirm}
+        onConfirm={() => {
+          if (pendingInput !== null) mutation.mutate(pendingInput);
+        }}
       />
     </Card>
   );

@@ -4,6 +4,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
 import { Field, useFocusFirstInvalidField } from '@/components/form/field';
+import { REQUIRED_AMOUNT_MESSAGE, parseRequiredAmount } from '@/components/form/required-amount';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -53,19 +54,23 @@ export function ResizeHostDialog({
   const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
     setErrors({});
+    const parsedAmount = parseRequiredAmount(amount);
     const payload: CapacityAppendInputWire = {
       metricTypeKey: latest?.metricTypeKey ?? 'memory_gb',
       effectiveFrom,
-      amount: Number(amount),
+      amount: parsedAmount,
     };
     const parsed = capacityRowInputSchema.safeParse(payload);
     if (!parsed.success) {
-      setErrors(
-        mapIssuesToFieldErrors(parsed.error.issues, {
-          effectiveFrom: 'effectiveFrom',
-          amount: 'amount',
-        }),
-      );
+      const fieldErrors = mapIssuesToFieldErrors(parsed.error.issues, {
+        effectiveFrom: 'effectiveFrom',
+        amount: 'amount',
+      });
+      // A blank capacity arrives as NaN and is already rejected; this only swaps
+      // Zod's "received NaN" for language an operator can act on. Getting here
+      // with 0 would append a row that silently zeroes this host's contribution.
+      if (Number.isNaN(parsedAmount)) fieldErrors.amount = REQUIRED_AMOUNT_MESSAGE;
+      setErrors(fieldErrors);
       return;
     }
     mutation.mutate(payload);
@@ -83,7 +88,10 @@ export function ResizeHostDialog({
               : null}
           </DialogDescription>
         </DialogHeader>
-        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
+        {/* noValidate: the browser's bubble fires before submit and would preempt the
+            Field errors below — transient, unstyled, first-field-only, and invisible to
+            a re-read. Safe because every `required` field here fails the parse too. */}
+        <form ref={formRef} noValidate onSubmit={onSubmit} className="space-y-4">
           <Field
             label="Effective from"
             type="date"

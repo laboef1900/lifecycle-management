@@ -10,12 +10,26 @@ import { BrandMark } from '@/components/ui/brand-mark';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 
+/** Skip-link target. Exported so a test can assert link and target agree. */
+export const MAIN_CONTENT_ID = 'main-content';
+
 export function AppShell(): React.JSX.Element {
   return (
     <>
+      {/* First in the DOM, and outside the shell below, so it is the document's
+          first tab stop — before the brand link in the sticky topbar. */}
+      <SkipLink />
       <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
         <Header />
-        <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+        {/* tabIndex={-1} makes the region programmatically focusable without
+            adding it to the tab order, which is what lets the skip link land
+            focus here; otherwise focus would stay on the link and the next Tab
+            would walk straight back into the header it was meant to bypass. */}
+        <main
+          id={MAIN_CONTENT_ID}
+          tabIndex={-1}
+          className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden"
+        >
           <div className="mx-auto w-full max-w-screen-2xl px-4 py-6 sm:px-6">
             <Outlet />
           </div>
@@ -25,6 +39,38 @@ export function AppShell(): React.JSX.Element {
       <ShortcutsDialog />
       <KeyboardShortcuts />
     </>
+  );
+}
+
+/**
+ * WCAG 2.2 §2.4.1 "Bypass Blocks" (Level A): a keyboard user must be able to
+ * jump the repeated topbar instead of tabbing through it on every page.
+ *
+ * Hidden off-screen rather than with `sr-only`/`hidden`, so it stays focusable
+ * and revealing it is a single `top` swap — no position/display juggling whose
+ * cascade order could resolve the wrong way. It is rendered OUTSIDE the shell's
+ * `overflow-hidden` flex wrapper and `fixed`: inside, the revealed link would be
+ * clipped by that wrapper and painted beneath the `z-30` sticky header. The
+ * visible state gets the house two-layer steel ring for free from the global
+ * `:focus-visible` rule in styles.css.
+ */
+function SkipLink(): React.JSX.Element {
+  return (
+    <a
+      href={`#${MAIN_CONTENT_ID}`}
+      onClick={(event) => {
+        // Move focus here rather than letting the UA follow the fragment: URL
+        // hashes are a deep-link contract in this app (see lib/anchors.ts), and
+        // a leftover `#main-content` would ride along in shareable locations
+        // for no reason. The href stays real so this is a link to assistive
+        // tech and keeps working if the handler ever fails to run.
+        event.preventDefault();
+        document.getElementById(MAIN_CONTENT_ID)?.focus();
+      }}
+      className="fixed -top-20 left-4 z-50 rounded-[var(--radius)] border border-border-strong bg-card px-3 py-2 text-sm font-medium text-foreground shadow-[var(--shadow-card)] focus:top-3"
+    >
+      Skip to main content
+    </a>
   );
 }
 

@@ -192,6 +192,29 @@ describe('<HostMoveDialog>', () => {
     expect(toast.error).toHaveBeenCalled();
   });
 
+  it("refuses a blank month with the dialog's own error, focuses it, and does not advance", async () => {
+    const moveSpy = vi
+      .spyOn(api.hosts, 'move')
+      .mockResolvedValue(makeHost({ clusterId: 'cl-dst' }));
+    const user = userEvent.setup();
+    renderDialog(makeHost());
+
+    await screen.findByRole('combobox', { name: /destination cluster/i });
+    const monthInput = screen.getByLabelText(/effective month/i);
+    await user.clear(monthInput);
+    await user.click(screen.getByRole('button', { name: /continue/i }));
+
+    // The app's own error, not the browser's transient `required` bubble.
+    expect(await screen.findByText(/pick the month this move takes effect/i)).toBeInTheDocument();
+    expect(monthInput).toHaveAttribute('aria-invalid', 'true');
+    expect(monthInput).toHaveAccessibleDescription(/pick the month this move takes effect/i);
+    // SC 3.3.1 — focus lands on the field that needs fixing.
+    expect(monthInput).toHaveFocus();
+    // Neither the confirmation step nor the endpoint is reached.
+    expect(screen.queryByRole('heading', { name: /confirm move/i })).not.toBeInTheDocument();
+    expect(moveSpy).not.toHaveBeenCalled();
+  });
+
   it('hides the destination select and shows an explanatory message when no eligible cluster exists', async () => {
     vi.spyOn(api.clusters, 'list').mockResolvedValue({
       items: [makeCluster({ id: 'cl-src', name: 'Source cluster' })],

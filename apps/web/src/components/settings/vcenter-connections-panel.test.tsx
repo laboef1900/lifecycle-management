@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CreateClusterDialog } from '@/components/clusters/create-cluster-dialog';
 import { api, ApiError } from '@/lib/api-client';
 
 import { VcenterConnectionsPanel } from './vcenter-connections-panel';
@@ -278,6 +279,120 @@ describe('<VcenterConnectionsPanel>', () => {
     expect(screen.queryByRole('button', { name: /sync now/i })).not.toBeInTheDocument();
   });
 
+  it("refuses an all-blank save with the panel's own errors, focuses the first, and sends nothing", async () => {
+    const create = vi
+      .spyOn(api.settings.vsphere.connections, 'create')
+      .mockResolvedValue(connection());
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /save connection/i }));
+
+    // Every blank field is named at once — the browser's bubble showed one.
+    expect(screen.getByText(/give this connection a name/i)).toBeInTheDocument();
+    expect(screen.getByText(/enter the vcenter hostname or ip address/i)).toBeInTheDocument();
+    expect(screen.getByText(/enter the read-only service account/i)).toBeInTheDocument();
+    expect(screen.getByText(/enter the password for that account/i)).toBeInTheDocument();
+
+    const name = screen.getByLabelText(/^name/i);
+    expect(name).toHaveAttribute('aria-invalid', 'true');
+    expect(name).toHaveAccessibleDescription(/give this connection a name/i);
+    // SC 3.3.1 — focus lands on the first field that needs fixing.
+    expect(name).toHaveFocus();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('measures a blank password the way the contract does — whitespace is a password', async () => {
+    const create = vi
+      .spyOn(api.settings.vsphere.connections, 'create')
+      .mockResolvedValue(connection());
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    await userEvent.type(await screen.findByLabelText(/^name/i), 'vc-alt');
+    await userEvent.type(screen.getByLabelText(/hostname/i), 'vcenter.corp.local');
+    await userEvent.type(screen.getByLabelText(/username/i), 'svc-lcm');
+    // `vsphereConnectionCreateSchema` does not `.trim()` the password, so a
+    // whitespace-only one is a legitimate credential. The panel must not invent
+    // a stricter rule than the contract it validates against.
+    await userEvent.type(screen.getByLabelText(/password/i), '  ');
+    await userEvent.click(screen.getByRole('button', { name: /save connection/i }));
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ password: '  ' })),
+    );
+    expect(screen.queryByText(/enter the password for that account/i)).not.toBeInTheDocument();
+  });
+
+  it('★ never probes a hostname the shared contract rejects', async () => {
+    const probe = vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
+      reachable: true,
+      trustedBySystemRoots: false,
+      leafFingerprintSha256: 'AB:CD',
+      validFrom: null,
+      validTo: null,
+      outcome: 'ok',
+    });
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    // A scheme (and the `user@host` parser-differential trick behind it) is what
+    // `vcenterHostname` exists to reject. The probe opens a TLS connection to
+    // whatever it is handed and returns the fingerprint the admin then pins as
+    // the anchor the stored credential is later sent to — so this must be caught
+    // before the request, not only by the server afterwards.
+    const hostname = await screen.findByLabelText(/hostname/i);
+    await userEvent.type(hostname, 'https://vcenter.corp.local');
+    await userEvent.click(screen.getByRole('button', { name: /check certificate/i }));
+
+    expect(screen.getByText(/must be a bare hostname or ip/i)).toBeInTheDocument();
+    expect(hostname).toHaveAttribute('aria-invalid', 'true');
+    expect(hostname).toHaveFocus();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('★ never probes with a port outside the contract range', async () => {
+    const probe = vi.spyOn(api.settings.vsphere, 'probe').mockResolvedValue({
+      reachable: true,
+      trustedBySystemRoots: false,
+      leafFingerprintSha256: 'AB:CD',
+      validFrom: null,
+      validTo: null,
+      outcome: 'ok',
+    });
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    await userEvent.type(await screen.findByLabelText(/hostname/i), 'vcenter.corp.local');
+    const port = screen.getByLabelText(/port/i);
+    await userEvent.clear(port);
+    await userEvent.type(port, '70000');
+    await userEvent.click(screen.getByRole('button', { name: /check certificate/i }));
+
+    // The bound comes from `vcenterPort` in @lcm/shared, not from this panel.
+    expect(port).toHaveAttribute('aria-invalid', 'true');
+    expect(port).toHaveAccessibleDescription(/65535/);
+    expect(port).toHaveFocus();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('★ never saves a connection with a blank port — no credential to a port-0 endpoint', async () => {
+    const create = vi
+      .spyOn(api.settings.vsphere.connections, 'create')
+      .mockResolvedValue(connection());
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    await userEvent.type(await screen.findByLabelText(/^name/i), 'vc-alt');
+    await userEvent.type(screen.getByLabelText(/hostname/i), 'vcenter.corp.local');
+    await userEvent.type(screen.getByLabelText(/username/i), 'svc-lcm');
+    await userEvent.type(screen.getByLabelText(/password/i), 'pw');
+    const port = screen.getByLabelText(/port/i);
+    await userEvent.clear(port);
+    await userEvent.click(screen.getByRole('button', { name: /save connection/i }));
+
+    // `Number('')` is 0, which is number-typed and would previously have been
+    // POSTed as a port; the panel must answer instead of asking the server.
+    expect(screen.getByText(/enter the https port vcenter listens on/i)).toBeInTheDocument();
+    expect(port).toHaveFocus();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('disables Sync now for a disabled connection — a queued run could never fire', async () => {
     vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([
       connection({ enabled: false }),
@@ -549,5 +664,58 @@ describe('<VcenterConnectionsPanel> — trust certificate (#259)', () => {
 
     expect(await screen.findByText(/could not reach that host/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^trust certificate$/i })).toBeDisabled();
+  });
+});
+
+/**
+ * `/settings/inventory` renders this panel and `AddClusterPanel` (→
+ * `CreateClusterDialog`) on the same page, and both have a field labelled
+ * "Name". `Field` derives `id` from `name ?? label`, so without an explicit
+ * `name` both render `id="field-name"` — a duplicate id whose damage is
+ * silent: `<label for>` and `aria-describedby` both resolve to the FIRST
+ * match in document order, which is this panel (the dialog is portalled to
+ * `body`, after `#root`).
+ *
+ * Rendering the two components separately — as every other test in the repo
+ * does — cannot see this, which is why the pairing is the test.
+ */
+describe('field ids do not collide across the Inventory settings page', () => {
+  it('keeps the Add-cluster dialog’s Name field labelled when the vCenter form is on the page', async () => {
+    vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([]);
+    renderWithClient(
+      <>
+        <VcenterConnectionsPanel />
+        <CreateClusterDialog />
+      </>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: '+ Add cluster' }));
+
+    const nameInputs = screen.getAllByLabelText('Name');
+    expect(nameInputs).toHaveLength(2);
+    const [panelName, dialogName] = nameInputs;
+    // Distinct ids, and neither is the colliding default.
+    expect(panelName?.id).not.toBe(dialogName?.id);
+    expect(document.querySelectorAll('#field-name')).toHaveLength(1);
+
+    // The real user-visible consequence: with one shared id the dialog's input
+    // has no `<label>` of its own and falls back to its placeholder as the
+    // accessible name (visible label ≠ accessible name — WCAG 2.2 SC 2.5.3).
+    expect(dialogName).toHaveAccessibleName('Name');
+    expect(panelName).toHaveAccessibleName('Name');
+  });
+
+  it('namespaces the vCenter fields by id, never by name', async () => {
+    vi.spyOn(api.settings.vsphere.connections, 'list').mockResolvedValue([]);
+    renderWithClient(<VcenterConnectionsPanel />);
+
+    // `Field` would also namespace off a `name` prop — but a `name` on a
+    // credential form is what switches on the browser's autofill and
+    // save-password heuristics for this vCenter service account, and containing
+    // that credential is the entire point of the probe-then-verify flow.
+    for (const label of [/^name/i, /hostname/i, /port/i, /username/i, /password/i]) {
+      const input = await screen.findByLabelText(label);
+      expect(input.id).toMatch(/^vcenter-/);
+      expect(input).not.toHaveAttribute('name');
+    }
   });
 });

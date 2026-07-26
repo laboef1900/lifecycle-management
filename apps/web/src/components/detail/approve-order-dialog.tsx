@@ -84,7 +84,12 @@ export function ApproveOrderDialog({
             earlier order date re-surfaces the order for a fresh approval.
           </DialogDescription>
         </DialogHeader>
-        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
+        {/* `noValidate` even though nothing here can currently raise a bubble —
+            the note is optional and its `maxLength` caps typing rather than
+            validating. It is the invariant that matters: every form in this app
+            answers for its own errors, so adding a native constraint later
+            cannot silently hand the error path back to the browser. */}
+        <form ref={formRef} onSubmit={onSubmit} className="space-y-4" noValidate>
           {orderByLabel ? (
             <p className="text-sm text-fg-muted">
               Last safe order date <strong className="text-fg">{orderByLabel}</strong>
