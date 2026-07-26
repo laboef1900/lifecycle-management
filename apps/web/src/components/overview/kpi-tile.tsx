@@ -40,12 +40,20 @@ export interface KpiTileProps
   label: string;
   value: string;
   caption?: string;
+  /**
+   * Provenance slot under the caption — where a tile says where its number came
+   * from (e.g. "this figure is the baseline, not the scenario on screen").
+   * Deliberately a node, not a string: the caller owns the wording and the mark,
+   * so a tile can never be given a provenance claim this component invented.
+   */
+  note?: React.ReactNode;
 }
 
 export function KpiTile({
   label,
   value,
   caption,
+  note,
   status,
   className,
   ...props
@@ -69,6 +77,7 @@ export function KpiTile({
       {caption ? (
         <p className="mt-1.5 text-[11px] text-fg-muted [overflow-wrap:anywhere]">{caption}</p>
       ) : null}
+      {note}
     </Card>
   );
 }

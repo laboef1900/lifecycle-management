@@ -4,7 +4,17 @@ import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 import type { ScenarioWire } from '@/lib/api-client';
 
-type ScenarioKind = 'lose_hosts' | 'add_vms' | 'delay_procurement';
+export type ScenarioKind = 'lose_hosts' | 'add_vms' | 'delay_procurement';
+
+/**
+ * Presets that cannot move THIS cluster's forecast, each mapped to the reason
+ * why — computed from the baseline forecast by the panel (`deriveBlockedPresets`)
+ * and stated on the control itself. A preset that can only ever return the
+ * baseline is worse than useless: applying it renders an unchanged, healthy-
+ * looking forecast that reads as "the what-if is fine", which is the confident
+ * wrong answer this product exists to refuse.
+ */
+export type BlockedPresets = Partial<Record<ScenarioKind, string>>;
 
 interface ScenarioControlsProps {
   active: ScenarioWire | null;
@@ -16,6 +26,8 @@ interface ScenarioControlsProps {
    * maximum is how an out-of-range count reaches the parent.
    */
   maxHosts?: number | undefined;
+  /** Presets this cluster's data cannot support, with the reason for each. */
+  blocked?: BlockedPresets | undefined;
 }
 
 interface DraftState {
@@ -86,6 +98,7 @@ export function ScenarioControls({
   active,
   onChange,
   maxHosts,
+  blocked,
 }: ScenarioControlsProps): React.JSX.Element {
   // Initializers, not sync effects: the draft is the user's in-progress edit
   // and must not be clobbered mid-drag. A reopened pane is a fresh mount, which
@@ -94,6 +107,15 @@ export function ScenarioControls({
   const [draft, setDraft] = React.useState<DraftState>(() => scenarioToDraft(active));
   const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pendingEmit = React.useRef<(() => void) | undefined>(undefined);
+  const reasonIdBase = React.useId();
+
+  /**
+   * The applied preset is never gated, even if its reason later becomes true:
+   * re-tapping it is also the only way to clear it, so disabling it would trap
+   * the user in a scenario they can no longer leave.
+   */
+  const blockedReason = (candidate: ScenarioKind): string | undefined =>
+    candidate === kind ? undefined : blocked?.[candidate];
 
   // The "lose hosts" bound. When the host count is unknown the slider is pinned
   // to its current value and disabled rather than being given an invented
@@ -138,6 +160,7 @@ export function ScenarioControls({
   );
 
   const selectPreset = (next: ScenarioKind): void => {
+    if (blockedReason(next) !== undefined) return; // defense in depth; the chip is disabled
     const nextKind = next === kind ? null : next; // re-tap the active preset → baseline
     setKind(nextKind);
     emit(nextKind, draft, true); // type change is immediate, not debounced
@@ -157,6 +180,7 @@ export function ScenarioControls({
       <div role="group" aria-label="Scenario type" className="grid grid-cols-3 gap-1.5">
         {PRESETS.map((p) => {
           const isActive = p.kind === kind;
+          const reason = blockedReason(p.kind);
           return (
             <button
               key={p.kind}
@@ -164,12 +188,27 @@ export function ScenarioControls({
               aria-pressed={isActive}
               data-testid={`scenario-preset-${p.kind}`}
               onClick={() => selectPreset(p.kind)}
+              // `aria-disabled`, NOT the native `disabled` attribute. Native
+              // `disabled` removes the chip from the tab order, so the
+              // `aria-describedby` reason below could never be announced — the
+              // stated reason was reachable only as sighted text, which defeats
+              // the point of stating it. Keeping the chip focusable lets a
+              // screen-reader user land on it and hear why it is unavailable;
+              // `selectPreset`'s early return at :163 is the actual block.
+              aria-disabled={reason !== undefined}
+              {...(reason !== undefined ? { 'aria-describedby': `${reasonIdBase}-${p.kind}` } : {})}
               className={cn(
                 'rounded-[var(--radius)] border px-2 py-1.5 text-xs font-medium transition-[background,border-color,color] duration-150',
-                'active:scale-[0.98]',
+                // Matches the shared Button's disabled treatment (opacity-50 +
+                // no pointer response) so a dead control looks the same
+                // everywhere. Keyed off aria-disabled rather than :disabled
+                // because the chip stays focusable — see the comment above.
+                'active:scale-[0.98] aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:active:scale-100',
                 isActive
                   ? 'border-accent bg-accent text-accent-foreground'
-                  : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
+                  : reason !== undefined
+                    ? 'border-border text-fg-muted'
+                    : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
               )}
             >
               {p.label}
@@ -177,6 +216,27 @@ export function ScenarioControls({
           );
         })}
       </div>
+
+      {/* Why a preset is off, in text — dimming alone is not a reason, and a
+          disabled chip that never explains itself reads as a broken control.
+          Each line is its own control's `aria-describedby` target. */}
+      {PRESETS.some((p) => blockedReason(p.kind) !== undefined) ? (
+        <ul className="space-y-1">
+          {PRESETS.map((p) => {
+            const reason = blockedReason(p.kind);
+            if (reason === undefined) return null;
+            return (
+              <li
+                key={p.kind}
+                id={`${reasonIdBase}-${p.kind}`}
+                className="text-[11px] leading-relaxed text-fg-muted"
+              >
+                <span className="font-medium text-foreground">{p.label}:</span> {reason}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
 
       {kind === null ? (
         <p className="text-xs leading-relaxed text-fg-subtle">

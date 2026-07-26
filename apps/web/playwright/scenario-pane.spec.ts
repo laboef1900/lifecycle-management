@@ -112,7 +112,11 @@ test.describe('scenario rail docked beside the content column at lg and up', () 
     await openFirstCluster(page);
     await openScenarioRail(page);
 
-    await page.getByTestId('scenario-preset-lose_hosts').click();
+    // "Add load" rather than "Lose hosts": this test is about the rail, not
+    // about which what-if is picked, and "Lose hosts" is gated off on clusters
+    // whose hosts have no recorded capacity — seeded data must not decide
+    // whether a rail-behavior test can run.
+    await page.getByTestId('scenario-preset-add_vms').click();
 
     // No Apply step, and no auto-dismiss: nothing is covered, so throwing away
     // the editing context after every change would be pure loss.
@@ -225,24 +229,31 @@ test.describe('live slider tuning', () => {
     await openFirstCluster(page);
     await openScenarioRail(page);
 
-    await page.getByTestId('scenario-preset-lose_hosts').click();
-    const slider = page.getByLabel('Hosts lost');
+    // Driven by "Add load", deliberately, not "Lose hosts". `deriveBlockedPresets`
+    // gates "Lose hosts" off whenever no host has a recorded capacity — which is
+    // true of every vSphere-synced cluster — so keying this test on it made the
+    // run depend on the seed. The earlier shape (`test.skip(await
+    // preset.isDisabled(), …)`) was worse than a seed dependency: a one-shot read
+    // against a state that arrives asynchronously, so the step could go
+    // permanently green without ever pressing a key. "Add load" is never blocked
+    // (it can always move a future month), so the precondition is structural.
+    const preset = page.getByTestId('scenario-preset-add_vms');
+    await expect(preset).toHaveAttribute('aria-disabled', 'false');
+    await preset.click();
+    const slider = page.getByLabel('VM count');
     await expect(slider).toBeVisible();
+    await expect(slider).toBeEnabled();
 
-    // The slider is disabled until the baseline forecast reports the host count,
-    // and a cluster with a single host has nowhere to step to.
-    const max = Number(await slider.getAttribute('max'));
-    const isDisabled = await slider.isDisabled();
-    test.skip(isDisabled || max < 2, 'requires a cluster with at least 2 tracked hosts');
-
-    await expect(page.getByTestId('scenario-active-indicator')).toHaveText(/Lose 1 host/);
+    const before = await page.getByTestId('scenario-active-indicator').textContent();
 
     // Keyboard-operable for free, which is half the reason this is a native
     // range input rather than a div with a drag handler.
     await slider.focus();
     await page.keyboard.press('ArrowRight');
 
-    await expect(page.getByTestId('scenario-active-indicator')).toHaveText(/Lose 2 hosts/);
+    // The VM count is what moved, so the indicator's own text must change.
+    await expect(page.getByTestId('scenario-active-indicator')).not.toHaveText(before ?? '');
+    await expect(page.getByTestId('scenario-active-indicator')).toHaveText(/GB VMs/);
     // No Apply was clicked and the rail never closed.
     await expect(page.getByTestId('scenario-pane-body')).toBeVisible();
   });
@@ -283,7 +294,10 @@ test.describe('scenario forecast fetch failure', () => {
     await page.route(/\/api\/clusters\/[^/]+\/forecast\/scenario/, (route) =>
       route.fulfill({ status: 500, json: { message: 'boom' } }),
     );
-    await page.getByTestId('scenario-preset-lose_hosts').click();
+    // "Add load" is applicable to every cluster; "Lose hosts" is gated off when
+    // no host has a recorded capacity, which would make this failure-path test
+    // depend on seeded data it deliberately does not rely on.
+    await page.getByTestId('scenario-preset-add_vms').click();
 
     // The header no longer claims a hypothetical forecast is on screen…
     await expect(page.getByTestId('scenario-active-indicator')).toHaveCount(0);

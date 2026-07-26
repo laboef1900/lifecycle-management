@@ -184,6 +184,49 @@ describe('<ScenarioControls>', () => {
     expect(onChange).toHaveBeenLastCalledWith({ kind: 'lose_hosts', count: 3 });
   });
 
+  it('disables a blocked preset, states the reason, and refuses to emit it', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ScenarioControls
+        active={null}
+        onChange={onChange}
+        maxHosts={4}
+        blocked={{ lose_hosts: 'no host has a recorded capacity in this window.' }}
+      />,
+    );
+
+    const preset = screen.getByTestId('scenario-preset-lose_hosts');
+    expect(preset).toHaveAttribute('aria-disabled', 'true');
+    // The reason is TEXT, not just a dimmed chip: a disabled control that never
+    // explains itself reads as broken, and dimming is a colour-only signal.
+    expect(preset).toHaveAccessibleDescription(/no host has a recorded capacity/i);
+    expect(screen.getByText(/no host has a recorded capacity/i)).toBeInTheDocument();
+
+    await user.click(preset);
+    expect(onChange).not.toHaveBeenCalled();
+    // Only the inapplicable preset is gated.
+    expect(screen.getByTestId('scenario-preset-add_vms')).toBeEnabled();
+  });
+
+  it('never blocks the preset that is currently applied — it is also the only way to clear it', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ScenarioControls
+        active={{ kind: 'delay_procurement', months: 3 }}
+        onChange={onChange}
+        blocked={{ delay_procurement: 'there is no order date to delay.' }}
+      />,
+    );
+
+    const preset = screen.getByTestId('scenario-preset-delay_procurement');
+    expect(preset).toBeEnabled();
+
+    await user.click(preset);
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
   it('bounds the VM-count and delay sliders', () => {
     const { unmount } = render(
       <ScenarioControls active={{ kind: 'add_vms', count: 20, sizeGb: 16 }} onChange={() => {}} />,
