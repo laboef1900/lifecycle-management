@@ -104,9 +104,23 @@ describe('<CategoryCombobox>', () => {
       </>,
     );
 
-    // `bulk-quarterly-growth-dialog` mounts one of these per row, so a shared id
-    // would point every row's input at the first row's message.
+    // The id is derived from `useId()`, so two mounts on one page each describe
+    // their OWN message. A module-level constant would have pointed both inputs
+    // at whichever error rendered first — silently, since `aria-describedby`
+    // resolving to a real-but-wrong element looks identical to a correct one in
+    // the DOM. No dialog renders two today; nothing stops one from doing so.
     expect(screen.getByLabelText('Category')).toHaveAccessibleDescription('First problem');
     expect(screen.getByLabelText('Second category')).toHaveAccessibleDescription('Second problem');
+  });
+
+  it('drops the marker, `required` and `aria-required` together when opted out', () => {
+    // All three come off one flag, as in `Field` — a caller that turns the
+    // requirement off must not be left with a `*` the contract does not back.
+    render(<CategoryCombobox value="" onChange={vi.fn()} categories={[]} required={false} />);
+
+    const input = screen.getByLabelText('Category');
+    expect(input).not.toHaveAttribute('required');
+    expect(input).not.toHaveAttribute('aria-required');
+    expect(screen.queryByText('*')).not.toBeInTheDocument();
   });
 });

@@ -8,6 +8,15 @@ interface CategoryComboboxProps {
   categories: string[];
   error?: string | undefined;
   label?: string;
+  /**
+   * Defaults to `true` because `category` is `.trim().min(1)` on every item
+   * schema in `@lcm/shared`, so every current mount is required. Kept as a prop
+   * anyway so this reproduces {@link Field}'s contract in full: there, the
+   * marker, `required` and `aria-required` are all derived from one flag, and a
+   * future optional-category caller must be able to turn all three off together
+   * rather than being stuck with a `*` that lies.
+   */
+  required?: boolean;
 }
 
 /**
@@ -26,6 +35,7 @@ export function CategoryCombobox({
   categories,
   error,
   label = 'Category',
+  required = true,
 }: CategoryComboboxProps): React.JSX.Element {
   const inputId = useId();
   const listId = useId();
@@ -37,24 +47,24 @@ export function CategoryCombobox({
           descendants the way accessible-name computation does — nesting it would
           rename this field to "Category *" for every `getByLabelText`. The glyph
           itself, not only its colour, carries "required" (WCAG 1.4.1); the
-          `aria-required` below is the channel assistive tech announces from.
-          Category is `min(1)` in `@lcm/shared` on every item schema, so it is
-          required on all three dialogs that mount this. */}
+          `aria-required` below is the channel assistive tech announces from. */}
       <div className="flex items-baseline gap-0.5">
         <label htmlFor={inputId} className="text-sm font-medium">
           {label}
         </label>
-        <span aria-hidden className="text-destructive">
-          *
-        </span>
+        {required ? (
+          <span aria-hidden className="text-destructive">
+            *
+          </span>
+        ) : null}
       </div>
       <Input
         id={inputId}
         list={listId}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        required
-        aria-required="true"
+        required={required}
+        aria-required={required ? 'true' : undefined}
         aria-invalid={error ? 'true' : undefined}
         // Without this the message below was visible but not programmatically
         // associated: a screen-reader user moving through the form heard the
