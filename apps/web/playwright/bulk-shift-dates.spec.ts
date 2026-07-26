@@ -125,14 +125,21 @@ test.describe('bulk-shift dates', () => {
       // dialog edge, which is the tell: a statically centred dialog measures
       // identically every time. A single synchronous read is immune, because
       // mid-animation both rects scale together and containment still holds.
-      const overflowPx = await dialog.evaluate(
-        (dialogEl, dateEl) => {
-          const d = dialogEl.getBoundingClientRect();
-          const n = (dateEl as HTMLElement).getBoundingClientRect();
-          return n.right - d.right;
-        },
-        await dialog.getByText('2026-07-02').elementHandle(),
-      );
+      // The date element is resolved inside the page rather than passed in as an
+      // ElementHandle: a handle would have to be awaited first, and `getByText`
+      // has already auto-waited for this node above, so re-finding it in the
+      // evaluate costs nothing and keeps the whole measurement in one frame.
+      const overflowPx = await dialog.evaluate((dialogEl, dateText) => {
+        const target = Array.from(dialogEl.querySelectorAll<HTMLElement>('*')).find(
+          (el) => el.children.length === 0 && el.textContent?.trim() === dateText,
+        );
+        // Loudly, rather than returning a number that would pass: a preview that
+        // stopped rendering the new date must not read as "nothing overflows".
+        if (!target) throw new Error(`no leaf element in the dialog renders "${dateText}"`);
+        const d = dialogEl.getBoundingClientRect();
+        const n = target.getBoundingClientRect();
+        return n.right - d.right;
+      }, '2026-07-02');
       // Half a pixel of slack for sub-pixel layout rounding; the real bug
       // overflowed by ~30px.
       expect(overflowPx).toBeLessThanOrEqual(0.5);

@@ -5,8 +5,15 @@ const API_BASE = 'http://localhost:8090';
 const suffix = (): string =>
   `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
 
+/**
+ * One definition, so a layout assertion derived from the viewport cannot drift
+ * away from the viewport the suite actually runs at.
+ */
+const VIEWPORT_WIDTH = 390;
+const VIEWPORT_HEIGHT = 844;
+
 test.describe('mobile layout at 390x844', () => {
-  test.use({ viewport: { width: 390, height: 844 } });
+  test.use({ viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT } });
 
   test('topbar renders directly — no nav drawer', async ({ page }) => {
     await page.addInitScript(() => {
@@ -48,23 +55,26 @@ test.describe('mobile layout at 390x844', () => {
     const first = tiles.first();
     const firstBox = await first.boundingBox();
     expect(firstBox).not.toBeNull();
-    // 1-up grid (spec §4.4: col-span-12 below the 820px breakpoint) — the tile
-    // fills its grid track.
+    // 1-up grid (spec §4.4: col-span-12 below the 820px breakpoint).
     //
-    // Measured against the track rather than a magic pixel floor: the old
-    // `> 340` was a viewport-derived number that quietly went stale as the
-    // shell's and card's padding changed around it (the tile is 328px wide at
-    // this 390px viewport — 16px of shell padding and ~15px of card padding per
-    // side). That number never described the invariant; "spans its whole track"
-    // does, and it cannot drift when padding is retuned.
-    const trackWidth = await first.evaluate(
-      (el) => el.parentElement?.getBoundingClientRect().width ?? 0,
+    // Measured against the GRID CONTAINER, deliberately not against the tile's
+    // own wrapper. The wrapper is the grid item carrying `col-span-*`, and the
+    // tile is a block-level flex container inside it — so "tile fills wrapper"
+    // is a CSS tautology that holds at col-span-6 and col-span-4 as well. It
+    // would keep passing if the 1-up breakpoint broke outright. Tile-vs-grid is
+    // what actually separates 1-up (tile spans the whole grid) from 2-up (about
+    // half of it, less the gap), and it stays true when padding is retuned —
+    // which is what made the original `> 340` rot.
+    const gridWidth = await first.evaluate(
+      (el) => el.parentElement?.parentElement?.getBoundingClientRect().width ?? 0,
     );
-    expect(trackWidth).toBeGreaterThan(0);
-    expect(firstBox!.width).toBeGreaterThan(trackWidth - 1);
-    // Sanity floor so a genuinely collapsed layout still fails: whatever the
-    // padding, one tile per row must dominate a 390px viewport.
-    expect(firstBox!.width).toBeGreaterThan(390 * 0.8);
+    expect(gridWidth).toBeGreaterThan(0);
+    expect(firstBox!.width).toBeGreaterThan(gridWidth - 1);
+    // Independent floor so a collapsed grid can't satisfy the above by being
+    // narrow itself. Derived from the invariant rather than from measured
+    // padding: a 2-up tile cannot exceed half the viewport, so anything wider
+    // is necessarily 1-up. ~130px of headroom, where `> 340` had 12px.
+    expect(firstBox!.width).toBeGreaterThan(VIEWPORT_WIDTH / 2);
 
     if (count > 1) {
       const secondBox = await tiles.nth(1).boundingBox();
@@ -100,7 +110,7 @@ test.describe('mobile layout at 390x844', () => {
     // The panel is a fullscreen takeover: 100vw at every width (spec §5,
     // styles.css `.cluster-panel`), so on this ~390px viewport it fills it.
     expect(Math.round(panelBox!.width)).toBeGreaterThanOrEqual(388);
-    expect(Math.round(panelBox!.width)).toBeLessThanOrEqual(390);
+    expect(Math.round(panelBox!.width)).toBeLessThanOrEqual(VIEWPORT_WIDTH);
 
     const kpiStrip = page.getByTestId('kpi-strip');
     await expect(kpiStrip.getByText('Current utilization')).toBeVisible();
@@ -175,7 +185,7 @@ test.describe('mobile layout at 390x844', () => {
       const box = await moreButton.boundingBox();
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(0);
-      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(VIEWPORT_WIDTH);
     } finally {
       if (clusterId) {
         const deleteResp = await request.delete(`${API_BASE}/api/clusters/${clusterId}`);

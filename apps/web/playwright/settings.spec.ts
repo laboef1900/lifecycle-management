@@ -39,9 +39,13 @@ interface TenantSettingsSnapshot {
 }
 
 test.describe('configurable thresholds', () => {
-  let saved: TenantSettingsSnapshot;
+  // `null` until the snapshot is taken, so a `beforeEach` that fails before the
+  // GET returns leaves `afterEach` with nothing to restore rather than PUTting
+  // `undefined` — that second, derived failure would otherwise bury the real one.
+  let saved: TenantSettingsSnapshot | null = null;
 
   test.beforeEach(async ({ request }) => {
+    saved = null;
     const current = await request.get(`${API_BASE}/api/settings/tenant`);
     expect(current.ok()).toBe(true);
     saved = (await current.json()) as TenantSettingsSnapshot;
@@ -55,6 +59,7 @@ test.describe('configurable thresholds', () => {
   test.afterEach(async ({ request }) => {
     // Restores exactly what was there, including any field this spec has never
     // heard of — the whole point of snapshotting rather than hand-listing.
+    if (!saved) return;
     const restore = await request.put(`${API_BASE}/api/settings/tenant`, { data: saved });
     expect(restore.ok()).toBe(true);
   });
