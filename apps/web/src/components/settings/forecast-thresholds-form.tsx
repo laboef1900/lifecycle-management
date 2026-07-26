@@ -55,6 +55,10 @@ export function ForecastThresholdsForm(): React.JSX.Element {
   );
   const [snapshotRetentionEdit, setSnapshotRetentionEdit] = React.useState<NumInput | null>(null);
   const [validationError, setValidationError] = React.useState<string | null>(null);
+  // Generated, not a literal: a fixed id would collide the moment this card is
+  // rendered twice on a page, and `aria-describedby` resolving to a real-but-wrong
+  // element is indistinguishable from a correct one in the DOM.
+  const retentionHelpId = React.useId();
 
   const initialWarn = settingsQuery.data
     ? Math.round(settingsQuery.data.warnThreshold * 100)
@@ -326,13 +330,13 @@ export function ForecastThresholdsForm(): React.JSX.Element {
               max={FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS}
               step={1}
               aria-label="Forecast snapshot retention (months)"
-              aria-describedby="snapshot-retention-help"
+              aria-describedby={retentionHelpId}
               value={snapshotRetention}
               onChange={(e) => setSnapshotRetentionEdit(parseInput(e.target.value))}
               className="mt-1 w-24"
             />
           </label>
-          <p id="snapshot-retention-help" className="max-w-md text-[11px] text-fg-subtle">
+          <p id={retentionHelpId} className="max-w-md text-[11px] text-fg-subtle">
             <strong className="font-medium text-foreground">0 keeps every snapshot forever</strong>{' '}
             — the default. Any other value permanently deletes the record of what the forecast
             projected in months older than the window, and narrows the uncertainty band&rsquo;s
@@ -340,8 +344,14 @@ export function ForecastThresholdsForm(): React.JSX.Element {
             backup can recover it. {FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS}–
             {FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS} months when enabled.
           </p>
+          {/* Gated on the accepted range, not merely on "not 0": values in the
+              1..11 dead zone are rejected on submit, so warning about deletions
+              they can never cause would announce a consequence of a save that
+              cannot happen — and it fires on the way past `1` for anyone typing
+              `12`. */}
           {typeof snapshotRetention === 'number' &&
-          snapshotRetention !== FORECAST_SNAPSHOT_RETENTION_DISABLED ? (
+          snapshotRetention >= FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS &&
+          snapshotRetention <= FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS ? (
             <p className="flex max-w-md items-start gap-1.5 text-[11px] text-warning" role="status">
               <TriangleAlert aria-hidden className="mt-px h-3 w-3 shrink-0" />
               <span>

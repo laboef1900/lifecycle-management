@@ -90,23 +90,46 @@ Each step lands as its own commit on `feat/forecast-uncertainty-band`; steps 2 a
 - **Chart** (`apps/web/src/components/clusters/forecast-chart.tsx`): a muted-neutral Recharts band between low/high, empirical caption; tiles stay bandless. Won't visibly render until real snapshots accrue — verify via unit/integration tests + synthetic data.
 - **RISK**: `forecast-loader.ts` is invariant-heavy (INV-1, characterization snapshot, #292/#300/#303 anchor semantics). This wiring is the mandatory two-reviewer high-risk change (§7).
 
-## 12. Retention / pruning (#318, added 2026-07-26)
+## 12. Retention window (#318, added 2026-07-26)
 
 `forecast_snapshot` is append-only and accrues ≤ 25 rows per anchor, at most one anchor per calendar month per cluster/metric (the unique index plus `skipDuplicates` collapse repeat captures), for one seeded metric — so ≤ 300 rows/cluster/year. Growth is not the pressing problem; an unbounded, ever-growing READ on a purchasing surface is. Retention addresses both with one window.
 
+**This section covers the window itself and the read that honours it.** The sweep that actually deletes rows landed as a separate change and is described in §12.1 — the read bound had to exist first, which is what makes deleting safe.
+
 **The setting.** `TenantSettings.forecastSnapshotRetentionMonths`. `0` = keep forever and is the **default** — pruning destroys forecast history nothing else records, so per Golden Rule 3 it is opt-in. Otherwise 12–120 months.
 
-**Keyed on `horizonMonth`, never `anchorMonth`/`createdAt`.** A projection and the horizon-0 row supplying its measured actual share a `horizonMonth`, so one predicate retains or deletes **both** — the pairing hazard is structurally impossible rather than merely tested for. An `anchorMonth`-keyed prune is also pairing-safe but silently caps the band's horizon: deleting an anchor destroys its h24 row, the only possible evidence of 24-month error, so the far end of the chart would lose its band first and without any signal.
+**Keyed on `horizonMonth`, never `anchorMonth`/`createdAt`.** A projection and the horizon-0 row supplying its measured actual share a `horizonMonth`, so one predicate retains or deletes **both** — the pairing hazard is structurally impossible rather than merely tested for. An `anchorMonth`-keyed window is also pairing-safe but silently caps the band's horizon: dropping an anchor discards its h24 row, the only possible evidence of 24-month error, so the far end of the chart would lose its band first and without any signal.
 
 **Invariants.**
 
-- **INV-R1 — one cutoff.** `retentionCutoffMonth()` (`apps/server/src/lib/forecast-retention.ts`) is the single definition. Both the band's read and the sweep call it; neither computes its own.
-- **INV-R2 — the read is bounded before the sweep is.** `computeUncertainty` applies the same window, so the sweep can only ever delete rows the band had already stopped considering. **A band never changes because a sweep ran** — pruning is invisible to the forecast, which is what makes it safe. (Regression test: `forecast-snapshot-cleanup.test.ts` → "leaves the band unchanged".)
-- **INV-R3 — retention off means no delete is issued at all.** The sweep filters tenants on `retentionMonths > 0` and skips them; a bug in the cutoff maths cannot reach a default-configured deployment.
-- **INV-R4 — the window is inclusive of the current month.** 12 months at 2026-07 retains 2025-08…2026-07.
+- **INV-R1 — one cutoff.** `retentionCutoffMonth()` (`apps/server/src/lib/forecast-retention.ts`) is the single definition. Everything that needs the cutoff calls it; nothing computes its own. Both sides normalise to a UTC first-of-month, so the read and any future sweep cannot disagree across a timezone.
+- **INV-R2 — the read is bounded by the window, not by what still exists.** `computeUncertainty` applies the cutoff itself, so the band is a function of the configured window rather than of which rows happen to be on disk. This is what makes deletion safe to add later: a sweep using the same cutoff can only ever remove rows the band had already stopped considering, so **a band never changes because a sweep ran**.
+- **INV-R3 — the window is inclusive of the current month.** 12 months at 2026-07 retains 2025-08…2026-07.
 
 **Why there is NO cross-validation against `forecastUncertaintyMinAnchors`.** The two count different things. `anchorCount` counts distinct _anchor_ months among paired samples, and an anchor up to 24 months older than the window still projects _into_ it — so `anchorCount` reaches roughly `retentionMonths + 23` and is never the binding constraint. The real floor is `PER_HORIZON_MIN_SAMPLES` (3): one retained month yields at most one sample per horizon index, so `retentionMonths` caps every horizon's sample count. The schema's 12-month minimum clears that floor with margin, which is why a 12-month window alongside the maximum 24 minimum-anchors is legitimate and accepted.
 
-**Failure behaviour.** The sweep never throws: a failed tenant is logged at `warn` and the next tick retries; other tenants are unaffected. Every tenant it actually pruned is logged at `info` with tenant, window, cutoff and deleted count — pruning is destructive and otherwise leaves no trace, so the server log must be enough to reconstruct what went and when.
+**Migration.** Additive: the column defaults to `0`, so applying it deletes nothing and changes no behaviour. It also rebuilds `forecast_snapshot_cluster_metric_idx` to trail `horizon_month`, matching the now-windowed read's key order. The rebuild is a `DROP` + `CREATE` inside the migration transaction and takes an `ACCESS EXCLUSIVE` lock for its duration — correct at this table's size, and the reason it is stated here rather than reached for reflexively on a larger one.
 
-**Rollback.** Set retention back to `0` — the sweep stops issuing deletes immediately and the read unbounds. That restores the _behaviour_, not the rows: already-pruned snapshots are recoverable only from a `pg_dump` backup. The migration itself is additive and non-destructive (the column defaults to 0), so reverting the code leaves no schema debt.
+**Rollback.** Revert the code. The column is inert at its default, so there is no schema debt and nothing to undo in data — this half of #318 deletes nothing.
+
+## 12.1 The prune sweep (#318, added 2026-07-26)
+
+`ForecastSnapshotCleanup` (`apps/server/src/services/forecast-snapshot-cleanup.ts`) deletes `forecast_snapshot` rows whose `horizon_month` falls outside each tenant's window. **This is the destructive half**: it removes capacity-forecast history nothing else records, recoverable only from a `pg_dump` backup.
+
+Its safety rests on §12's window already bounding the read (INV-R2), plus one invariant of its own:
+
+- **INV-R4 — retention off means no delete is issued at all.** The sweep filters tenants on `retentionMonths > 0` and skips them outright; no cutoff is computed and no `deleteMany` runs. A bug in the cutoff maths therefore cannot reach a default-configured deployment. Asserted both by row count and by spying that `deleteMany` is never called — the second is the one that proves the safety comes from skipping rather than from a predicate that happens to match nothing.
+
+The pairing property in §12 is what makes the delete predicate safe: because a projection and the horizon-0 row supplying its actual share a `horizon_month`, one predicate takes or spares both, and the sweep cannot strand a projection whose actual is gone (`computeUncertainty` skips unpaired rows silently, so that failure would be invisible). Pinned against a synced 0-capacity cluster, which has no fallback source of actuals. INV-R2's consequence — the band is identical either side of a sweep — has its own regression test (`forecast-snapshot-cleanup.test.ts` → "leaves the band unchanged").
+
+**Divergence from `IdempotencyCleanup`.** That sweep reads a precomputed `expiresAt` stamped at write time, so it consults no settings and retention changes are not retroactive. A snapshot has no write-time expiry — maturity is what matters — so the cutoff is resolved per tenant on every tick and a retention change applies retroactively. The plugin/service/drain/never-throws skeleton transfers; the expiry model does not.
+
+**Cadence.** A fixed six-hour `setInterval`, not a setting, and with no leading run — so the first prune after a boot is up to six hours out. Both are immaterial to correctness: retention is measured in months, and a row that ages out is excluded from the band's read the moment it crosses the cutoff whether or not the sweep has caught up. The tick only decides when the disk catches up with the read.
+
+**Concurrency.** `sweep()` is not re-entrant: an overlapping call joins the run in flight. Two concurrent sweeps would be harmless in themselves, but the second would overwrite the tracked run and the first to settle would clear it, leaving `stop()` draining a finished run while a live one kept deleting through shutdown.
+
+**Query shape.** The delete is `WHERE tenant_id = ? AND horizon_month < ?`, which no index on `forecast_snapshot` serves — both existing indexes lead with `cluster_id`. Each sweep therefore sequentially scans the table. That is a deliberate accept, not an oversight: at the ≤ 300 rows/cluster/year budget above, on a six-hour tick, the scan is cheaper than the write amplification of an index maintained solely for it. Revisit if the row budget or the tick rate changes materially.
+
+**Failure behaviour.** The sweep never throws: a failed tenant is logged at `warn` and the next tick retries; other tenants in the same tick are unaffected. Every tenant it actually pruned is logged at `info` with tenant, window, cutoff and deleted count — pruning is destructive and otherwise leaves no trace, so the server log must be enough to reconstruct what went and when.
+
+**Rollback.** Set retention back to `0`: the sweep stops issuing deletes immediately and the read unbounds. That restores the _behaviour_, not the rows — already-pruned snapshots need a `pg_dump` restore. Confirm deployment state before enabling a window on a live deployment.
