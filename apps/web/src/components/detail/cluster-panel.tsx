@@ -7,13 +7,17 @@ import type {
 } from '@lcm/shared';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { AlertTriangle, SlidersHorizontal, X } from 'lucide-react';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { AlertTriangle, Info, SlidersHorizontal, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { ForecastChart } from '@/components/clusters/forecast-chart';
 import { HostsTab } from '@/components/clusters/hosts-tab';
 import { ItemsTab } from '@/components/clusters/items-tab';
-import { ScenarioControls, describeScenario } from '@/components/clusters/scenario-controls';
+import {
+  ScenarioControls,
+  describeScenario,
+  type BlockedPresets,
+} from '@/components/clusters/scenario-controls';
 import { SettingsTab } from '@/components/clusters/settings-tab';
 import {
   resolveWindow,
@@ -37,6 +41,7 @@ import { api, type ScenarioWire } from '@/lib/api-client';
 import { HOSTS_TAB_HASH, useAnchorFocusRequest } from '@/lib/anchors';
 import { useIsAdmin } from '@/lib/auth';
 import { runwayToWarn, utilStatus, type RunwaySummary } from '@/lib/forecast-summary';
+import { todayIso } from '@/lib/format';
 import { formatMonthLong, formatMonthShort } from '@/lib/format-month';
 import { deriveProcurementKpi } from '@/lib/procurement-kpi';
 import { useMediaQuery } from '@/lib/use-media-query';
@@ -403,6 +408,15 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
 
   const activeForecast = scenario && scenarioQuery.data ? scenarioQuery.data : forecastQuery.data;
   const activeCapacityKnown = metric?.utilization !== null;
+  // Preset applicability is judged against the BASELINE forecast, never the
+  // active one: the question is "can this what-if move the real forecast at
+  // all", and a scenario's own output must not be able to change the answer
+  // (e.g. a delay that pushes the breach out of the window would otherwise
+  // disable the very control that produced it).
+  const blockedPresets = useMemo(
+    () => deriveBlockedPresets(forecastQuery.data),
+    [forecastQuery.data],
+  );
   const scenarioDeltaLabel =
     scenario && forecastQuery.data && scenarioQuery.data
       ? computeScenarioDeltaLabel(forecastQuery.data, scenarioQuery.data)
@@ -416,6 +430,17 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // forecast over what the rest of the panel had already, correctly, fallen
   // back to showing: the baseline.
   const scenarioFailed = Boolean(scenario && scenarioQuery.isError);
+  // The scenario computed successfully and reproduced the baseline exactly —
+  // an un-modelable what-if (see `scenarioChangesNothing`). Nothing on the
+  // chart or in the KPI numbers can show this by itself: an unchanged forecast
+  // looks precisely like a forecast that was never disturbed, which is the one
+  // reading this tool must never leave a purchaser with.
+  const scenarioIsNoop = Boolean(
+    scenario &&
+    forecastQuery.data &&
+    scenarioQuery.data &&
+    scenarioChangesNothing(forecastQuery.data, scenarioQuery.data),
+  );
   // Derived on every render, not set from an effect: the correction must
   // track `scenarioFailed` live (an unchanged failed-retry re-render must
   // keep showing it, and a Clear must drop it the instant `scenario` goes
@@ -426,9 +451,17 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // itself while the same failure persists, and a differing announcement in
   // between (e.g. a subsequent "Scenario active: …" for a new attempt) is
   // what makes a *second* failure's identical text register as new again.
+  //
+  // The no-op correction is derived the same way and for the same reason: the
+  // visual "it changed nothing" cue is a badge and a notice, neither of which
+  // a screen-reader user hears from the announcement alone. It EXTENDS the
+  // activation sentence rather than replacing it, so the scenario is still
+  // named — only now with what it did.
   const liveMessage = scenarioFailed
     ? 'Scenario could not be computed — showing baseline.'
-    : (announcementOverride ?? (clusterName ? `Cluster ${clusterName} detail opened.` : ''));
+    : scenarioIsNoop && scenario
+      ? `Scenario active: ${describeScenario(scenario)}. It changes nothing in this window.`
+      : (announcementOverride ?? (clusterName ? `Cluster ${clusterName} detail opened.` : ''));
 
   return (
     <div
@@ -530,9 +563,13 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
               {forecastQuery.data ? (
                 <ClusterDetailKpiStrip
                   forecast={activeForecast ?? forecastQuery.data}
+                  // The real forecast, always — the strip compares the two to
+                  // work out which KPIs a scenario actually moved.
+                  baseline={forecastQuery.data}
                   metric={metric}
                   capacityKnown={activeCapacityKnown}
                   isScenario={Boolean(scenario && scenarioQuery.data)}
+                  noChange={scenarioIsNoop}
                 />
               ) : null}
 
@@ -616,6 +653,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                     onClose={closePane}
                     closeRef={paneCloseRef}
                     maxHosts={forecastQuery.data?.hosts.length}
+                    blocked={blockedPresets}
                   />
                 </section>
               ) : null}
@@ -667,6 +705,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
             onClose={closePane}
             closeRef={paneCloseRef}
             maxHosts={forecastQuery.data?.hosts.length}
+            blocked={blockedPresets}
           />
         </aside>
       ) : null}
@@ -726,6 +765,149 @@ export function computeScenarioDeltaLabel(
   const arrow = direction === 'earlier' ? '▲' : '▼';
   const monthLabel = baselineMonth ? ` (was ≈ ${formatMonthShort(baselineMonth)})` : '';
   return `${arrow} warn ${Math.abs(delta)} mo ${direction}${monthLabel}`;
+}
+
+/**
+ * Which scenario presets this cluster's data cannot support, and why. Judged on
+ * the baseline forecast only (see the call site).
+ *
+ * @ai-note The three presets differ in what they can reach, which is why this
+ * exists at all. `add_vms` adds a synthetic application starting now, so it can
+ * always move something. `lose_hosts` drops hosts from the window — but the
+ * engine's `capacityAt` treats a host with no recorded capacity row as 0 GB, so
+ * dropping such hosts subtracts nothing and returns the baseline verbatim.
+ * `delay_procurement` shifts only commissions dated in the future, so with no
+ * projected breach (hence no order-by date) there is nothing to shift.
+ */
+export function deriveBlockedPresets(forecast: ForecastResponse | undefined): BlockedPresets {
+  if (!forecast) return {};
+  const blocked: BlockedPresets = {};
+  if (forecast.hosts.length === 0) {
+    blocked.lose_hosts = 'this cluster has no tracked hosts to remove.';
+  } else if (!forecast.hosts.some((host) => host.contributions.some((c) => c.amount > 0))) {
+    blocked.lose_hosts =
+      'no host has a recorded capacity in this window, so removing one cannot change the forecast. Record host capacity on the Hosts tab first.';
+  }
+  if (forecast.procurement.orderByDate === null) {
+    blocked.delay_procurement =
+      'there is no order date to delay — this forecast projects no warn breach in the window.';
+  }
+  return blocked;
+}
+
+/**
+ * The present-month values behind "Current utilization" and "Headroom", and
+ * where they came from.
+ *
+ * @ai-note `metric.currentConsumption/currentCapacity/utilization` are produced
+ * server-side (`ClustersService`) by running the SAME forecast engine over the
+ * window `today..today` and reading `months[0]`. Reading the active forecast's
+ * current-month point is therefore the identical computation with the scenario
+ * applied — not a different definition of "current" — and it provably agrees
+ * with `metric` when no scenario is active.
+ */
+export interface PresentKpi {
+  consumption: number;
+  capacity: number;
+  /** `null` = capacity 0 = unknowable. Never defaulted to 0 (Q9d, #200). */
+  utilization: number | null;
+  /** 'forecast': the active forecast's current-month point. 'metric': the
+   *  window has no current-month point, so the cluster's stored current-month
+   *  metric stands in — a baseline number, whatever is on the chart. */
+  source: 'forecast' | 'metric';
+  /** True only when these numbers are the scenario's own, i.e. a scenario is
+   *  active AND it actually moves the present month. */
+  hypothetical: boolean;
+}
+
+export function resolvePresentKpi(
+  active: ForecastResponse,
+  baseline: ForecastResponse,
+  metric: MetricStateResponse,
+  isScenario: boolean,
+): PresentKpi {
+  const currentMonth = todayIso();
+  const activePoint = active.months.find((m) => m.month === currentMonth);
+  if (!activePoint) {
+    // No honest scenario value for "today": fall back to the stored metric and
+    // let the tiles say that is what happened.
+    return {
+      consumption: metric.currentConsumption,
+      capacity: metric.currentCapacity,
+      utilization: metric.utilization,
+      source: 'metric',
+      hypothetical: false,
+    };
+  }
+  const baselinePoint = baseline.months.find((m) => m.month === currentMonth);
+  // Both forecasts are computed over the same window by the same engine, so a
+  // present month in one is a present month in the other. If it somehow isn't,
+  // the value on screen IS the scenario's own point and is labelled as such —
+  // the failure mode to avoid is calling a scenario number "baseline".
+  const moved =
+    baselinePoint === undefined ||
+    activePoint.consumption !== baselinePoint.consumption ||
+    activePoint.capacity !== baselinePoint.capacity;
+  return {
+    consumption: activePoint.consumption,
+    capacity: activePoint.capacity,
+    utilization: activePoint.utilization,
+    source: 'forecast',
+    hypothetical: isScenario && moved,
+  };
+}
+
+/** In-tile provenance line: only ever set when a scenario is on screen and the
+ *  tile's number is NOT part of it. */
+function presentSourceNote(present: PresentKpi, isScenario: boolean): string | null {
+  if (!isScenario || present.hypothetical) return null;
+  return present.source === 'metric'
+    ? 'Baseline — this window does not cover the current month'
+    : 'Baseline — unchanged by this scenario';
+}
+
+/**
+ * The scenario badge's claim, scoped to what the wiring can actually deliver.
+ * Runway and Order by are always scenario-derived; the present-tense tiles are
+ * only hypothetical when the scenario moves the present month at all — which
+ * `delay_procurement` (future commissions only) can never do.
+ */
+function scenarioBadgeText(present: PresentKpi, noChange: boolean): string {
+  if (noChange) return 'Scenario active — it changes nothing in this window';
+  if (present.hypothetical) return 'Scenario active — KPIs reflect the hypothetical forecast';
+  return 'Scenario active — Runway and Order by are hypothetical; Current utilization and Headroom are baseline';
+}
+
+/**
+ * Does the scenario forecast reproduce the baseline exactly? An un-modelable
+ * what-if (e.g. losing hosts whose capacity was never recorded) returns the
+ * baseline verbatim, which otherwise renders as "nothing changed, still
+ * healthy" — a confident wrong answer on the surface that drives purchasing.
+ */
+export function scenarioChangesNothing(
+  baseline: ForecastResponse,
+  scenario: ForecastResponse,
+): boolean {
+  if (baseline.months.length !== scenario.months.length) return false;
+  return scenario.months.every((point, index) => {
+    const base = baseline.months[index];
+    return (
+      base !== undefined &&
+      base.month === point.month &&
+      base.consumption === point.consumption &&
+      base.capacity === point.capacity
+    );
+  });
+}
+
+/** Neutral provenance tag inside a KPI tile. Bordered rather than tinted: it
+ *  states where a number came from, which is not a status. */
+function SourceTag({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <span className="mt-1.5 inline-flex w-fit items-center rounded-[var(--radius)] border border-border px-1.5 py-0.5 text-[10px] font-medium text-fg-muted">
+      {children}
+    </span>
+  );
 }
 
 function forecastHeading(procurement: ProcurementInfo, capacityKnown: boolean): string {
@@ -810,6 +992,7 @@ function ScenarioPaneBody({
   onClose,
   closeRef,
   maxHosts,
+  blocked,
 }: {
   headingId: string;
   scenario: ScenarioWire | null;
@@ -817,6 +1000,7 @@ function ScenarioPaneBody({
   onClose: () => void;
   closeRef: React.RefObject<HTMLButtonElement | null>;
   maxHosts: number | undefined;
+  blocked: BlockedPresets;
 }): React.JSX.Element {
   // Plain docked body: the container (the docked `<aside>` at lg+, or the
   // inline `<section>` below lg) owns the surface, border, and scroll. No glass,
@@ -860,7 +1044,12 @@ function ScenarioPaneBody({
           </Kbd>
         </Button>
       </div>
-      <ScenarioControls active={scenario} onChange={onChange} maxHosts={maxHosts} />
+      <ScenarioControls
+        active={scenario}
+        onChange={onChange}
+        maxHosts={maxHosts}
+        blocked={blocked}
+      />
     </div>
   );
 }
@@ -973,34 +1162,65 @@ function deriveRunwayKpiCopy(
 
 function ClusterDetailKpiStrip({
   forecast,
+  baseline,
   metric,
   capacityKnown,
   isScenario = false,
+  noChange = false,
 }: {
   forecast: ForecastResponse;
+  /** The real forecast — the reference the scenario's claims are measured against. */
+  baseline: ForecastResponse;
   metric: MetricStateResponse;
   capacityKnown: boolean;
   isScenario?: boolean;
+  /** The active scenario reproduces the baseline exactly (see `scenarioChangesNothing`). */
+  noChange?: boolean;
 }): React.JSX.Element {
-  const headroom = Math.max(0, metric.currentCapacity - metric.currentConsumption);
+  const present = resolvePresentKpi(forecast, baseline, metric, isScenario);
+  const presentCapacityKnown = present.utilization !== null;
+  const headroom = Math.max(0, present.capacity - present.consumption);
   const summary = runwayToWarn(forecast.months, forecast.effectiveThresholds);
   const runwayUnknown =
     !capacityKnown && summary.months === null && summary.alreadyBreached === false;
   const procurementKpi = deriveProcurementKpi(forecast.procurement, new Date(), capacityKnown);
   const runwayKpi = deriveRunwayKpiCopy(forecast, summary, runwayUnknown);
+  const presentNote = presentSourceNote(present, isScenario);
+  // Rendered inside BOTH present-tense tiles: whichever tile a reader lands on
+  // has to say for itself that its number is the baseline, since the badge above
+  // is easy to scroll past.
+  const presentNoteTag = presentNote ? <SourceTag>{presentNote}</SourceTag> : null;
   return (
     <div data-testid="kpi-strip" className="space-y-2">
       {isScenario ? (
-        <Badge variant="outline" data-testid="scenario-badge">
-          Scenario active — KPIs reflect the hypothetical forecast
-        </Badge>
+        <div className="space-y-2">
+          <Badge variant="outline" data-testid="scenario-badge">
+            {scenarioBadgeText(present, noChange)}
+          </Badge>
+          {noChange ? (
+            // Same anatomy as this file's ErrorCard (icon + text in a Card), in
+            // the neutral tone: nothing is broken and nothing is alarming — the
+            // forecast simply cannot answer the question that was asked.
+            <Card
+              data-testid="scenario-noop-notice"
+              className="flex items-start gap-3 p-3 text-[11px] leading-relaxed text-fg-muted shadow-none"
+            >
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span>
+                This what-if does not change the forecast: every month below is identical to the
+                baseline. That is a limit of the data on record for this cluster — not a finding
+                that the scenario would be harmless.
+              </span>
+            </Card>
+          ) : null}
+        </div>
       ) : null}
       <div data-testid="kpi-grid" className="grid grid-cols-2 gap-2 sm:grid-cols-12">
         <Card className="col-span-1 flex flex-col justify-center gap-1.5 p-3.5 sm:col-span-6 lg:col-span-3">
           <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
             Current utilization
           </p>
-          {metric.utilization === null ? (
+          {present.utilization === null ? (
             // Capacity 0 ⇒ unknowable. Render an explicit gap — em-dash + reason,
             // never a meter (a 0-width bar is the "0% used, healthy" lie). Q9d (#200).
             <>
@@ -1015,29 +1235,31 @@ function ClusterDetailKpiStrip({
           ) : (
             <>
               <p className="font-mono text-xl font-medium tabular-nums text-foreground sm:text-2xl">
-                {(metric.utilization * 100).toFixed(1)}%
+                {(present.utilization * 100).toFixed(1)}%
               </p>
               <BulletMeter
-                value={metric.utilization * 100}
+                value={present.utilization * 100}
                 warn={forecast.effectiveThresholds.warn * 100}
                 crit={forecast.effectiveThresholds.crit * 100}
               />
             </>
           )}
           <p className="font-mono text-[11px] tabular-nums text-fg-muted">
-            {numberFormat.format(Math.round(metric.currentConsumption))} GB used
+            {numberFormat.format(Math.round(present.consumption))} GB used
           </p>
+          {presentNoteTag}
         </Card>
         <KpiTile
           className="col-span-1 sm:col-span-6 lg:col-span-3"
           label="Headroom"
-          value={capacityKnown ? `${numberFormat.format(Math.round(headroom))} GB` : '—'}
+          value={presentCapacityKnown ? `${numberFormat.format(Math.round(headroom))} GB` : '—'}
           caption={
-            capacityKnown
-              ? `of ${numberFormat.format(Math.round(metric.currentCapacity))} GB capacity`
+            presentCapacityKnown
+              ? `of ${numberFormat.format(Math.round(present.capacity))} GB capacity`
               : 'unknown — no capacity recorded'
           }
-          status={utilStatus(metric.utilization, forecast.effectiveThresholds)}
+          note={presentNoteTag}
+          status={utilStatus(present.utilization, forecast.effectiveThresholds)}
         />
         <KpiTile
           className="col-span-1 sm:col-span-6 lg:col-span-3"

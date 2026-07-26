@@ -112,7 +112,11 @@ test.describe('scenario rail docked beside the content column at lg and up', () 
     await openFirstCluster(page);
     await openScenarioRail(page);
 
-    await page.getByTestId('scenario-preset-lose_hosts').click();
+    // "Add load" rather than "Lose hosts": this test is about the rail, not
+    // about which what-if is picked, and "Lose hosts" is gated off on clusters
+    // whose hosts have no recorded capacity — seeded data must not decide
+    // whether a rail-behavior test can run.
+    await page.getByTestId('scenario-preset-add_vms').click();
 
     // No Apply step, and no auto-dismiss: nothing is covered, so throwing away
     // the editing context after every change would be pure loss.
@@ -225,7 +229,13 @@ test.describe('live slider tuning', () => {
     await openFirstCluster(page);
     await openScenarioRail(page);
 
-    await page.getByTestId('scenario-preset-lose_hosts').click();
+    // The preset itself is gated off when no host has a recorded capacity —
+    // losing such a host cannot move the forecast. Check that BEFORE clicking:
+    // `click()` auto-waits for an enabled control, so an ungated assumption
+    // would time out here instead of skipping.
+    const preset = page.getByTestId('scenario-preset-lose_hosts');
+    test.skip(await preset.isDisabled(), 'requires hosts with a recorded capacity');
+    await preset.click();
     const slider = page.getByLabel('Hosts lost');
     await expect(slider).toBeVisible();
 
@@ -283,7 +293,10 @@ test.describe('scenario forecast fetch failure', () => {
     await page.route(/\/api\/clusters\/[^/]+\/forecast\/scenario/, (route) =>
       route.fulfill({ status: 500, json: { message: 'boom' } }),
     );
-    await page.getByTestId('scenario-preset-lose_hosts').click();
+    // "Add load" is applicable to every cluster; "Lose hosts" is gated off when
+    // no host has a recorded capacity, which would make this failure-path test
+    // depend on seeded data it deliberately does not rely on.
+    await page.getByTestId('scenario-preset-add_vms').click();
 
     // The header no longer claims a hypothetical forecast is on screen…
     await expect(page.getByTestId('scenario-active-indicator')).toHaveCount(0);
