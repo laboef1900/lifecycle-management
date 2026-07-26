@@ -82,10 +82,32 @@ Each step lands as its own commit on `feat/forecast-uncertainty-band`; steps 2 a
 
 ## 11. Integration map (discovered 2026-07-24, for the wiring pass)
 
-- **Actuals**: `ForecastService.prepare()` already builds `baselineHistory[]` with per-period `utilization` — the measured actual per month. No new source needed.
+- **Actuals** — ⚠️ **superseded during implementation.** The plan below assumed `baselineHistory[]`'s per-period `utilization`. The shipped code deliberately does NOT use it: `baselineCapacity` is `0` for every vSphere-synced cluster (the hosts ARE the capacity), so that utilization is `null` and the band could never appear for the product's primary case. Actuals instead come from each anchor's OWN `horizonIndex === 0` snapshot row, captured at re-anchor. See `ForecastService.snapshotForecast`'s docstring.
 - **Attach**: in `finalize()`, exposed only through `forCluster` (real read). NEVER `forClusterWithScenario` — a hypothetical has no measured error (INV-1). Attaching an optional `uncertainty` is additive and must not alter the pure `computeForecast` output (a **characterization snapshot** test guards this — keep it green).
 - **Persist a `ForecastSnapshot`** at each re-anchor: the baseline-capture points — `clusters.ts` (manual baseline upsert ~L493) and `vsphere-snapshot.ts` (`createMany` ~L117). Compute the forecast once at capture and store per-horizon projected utilization %.
-- **Read path**: on `forCluster`, gather matured `ForecastSnapshot` rows (horizonMonth ≤ current), pair each with the actual utilization from `baselineHistory` at that month → `ForecastErrorSample[]`, then `computeForecastErrorBands(samples, distinctAnchorCount, bandWidth, minAnchors)` → apply per-horizon offsets to the current forecast's future months → `forecast.uncertainty`.
+- **Read path**: on `forCluster`, gather matured `ForecastSnapshot` rows (horizonMonth ≤ current, and ≥ the retention cutoff when retention is on — §12), pair each with the actual from the `horizonIndex === 0` row at that same horizon month (NOT `baselineHistory`, per the correction above) → `ForecastErrorSample[]`, then `computeForecastErrorBands(samples, distinctAnchorCount, bandWidth, minAnchors)` → apply per-horizon offsets to the current forecast's future months → `forecast.uncertainty`.
 - **DTO**: add optional `uncertainty?: { month, low, high }[]` to the forecast response schema in `@lcm/shared` (omit when the setting is off or the global floor is unmet — honest absence).
 - **Chart** (`apps/web/src/components/clusters/forecast-chart.tsx`): a muted-neutral Recharts band between low/high, empirical caption; tiles stay bandless. Won't visibly render until real snapshots accrue — verify via unit/integration tests + synthetic data.
 - **RISK**: `forecast-loader.ts` is invariant-heavy (INV-1, characterization snapshot, #292/#300/#303 anchor semantics). This wiring is the mandatory two-reviewer high-risk change (§7).
+
+## 12. Retention window (#318, added 2026-07-26)
+
+`forecast_snapshot` is append-only and accrues ≤ 25 rows per anchor, at most one anchor per calendar month per cluster/metric (the unique index plus `skipDuplicates` collapse repeat captures), for one seeded metric — so ≤ 300 rows/cluster/year. Growth is not the pressing problem; an unbounded, ever-growing READ on a purchasing surface is. Retention addresses both with one window.
+
+**This section covers the window itself and the read that honours it.** The sweep that actually deletes rows is a separate change (§12.1) and is deliberately not described here — the read bound has to exist first, which is what makes deleting safe.
+
+**The setting.** `TenantSettings.forecastSnapshotRetentionMonths`. `0` = keep forever and is the **default** — pruning destroys forecast history nothing else records, so per Golden Rule 3 it is opt-in. Otherwise 12–120 months.
+
+**Keyed on `horizonMonth`, never `anchorMonth`/`createdAt`.** A projection and the horizon-0 row supplying its measured actual share a `horizonMonth`, so one predicate retains or deletes **both** — the pairing hazard is structurally impossible rather than merely tested for. An `anchorMonth`-keyed window is also pairing-safe but silently caps the band's horizon: dropping an anchor discards its h24 row, the only possible evidence of 24-month error, so the far end of the chart would lose its band first and without any signal.
+
+**Invariants.**
+
+- **INV-R1 — one cutoff.** `retentionCutoffMonth()` (`apps/server/src/lib/forecast-retention.ts`) is the single definition. Everything that needs the cutoff calls it; nothing computes its own. Both sides normalise to a UTC first-of-month, so the read and any future sweep cannot disagree across a timezone.
+- **INV-R2 — the read is bounded by the window, not by what still exists.** `computeUncertainty` applies the cutoff itself, so the band is a function of the configured window rather than of which rows happen to be on disk. This is what makes deletion safe to add later: a sweep using the same cutoff can only ever remove rows the band had already stopped considering, so **a band never changes because a sweep ran**.
+- **INV-R3 — the window is inclusive of the current month.** 12 months at 2026-07 retains 2025-08…2026-07.
+
+**Why there is NO cross-validation against `forecastUncertaintyMinAnchors`.** The two count different things. `anchorCount` counts distinct _anchor_ months among paired samples, and an anchor up to 24 months older than the window still projects _into_ it — so `anchorCount` reaches roughly `retentionMonths + 23` and is never the binding constraint. The real floor is `PER_HORIZON_MIN_SAMPLES` (3): one retained month yields at most one sample per horizon index, so `retentionMonths` caps every horizon's sample count. The schema's 12-month minimum clears that floor with margin, which is why a 12-month window alongside the maximum 24 minimum-anchors is legitimate and accepted.
+
+**Migration.** Additive: the column defaults to `0`, so applying it deletes nothing and changes no behaviour. It also rebuilds `forecast_snapshot_cluster_metric_idx` to trail `horizon_month`, matching the now-windowed read's key order. The rebuild is a `DROP` + `CREATE` inside the migration transaction and takes an `ACCESS EXCLUSIVE` lock for its duration — correct at this table's size, and the reason it is stated here rather than reached for reflexively on a larger one.
+
+**Rollback.** Revert the code. The column is inert at its default, so there is no schema debt and nothing to undo in data — this half of #318 deletes nothing.

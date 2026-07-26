@@ -260,6 +260,29 @@ describe('<ForecastThresholdsForm>', () => {
       expect(await screen.findByRole('status')).toHaveTextContent(/24 months/i);
     });
 
+    it('stays quiet across the rejected dead zone on the way to a valid window', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
+      await userEvent.clear(screen.getByLabelText(retentionField));
+
+      // `1` cannot be saved, so promising that saving deletes everything older
+      // than 1 month describes a consequence that cannot occur — and every
+      // operator typing `12` passes through `1` on the way.
+      await userEvent.type(screen.getByLabelText(retentionField), '1');
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+      await userEvent.type(screen.getByLabelText(retentionField), '2');
+      expect(await screen.findByRole('status')).toHaveTextContent(/12 months/i);
+    });
+
+    it('stays quiet past the maximum, which is equally unsaveable', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
+      await userEvent.clear(screen.getByLabelText(retentionField));
+      await userEvent.type(screen.getByLabelText(retentionField), '121');
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
     it('rejects the 1..11 dead zone rather than silently pruning to it', async () => {
       renderWithClient(<ForecastThresholdsForm />);
       await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
