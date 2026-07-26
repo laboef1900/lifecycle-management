@@ -1,8 +1,9 @@
 import { hostMoveInputSchema } from '@lcm/shared';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import {
   Dialog,
   DialogContent,
@@ -31,6 +32,8 @@ import {
 } from './shared';
 
 type Step = 'form' | 'confirm';
+
+type MoveFieldErrors = Partial<Record<'destinationClusterId' | 'moveMonth', string>>;
 
 /** `'2026-07-01'` → `'2026-07'`, the value an `<input type="month">` wants. */
 function currentMonthValue(): string {
@@ -69,7 +72,9 @@ export function HostMoveDialog({
   const [step, setStep] = useState<Step>('form');
   const [destinationClusterId, setDestinationClusterId] = useState('');
   const [moveMonth, setMoveMonth] = useState(currentMonthValue());
-  const [errors, setErrors] = useState<{ destinationClusterId?: string; moveMonth?: string }>({});
+  const [errors, setErrors] = useState<MoveFieldErrors>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   // The <Select> needs a non-empty default once candidates load; re-picking here
   // (rather than a useEffect) keeps this a plain render-time derivation.
@@ -104,18 +109,27 @@ export function HostMoveDialog({
   const onContinue = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
     setErrors({});
-    const moveDate = moveMonth.length > 0 ? `${moveMonth}-01` : '';
+    // The form is `noValidate`: this parse is the only gate, so a blank month
+    // must be caught here. It gets the dialog's own words because `dateOnly`'s
+    // "Must be a YYYY-MM-DD date" describes the wire format of a field the
+    // operator never sees (they pick a month; the `-01` is added below).
+    if (moveMonth.length === 0) {
+      setErrors({ moveMonth: 'Pick the month this move takes effect.' });
+      return;
+    }
     const parsed = hostMoveInputSchema.safeParse({
       clusterId: selectedDestinationId,
-      moveDate,
+      moveDate: `${moveMonth}-01`,
     });
     if (!parsed.success) {
-      setErrors(
-        mapIssuesToFieldErrors(parsed.error.issues, {
-          clusterId: 'destinationClusterId',
-          moveDate: 'moveMonth',
-        }),
-      );
+      const fieldErrors = mapIssuesToFieldErrors(parsed.error.issues, {
+        clusterId: 'destinationClusterId',
+        moveDate: 'moveMonth',
+      });
+      setErrors(fieldErrors);
+      if (Object.keys(fieldErrors).length === 0) {
+        toast.error(parsed.error.issues[0]?.message ?? 'Invalid input');
+      }
       return;
     }
     setStep('confirm');
@@ -168,7 +182,12 @@ export function HostMoveDialog({
                 </DialogFooter>
               </div>
             ) : (
-              <form onSubmit={onContinue} className="space-y-4">
+              <form ref={formRef} onSubmit={onContinue} className="space-y-4" noValidate>
+                {/* Hand-rolled rather than a `Field`: this control is a Radix
+                    Select, which `Field` (an `<Input>` wrapper) cannot host. The
+                    aria contract is the same one `Field` produces — including the
+                    `aria-invalid="true"` that `useFocusFirstInvalidField` looks
+                    for — so a rejected destination still takes focus. */}
                 <div className="space-y-1.5">
                   <label htmlFor="move-destination-cluster" className="text-sm font-medium">
                     Destination cluster
@@ -200,30 +219,16 @@ export function HostMoveDialog({
                     </p>
                   ) : null}
                 </div>
-                <div className="space-y-1.5">
-                  <label htmlFor="move-effective-month" className="text-sm font-medium">
-                    Effective month
-                  </label>
-                  <input
-                    id="move-effective-month"
-                    type="month"
-                    value={moveMonth}
-                    onChange={(e) => setMoveMonth(e.target.value)}
-                    required
-                    aria-invalid={errors.moveMonth ? 'true' : undefined}
-                    aria-describedby={errors.moveMonth ? 'move-effective-month-error' : undefined}
-                    className="flex h-8 w-full rounded-[var(--radius)] border border-input bg-background px-2.5 py-1 text-sm transition-colors hover:border-border-strong disabled:cursor-not-allowed disabled:opacity-50"
-                  />
-                  {errors.moveMonth ? (
-                    <p id="move-effective-month-error" className="text-xs text-destructive">
-                      {errors.moveMonth}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      Must be the first of a month; matches the forecast's monthly granularity.
-                    </p>
-                  )}
-                </div>
+                <Field
+                  id="move-effective-month"
+                  label="Effective month"
+                  type="month"
+                  value={moveMonth}
+                  onChange={(e) => setMoveMonth(e.target.value)}
+                  error={errors.moveMonth}
+                  hint="Must be the first of a month; matches the forecast's monthly granularity."
+                  required
+                />
                 <DialogFooter>
                   <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
                     Cancel

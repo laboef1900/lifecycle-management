@@ -1,6 +1,6 @@
 import type { HostResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -64,6 +64,24 @@ async function overflowSerialNumber(user: ReturnType<typeof userEvent.setup>): P
   await user.paste('x'.repeat(121));
 }
 
+/**
+ * Fill the two fields CreateHostDialog requires beyond the one under test.
+ *
+ * The capacity field starts BLANK on purpose (a pre-filled 0 would be a
+ * measurement nobody made), so every test that expects to reach the server has
+ * to supply it — the same way an operator does.
+ */
+async function fillRequiredHostFields(
+  user: ReturnType<typeof userEvent.setup>,
+  { name = 'hpe-01', capacity = '512' } = {},
+): Promise<void> {
+  await user.type(screen.getByRole('textbox', { name: 'Name' }), name);
+  await user.type(
+    screen.getByRole('spinbutton', { name: 'Initial memory capacity (GB)' }),
+    capacity,
+  );
+}
+
 describe('<CreateHostDialog> validation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -82,7 +100,7 @@ describe('<CreateHostDialog> validation', () => {
       </QueryClientProvider>,
     );
 
-    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'hpe-01');
+    await fillRequiredHostFields(user);
     await overflowSerialNumber(user);
 
     await user.click(screen.getByRole('button', { name: 'Add host' }));
@@ -90,6 +108,90 @@ describe('<CreateHostDialog> validation', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/too big/i));
     });
+    expect(api.hosts.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('<CreateHostDialog> initial memory capacity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(api.hosts, 'create').mockResolvedValue(makeHost());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function renderCreateDialog(): void {
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <CreateHostDialog open onOpenChange={vi.fn()} clusterId="cl-1" />
+      </QueryClientProvider>,
+    );
+  }
+
+  it('starts blank rather than pre-filling a 0 nobody measured', () => {
+    renderCreateDialog();
+
+    expect(screen.getByRole('spinbutton', { name: 'Initial memory capacity (GB)' })).toHaveValue(
+      null,
+    );
+  });
+
+  it('blocks submit with an inline error instead of posting the blank field as 0', async () => {
+    const user = userEvent.setup();
+    renderCreateDialog();
+
+    // Name filled, capacity untouched: the ONLY thing wrong is the empty
+    // capacity. `Number('')` is 0 and the shared `positiveAmount` accepts 0, so
+    // before the guard this submitted a host that provides no capacity — which
+    // reads downstream as free headroom, not as missing data.
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'hpe-01');
+    await user.click(screen.getByRole('button', { name: 'Add host' }));
+
+    const capacity = screen.getByRole('spinbutton', { name: 'Initial memory capacity (GB)' });
+    await waitFor(() => expect(capacity).toHaveAttribute('aria-invalid', 'true'));
+    const describedBy = capacity.getAttribute('aria-describedby');
+    expect(document.getElementById(describedBy ?? '')?.textContent).toBe('Enter a value');
+    expect(api.hosts.create).not.toHaveBeenCalled();
+    // A field error, not a fallback toast.
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('accepts a capacity of 0 the operator typed deliberately', async () => {
+    const user = userEvent.setup();
+    renderCreateDialog();
+
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'hpe-01');
+    await user.type(screen.getByRole('spinbutton', { name: 'Initial memory capacity (GB)' }), '0');
+    await user.click(screen.getByRole('button', { name: 'Add host' }));
+
+    await waitFor(() =>
+      expect(api.hosts.create).toHaveBeenCalledWith(
+        'cl-1',
+        expect.objectContaining({
+          capacities: [expect.objectContaining({ amount: 0 })],
+        }),
+      ),
+    );
+  });
+
+  it('blames the date field, not the capacity field, for a cleared commissioning date', async () => {
+    const user = userEvent.setup();
+    renderCreateDialog();
+
+    await fillRequiredHostFields(user);
+    // `capacities[0].effectiveFrom` mirrors this date, so a bad value raises an
+    // issue under `capacities` too — which maps to the capacity AMOUNT slot.
+    fireEvent.change(screen.getByLabelText('Commissioned at'), { target: { value: '' } });
+    await user.click(screen.getByRole('button', { name: 'Add host' }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Commissioned at')).toHaveAttribute('aria-invalid', 'true'),
+    );
+    expect(screen.getByLabelText('Initial memory capacity (GB)')).not.toHaveAttribute(
+      'aria-invalid',
+    );
     expect(api.hosts.create).not.toHaveBeenCalled();
   });
 });
@@ -143,15 +245,16 @@ describe('<EditHostDialog> validation', () => {
     const user = userEvent.setup();
     renderEditDialog();
 
+    // No `removeAttribute('required')` crutch: the form sets `noValidate`, so a
+    // real click reaches the submit handler and the Zod layer is genuinely what
+    // the operator sees. If that opt-out regresses, this test fails.
     const nameInput = screen.getByRole('textbox', { name: 'Name' });
-    // The native `required` attribute fires before our Zod layer; drop it so the
-    // schema-driven validation path is the one under test.
-    nameInput.removeAttribute('required');
     await user.clear(nameInput);
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByText(/too small/i)).toBeInTheDocument();
+    expect(nameInput).toHaveAttribute('aria-invalid', 'true');
     expect(toast.error).not.toHaveBeenCalled();
     expect(api.hosts.update).not.toHaveBeenCalled();
   });
@@ -161,7 +264,6 @@ describe('<EditHostDialog> validation', () => {
     renderEditDialog();
 
     const nameInput = screen.getByRole('textbox', { name: 'Name' });
-    nameInput.removeAttribute('required');
     await user.clear(nameInput);
     // Move focus off the field the way a real submit click would — otherwise
     // the assertion below would pass even if the effect never ran.
@@ -210,7 +312,7 @@ describe('<CreateHostDialog> invalidation', () => {
       </QueryClientProvider>,
     );
 
-    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'hpe-01');
+    await fillRequiredHostFields(user);
     await user.click(screen.getByRole('button', { name: 'Add host' }));
 
     await waitFor(() => {

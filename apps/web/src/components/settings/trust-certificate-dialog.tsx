@@ -1,8 +1,10 @@
-import type { VsphereConnectionResponse } from '@lcm/shared';
+import type { VsphereConnectionResponse, VsphereTrustCert } from '@lcm/shared';
+import { vsphereTrustCertSchema } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
 import { ShieldAlert } from 'lucide-react';
 import * as React from 'react';
 
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { CertificateFingerprint } from '@/components/settings/certificate-fingerprint';
 import { Button } from '@/components/ui/button';
 import {
@@ -13,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { api, describeApiError } from '@/lib/api-client';
 
 /** The two connection states this dialog can repair. */
@@ -69,6 +70,9 @@ export function TrustCertificateDialog({
   onTrusted,
 }: TrustCertificateDialogProps): React.JSX.Element {
   const [password, setPassword] = React.useState('');
+  const [errors, setErrors] = React.useState<Partial<Record<'password', string>>>({});
+  const formRef = React.useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
   const copy = COPY[connection.status === 'cert_mismatch' ? 'cert_mismatch' : 'tls_untrusted'];
 
   // Read-only, sends no credential. Fired once on mount: the dialog is mounted
@@ -83,18 +87,42 @@ export function TrustCertificateDialog({
     startProbe();
   }, [startProbe]);
 
+  // Takes the whole validated payload rather than assembling it here: the only
+  // thing that reaches the endpoint is a value `vsphereTrustCertSchema` accepted.
   const trustMutation = useMutation({
-    mutationFn: (fingerprint: string) =>
-      api.settings.vsphere.connections.trustCert(connection.id, {
-        leafFingerprintSha256: fingerprint,
-        password,
-      }),
+    mutationFn: (input: VsphereTrustCert) =>
+      api.settings.vsphere.connections.trustCert(connection.id, input),
     onSuccess: onTrusted,
   });
 
   const probe = probeMutation.data;
   const fingerprint = probe?.reachable ? probe.leafFingerprintSha256 : null;
   const trustError = trustMutation.error;
+
+  const onSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    setErrors({});
+    // There is nothing to pin until the probe has produced a fingerprint; the
+    // confirm button is disabled in that state too.
+    if (fingerprint === null) return;
+    // The form is `noValidate`, so this is the only gate. The blank case gets the
+    // dialog's own words; the bound comes from the contract, not from here.
+    if (password.length === 0) {
+      setErrors({ password: `Enter the password for ${connection.username}.` });
+      return;
+    }
+    const parsedPassword = vsphereTrustCertSchema.shape.password.safeParse(password);
+    if (!parsedPassword.success) {
+      setErrors({
+        password: parsedPassword.error.issues[0]?.message ?? 'That password cannot be sent.',
+      });
+      return;
+    }
+    trustMutation.mutate({
+      leafFingerprintSha256: fingerprint,
+      password: parsedPassword.data,
+    });
+  };
 
   // Every close path is sealed while the trust submission is in flight, matching
   // the already-disabled Cancel button. React Query does not cancel a mutation on
@@ -156,28 +184,21 @@ export function TrustCertificateDialog({
           </div>
         )}
 
-        <form
-          id="trust-certificate-form"
-          className="flex flex-col gap-1 text-sm"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (fingerprint !== null) trustMutation.mutate(fingerprint);
-          }}
-        >
-          <label className="flex flex-col gap-1" htmlFor="trust-certificate-password">
-            <span>Password for {connection.username}</span>
-            <Input
-              id="trust-certificate-password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          <p className="text-muted-foreground text-xs">
-            Re-pinning trust material needs the connection&rsquo;s own password.
-          </p>
+        {/* `noValidate`: the browser's bubble is transient and unstyled, and it
+            would fire on a form whose only control the dialog already validates
+            against the shared contract. `onSubmit` is the single error path. */}
+        <form ref={formRef} id="trust-certificate-form" onSubmit={onSubmit} noValidate>
+          <Field
+            id="trust-certificate-password"
+            label={`Password for ${connection.username}`}
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            error={errors.password}
+            hint="Re-pinning trust material needs the connection's own password."
+            autoComplete="current-password"
+            required
+          />
         </form>
 
         {/* The endpoint's own words (PASSWORD_MISMATCH / FINGERPRINT_MISMATCH /

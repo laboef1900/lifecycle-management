@@ -199,7 +199,14 @@ test.describe('cluster identity + baseline edit', () => {
 
       const consumptionInput = page.getByLabel(/memory.*baseline consumption/i);
       await consumptionInput.fill(String(newConsumption));
-      await page.getByRole('button', { name: /save baseline/i }).click();
+      // The trigger carries the confirm's words plus the ellipsis that
+      // advertises the extra step, so locators are the ellipsis (trigger) or the
+      // dialog scope (confirm) — bare /rewrite baseline/i now matches both.
+      const submitTrigger = page.getByRole('button', { name: /rewrite baseline…/i });
+      const confirmButton = page
+        .getByRole('dialog')
+        .getByRole('button', { name: 'Rewrite baseline' });
+      await submitTrigger.click();
 
       await expect(page.getByRole('dialog', { name: /rewrite baseline/i })).toBeVisible();
 
@@ -208,14 +215,14 @@ test.describe('cluster identity + baseline edit', () => {
       await expect(page.getByRole('dialog', { name: /rewrite baseline/i })).not.toBeVisible();
 
       // Now confirm.
-      await page.getByRole('button', { name: /save baseline/i }).click();
+      await submitTrigger.click();
       await expect(page.getByRole('dialog', { name: /rewrite baseline/i })).toBeVisible();
 
       const expectedPath = `/api/clusters/${cluster.id}`;
       const putResponse = page.waitForResponse(
         (r) => new URL(r.url()).pathname === expectedPath && r.request().method() === 'PUT',
       );
-      await page.getByRole('button', { name: /rewrite baseline/i }).click();
+      await confirmButton.click();
       await putResponse;
 
       // Dialog closes.

@@ -5,6 +5,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
 import { Field, useFocusFirstInvalidField } from '@/components/form/field';
+import { REQUIRED_AMOUNT_MESSAGE, parseRequiredAmount } from '@/components/form/required-amount';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -111,6 +112,7 @@ export function CreateItemDialog({
     event.preventDefault();
     setErrors({});
     const description = form.description.trim();
+    const allocationAmount = parseRequiredAmount(form.allocationAmount);
     const payload: ItemCreateInputWire =
       form.kind === 'application'
         ? {
@@ -122,7 +124,7 @@ export function CreateItemDialog({
               {
                 metricTypeKey: 'memory_gb',
                 effectiveFrom: form.effectiveDate,
-                amount: Number(form.allocationAmount),
+                amount: allocationAmount,
               },
             ],
             ...(description.length > 0 && { description }),
@@ -146,9 +148,20 @@ export function CreateItemDialog({
         if (root === 'name') fieldErrors.name = issue.message;
         else if (root === 'category') fieldErrors.category = issue.message;
         else if (root === 'effectiveDate') fieldErrors.effectiveDate = issue.message;
-        else if (root === 'allocations') fieldErrors.allocationAmount = issue.message;
-        else if (root === 'consumptionDelta') fieldErrors.consumptionDelta = issue.message;
+        else if (root === 'allocations') {
+          // `allocations[0].effectiveFrom` mirrors `effectiveDate`, so one bad
+          // date raises TWO issues — reporting the second on the allocation
+          // AMOUNT field would blame the wrong input. The date field above
+          // already carries the message.
+          if (issue.path[2] !== 'effectiveFrom') fieldErrors.allocationAmount = issue.message;
+        } else if (root === 'consumptionDelta') fieldErrors.consumptionDelta = issue.message;
         else if (root === 'capacityDelta') fieldErrors.capacityDelta = issue.message;
+      }
+      // A blank allocation arrives as NaN and is already rejected; this only swaps
+      // Zod's "received NaN" for language an operator can act on. Only applications
+      // carry an allocation — an event's deltas are genuinely optional.
+      if (form.kind === 'application' && Number.isNaN(allocationAmount)) {
+        fieldErrors.allocationAmount = REQUIRED_AMOUNT_MESSAGE;
       }
       setErrors(fieldErrors);
       return;
@@ -174,7 +187,10 @@ export function CreateItemDialog({
             one-off capacity/consumption delta.
           </DialogDescription>
         </DialogHeader>
-        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
+        {/* noValidate: the browser's bubble fires before submit and would preempt the
+            Field errors below — transient, unstyled, first-field-only, and invisible to
+            a re-read. Safe because every `required` field here fails the parse too. */}
+        <form ref={formRef} noValidate onSubmit={onSubmit} className="space-y-4">
           <KindToggle value={form.kind} onChange={(kind) => setForm({ ...form, kind })} />
           <Field
             label={isApp ? 'Name' : 'Title'}

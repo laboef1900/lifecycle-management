@@ -114,9 +114,9 @@ describe('<ConfirmCommissioningDialog>', () => {
     renderDialog([makeHost({ id: 'a', name: 'esx-01' })]);
 
     const input = screen.getByLabelText('esx-01');
-    // The native `required` attribute blocks submit before our Zod layer runs;
-    // drop it so the schema-driven validation path is the one under test.
-    input.removeAttribute('required');
+    // No `removeAttribute('required')` crutch: the form sets `noValidate`, so the
+    // click reaches the submit handler and this row's own error is what an operator
+    // actually sees. If that opt-out regresses, this test fails.
     fireEvent.change(input, { target: { value: '' } });
 
     const user = userEvent.setup();
@@ -135,7 +135,6 @@ describe('<ConfirmCommissioningDialog>', () => {
     renderDialog([makeHost({ id: 'a', name: 'esx-01' }), makeHost({ id: 'b', name: 'esx-02' })]);
 
     const input = screen.getByLabelText('esx-02');
-    input.removeAttribute('required');
     fireEvent.change(input, { target: { value: '' } });
     screen.getByRole('button', { name: 'Confirm 2 dates' }).focus();
 
@@ -228,7 +227,6 @@ describe('<ConfirmCommissioningDialog>', () => {
 
     // Force an inline error on one row via a blocked submit.
     const rowA = screen.getByLabelText('esx-01');
-    rowA.removeAttribute('required');
     fireEvent.change(rowA, { target: { value: '' } });
 
     const user = userEvent.setup();

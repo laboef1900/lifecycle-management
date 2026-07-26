@@ -1,8 +1,9 @@
+import { hostUpdateInputSchema } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -15,7 +16,9 @@ import {
 import { api, describeApiError, type HostUpdateInputWire } from '@/lib/api-client';
 import { todayIso } from '@/lib/format';
 
-import { useHostMutations, type WithHostProps } from './shared';
+import { mapIssuesToFieldErrors, useHostMutations, type WithHostProps } from './shared';
+
+type FieldErrors = Partial<Record<'decommissionedAt', string>>;
 
 export function DecommissionHostDialog({
   open,
@@ -25,12 +28,16 @@ export function DecommissionHostDialog({
 }: WithHostProps): React.JSX.Element {
   const { invalidate } = useHostMutations(clusterId);
   const [decommissionedAt, setDecommissionedAt] = useState(host.decommissionedAt ?? todayIso());
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const mutation = useMutation({
     mutationFn: (payload: HostUpdateInputWire) => api.hosts.update(host.id, payload),
     onSuccess: () => {
       invalidate();
       toast.success(host.decommissionedAt ? 'Host updated' : 'Host decommissioned');
+      setErrors({});
       onOpenChange(false);
     },
     onError: (err) => toast.error(describeApiError(err, 'Could not decommission host')),
@@ -38,10 +45,34 @@ export function DecommissionHostDialog({
 
   const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    mutation.mutate({ decommissionedAt });
+    setErrors({});
+    // The form is `noValidate`, so this is the only gate — a blank date must
+    // never reach the mutation. The blank case gets the dialog's own words
+    // because `dateOnly`'s "Must be a YYYY-MM-DD date" describes a wire format,
+    // not the thing the operator forgot to do.
+    if (decommissionedAt.length === 0) {
+      setErrors({ decommissionedAt: 'Pick the date this host stops contributing capacity.' });
+      return;
+    }
+    const payload: HostUpdateInputWire = { decommissionedAt };
+    const parsed = hostUpdateInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      const fieldErrors = mapIssuesToFieldErrors(parsed.error.issues, {
+        decommissionedAt: 'decommissionedAt',
+      });
+      setErrors(fieldErrors);
+      if (Object.keys(fieldErrors).length === 0) {
+        toast.error(parsed.error.issues[0]?.message ?? 'Invalid input');
+      }
+      return;
+    }
+    mutation.mutate(payload);
   };
 
+  // Clearing needs no date, so it needs no validation — but it must not leave a
+  // stale error pointing at a field the operator is no longer being asked about.
   const onClear = (): void => {
+    setErrors({});
     mutation.mutate({ decommissionedAt: null });
   };
 
@@ -54,12 +85,13 @@ export function DecommissionHostDialog({
             Capacity stops contributing on this date. History is preserved.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={onSubmit} className="space-y-4" noValidate>
           <Field
             label="Decommissioned at"
             type="date"
             value={decommissionedAt}
             onChange={(e) => setDecommissionedAt(e.target.value)}
+            error={errors.decommissionedAt}
             required
           />
           <DialogFooter>

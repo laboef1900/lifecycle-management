@@ -18,6 +18,19 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
+  /* Tells the UA which palette to paint the controls it draws *itself* in:
+     scrollbars, the date input's calendar glyph, and any checkbox/radio left in
+     its native appearance. Theme here is class-driven, so without this the UA
+     kept using its light palette under `html.dark` — white scrollbars on every
+     scroll container, a near-invisible date-picker glyph, and an *unchecked*
+     checkbox rendered as a solid white square, i.e. an off setting that reads
+     as on (the "Show forecast uncertainty band" toggle).
+     @ai-note This is per-theme, so it must be re-declared in `html.dark` below;
+     `html.dark` outweighs `:root` on specificity, so the dark value wins there.
+     The custom range slider is deliberately immune either way — `.range-slider`
+     sets `appearance: none` and paints its own track and thumb from theme
+     tokens, so no UA-supplied color reaches it in either scheme. */
+  color-scheme: light;
   --background: #f4f6fa;
   --foreground: #171c2c;
   --card: #ffffff;
@@ -149,6 +162,8 @@
 }
 
 html.dark {
+  /* See the `:root` note — the dark half of the UA-painted-control contract. */
+  color-scheme: dark;
   --background: #0e1220;
   --foreground: #e8ecf5;
   --card: #151b2c;

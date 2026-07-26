@@ -1,10 +1,12 @@
 import type { CreateLocalUser, LocalUserSummary } from '@lcm/shared';
+import { localUsernameSchema, passwordSchema } from '@lcm/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { KeyRound, Trash2 } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
 import { ConfirmDialog } from '@/components/form/confirm-dialog';
+import { useFocusFirstInvalidField } from '@/components/form/field';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -20,7 +22,43 @@ interface CreateFormState {
   role: 'ADMIN' | 'VIEWER';
 }
 
+type CreateFieldErrors = Partial<Record<'username' | 'password', string>>;
+
 const EMPTY_CREATE_FORM: CreateFormState = { username: '', password: '', role: 'ADMIN' };
+
+/**
+ * The policy sentence an admin can act on, with the bound read from the contract
+ * that enforces it (`passwordSchema` in `@lcm/shared`) rather than restated
+ * here. Zod's own text — "Too small: expected string to have >=12 characters" —
+ * describes a wire contract, not a choice a person is making.
+ */
+const PASSWORD_HINT =
+  passwordSchema.minLength === null
+    ? 'Choose a password.'
+    : `At least ${passwordSchema.minLength} characters.`;
+
+/**
+ * Validate a password against the shared contract, in the panel's own words.
+ *
+ * @ai-warning Judges the value verbatim — no `.trim()`. A credential may
+ * legitimately begin or end with whitespace, and trimming it here would store a
+ * hash of something the operator never typed, locking them out of the account
+ * they just set the password on. (`localUsernameSchema` trims on its own; that
+ * is the schema's decision for a username, not this form's for a secret.)
+ */
+function validatePassword(value: string, blankMessage: string): string | undefined {
+  if (value.length === 0) return blankMessage;
+  const parsed = passwordSchema.safeParse(value);
+  if (parsed.success) return undefined;
+  const { minLength, maxLength } = passwordSchema;
+  if (minLength !== null && value.length < minLength) {
+    return `Too short — use at least ${minLength} characters.`;
+  }
+  if (maxLength !== null && value.length > maxLength) {
+    return `Too long — use at most ${maxLength} characters.`;
+  }
+  return parsed.error.issues[0]?.message ?? 'That password was not accepted.';
+}
 
 /**
  * Settings panel for local (username/password) admin accounts. Rendered by
@@ -38,9 +76,15 @@ export function LocalAccountsPanel(): React.JSX.Element {
   });
 
   const [form, setForm] = React.useState<CreateFormState>(EMPTY_CREATE_FORM);
+  const [createErrors, setCreateErrors] = React.useState<CreateFieldErrors>({});
   const [resettingId, setResettingId] = React.useState<string | null>(null);
   const [resetPasswordValue, setResetPasswordValue] = React.useState('');
+  const [resetErrors, setResetErrors] = React.useState<{ password?: string }>({});
   const [deleteTarget, setDeleteTarget] = React.useState<LocalUserSummary | null>(null);
+  const createFormRef = React.useRef<HTMLFormElement>(null);
+  const resetFormRef = React.useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(createFormRef, createErrors);
+  useFocusFirstInvalidField(resetFormRef, resetErrors);
 
   const invalidate = (): void => {
     void queryClient.invalidateQueries({ queryKey: ['local-users'] });
@@ -51,6 +95,7 @@ export function LocalAccountsPanel(): React.JSX.Element {
     onSuccess: () => {
       invalidate();
       setForm(EMPTY_CREATE_FORM);
+      setCreateErrors({});
       toast.success('Local account created');
     },
     onError: (err) => toast.error(describeApiError(err, 'Could not create local account')),
@@ -72,6 +117,7 @@ export function LocalAccountsPanel(): React.JSX.Element {
     onSuccess: () => {
       setResettingId(null);
       setResetPasswordValue('');
+      setResetErrors({});
       toast.success('Password reset');
     },
     onError: (err) => toast.error(describeApiError(err, 'Could not reset password')),
@@ -87,19 +133,52 @@ export function LocalAccountsPanel(): React.JSX.Element {
     onError: (err) => toast.error(describeApiError(err, 'Could not delete local account')),
   });
 
+  /**
+   * Both forms are `noValidate`, so these handlers are the only gate. They used
+   * to `return` silently on a blank value and leave the 12-character rule to a
+   * `minLength` attribute — which meant the browser's transient, unstyled,
+   * first-field-only bubble was the sole enforcement on the highest-stakes form
+   * in the app, and a blank field produced no message at all.
+   */
   const handleCreate = (e: React.FormEvent): void => {
     e.preventDefault();
     const username = form.username.trim();
     const password = form.password;
-    if (username === '' || password === '') return;
+
+    const next: CreateFieldErrors = {};
+    // `localUsernameSchema` owns what a username may contain (and its own
+    // trimming); only "you left it blank" is this form's sentence to write.
+    if (username === '') {
+      next.username = 'Enter a username.';
+    } else {
+      const parsed = localUsernameSchema.safeParse(username);
+      if (!parsed.success) {
+        next.username = parsed.error.issues[0]?.message ?? 'That username was not accepted.';
+      }
+    }
+    const passwordError = validatePassword(password, 'Enter a password.');
+    if (passwordError !== undefined) next.password = passwordError;
+
+    // A new object every failed submit — that reference change is what re-fires
+    // the focus move in `useFocusFirstInvalidField`.
+    if (next.username !== undefined || next.password !== undefined) {
+      setCreateErrors(next);
+      return;
+    }
+
+    setCreateErrors({});
     createMutation.mutate({ username, password, role: form.role });
   };
 
   const handleResetSubmit = (e: React.FormEvent, id: string): void => {
     e.preventDefault();
-    const trimmed = resetPasswordValue.trim();
-    if (trimmed === '') return;
-    resetPasswordMutation.mutate({ id, newPassword: trimmed });
+    const passwordError = validatePassword(resetPasswordValue, 'Enter the new password.');
+    if (passwordError !== undefined) {
+      setResetErrors({ password: passwordError });
+      return;
+    }
+    setResetErrors({});
+    resetPasswordMutation.mutate({ id, newPassword: resetPasswordValue });
   };
 
   const users = usersQuery.data ?? [];
@@ -159,6 +238,10 @@ export function LocalAccountsPanel(): React.JSX.Element {
                     onClick={() => {
                       setResettingId((current) => (current === user.id ? null : user.id));
                       setResetPasswordValue('');
+                      // One `resetErrors` serves whichever row is open, so it has
+                      // to be cleared here too — otherwise opening a second row
+                      // greets that admin with the first row's failure.
+                      setResetErrors({});
                     }}
                   >
                     <KeyRound className="h-3.5 w-3.5" />
@@ -176,39 +259,88 @@ export function LocalAccountsPanel(): React.JSX.Element {
                 </div>
               </div>
               {resettingId === user.id ? (
+                /* `noValidate` — see `handleResetSubmit`. */
                 <form
+                  ref={resetFormRef}
                   onSubmit={(e) => handleResetSubmit(e, user.id)}
-                  className="mt-2 flex flex-wrap items-end gap-2"
+                  className="mt-2 space-y-1"
+                  noValidate
                 >
-                  <label className="block min-w-[10rem] flex-1">
-                    <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-                      New password
-                    </span>
-                    <Input
-                      type="password"
-                      aria-label={`New password for ${user.username}`}
-                      value={resetPasswordValue}
-                      onChange={(e) => setResetPasswordValue(e.target.value)}
-                      minLength={12}
-                      className="mt-1"
-                    />
-                  </label>
-                  <Button
-                    type="submit"
-                    variant="accent"
-                    size="sm"
-                    disabled={resetPasswordMutation.isPending || resetPasswordValue.trim() === ''}
-                  >
-                    {resetPasswordMutation.isPending ? 'Saving…' : 'Save'}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setResettingId(null)}
-                  >
-                    Cancel
-                  </Button>
+                  {/* The message lives OUTSIDE this row, not under the input:
+                      the row is `items-end`, so a paragraph inside the field
+                      column would drag Save and Cancel down to sit level with
+                      the message instead of the control they act on.
+                      `aria-describedby` is an id reference, so the association
+                      survives the move. */}
+                  <div className="flex flex-wrap items-end gap-2">
+                    {/* Label and control are siblings rather than nested: a
+                        wrapping `<label>` would fold the message into the
+                        field's own label text. */}
+                    <div className="min-w-[10rem] flex-1">
+                      <div className="flex items-baseline gap-0.5">
+                        <label
+                          htmlFor={`reset-password-${user.id}`}
+                          className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle"
+                        >
+                          New password
+                        </label>
+                        {/* The glyph, not just its colour, carries "required". */}
+                        <span aria-hidden className="text-destructive">
+                          *
+                        </span>
+                      </div>
+                      <Input
+                        id={`reset-password-${user.id}`}
+                        type="password"
+                        aria-label={`New password for ${user.username}`}
+                        value={resetPasswordValue}
+                        onChange={(e) => setResetPasswordValue(e.target.value)}
+                        required
+                        aria-required="true"
+                        aria-invalid={resetErrors.password ? 'true' : undefined}
+                        aria-describedby={
+                          resetErrors.password
+                            ? `reset-password-${user.id}-error`
+                            : `reset-password-${user.id}-hint`
+                        }
+                        className="mt-1"
+                      />
+                    </div>
+                    {/* Not disabled on a blank value: the point of the sweep is
+                        that the handler explains the problem, and a dead button
+                        explains nothing. Only the in-flight case disables. */}
+                    <Button
+                      type="submit"
+                      variant="accent"
+                      size="sm"
+                      disabled={resetPasswordMutation.isPending}
+                    >
+                      {resetPasswordMutation.isPending ? 'Saving…' : 'Save'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setResettingId(null);
+                        setResetErrors({});
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                  {resetErrors.password ? (
+                    <p id={`reset-password-${user.id}-error`} className="text-xs text-destructive">
+                      {resetErrors.password}
+                    </p>
+                  ) : (
+                    <p
+                      id={`reset-password-${user.id}-hint`}
+                      className="text-xs text-muted-foreground"
+                    >
+                      {PASSWORD_HINT}
+                    </p>
+                  )}
                 </form>
               ) : null}
             </li>
@@ -216,57 +348,104 @@ export function LocalAccountsPanel(): React.JSX.Element {
         </ul>
       )}
 
-      <form onSubmit={handleCreate} className="flex flex-wrap items-end gap-2">
-        <label className="block min-w-[10rem] flex-1">
-          <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            Username
-          </span>
-          <Input
-            aria-label="Username"
-            placeholder="e.g. jsmith"
-            value={form.username}
-            onChange={(e) => setForm((prev) => ({ ...prev, username: e.target.value }))}
-            className="mt-1"
-          />
-        </label>
-        <label className="block min-w-[10rem] flex-1">
-          <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            Password
-          </span>
-          <Input
-            type="password"
-            aria-label="Password"
-            placeholder="At least 12 characters"
-            value={form.password}
-            onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
-            minLength={12}
-            className="mt-1"
-          />
-        </label>
-        <div>
-          <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
-            Role
-          </span>
-          <div className="mt-1">
-            <SegmentedControl
-              ariaLabel="Role"
-              value={form.role}
-              onValueChange={(role) => setForm((prev) => ({ ...prev, role }))}
-              options={[
-                { value: 'ADMIN', label: 'Admin' },
-                { value: 'VIEWER', label: 'Viewer' },
-              ]}
+      {/* `noValidate` — see `handleCreate`. The `minLength={12}` that used to sit
+          on the password input is gone with it: it enforced nothing on its own
+          and its only effect was the bubble. `passwordSchema` is the rule now,
+          and it is stated up front in the hint below rather than only on
+          failure. */}
+      <form ref={createFormRef} onSubmit={handleCreate} className="space-y-1" noValidate>
+        {/* Messages live outside this row — see the reset form above for why. */}
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-[10rem] flex-1">
+            <div className="flex items-baseline gap-0.5">
+              <label
+                htmlFor="local-account-username"
+                className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle"
+              >
+                Username
+              </label>
+              <span aria-hidden className="text-destructive">
+                *
+              </span>
+            </div>
+            <Input
+              id="local-account-username"
+              aria-label="Username"
+              placeholder="e.g. jsmith"
+              value={form.username}
+              onChange={(e) => setForm((prev) => ({ ...prev, username: e.target.value }))}
+              required
+              aria-required="true"
+              aria-invalid={createErrors.username ? 'true' : undefined}
+              aria-describedby={createErrors.username ? 'local-account-username-error' : undefined}
+              className="mt-1"
             />
           </div>
+          <div className="min-w-[10rem] flex-1">
+            <div className="flex items-baseline gap-0.5">
+              <label
+                htmlFor="local-account-password"
+                className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle"
+              >
+                Password
+              </label>
+              <span aria-hidden className="text-destructive">
+                *
+              </span>
+            </div>
+            <Input
+              id="local-account-password"
+              type="password"
+              aria-label="Password"
+              value={form.password}
+              onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
+              required
+              aria-required="true"
+              aria-invalid={createErrors.password ? 'true' : undefined}
+              aria-describedby={
+                createErrors.password
+                  ? 'local-account-password-error'
+                  : 'local-account-password-hint'
+              }
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+              Role
+            </span>
+            <div className="mt-1">
+              <SegmentedControl
+                ariaLabel="Role"
+                value={form.role}
+                onValueChange={(role) => setForm((prev) => ({ ...prev, role }))}
+                options={[
+                  { value: 'ADMIN', label: 'Admin' },
+                  { value: 'VIEWER', label: 'Viewer' },
+                ]}
+              />
+            </div>
+          </div>
+          {/* Not disabled on blank fields: a dead button explains nothing, and
+              this form's whole failure story used to be "nothing happens". */}
+          <Button type="submit" variant="accent" size="sm" disabled={createMutation.isPending}>
+            {createMutation.isPending ? 'Adding…' : 'Add account'}
+          </Button>
         </div>
-        <Button
-          type="submit"
-          variant="accent"
-          size="sm"
-          disabled={form.username.trim() === '' || form.password === '' || createMutation.isPending}
-        >
-          {createMutation.isPending ? 'Adding…' : 'Add account'}
-        </Button>
+        {createErrors.username ? (
+          <p id="local-account-username-error" className="text-xs text-destructive">
+            {createErrors.username}
+          </p>
+        ) : null}
+        {createErrors.password ? (
+          <p id="local-account-password-error" className="text-xs text-destructive">
+            {createErrors.password}
+          </p>
+        ) : (
+          <p id="local-account-password-hint" className="text-xs text-muted-foreground">
+            Password: {PASSWORD_HINT}
+          </p>
+        )}
       </form>
 
       <ConfirmDialog

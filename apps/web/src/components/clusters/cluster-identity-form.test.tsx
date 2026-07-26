@@ -111,6 +111,47 @@ describe('<ClusterIdentityForm>', () => {
     expect(screen.getByText(/name is required/i)).toBeInTheDocument();
   });
 
+  it('ties the empty-name error to the field, focuses it, and sends nothing', async () => {
+    const updateSpy = vi.spyOn(api.clusters, 'update').mockResolvedValue(baseCluster);
+    renderWithClient(<ClusterIdentityForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/name/i)).toHaveValue('CL-Original'));
+
+    const nameInput = screen.getByLabelText(/name/i);
+    await userEvent.clear(nameInput);
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    // The error is the field's own description, not a floating paragraph — the
+    // browser's `required` bubble is off, so this is the only signal.
+    expect(nameInput).toHaveAttribute('aria-invalid', 'true');
+    expect(nameInput).toHaveAccessibleDescription(/name is required/i);
+    // SC 3.3.1 — focus lands on the field that needs fixing.
+    expect(nameInput).toHaveFocus();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('announces the field as required without relying on colour alone', async () => {
+    renderWithClient(<ClusterIdentityForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/name/i)).toHaveValue('CL-Original'));
+
+    // `aria-required` is the assistive-tech channel; the `*` glyph beside the
+    // label is the visual one. The accessible name stays clean either way.
+    expect(screen.getByLabelText(/name/i)).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByLabelText('Name')).toBeInTheDocument();
+  });
+
+  it('keeps the accessible name stable when the error appears', async () => {
+    vi.spyOn(api.clusters, 'update').mockResolvedValue(baseCluster);
+    renderWithClient(<ClusterIdentityForm clusterId={CLUSTER_ID} />);
+    await waitFor(() => expect(screen.getByLabelText(/name/i)).toHaveValue('CL-Original'));
+
+    await userEvent.clear(screen.getByLabelText(/name/i));
+    await userEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    // A wrapping `<label>` would have folded the error paragraph into the field's
+    // label text, renaming the control the moment validation failed.
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true');
+  });
+
   it('invalidates the clusters list query after a successful rename', async () => {
     vi.spyOn(api.clusters, 'update').mockResolvedValue({ ...baseCluster, name: 'CL-Renamed' });
     const client = new QueryClient({

@@ -1,9 +1,10 @@
 import { clusterCreateInputSchema } from '@lcm/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
+import { REQUIRED_AMOUNT_MESSAGE, parseRequiredAmount } from '@/components/form/required-amount';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -42,6 +43,8 @@ export function CreateClusterDialog({ trigger }: CreateClusterDialogProps): Reac
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<FormState>(initialState);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof FormState, string>>>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, fieldErrors);
 
   const mutation = useMutation({
     mutationFn: (payload: ClusterCreateInputWire) => api.clusters.create(payload),
@@ -68,14 +71,16 @@ export function CreateClusterDialog({ trigger }: CreateClusterDialogProps): Reac
     event.preventDefault();
     setFieldErrors({});
     const description = form.description.trim();
+    const baselineConsumption = parseRequiredAmount(form.baselineConsumption);
+    const baselineCapacity = parseRequiredAmount(form.baselineCapacity);
     const candidate: ClusterCreateInputWire = {
       name: form.name,
       baselineDate: form.baselineDate,
       baselines: [
         {
           metricTypeKey: 'memory_gb',
-          baselineConsumption: Number(form.baselineConsumption),
-          baselineCapacity: Number(form.baselineCapacity),
+          baselineConsumption,
+          baselineCapacity,
         },
       ],
       ...(description.length > 0 && { description }),
@@ -93,6 +98,11 @@ export function CreateClusterDialog({ trigger }: CreateClusterDialogProps): Reac
           if (field === 'baselineCapacity') errors.baselineCapacity = issue.message;
         }
       }
+      // A blank baseline reaches the schema as NaN (see parseRequiredAmount), so
+      // it is already rejected above — this only swaps Zod's "received NaN" for
+      // language an operator can act on.
+      if (Number.isNaN(baselineConsumption)) errors.baselineConsumption = REQUIRED_AMOUNT_MESSAGE;
+      if (Number.isNaN(baselineCapacity)) errors.baselineCapacity = REQUIRED_AMOUNT_MESSAGE;
       setFieldErrors(errors);
       return;
     }
@@ -117,7 +127,10 @@ export function CreateClusterDialog({ trigger }: CreateClusterDialogProps): Reac
             Track a new vSphere cluster. Memory baselines are required.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        {/* noValidate: the browser's bubble fires before submit and would preempt the
+            Field errors below — transient, unstyled, first-field-only, and invisible to
+            a re-read. Safe because every `required` field here fails the parse too. */}
+        <form ref={formRef} noValidate onSubmit={onSubmit} className="space-y-4">
           <Field
             label="Name"
             value={form.name}

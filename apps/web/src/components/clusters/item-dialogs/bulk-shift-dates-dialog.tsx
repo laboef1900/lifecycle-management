@@ -3,16 +3,17 @@ import {
   formatDateIso,
   hasShiftCollision,
   isSupportedDate,
+  itemBulkShiftDatesInputSchema,
   MAX_SHIFT_BY_UNIT,
   shiftDateByUnit,
   type DateShiftUnit,
 } from '@lcm/shared';
 import { useMutation } from '@tanstack/react-query';
 import { AlertTriangle, ArrowRight } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
-import { Field } from '@/components/form/field';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -133,6 +134,13 @@ export function BulkShiftDatesDialog({
   const [direction, setDirection] = useState<Direction>('later');
   const [unit, setUnit] = useState<DateShiftUnit>('months');
   const [rawAmount, setRawAmount] = useState('1');
+  // `amountError` below is derived live and already renders on the field. This
+  // is the *submit-time* copy of it: a fresh object per rejected submit is what
+  // `useFocusFirstInvalidField` needs to move focus onto the offending control
+  // (SC 3.3.1) now that `noValidate` has retired the browser's own bubble.
+  const [submitErrors, setSubmitErrors] = useState<Partial<Record<'amount', string>>>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, submitErrors);
 
   // One key per dialog instance: `items-tab.tsx` only mounts this dialog
   // while `shiftOpen` is true, so a fresh open is a fresh mount and a fresh
@@ -174,8 +182,34 @@ export function BulkShiftDatesDialog({
 
   const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    if (blocked) return;
-    mutation.mutate({ itemIds: items.map((item) => item.id), shift: { amount, unit } });
+    if (amountError !== undefined) {
+      setSubmitErrors({ amount: amountError });
+      return;
+    }
+    // Out-of-range and collision rows have no single field to focus — the
+    // per-row markers and the `role="alert"` summaries below already name every
+    // affected entry — so refuse without claiming the Amount field is at fault.
+    if (blockedRows > 0 || items.length === 0) {
+      setSubmitErrors({});
+      return;
+    }
+    const payload = { itemIds: items.map((item) => item.id), shift: { amount, unit } };
+    // The shared contract is the authority on what a legal shift is; the derived
+    // `amountError` above exists to say so *while typing*, not instead of this.
+    const parsed = itemBulkShiftDatesInputSchema.safeParse(payload);
+    if (!parsed.success) {
+      // `itemDateShiftSchema` raises its magnitude issues at `['shift','amount']`.
+      const shiftIssue = parsed.error.issues.find((issue) => issue.path[0] === 'shift');
+      if (shiftIssue === undefined) {
+        setSubmitErrors({});
+        toast.error(parsed.error.issues[0]?.message ?? 'Could not shift the dates');
+        return;
+      }
+      setSubmitErrors({ amount: shiftIssue.message });
+      return;
+    }
+    setSubmitErrors({});
+    mutation.mutate(payload);
   };
 
   return (
@@ -198,7 +232,7 @@ export function BulkShiftDatesDialog({
             column past max-w-xl, and push the old→new dates off the right edge
             instead of truncating (#264). min-w-0 lets the column shrink so the
             row's own truncate engages. */}
-        <form onSubmit={onSubmit} className="min-w-0 space-y-4">
+        <form ref={formRef} onSubmit={onSubmit} className="min-w-0 space-y-4" noValidate>
           <div className="flex flex-wrap items-end gap-4">
             <div className="space-y-1.5">
               <span className="block text-sm font-medium">Direction</span>
@@ -219,7 +253,7 @@ export function BulkShiftDatesDialog({
               className="w-24"
               value={rawAmount}
               onChange={(e) => setRawAmount(e.target.value)}
-              error={amountError}
+              error={amountError ?? submitErrors.amount}
               required
             />
             <div className="space-y-1.5">
