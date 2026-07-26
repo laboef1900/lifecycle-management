@@ -100,24 +100,10 @@
      overridden with the real gradients in html.dark below. */
   --surface-backdrop: var(--background);
   --surface-card: var(--card);
-  /* Login hero (#257). A per-theme pair rather than a reuse of
-     --surface-backdrop, which is flat var(--background) in light and only
-     carries a gradient in dark — the hero gets a designed light counterpart
-     (owner decision 2026-07-20), so both themes declare a real surface here.
-     Light is a warm off-white with an amber-tinted wash; the grid tint is
-     amber here and a plain white hairline in dark.
-     @ai-warning the stops are tuned against the WORST-case composite — the
-     darkest gradient stop with a grid line painted over it — so that every
-     element sitting on the hero clears AA in both themes. --fg-muted (the
-     supporting sentence) is the tightest at 4.87:1 light / 4.81:1 dark.
-     Retune a stop and those have to be re-measured. */
-  /* Cool steel-tinted wash mirroring the dark radial (cool-brand, 2026-07-24):
-     the light hero was the last surface still on the retired warm-amber palette
-     (#8f6400 grid), which contradicted the steel-led brand it introduces. Now a
-     subtle cool slate radial + a low-alpha steel grid, coherent with the dark
-     hero and the steel chip/CTA/ring that sit on it. */
-  --hero-surface: radial-gradient(900px 520px at 15% -10%, #e9eff8 0%, #f1f4fa 62%);
-  --hero-grid: rgb(47 107 216 / 0.05);
+  /* (The login hero's --hero-surface/--hero-grid pair was removed with the
+     /login redesign: the decorative brand panel is gone, so the app no longer
+     maintains a per-theme surface — and its worst-case-composite contrast
+     budget — for one panel that was hidden below `lg` anyway.) */
   /* Bullet-meter fill (spec §3: "amber meter gradient"). The utilization meter
      stays amber, kept as a literal (#8F6400 light) and decoupled from --accent,
      which became steel under cool-brand (2026-07-23): brand went steel, the
@@ -203,12 +189,6 @@ html.dark {
     var(--background) 60%
   );
   --surface-card: linear-gradient(180deg, #171e31, #131928);
-  /* Dark hero (#257): the near-black treatment, lit from the top-left so the
-     brand lockup sits in the light and the checklist falls away into the
-     background. #161d33 is the lightest point and therefore the worst case
-     for the light text on top — see the :root note. */
-  --hero-surface: radial-gradient(900px 520px at 15% -10%, #161d33 0%, #0b0f1c 62%);
-  --hero-grid: rgb(255 255 255 / 0.045);
   /* Exact spec §3 value: linear-gradient(90deg,#D9A32C,#FFC53D). */
   --meter-gradient: linear-gradient(
     90deg,
@@ -384,17 +364,10 @@ body {
   width: 100vw;
 }
 
-/* Login hero panel (#257): the brand column of the split-screen /login layout.
-   An opaque page surface. The grid is two 1px repeating gradients over the
-   themed --hero-surface wash; the flat background-color underneath is the
-   fallback for forced-colors mode, which drops background-image entirely. */
-.login-hero {
-  background-color: var(--background);
-  background-image:
-    repeating-linear-gradient(to right, var(--hero-grid) 0 1px, transparent 1px 72px),
-    repeating-linear-gradient(to bottom, var(--hero-grid) 0 1px, transparent 1px 72px),
-    var(--hero-surface);
-}
+/* (`.login-hero` — the split-screen brand column of the old /login — was
+   removed with the login redesign. The sign-in surface is a single centred
+   plate on the app's own lit chassis; there is no decorative panel left to
+   style, and no per-theme hero surface pair to keep in contrast budget.) */
 
 /* Single-thumb range slider (Slider primitive). The value fill runs up to the
    thumb via --slider-pct (set inline from the value) with the muted track
