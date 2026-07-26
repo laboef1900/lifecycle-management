@@ -197,7 +197,7 @@ describe('<ScenarioControls>', () => {
     );
 
     const preset = screen.getByTestId('scenario-preset-lose_hosts');
-    expect(preset).toBeDisabled();
+    expect(preset).toHaveAttribute('aria-disabled', 'true');
     // The reason is TEXT, not just a dimmed chip: a disabled control that never
     // explains itself reads as broken, and dimming is a colour-only signal.
     expect(preset).toHaveAccessibleDescription(/no host has a recorded capacity/i);

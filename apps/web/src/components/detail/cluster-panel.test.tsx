@@ -169,6 +169,34 @@ function hostsWithCapacity(count: number, amount = 500): ForecastResponse['hosts
   }));
 }
 
+/**
+ * Hosts where one comes online INSIDE the window — its contribution rises from
+ * 0 partway through. That rise is the only input `delay_procurement` can act on:
+ * `delayFutureCommissions` (apps/server/src/services/scenario.ts) shifts
+ * `commissionedAt` for hosts commissioned in the future, and
+ * `effectiveCapacityAt` contributes 0 before that date. A cluster with no such
+ * host has nothing for the preset to shift, whether or not a breach is
+ * projected.
+ */
+function hostsWithFutureCommission(): ForecastResponse['hosts'] {
+  return [
+    {
+      id: 'h1',
+      name: 'esx-01',
+      contributions: [0, 1, 2].map((offset) => ({ month: monthFromNow(offset), amount: 1000 })),
+    },
+    {
+      id: 'h2',
+      name: 'esx-02-new',
+      contributions: [
+        { month: monthFromNow(0), amount: 0 },
+        { month: monthFromNow(1), amount: 0 },
+        { month: monthFromNow(2), amount: 500 },
+      ],
+    },
+  ];
+}
+
 function forecast(overrides: Partial<ForecastResponse> = {}): ForecastResponse {
   return {
     fromMonth: monthFromNow(0),
@@ -1140,12 +1168,18 @@ describe('<ClusterPanel> scenario KPI honesty', () => {
   };
 
   it('moves Current utilization and Headroom when the scenario moves the present month', async () => {
-    // "Add load" starts its synthetic application at `new Date()`, so it lands
-    // on the CURRENT month — the one scenario shape that provably moves the
-    // present. 500 → 900 GB of a 1,000 GB cluster.
+    // Driven by "Lose hosts", which is the preset that provably reaches the
+    // present month: `loseLargestHosts` removes the host from the WHOLE window,
+    // so month 0's capacity drops. (`add_vms` cannot — see the add_vms test
+    // below.) Four 250 GB hosts, one lost: 1,000 → 750 GB capacity against an
+    // unchanged 500 GB of consumption.
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({ hosts: hostsWithCapacity(4, 250) }),
+    );
     vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
       forecast({
-        months: [monthPoint(0, 900, 1000), monthPoint(1, 950, 1000), monthPoint(2, 1000, 1000)],
+        hosts: hostsWithCapacity(3, 250),
+        months: [monthPoint(0, 500, 750), monthPoint(1, 550, 750), monthPoint(2, 600, 750)],
       }),
     );
     const user = userEvent.setup();
@@ -1156,13 +1190,13 @@ describe('<ClusterPanel> scenario KPI honesty', () => {
     expect(within(grid()).getByText('50.0%')).toBeInTheDocument();
     expect(tile('Headroom')).toHaveTextContent('500 GB');
 
-    await applyPreset(user, 'add_vms');
+    await applyPreset(user, 'lose_hosts');
     await screen.findByTestId('scenario-badge');
 
     // The whole defect: these two used to stay byte-identical under a scenario
     // that visibly lifted the chart.
-    await waitFor(() => expect(within(grid()).getByText('90.0%')).toBeInTheDocument());
-    expect(tile('Headroom')).toHaveTextContent('100 GB');
+    await waitFor(() => expect(within(grid()).getByText('66.7%')).toBeInTheDocument());
+    expect(tile('Headroom')).toHaveTextContent('250 GB');
     expect(within(grid()).queryByText('50.0%')).toBeNull();
 
     // …and only then may the badge claim all of them are hypothetical.
@@ -1172,6 +1206,128 @@ describe('<ClusterPanel> scenario KPI honesty', () => {
     expect(within(grid()).queryByText(/unchanged by this scenario/i)).toBeNull();
   });
 
+  it('says the present-tense tiles are baseline under "Add load", which cannot reach the current month', async () => {
+    // The originally reported symptom, and why the honest answer is a scoped
+    // badge rather than moving numbers: `addSyntheticVms` sets the synthetic
+    // application's `startedAt` to `new Date()` (an instant mid-month), while
+    // `computeForecast` evaluates every month at its UTC first-of-month anchor
+    // and `effectiveAllocationAt` returns 0 for `date < startedAt`. The added
+    // load therefore first appears in month +1 — month 0 is unchanged for every
+    // real response, so this fixture is what the engine actually emits.
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 950, 1000), monthPoint(2, 1000, 1000)],
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await applyPreset(user, 'add_vms');
+    const badge = await screen.findByTestId('scenario-badge');
+
+    // The tiles keep the real current-month numbers — correctly, because the
+    // scenario does not touch them — and the badge stops vouching for them.
+    await waitFor(() => expect(badge).toHaveTextContent(/affects Runway and Order by only/i));
+    expect(badge).not.toHaveTextContent(/KPIs reflect the hypothetical forecast/i);
+    expect(within(grid()).getByText('50.0%')).toBeInTheDocument();
+    expect(tile('Headroom')).toHaveTextContent('500 GB');
+    expect(within(grid()).getAllByText(/unchanged by this scenario/i)).toHaveLength(2);
+  });
+
+  it('reports every capacity-dependent KPI as unknown when the scenario removes all capacity', async () => {
+    // The zero-capacity prohibition under a scenario. The cluster HAS capacity
+    // today (metric.utilization 0.5), so a capacity-known flag read off the
+    // stored metric stays true — and `runwayToWarn` skips zero-capacity months,
+    // so Runway/Order by/the heading/the header chip would all keep asserting
+    // "no breach, no order needed" over a forecast with no capacity at all,
+    // beside two tiles correctly reading "unknown". The flag has to come from
+    // the forecast on screen.
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({ hosts: [], months: [monthPoint(0, 500, 0), monthPoint(1, 550, 0)] }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    const strip = await screen.findByTestId('kpi-strip');
+
+    await applyPreset(user, 'lose_hosts');
+    await screen.findByTestId('scenario-badge');
+
+    // All four tiles say "unknown", in text, together.
+    await waitFor(() =>
+      expect(tile('Runway')).toHaveTextContent(/unknown — no capacity recorded/i),
+    );
+    expect(tile('Runway')).not.toHaveTextContent(/no warn breach in horizon/i);
+    expect(tile('Order by')).toHaveTextContent(/capacity required for procurement timing/i);
+    expect(tile('Order by')).not.toHaveTextContent(/no projected breach/i);
+    expect(tile('Current utilization')).toHaveTextContent(/Unknown — no capacity recorded/i);
+    expect(tile('Headroom')).toHaveTextContent(/unknown — no capacity recorded/i);
+    expect(strip).not.toHaveTextContent('0.0%');
+
+    // …and so do the two surfaces outside the strip that read the same flag.
+    expect(
+      screen.getByRole('heading', { name: /forecast — capacity unknown/i }),
+    ).toBeInTheDocument();
+    const chip = screen.getByTestId('recommendation-chip');
+    expect(chip).toHaveTextContent(/capacity unknown/i);
+    expect(chip).not.toHaveTextContent(/no order needed/i);
+  });
+
+  it('never claims the newly selected scenario changes nothing while its forecast is still in flight', async () => {
+    stubViewportWidth(1280);
+    // A held second fetch makes the in-flight window observable. Under
+    // `keepPreviousData` the FIRST scenario's result (a no-op) stays on screen
+    // across the key change — so any sentence about "this scenario" would be a
+    // sentence about the wrong scenario, and an aria-live announcement cannot be
+    // un-said.
+    let releaseSecond: (value: ForecastResponse) => void = () => {};
+    const second = new Promise<ForecastResponse>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const scenarioSpy = vi
+      .spyOn(api.clusters, 'forecastScenario')
+      .mockResolvedValueOnce(forecast()) // identical to the baseline: a real no-op
+      .mockReturnValueOnce(second);
+
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await applyPreset(user, 'lose_hosts');
+    await screen.findByTestId('scenario-noop-notice');
+    const live = screen.getByTestId('panel-live-region');
+    await waitFor(() =>
+      expect(live).toHaveTextContent(
+        'Scenario active: Lose 1 host. It changes nothing in this window.',
+      ),
+    );
+
+    // Switch presets. The no-op result is held on screen; the claim must not be.
+    await user.click(screen.getByTestId('scenario-preset-add_vms'));
+    await waitFor(() => expect(scenarioSpy).toHaveBeenCalledTimes(2));
+
+    expect(live).toHaveTextContent('Scenario active: Add 20 × 16 GB VMs.');
+    expect(live).not.toHaveTextContent(/changes nothing/i);
+    expect(screen.queryByTestId('scenario-noop-notice')).toBeNull();
+    expect(screen.getByTestId('scenario-badge')).toHaveTextContent(/recomputing/i);
+    // Nor may a tile attribute its held baseline-ness to the new scenario.
+    expect(within(grid()).queryByText(/unchanged by this scenario/i)).toBeNull();
+
+    // Once the real answer lands — 500 → 900 GB in month +1 — nothing claims a
+    // no-op either.
+    releaseSecond(
+      forecast({
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 900, 1000), monthPoint(2, 950, 1000)],
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('scenario-badge')).toHaveTextContent(
+        /affects Runway and Order by only/i,
+      ),
+    );
+    expect(screen.queryByTestId('scenario-noop-notice')).toBeNull();
+  });
+
   it('never claims a delay_procurement scenario changed the present-tense KPIs', async () => {
     // `delayFutureCommissions` shifts only commissions in the FUTURE, so the
     // present month is unreachable for this preset by construction — a blanket
@@ -1179,16 +1335,15 @@ describe('<ClusterPanel> scenario KPI honesty', () => {
     // how the tiles are wired.
     vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
       forecast({
+        // A host commissioning inside the window is what makes the preset
+        // applicable at all (see `deriveBlockedPresets`).
+        hosts: hostsWithFutureCommission(),
         months: [monthPoint(0, 500, 1000), monthPoint(1, 550, 1000), monthPoint(2, 600, 1000)],
-        procurement: {
-          leadTimeWeeks: 6,
-          orderByDate: monthFromNow(0),
-          breachMonth: monthFromNow(2),
-        },
       }),
     );
     vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
       forecast({
+        hosts: hostsWithFutureCommission(),
         // Identical present month; only the later capacity moves.
         months: [monthPoint(0, 500, 1000), monthPoint(1, 550, 800), monthPoint(2, 600, 800)],
         procurement: {
@@ -1207,8 +1362,7 @@ describe('<ClusterPanel> scenario KPI honesty', () => {
 
     // The forward-looking KPIs are genuinely scenario-derived; the present-tense
     // ones are not, and the badge must say exactly that.
-    await waitFor(() => expect(badge).toHaveTextContent(/Runway and Order by are hypothetical/i));
-    expect(badge).toHaveTextContent(/Current utilization and Headroom are baseline/i);
+    await waitFor(() => expect(badge).toHaveTextContent(/affects Runway and Order by only/i));
     expect(badge).not.toHaveTextContent(/KPIs reflect the hypothetical forecast/i);
 
     // Colour is never the only signal: each present-tense tile says it in text.
@@ -1336,7 +1490,7 @@ describe('<ClusterPanel> scenario KPI honesty', () => {
     await screen.findByTestId('scenario-controls');
 
     const preset = screen.getByTestId('scenario-preset-lose_hosts');
-    expect(preset).toBeDisabled();
+    expect(preset).toHaveAttribute('aria-disabled', 'true');
     expect(preset).toHaveAccessibleDescription(/no host has a recorded capacity/i);
     // Only the inapplicable preset is gated.
     expect(screen.getByTestId('scenario-preset-add_vms')).toBeEnabled();
@@ -1352,7 +1506,7 @@ describe('<ClusterPanel> scenario KPI honesty', () => {
     await screen.findByTestId('scenario-controls');
 
     const preset = screen.getByTestId('scenario-preset-lose_hosts');
-    expect(preset).toBeDisabled();
+    expect(preset).toHaveAttribute('aria-disabled', 'true');
     expect(preset).toHaveAccessibleDescription(/no tracked hosts/i);
   });
 
@@ -1367,27 +1521,33 @@ describe('<ClusterPanel> scenario KPI honesty', () => {
     expect(screen.getByTestId('scenario-preset-lose_hosts')).toBeEnabled();
   });
 
-  it('disables "Delay order" with a stated reason when there is no order-by date to delay', async () => {
+  it('disables "Delay order" with a stated reason when no host comes online inside the window', async () => {
     const user = userEvent.setup();
-    render(<Harness show />); // default fixture: procurement.orderByDate === null
+    // Default fixture: one host contributing the same capacity all window, so
+    // there is no future commissioning date for the preset to shift.
+    render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
 
     const preset = screen.getByTestId('scenario-preset-delay_procurement');
-    expect(preset).toBeDisabled();
-    expect(preset).toHaveAccessibleDescription(/no order date to delay/i);
+    expect(preset).toHaveAttribute('aria-disabled', 'true');
+    expect(preset).toHaveAccessibleDescription(/no host is commissioned inside this window/i);
   });
 
-  it('enables "Delay order" once the forecast has an order-by date', async () => {
+  it('keeps "Delay order" available on a healthy cluster whose incoming hardware could slip', async () => {
+    // The regression this pins: the gate used to key on
+    // `procurement.orderByDate === null`, which is just "this cluster is
+    // currently projected healthy" — so it disabled the one what-if that reveals
+    // the risk ("what if the new hosts land late?") on exactly the clusters that
+    // are healthy BECAUSE those hosts land inside the window, and stated a reason
+    // about an "order date" the preset never touches.
     vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
       forecast({
-        procurement: {
-          leadTimeWeeks: 6,
-          orderByDate: monthFromNow(0),
-          breachMonth: monthFromNow(2),
-        },
+        hosts: hostsWithFutureCommission(),
+        // No projected breach anywhere: orderByDate stays null.
+        procurement: { leadTimeWeeks: 6, orderByDate: null, breachMonth: null },
       }),
     );
     const user = userEvent.setup();
@@ -1458,8 +1618,13 @@ describe('resolvePresentKpi / scenarioChangesNothing / deriveBlockedPresets', ()
 
   it('blocks only the presets the data cannot support', () => {
     expect(deriveBlockedPresets(forecast())).toEqual({
-      delay_procurement: expect.stringMatching(/no order date to delay/i),
+      delay_procurement: expect.stringMatching(/no host is commissioned inside this window/i),
     });
+    expect(deriveBlockedPresets(forecast({ hosts: hostsWithFutureCommission() }))).toEqual({});
+  });
+
+  it('judges "Delay order" on host commissioning, never on the procurement outcome', () => {
+    // A projected breach does not give the preset anything to shift…
     expect(
       deriveBlockedPresets(
         forecast({
@@ -1469,8 +1634,17 @@ describe('resolvePresentKpi / scenarioChangesNothing / deriveBlockedPresets', ()
             breachMonth: monthFromNow(2),
           },
         }),
-      ),
-    ).toEqual({});
+      ).delay_procurement,
+    ).toMatch(/no host is commissioned inside this window/i);
+    // …and the absence of one does not take it away.
+    expect(
+      deriveBlockedPresets(
+        forecast({
+          hosts: hostsWithFutureCommission(),
+          procurement: { leadTimeWeeks: 6, orderByDate: null, breachMonth: null },
+        }),
+      ).delay_procurement,
+    ).toBeUndefined();
   });
 });
 

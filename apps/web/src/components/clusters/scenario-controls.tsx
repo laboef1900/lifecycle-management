@@ -188,18 +188,27 @@ export function ScenarioControls({
               aria-pressed={isActive}
               data-testid={`scenario-preset-${p.kind}`}
               onClick={() => selectPreset(p.kind)}
-              disabled={reason !== undefined}
+              // `aria-disabled`, NOT the native `disabled` attribute. Native
+              // `disabled` removes the chip from the tab order, so the
+              // `aria-describedby` reason below could never be announced — the
+              // stated reason was reachable only as sighted text, which defeats
+              // the point of stating it. Keeping the chip focusable lets a
+              // screen-reader user land on it and hear why it is unavailable;
+              // `selectPreset`'s early return at :163 is the actual block.
+              aria-disabled={reason !== undefined}
               {...(reason !== undefined ? { 'aria-describedby': `${reasonIdBase}-${p.kind}` } : {})}
               className={cn(
                 'rounded-[var(--radius)] border px-2 py-1.5 text-xs font-medium transition-[background,border-color,color] duration-150',
                 // Matches the shared Button's disabled treatment (opacity-50 +
                 // no pointer response) so a dead control looks the same
-                // everywhere; `cursor-not-allowed` needs pointer events, so it
-                // is `pointer-events-none`'s deliberate alternative here.
-                'active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100',
+                // everywhere. Keyed off aria-disabled rather than :disabled
+                // because the chip stays focusable — see the comment above.
+                'active:scale-[0.98] aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:active:scale-100',
                 isActive
                   ? 'border-accent bg-accent text-accent-foreground'
-                  : 'border-border text-fg-muted enabled:hover:border-border-strong enabled:hover:text-foreground',
+                  : reason !== undefined
+                    ? 'border-border text-fg-muted'
+                    : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
               )}
             >
               {p.label}

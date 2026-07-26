@@ -229,30 +229,31 @@ test.describe('live slider tuning', () => {
     await openFirstCluster(page);
     await openScenarioRail(page);
 
-    // The preset itself is gated off when no host has a recorded capacity —
-    // losing such a host cannot move the forecast. Check that BEFORE clicking:
-    // `click()` auto-waits for an enabled control, so an ungated assumption
-    // would time out here instead of skipping.
-    const preset = page.getByTestId('scenario-preset-lose_hosts');
-    test.skip(await preset.isDisabled(), 'requires hosts with a recorded capacity');
+    // Driven by "Add load", deliberately, not "Lose hosts". `deriveBlockedPresets`
+    // gates "Lose hosts" off whenever no host has a recorded capacity — which is
+    // true of every vSphere-synced cluster — so keying this test on it made the
+    // run depend on the seed. The earlier shape (`test.skip(await
+    // preset.isDisabled(), …)`) was worse than a seed dependency: a one-shot read
+    // against a state that arrives asynchronously, so the step could go
+    // permanently green without ever pressing a key. "Add load" is never blocked
+    // (it can always move a future month), so the precondition is structural.
+    const preset = page.getByTestId('scenario-preset-add_vms');
+    await expect(preset).toHaveAttribute('aria-disabled', 'false');
     await preset.click();
-    const slider = page.getByLabel('Hosts lost');
+    const slider = page.getByLabel('VM count');
     await expect(slider).toBeVisible();
+    await expect(slider).toBeEnabled();
 
-    // The slider is disabled until the baseline forecast reports the host count,
-    // and a cluster with a single host has nowhere to step to.
-    const max = Number(await slider.getAttribute('max'));
-    const isDisabled = await slider.isDisabled();
-    test.skip(isDisabled || max < 2, 'requires a cluster with at least 2 tracked hosts');
-
-    await expect(page.getByTestId('scenario-active-indicator')).toHaveText(/Lose 1 host/);
+    const before = await page.getByTestId('scenario-active-indicator').textContent();
 
     // Keyboard-operable for free, which is half the reason this is a native
     // range input rather than a div with a drag handler.
     await slider.focus();
     await page.keyboard.press('ArrowRight');
 
-    await expect(page.getByTestId('scenario-active-indicator')).toHaveText(/Lose 2 hosts/);
+    // The VM count is what moved, so the indicator's own text must change.
+    await expect(page.getByTestId('scenario-active-indicator')).not.toHaveText(before ?? '');
+    await expect(page.getByTestId('scenario-active-indicator')).toHaveText(/GB VMs/);
     // No Apply was clicked and the rail never closed.
     await expect(page.getByTestId('scenario-pane-body')).toBeVisible();
   });

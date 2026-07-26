@@ -407,7 +407,18 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   });
 
   const activeForecast = scenario && scenarioQuery.data ? scenarioQuery.data : forecastQuery.data;
-  const activeCapacityKnown = metric?.utilization !== null;
+  // Capacity-honesty follows the forecast that is ON SCREEN, not the stored
+  // baseline metric. This one flag gates the Runway tile, the Order-by tile, the
+  // chart heading and the header chip — so while it was baseline-derived, a
+  // scenario that removes every host with recorded capacity (zeroing capacity
+  // for the whole window) left those four reporting "no warn breach in horizon"
+  // and "OK — No order needed" beside two tiles correctly reading
+  // "Unknown — no capacity recorded", under a badge vouching for all of them.
+  // An absent forecast keeps the metric's answer so nothing regresses while
+  // loading.
+  const activeCapacityKnown =
+    metric?.utilization !== null &&
+    (activeForecast === undefined || activeForecast.months.some((m) => m.capacity > 0));
   // Preset applicability is judged against the BASELINE forecast, never the
   // active one: the question is "can this what-if move the real forecast at
   // all", and a scenario's own output must not be able to change the answer
@@ -435,8 +446,17 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // chart or in the KPI numbers can show this by itself: an unchanged forecast
   // looks precisely like a forecast that was never disturbed, which is the one
   // reading this tool must never leave a purchaser with.
+  // @ai-warning Must be judged on a SETTLED answer only. `placeholderData:
+  // keepPreviousData` above means `scenarioQuery.data` is the PREVIOUS
+  // scenario's forecast while a newly selected one is in flight — so without the
+  // `isPlaceholderData` guard this asserted "it changes nothing in this window"
+  // about a scenario that had not been computed yet, and the live region
+  // announced that claim naming the new scenario. Holding the stale forecast is
+  // deliberate for the CHART (it is what makes a slider drag read as one
+  // continuous redraw); making an equality CLAIM about it is not.
   const scenarioIsNoop = Boolean(
     scenario &&
+    !scenarioQuery.isPlaceholderData &&
     forecastQuery.data &&
     scenarioQuery.data &&
     scenarioChangesNothing(forecastQuery.data, scenarioQuery.data),
@@ -570,6 +590,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                   capacityKnown={activeCapacityKnown}
                   isScenario={Boolean(scenario && scenarioQuery.data)}
                   noChange={scenarioIsNoop}
+                  recomputing={Boolean(scenario && scenarioQuery.isPlaceholderData)}
                 />
               ) : null}
 
@@ -772,12 +793,26 @@ export function computeScenarioDeltaLabel(
  * the baseline forecast only (see the call site).
  *
  * @ai-note The three presets differ in what they can reach, which is why this
- * exists at all. `add_vms` adds a synthetic application starting now, so it can
- * always move something. `lose_hosts` drops hosts from the window — but the
- * engine's `capacityAt` treats a host with no recorded capacity row as 0 GB, so
- * dropping such hosts subtracts nothing and returns the baseline verbatim.
- * `delay_procurement` shifts only commissions dated in the future, so with no
- * projected breach (hence no order-by date) there is nothing to shift.
+ * exists at all. Each gate must test the input the preset actually consumes:
+ *
+ * - `lose_hosts` drops hosts from the window, but the engine's `capacityAt`
+ *   treats a host with no recorded capacity row as 0 GB, so dropping such hosts
+ *   subtracts nothing and returns the baseline verbatim.
+ * - `delay_procurement` shifts `commissionedAt`/`projectedDecommissionAt` for
+ *   hosts dated in the future (`delayFutureCommissions`), and
+ *   `effectiveCapacityAt` contributes 0 before `commissionedAt`. So what it
+ *   needs is a commissioning STEP inside the window — a host whose own
+ *   contribution rises month over month. It has nothing to do with whether a
+ *   breach is projected.
+ *   @ai-warning Do NOT gate this on `procurement.orderByDate`. That reads
+ *   plausibly and is wrong twice over: it disables the most decision-relevant
+ *   what-if precisely on a healthy forecast, and it states a false reason (the
+ *   preset delays commissions, not an order date).
+ * - `add_vms` is never blocked: it adds a synthetic application, so it can
+ *   always move a future month. It cannot move the CURRENT month — `monthRange`
+ *   evaluates each month at the 1st and `effectiveAllocationAt` returns 0 while
+ *   `date < app.startedAt` — but that is a present-tense KPI concern
+ *   (`resolvePresentKpi`), not an applicability one.
  */
 export function deriveBlockedPresets(forecast: ForecastResponse | undefined): BlockedPresets {
   if (!forecast) return {};
@@ -788,9 +823,12 @@ export function deriveBlockedPresets(forecast: ForecastResponse | undefined): Bl
     blocked.lose_hosts =
       'no host has a recorded capacity in this window, so removing one cannot change the forecast. Record host capacity on the Hosts tab first.';
   }
-  if (forecast.procurement.orderByDate === null) {
+  const hasCommissioningStep = forecast.hosts.some((host) =>
+    host.contributions.some((c, i) => i > 0 && c.amount > (host.contributions[i - 1]?.amount ?? 0)),
+  );
+  if (!hasCommissioningStep) {
     blocked.delay_procurement =
-      'there is no order date to delay — this forecast projects no warn breach in the window.';
+      'no host is commissioned inside this window, so there is no commissioning date to push out.';
   }
   return blocked;
 }
@@ -858,9 +896,16 @@ export function resolvePresentKpi(
 }
 
 /** In-tile provenance line: only ever set when a scenario is on screen and the
- *  tile's number is NOT part of it. */
-function presentSourceNote(present: PresentKpi, isScenario: boolean): string | null {
-  if (!isScenario || present.hypothetical) return null;
+ *  tile's number is NOT part of it. Suppressed while `recomputing`, because the
+ *  number on screen belongs to the PREVIOUS scenario — attributing its
+ *  baseline-ness to the newly selected one would be a claim about an answer that
+ *  does not exist yet. */
+function presentSourceNote(
+  present: PresentKpi,
+  isScenario: boolean,
+  recomputing: boolean,
+): string | null {
+  if (!isScenario || recomputing || present.hypothetical) return null;
   return present.source === 'metric'
     ? 'Baseline — this window does not cover the current month'
     : 'Baseline — unchanged by this scenario';
@@ -869,13 +914,25 @@ function presentSourceNote(present: PresentKpi, isScenario: boolean): string | n
 /**
  * The scenario badge's claim, scoped to what the wiring can actually deliver.
  * Runway and Order by are always scenario-derived; the present-tense tiles are
- * only hypothetical when the scenario moves the present month at all — which
- * `delay_procurement` (future commissions only) can never do.
+ * only hypothetical when the scenario moves the present month at all.
+ *
+ * @ai-note Only `lose_hosts` can move the present month. `add_vms` starts its
+ * synthetic application at `new Date()`, but the engine evaluates every month at
+ * the 1st (`monthRange`) and `effectiveAllocationAt` returns 0 while
+ * `date < app.startedAt` — so it reaches future months only.
+ * `delay_procurement` shifts future commissions exclusively. This is why a
+ * blanket "all KPIs are hypothetical" badge was false for two of three presets.
+ *
+ * Kept to a short pill label: `Badge` is `rounded-full` and is defined by the
+ * design authority as a short status label, not a container for prose. The
+ * per-number detail lives in the tiles' own `SourceTag`s and, for a no-op, in
+ * the Card notice below.
  */
-function scenarioBadgeText(present: PresentKpi, noChange: boolean): string {
+function scenarioBadgeText(present: PresentKpi, noChange: boolean, recomputing: boolean): string {
+  if (recomputing) return 'Scenario active — recomputing…';
   if (noChange) return 'Scenario active — it changes nothing in this window';
   if (present.hypothetical) return 'Scenario active — KPIs reflect the hypothetical forecast';
-  return 'Scenario active — Runway and Order by are hypothetical; Current utilization and Headroom are baseline';
+  return 'Scenario active — affects Runway and Order by only';
 }
 
 /**
@@ -1167,6 +1224,7 @@ function ClusterDetailKpiStrip({
   capacityKnown,
   isScenario = false,
   noChange = false,
+  recomputing = false,
 }: {
   forecast: ForecastResponse;
   /** The real forecast — the reference the scenario's claims are measured against. */
@@ -1176,16 +1234,30 @@ function ClusterDetailKpiStrip({
   isScenario?: boolean;
   /** The active scenario reproduces the baseline exactly (see `scenarioChangesNothing`). */
   noChange?: boolean;
+  /** A newly selected scenario is still in flight and `keepPreviousData` is
+   *  holding the PREVIOUS one's forecast on screen. No claim may be attached to
+   *  the numbers while that is true. */
+  recomputing?: boolean;
 }): React.JSX.Element {
   const present = resolvePresentKpi(forecast, baseline, metric, isScenario);
   const presentCapacityKnown = present.utilization !== null;
   const headroom = Math.max(0, present.capacity - present.consumption);
   const summary = runwayToWarn(forecast.months, forecast.effectiveThresholds);
+  // Both the runway and the procurement tile must answer to the forecast ON
+  // SCREEN. `capacityKnown` already follows the active forecast (see
+  // `activeCapacityKnown`); this adds the same test against the forecast this
+  // strip was actually handed, so a scenario that zeroes capacity can never
+  // render "no warn breach in horizon" next to "Unknown — no capacity recorded".
+  const forecastCapacityKnown = capacityKnown && forecast.months.some((m) => m.capacity > 0);
   const runwayUnknown =
-    !capacityKnown && summary.months === null && summary.alreadyBreached === false;
-  const procurementKpi = deriveProcurementKpi(forecast.procurement, new Date(), capacityKnown);
+    !forecastCapacityKnown && summary.months === null && summary.alreadyBreached === false;
+  const procurementKpi = deriveProcurementKpi(
+    forecast.procurement,
+    new Date(),
+    forecastCapacityKnown,
+  );
   const runwayKpi = deriveRunwayKpiCopy(forecast, summary, runwayUnknown);
-  const presentNote = presentSourceNote(present, isScenario);
+  const presentNote = presentSourceNote(present, isScenario, recomputing);
   // Rendered inside BOTH present-tense tiles: whichever tile a reader lands on
   // has to say for itself that its number is the baseline, since the badge above
   // is easy to scroll past.
@@ -1195,7 +1267,7 @@ function ClusterDetailKpiStrip({
       {isScenario ? (
         <div className="space-y-2">
           <Badge variant="outline" data-testid="scenario-badge">
-            {scenarioBadgeText(present, noChange)}
+            {scenarioBadgeText(present, noChange, recomputing)}
           </Badge>
           {noChange ? (
             // Same anatomy as this file's ErrorCard (icon + text in a Card), in
