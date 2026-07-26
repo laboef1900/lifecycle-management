@@ -160,6 +160,29 @@ describe('<CreateItemDialog> invalidation', () => {
     });
   });
 
+  it('announces WHY the category was rejected, not just that it was', async () => {
+    const user = userEvent.setup();
+    renderCreateItemDialog();
+
+    // Name and allocation filled, so the category is the only thing wrong and
+    // is therefore also the field focus lands on.
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'openshift-lab');
+    await user.type(
+      screen.getByRole('spinbutton', { name: 'Initial memory allocation (GB)' }),
+      '512',
+    );
+    await user.click(screen.getByRole('button', { name: /add application/i }));
+
+    const category = screen.getByLabelText('Category');
+    await waitFor(() => expect(category).toHaveAttribute('aria-invalid', 'true'));
+    // The combobox used to render its message with no id and no
+    // `aria-describedby`, so this was the one field in the dialog whose reason
+    // never reached assistive tech.
+    expect(category).toHaveAccessibleDescription(/too small|required/i);
+    expect(category).toHaveFocus();
+    expect(api.items.create).not.toHaveBeenCalled();
+  });
+
   it('starts the allocation blank rather than pre-filling a 0 nobody measured', () => {
     renderCreateItemDialog();
 

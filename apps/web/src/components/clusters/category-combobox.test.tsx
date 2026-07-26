@@ -46,4 +46,67 @@ describe('<CategoryCombobox>', () => {
 
     expect(onChange).toHaveBeenLastCalledWith('Database');
   });
+
+  it('ties its error to the input, not just next to it', () => {
+    render(
+      <CategoryCombobox value="" onChange={vi.fn()} categories={[]} error="Category is required" />,
+    );
+
+    // The message used to render with no `id` and no `aria-describedby` pointing
+    // at it: visible, but a screen-reader user heard "invalid" and never the
+    // reason. `aria-invalid` alone cannot carry a sentence.
+    const input = screen.getByLabelText('Category');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveAccessibleDescription('Category is required');
+  });
+
+  it('describes nothing while it is valid', () => {
+    render(<CategoryCombobox value="Growth" onChange={vi.fn()} categories={['Growth']} />);
+
+    const input = screen.getByLabelText('Category');
+    expect(input).not.toHaveAttribute('aria-invalid');
+    // A dangling `aria-describedby` pointing at an unrendered id would make the
+    // description silently empty rather than absent.
+    expect(input).not.toHaveAttribute('aria-describedby');
+    expect(input).toHaveAccessibleDescription('');
+  });
+
+  it('announces as required without renaming the field', () => {
+    render(<CategoryCombobox value="" onChange={vi.fn()} categories={[]} />);
+
+    // Category is `min(1)` on every item schema in `@lcm/shared`.
+    const input = screen.getByLabelText('Category');
+    expect(input).toHaveAttribute('aria-required', 'true');
+    // The `*` marker sits OUTSIDE the label, so the accessible name stays clean
+    // — a marker nested in the label would rename this control "Category *".
+    expect(input).toHaveAccessibleName('Category');
+  });
+
+  it('keeps a custom label’s accessible name intact', () => {
+    render(
+      <CategoryCombobox value="" onChange={vi.fn()} categories={[]} label="Growth category" />,
+    );
+
+    expect(screen.getByLabelText('Growth category')).toHaveAccessibleName('Growth category');
+  });
+
+  it('gives each instance its own error id', () => {
+    render(
+      <>
+        <CategoryCombobox value="" onChange={vi.fn()} categories={[]} error="First problem" />
+        <CategoryCombobox
+          value=""
+          onChange={vi.fn()}
+          categories={[]}
+          label="Second category"
+          error="Second problem"
+        />
+      </>,
+    );
+
+    // `bulk-quarterly-growth-dialog` mounts one of these per row, so a shared id
+    // would point every row's input at the first row's message.
+    expect(screen.getByLabelText('Category')).toHaveAccessibleDescription('First problem');
+    expect(screen.getByLabelText('Second category')).toHaveAccessibleDescription('Second problem');
+  });
 });
