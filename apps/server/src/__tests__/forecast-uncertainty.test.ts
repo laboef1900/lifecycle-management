@@ -272,6 +272,15 @@ describe('ForecastService — uncertainty band', () => {
       // sample per horizon index, so `retentionMonths` caps every horizon — but an
       // anchor up to 24 months older than the window still projects INTO it, so
       // the anchor count is not capped and keeps growing past it.
+      //
+      // Scope, so the numbers below are not mistaken for the worst case: this
+      // seeds evidence at two horizons (1 and 24), which exercises the MECHANISM
+      // and lands N at 15. The general bound is `retentionMonths + (maxHorizon -
+      // 1)` — the union of the per-horizon valid-anchor windows across horizons
+      // 1..maxHorizon spans that many months — so at the 24-month default with a
+      // 12-month window it is 35, and a longer requested span widens it further.
+      // Seeding all 24 horizons to reach 35 would grow the fixture without
+      // pinning anything these assertions do not already pin.
       const { id, metricTypeId } = await makeCluster(prisma, {
         baselineDate: monthStart(0),
         baselineConsumption: 100,

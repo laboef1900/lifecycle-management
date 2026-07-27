@@ -123,11 +123,6 @@ export function ForecastChart({
     });
   }
   const hasBand = bandByMonth.size > 0;
-  // Per-horizon evidence for the months that actually DRAW a band (#317), keyed
-  // by month so the tooltip and the caption quote the same numbers the shaded
-  // area rests on. Absent for a server build predating #317 — the caption then
-  // falls back to the global anchor count.
-  const bandSamplesByMonth = new Map<string, number>();
 
   // History predating the forecast window gets its own leading rows: the window
   // opens at the NEWEST baseline, so without these every older measurement would
@@ -146,6 +141,10 @@ export function ForecastChart({
       baselineConsumption: null,
       measured: Math.round(h.consumption),
       bandRange: null as [number, number] | null,
+      // Pre-window rows predate the forecast entirely, so they never draw a band
+      // and never carry evidence; padded for the same shape-parity reason as
+      // `bandRange` above.
+      bandSampleCount: null as number | null,
     }));
 
   const windowData = activeForecast.months.map((point, index) => {
@@ -159,9 +158,6 @@ export function ForecastChart({
       band && capacity > 0
         ? [Math.max(0, Math.round(band.low * capacity)), Math.round(band.high * capacity)]
         : null;
-    if (bandRange && band?.sampleCount !== undefined) {
-      bandSamplesByMonth.set(point.month, band.sampleCount);
-    }
     return {
       month: point.month,
       consumption,
@@ -177,10 +173,25 @@ export function ForecastChart({
       // null (not 0) for months with no measurement — see the `measured` <Line>.
       measured: measuredByMonth.get(point.month) ?? null,
       bandRange,
+      // Carried on the row rather than collected by side-effecting the map
+      // callback above: the count belongs to the month that draws the band, and
+      // deriving it here keeps ONE definition of "this month has a band" — a
+      // second copy of the `bandRange && …` condition elsewhere could drift and
+      // caption a month the chart never shaded.
+      bandSampleCount: bandRange && band?.sampleCount !== undefined ? band.sampleCount : null,
     };
   });
 
   const data = [...preWindow, ...windowData];
+  // Per-horizon evidence for the months that actually DRAW a band (#317), keyed
+  // by month so the tooltip and the caption quote the same numbers the shaded
+  // area rests on. Read out of the rows in an explicit pass rather than
+  // accumulated as a side effect while building them. Empty against a server
+  // build predating #317 — the caption then falls back to the global count.
+  const bandSamplesByMonth = new Map<string, number>();
+  for (const row of windowData) {
+    if (row.bandSampleCount !== null) bandSamplesByMonth.set(row.month, row.bandSampleCount);
+  }
   // Spread of per-horizon evidence across the drawn band (#317). A single number
   // for the whole chart misstates the far end: a near horizon can rest on many
   // past forecasts while a far one sits on the engine's per-horizon floor, and a
@@ -917,7 +928,14 @@ function bandCaption(
   if (sampleRange.min === sampleRange.max) {
     return `${lead} Every month’s band rests on ${sampleRange.min} past forecast${plural(sampleRange.min)} measured at that horizon.`;
   }
-  return `${lead} Of ${anchorCount} past forecasts, each month’s band rests only on the ${sampleRange.min}–${sampleRange.max} measured at its own horizon.`;
+  // Per-horizon figure FIRST, pool trailing in parentheses — not the reverse.
+  // An earlier revision opened with "Of N past forecasts, each month's band
+  // rests only on…", which put the largest and least relevant number where a
+  // skim-reader lands and left the qualifier that undercuts it to be read
+  // second. On a surface people skim before spending money that re-commits a
+  // quieter version of the exact overstatement this caption exists to remove.
+  // The pool is context for the range, so it is written as context.
+  return `${lead} Each month’s band rests on ${sampleRange.min} to ${sampleRange.max} past forecasts measured at its own horizon (${anchorCount} total across the chart).`;
 }
 
 function LegendItem({

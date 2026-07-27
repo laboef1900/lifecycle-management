@@ -1088,12 +1088,28 @@ describe('ForecastChart per-horizon band evidence (#317)', () => {
     const caption = screen.getByTestId('forecast-band-caption');
     // Both numbers, and the relationship between them: the pool is 12, but no
     // single month's band rests on more than 9 or fewer than 3.
-    expect(caption).toHaveTextContent('Of 12 past forecasts');
-    expect(caption).toHaveTextContent('3–9');
+    expect(caption).toHaveTextContent('3 to 9 past forecasts measured at its own horizon');
+    expect(caption).toHaveTextContent('12 total across the chart');
     expect(caption).toHaveTextContent(/not a guarantee/i);
     // The pre-#317 claim — the pool presented AS the band's measured error — must
     // be gone; that is the overstatement this issue exists to remove.
     expect(caption).not.toHaveTextContent('12 past forecasts’ measured error');
+  });
+
+  it('does not open the caption with the pool figure', () => {
+    // Ordering is load-bearing, not styling. Leading with the pool puts the
+    // largest and least relevant number where a skim-reader lands and defers the
+    // qualifier that undercuts it — a quieter version of the overstatement this
+    // caption exists to remove, on a surface people skim before spending money.
+    renderChart(bandedForecast([9, 5, 3], 12));
+    const text = screen.getByTestId('forecast-band-caption').textContent ?? '';
+
+    const perHorizonAt = text.indexOf('3 to 9');
+    const poolAt = text.indexOf('12 total');
+    expect(perHorizonAt).toBeGreaterThan(-1);
+    expect(poolAt).toBeGreaterThan(-1);
+    expect(perHorizonAt).toBeLessThan(poolAt);
+    expect(text).not.toMatch(/^Of \d+ past forecasts/);
   });
 
   it('captions a single figure when every banded horizon rests on the same evidence', () => {
