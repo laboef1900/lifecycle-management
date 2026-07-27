@@ -326,7 +326,7 @@ export function ForecastThresholdsForm(): React.JSX.Element {
             </span>
             <Input
               type="number"
-              min={0}
+              min={FORECAST_SNAPSHOT_RETENTION_DISABLED}
               max={FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS}
               step={1}
               aria-label="Forecast snapshot retention (months)"
