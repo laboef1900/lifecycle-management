@@ -56,9 +56,18 @@ test('create cluster, add host + application, chart reflects updates', async ({
 
     // The cluster's uniform tile appears in the grid, linking to its detail
     // panel, showing the right utilization (1000/5000 = 20.0%, spec §4.4).
+    //
+    // Asserted on the accessible name, not the tile's text. The visible numeral
+    // is deliberately rounded (`Math.round` in `cluster-tile.tsx`, added with
+    // the BulletMeter and pinned by its unit tests at `78%`), so the old
+    // `toContainText('20.0%')` had been failing since then. Text is also the
+    // wrong surface for this: the tile embeds a chart whose axis labels include
+    // "15%", "20%", "25%", so a bare `toContainText('20%')` would pass on an
+    // axis tick even if the utilization numeral were wrong. The aria-label
+    // carries the exact figure and belongs to the tile alone.
     const tile = page.getByRole('link', { name: clusterName });
     await expect(tile).toBeVisible();
-    await expect(tile).toContainText('20.0%');
+    await expect(tile).toHaveAttribute('aria-label', /20\.0 percent utilized/);
 
     // Open the detail slide-in panel via the tile link.
     await tile.click();
