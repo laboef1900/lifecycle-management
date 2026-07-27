@@ -27,6 +27,14 @@ export interface ForecastErrorSample {
 export interface ErrorBand {
   low: number;
   high: number;
+  /**
+   * Matured samples this horizon's offsets were measured from (#317). Always
+   * `>= PER_HORIZON_MIN_SAMPLES`, because a thinner horizon is omitted from the
+   * map entirely rather than emitted with a small count. Surfaced per band point
+   * so the chart can state the evidence behind a given month instead of quoting
+   * one global anchor count across every horizon.
+   */
+  sampleCount: number;
 }
 
 /**
@@ -97,14 +105,22 @@ export function computeForecastErrorBands(
 
   for (const [horizon, errors] of byHorizon) {
     if (errors.length < PER_HORIZON_MIN_SAMPLES) continue;
+    // Counted per horizon, never globally: `errors` holds only the samples that
+    // matured AT this horizon index, which is the honest denominator for this
+    // horizon's spread (#317).
+    const sampleCount = errors.length;
     if (bandWidth === 'stddev') {
       const m = mean(errors);
       const sd = stddev(errors, m);
-      bands.set(horizon, { low: -m - sd, high: -m + sd });
+      bands.set(horizon, { low: -m - sd, high: -m + sd, sampleCount });
     } else {
       const q = QUANTILES[bandWidth];
       const sorted = [...errors].sort((a, b) => a - b);
-      bands.set(horizon, { low: -quantile(sorted, q.high), high: -quantile(sorted, q.low) });
+      bands.set(horizon, {
+        low: -quantile(sorted, q.high),
+        high: -quantile(sorted, q.low),
+        sampleCount,
+      });
     }
   }
   return bands;

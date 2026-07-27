@@ -76,4 +76,38 @@ describe('computeForecastErrorBands', () => {
     expect(bands.get(1)!.low).toBeCloseTo(-1, 6);
     expect(bands.get(3)!.low).toBeCloseTo(-10, 6);
   });
+
+  it('reports each horizon its OWN sample count, not the global anchor count (#317)', () => {
+    // The whole point of the field: 9 anchors in the pool, but horizon 5 was
+    // measured only 3 times. Quoting 9 against horizon 5 overstates its evidence.
+    const samples = [
+      ...samplesWithErrors(1, [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+      ...samplesWithErrors(5, [1, 2, 3]),
+    ];
+    const bands = computeForecastErrorBands(samples, 9, 'p10_p90', K);
+    expect(bands.get(1)!.sampleCount).toBe(9);
+    expect(bands.get(5)!.sampleCount).toBe(3);
+  });
+
+  it('counts samples identically for the stddev width', () => {
+    // The count is evidence, not a property of the quantile maths — it must not
+    // depend on which band width the tenant configured.
+    const samples = samplesWithErrors(2, [3, 4, 5, 6]);
+    expect(computeForecastErrorBands(samples, K, 'stddev', K).get(2)!.sampleCount).toBe(4);
+    expect(computeForecastErrorBands(samples, K, 'p05_p95', K).get(2)!.sampleCount).toBe(4);
+  });
+
+  it('never emits a count below the per-horizon floor', () => {
+    // A thin horizon is omitted entirely rather than emitted with a small count,
+    // so any count a caller can read is >= PER_HORIZON_MIN_SAMPLES.
+    const samples = [
+      ...samplesWithErrors(1, [1, 2, 3]),
+      ...samplesWithErrors(2, [1, 2]), // below the floor
+    ];
+    const bands = computeForecastErrorBands(samples, K, 'p10_p90', K);
+    for (const band of bands.values()) {
+      expect(band.sampleCount).toBeGreaterThanOrEqual(PER_HORIZON_MIN_SAMPLES);
+    }
+    expect(bands.has(2)).toBe(false);
+  });
 });
