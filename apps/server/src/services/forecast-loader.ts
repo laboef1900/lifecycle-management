@@ -12,6 +12,8 @@ import {
 } from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
 
+import { retentionCutoffMonth } from '../lib/forecast-retention.js';
+
 import { NotFoundError, UnprocessableError } from './errors.js';
 import {
   computeForecast,
@@ -84,6 +86,12 @@ interface PreparedForecastInput {
   bandEnabled: boolean;
   bandMinAnchors: number;
   bandWidth: ForecastUncertaintyBandWidth;
+  /**
+   * Months of snapshot evidence the band may consider; 0 = unbounded (#318).
+   * Bounds the READ as well as the sweep, so the band is a function of the
+   * setting rather than of when the sweep last ran.
+   */
+  snapshotRetentionMonths: number;
 }
 
 /** Live procurement context for the order-approval write path (#292). */
@@ -194,7 +202,7 @@ export class ForecastService {
    * baseline-anchored window and NOT the exact window the chip reads. The web
    * chip requests a TODAY-anchored window (`resolveWindow` in
    * `apps/web/src/components/clusters/window-controls.tsx` — `from =
-   * firstOfMonth(today)` for the 12/24-mo views).
+   * startOfUtcMonth(today)` for the 12/24-mo views).
    *
    *   - PAST/PRESENT-dated baseline (`capturedAt ≤ today`, the normal case): the
    *     clamp is a no-op, so this stays baseline-anchored and starts no later than
@@ -206,7 +214,7 @@ export class ForecastService {
    *     422 on Approve for a breach past this window's `to` (anchor + horizon) yet
    *     within the chip's (today + horizon).
    *   - FUTURE-dated baseline (`capturedAt > today`): the clamp pulls the window
-   *     start back to `firstOfMonth(today)`, matching the chip's 12/24-mo anchor.
+   *     start back to `startOfUtcMonth(today)`, matching the chip's 12/24-mo anchor.
    *     Without it (the pre-#303 defect) the raw baseline anchor started the write
    *     window LATER than the chip's, so the snapshotted `orderByDate` landed later
    *     than the live one and the ≥ T rule FALSELY superseded the approval the
@@ -334,13 +342,13 @@ export class ForecastService {
     // start the snapshot window later than the today-anchored chip window and
     // falsely supersede a fresh approval. `min` makes it a no-op for any
     // past/present baseline, so the read path (no `clampAnchorToToday`) is
-    // untouched. `firstOfMonth` is monotonic, so clamping the instant then
+    // untouched. `startOfUtcMonth` is monotonic, so clamping the instant then
     // snapping equals snapping both then taking the earlier month.
     const defaultAnchor =
       options.clampAnchorToToday && anchor.capturedAt.getTime() > Date.now()
         ? new Date()
         : anchor.capturedAt;
-    const fromMonth = options.fromMonth ?? firstOfMonth(defaultAnchor);
+    const fromMonth = options.fromMonth ?? startOfUtcMonth(defaultAnchor);
     const toMonth = options.toMonth ?? addMonths(fromMonth, DEFAULT_HORIZON_MONTHS);
 
     if (toMonth < fromMonth) {
@@ -479,10 +487,11 @@ export class ForecastService {
       // change-detector an approval snapshots (#292). Never a scenario value.
       capacitySignature: computeCapacitySignature(hosts),
       metricTypeId: metricType.id,
-      anchorMonth: firstOfMonth(anchor.capturedAt),
+      anchorMonth: startOfUtcMonth(anchor.capturedAt),
       bandEnabled: tenantSettings.forecastUncertaintyBandEnabled,
       bandMinAnchors: tenantSettings.forecastUncertaintyMinAnchors,
       bandWidth: tenantSettings.forecastUncertaintyBandWidth,
+      snapshotRetentionMonths: tenantSettings.forecastSnapshotRetentionMonths,
     };
   }
 
@@ -506,9 +515,12 @@ export class ForecastService {
 
   /**
    * Empirical uncertainty band for the projected months of the REAL forecast.
-   * Reads matured ForecastSnapshots (horizonMonth ≤ this month), pairs each with
-   * the measured actual utilization from baselineHistory, runs the pure error
-   * math, and applies the per-horizon offsets to this forecast's future months.
+   * Reads matured ForecastSnapshots (horizonMonth ≤ this month, and ≥ the
+   * retention cutoff when retention is on), pairs each with the measured actual
+   * from that month's OWN horizon-0 snapshot row — NOT from baselineHistory,
+   * whose baseline scalar is 0 for synced clusters (see `snapshotForecast`) —
+   * runs the pure error math, and applies the per-horizon offsets to this
+   * forecast's future months.
    * Returns undefined when disabled or the anchor floor is unmet — an honest
    * omission, never a fabricated band. Additive: never touches the forecast maths
    * (INV-1); invoked only by `forCluster`, never scenarios.
@@ -519,9 +531,21 @@ export class ForecastService {
     months: ForecastResult['months'],
   ): Promise<{ points: ForecastUncertaintyPoint[]; anchorCount: number } | undefined> {
     if (!prepared.bandEnabled) return undefined;
-    const thisMonth = firstOfMonth(new Date());
+    const thisMonth = startOfUtcMonth(new Date());
+    // The retention window bounds the READ, not just the sweep (#318): the band
+    // must be a function of the configured window, never of how recently the
+    // sweep last ran — otherwise the same cluster yields a different band before
+    // and after a tick. `snapshotRetentionMonths === 0` keeps it unbounded, which
+    // is the default (nothing is deleted, so nothing is hidden).
+    const retentionCutoff = retentionCutoffMonth(thisMonth, prepared.snapshotRetentionMonths);
     const snapshots = await this.prisma.forecastSnapshot.findMany({
-      where: { clusterId, metricTypeId: prepared.metricTypeId, horizonMonth: { lte: thisMonth } },
+      where: {
+        clusterId,
+        metricTypeId: prepared.metricTypeId,
+        horizonMonth: retentionCutoff
+          ? { gte: retentionCutoff, lte: thisMonth }
+          : { lte: thisMonth },
+      },
     });
     if (snapshots.length === 0) return undefined;
 
@@ -575,10 +599,6 @@ export class ForecastService {
 
 function parseMonth(month: string): Date {
   return new Date(`${month}T00:00:00.000Z`);
-}
-
-function firstOfMonth(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
 }
 
 function addMonths(date: Date, months: number): Date {

@@ -23,6 +23,7 @@ function toIso(d: Date): string {
 async function enableBand(
   minAnchors = 6,
   bandWidth: ForecastUncertaintyBandWidth = 'p10_p90',
+  snapshotRetentionMonths = 0,
 ): Promise<void> {
   await new SettingsService(prisma).updateTenant(TENANT, {
     warnThreshold: 0.7,
@@ -32,6 +33,7 @@ async function enableBand(
     forecastUncertaintyBandEnabled: true,
     forecastUncertaintyMinAnchors: minAnchors,
     forecastUncertaintyBandWidth: bandWidth,
+    forecastSnapshotRetentionMonths: snapshotRetentionMonths,
   });
 }
 
@@ -220,5 +222,97 @@ describe('ForecastService — uncertainty band', () => {
     await enableBand(4); // floor of 4; only 3 anchors truly paired
     const result = await new ForecastService(prisma).forCluster(TENANT, id, METRIC);
     expect(result.uncertainty).toBeUndefined();
+  });
+
+  describe('retention window bounds the READ (#318)', () => {
+    /**
+     * 24 monthly re-anchors, each over-forecasting horizon 1 by a margin that
+     * depends on how old the anchor is: months older than a year missed by
+     * +0.30, recent ones by only +0.10. A retention window that excludes the
+     * old, bad evidence must visibly tighten the band.
+     */
+    async function seedTwoEras(): Promise<{ id: string }> {
+      const { id, metricTypeId } = await makeCluster(prisma, {
+        baselineDate: monthStart(0),
+        baselineConsumption: 100,
+        baselineCapacity: 200,
+      });
+      for (let i = -24; i <= 0; i++) {
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i), 0, 0.5); // actual
+      }
+      for (let i = -24; i <= -1; i++) {
+        const projected = i < -12 ? 0.8 : 0.6; // error +0.30 (old era) vs +0.10 (recent)
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i + 1), 1, projected);
+      }
+      return { id };
+    }
+
+    it('keeps every sample when retention is off (the default)', async () => {
+      const { id } = await seedTwoEras();
+      await enableBand(6, 'p10_p90', 0);
+      const result = await new ForecastService(prisma).forCluster(TENANT, id, METRIC);
+      // 24 paired anchors, both eras present.
+      expect(result.uncertaintyAnchorCount).toBe(24);
+    });
+
+    it('excludes evidence older than the window without deleting anything', async () => {
+      const { id } = await seedTwoEras();
+      const before = await prisma.forecastSnapshot.count({ where: { clusterId: id } });
+
+      await enableBand(6, 'p10_p90', 12);
+      const result = await new ForecastService(prisma).forCluster(TENANT, id, METRIC);
+
+      // The read narrowed...
+      expect(result.uncertaintyAnchorCount).toBeLessThan(24);
+      expect(result.uncertainty).toBeDefined();
+      // ...but the rows are all still on disk. This PR windows the READ only.
+      expect(await prisma.forecastSnapshot.count({ where: { clusterId: id } })).toBe(before);
+    });
+
+    it('tightens the band when the window excludes a worse forecasting era', async () => {
+      const { id } = await seedTwoEras();
+      const service = new ForecastService(prisma);
+
+      await enableBand(6, 'p10_p90', 0);
+      const wide = await service.forCluster(TENANT, id, METRIC);
+      await enableBand(6, 'p10_p90', 12);
+      const narrow = await service.forCluster(TENANT, id, METRIC);
+
+      const h1 = (r: typeof wide): { low: number; high: number } => {
+        const p = r.uncertainty!.find((x) => x.month === toIso(monthStart(1)));
+        expect(p).toBeDefined();
+        return { low: p!.low, high: p!.high };
+      };
+      const wideH1 = h1(wide);
+      const narrowH1 = h1(narrow);
+      // Dropping the +0.30-error era leaves only the consistent +0.10 misses, so
+      // the retained band is strictly narrower.
+      expect(narrowH1.high - narrowH1.low).toBeLessThan(wideH1.high - wideH1.low);
+    });
+
+    it('counts anchors OLDER than the window when they project into it', async () => {
+      // The point of keying on horizonMonth rather than anchorMonth: a 20-month-old
+      // anchor whose horizon lands inside the window is still valid evidence for
+      // that horizon, and the window must not silently discard long horizons.
+      const { id, metricTypeId } = await makeCluster(prisma, {
+        baselineDate: monthStart(0),
+        baselineConsumption: 100,
+        baselineCapacity: 200,
+      });
+      for (let i = -11; i <= 0; i++) {
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i), 0, 0.5);
+      }
+      // Anchors -20..-15 (all far outside a 12-month window) projecting to
+      // horizon months -8..-3, which are INSIDE it.
+      for (let i = -20; i <= -15; i++) {
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i + 12), 12, 0.6);
+      }
+
+      await enableBand(6, 'p10_p90', 12);
+      const result = await new ForecastService(prisma).forCluster(TENANT, id, METRIC);
+
+      // All six ancient anchors still count — anchorCount is not capped by the window.
+      expect(result.uncertaintyAnchorCount).toBe(6);
+    });
   });
 });

@@ -54,6 +54,11 @@ model TenantSettings {
   forecastUncertaintyBandEnabled Boolean  @default(false) @map("forecast_uncertainty_band_enabled")
   forecastUncertaintyMinAnchors  Int      @default(6) @map("forecast_uncertainty_min_anchors")
   forecastUncertaintyBandWidth   String   @default("p10_p90") @map("forecast_uncertainty_band_width")
+  /// Months of `forecast_snapshot` history to keep, keyed on `horizon_month` (#318).
+  /// 0 = keep forever (the DEFAULT — pruning deletes forecast evidence nothing else
+  /// records, so it is opt-in per Golden Rule 3). Mirrors @lcm/shared
+  /// DEFAULT_FORECAST_SNAPSHOT_RETENTION_MONTHS.
+  forecastSnapshotRetentionMonths Int     @default(0) @map("forecast_snapshot_retention_months")
   createdAt                      DateTime @default(now()) @map("created_at")
   updatedAt                      DateTime @updatedAt @map("updated_at")
 
@@ -229,7 +234,10 @@ model ForecastSnapshot {
   tenant     Tenant     @relation(fields: [tenantId], references: [id])
 
   @@unique([clusterId, metricTypeId, anchorMonth, horizonMonth], map: "forecast_snapshot_unique")
-  @@index([clusterId, metricTypeId], map: "forecast_snapshot_cluster_metric_idx")
+  /// `horizonMonth` trails the read's own key order: `computeUncertainty` selects
+  /// one cluster+metric over a bounded horizon window (#318), so the range column
+  /// belongs last.
+  @@index([clusterId, metricTypeId, horizonMonth], map: "forecast_snapshot_cluster_metric_idx")
   @@map("forecast_snapshot")
 }
 

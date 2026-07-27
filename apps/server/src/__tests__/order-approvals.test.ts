@@ -131,6 +131,7 @@ async function setLeadTimeWeeks(weeks: number): Promise<void> {
     forecastUncertaintyBandEnabled: false,
     forecastUncertaintyMinAnchors: 6,
     forecastUncertaintyBandWidth: 'p10_p90',
+    forecastSnapshotRetentionMonths: 0,
   });
 }
 
@@ -283,6 +284,7 @@ describe('forecast acknowledgment coverage (DESIGN.md §3)', () => {
       forecastUncertaintyBandEnabled: false,
       forecastUncertaintyMinAnchors: 6,
       forecastUncertaintyBandWidth: 'p10_p90',
+      forecastSnapshotRetentionMonths: 0,
     });
 
     expect((await getForecast(clusterId)).json().acknowledgment).toBeNull();

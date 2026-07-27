@@ -267,6 +267,7 @@ function makeTenantSettings(overrides: Partial<TenantSettings> = {}): TenantSett
     forecastUncertaintyBandEnabled: false,
     forecastUncertaintyMinAnchors: 6,
     forecastUncertaintyBandWidth: 'p10_p90',
+    forecastSnapshotRetentionMonths: 0,
     ...overrides,
   };
 }
