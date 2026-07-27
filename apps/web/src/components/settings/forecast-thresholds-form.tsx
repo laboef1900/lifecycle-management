@@ -82,6 +82,24 @@ export function ForecastThresholdsForm(): React.JSX.Element {
   const bandWidth: ForecastUncertaintyBandWidth = bandWidthEdit ?? initialBandWidth ?? 'p10_p90';
   const snapshotRetention: NumInput = snapshotRetentionEdit ?? initialSnapshotRetention ?? '';
 
+  /**
+   * The value the SERVER currently has stored is outside `{0} ∪ [MIN, MAX]`, so
+   * `retentionCutoffMonth` is treating it as retention-off (INV-R1a) and nothing
+   * is being pruned — while this form would otherwise render it as a live
+   * window. Only reachable by a direct DB write, since the schema rejects it on
+   * save, but that is exactly the case INV-R1a exists to defend, and a defence
+   * the operator cannot see is half a defence.
+   *
+   * Keyed on the LOADED value, never the edited one: keying it on the current
+   * input would fire on the `1` that everyone types on the way to `12`, the same
+   * mistake the deletion warning below already had to have corrected.
+   */
+  const storedRetentionOutOfRange =
+    initialSnapshotRetention !== null &&
+    initialSnapshotRetention !== FORECAST_SNAPSHOT_RETENTION_DISABLED &&
+    (initialSnapshotRetention < FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS ||
+      initialSnapshotRetention > FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS);
+
   const mutation = useMutation({
     mutationFn: (input: TenantSettings) => api.settings.tenant.update(input),
     onSuccess: (data) => {
@@ -357,6 +375,21 @@ export function ForecastThresholdsForm(): React.JSX.Element {
               <span>
                 Saving deletes forecast snapshots older than {snapshotRetention} months, and keeps
                 deleting them as they age out.
+              </span>
+            </p>
+          ) : null}
+          {storedRetentionOutOfRange ? (
+            <p
+              className="flex max-w-md items-start gap-1.5 text-[11px] text-destructive"
+              role="alert"
+            >
+              <TriangleAlert aria-hidden className="mt-px h-3 w-3 shrink-0" />
+              <span>
+                The saved value ({initialSnapshotRetention}) is outside the permitted range, so
+                retention is currently <strong className="font-medium">off</strong> and nothing is
+                being deleted. It cannot have been set here — change it to 0, or to{' '}
+                {FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS}–{FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS},
+                and save to clear this.
               </span>
             </p>
           ) : null}
