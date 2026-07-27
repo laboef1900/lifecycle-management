@@ -356,7 +356,7 @@ describe('POST /api/clusters/:id/forecast/scenario', () => {
  * `absorbed` is fed from TWO independent places. `ClustersService.toResponse`
  * builds a per-metric input for `ClusterResponse.metrics`, and `ForecastService`
  * builds a different one here — different query, different window
- * (`fromMonth = firstOfMonth(anchor.capturedAt)`), and it is this one that
+ * (`fromMonth = startOfUtcMonth(anchor.capturedAt)`), and it is this one that
  * produces `procurement.breachMonth`, `procurement.orderByDate` and the 24-month
  * chart hardware purchasing is decided from. Coverage of one says nothing about
  * the other: before these tests, deleting the `baselineMeasuredAt` line in

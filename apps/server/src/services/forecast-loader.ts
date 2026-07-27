@@ -202,7 +202,7 @@ export class ForecastService {
    * baseline-anchored window and NOT the exact window the chip reads. The web
    * chip requests a TODAY-anchored window (`resolveWindow` in
    * `apps/web/src/components/clusters/window-controls.tsx` — `from =
-   * firstOfMonth(today)` for the 12/24-mo views).
+   * startOfUtcMonth(today)` for the 12/24-mo views).
    *
    *   - PAST/PRESENT-dated baseline (`capturedAt ≤ today`, the normal case): the
    *     clamp is a no-op, so this stays baseline-anchored and starts no later than
@@ -214,7 +214,7 @@ export class ForecastService {
    *     422 on Approve for a breach past this window's `to` (anchor + horizon) yet
    *     within the chip's (today + horizon).
    *   - FUTURE-dated baseline (`capturedAt > today`): the clamp pulls the window
-   *     start back to `firstOfMonth(today)`, matching the chip's 12/24-mo anchor.
+   *     start back to `startOfUtcMonth(today)`, matching the chip's 12/24-mo anchor.
    *     Without it (the pre-#303 defect) the raw baseline anchor started the write
    *     window LATER than the chip's, so the snapshotted `orderByDate` landed later
    *     than the live one and the ≥ T rule FALSELY superseded the approval the
@@ -342,13 +342,13 @@ export class ForecastService {
     // start the snapshot window later than the today-anchored chip window and
     // falsely supersede a fresh approval. `min` makes it a no-op for any
     // past/present baseline, so the read path (no `clampAnchorToToday`) is
-    // untouched. `firstOfMonth` is monotonic, so clamping the instant then
+    // untouched. `startOfUtcMonth` is monotonic, so clamping the instant then
     // snapping equals snapping both then taking the earlier month.
     const defaultAnchor =
       options.clampAnchorToToday && anchor.capturedAt.getTime() > Date.now()
         ? new Date()
         : anchor.capturedAt;
-    const fromMonth = options.fromMonth ?? firstOfMonth(defaultAnchor);
+    const fromMonth = options.fromMonth ?? startOfUtcMonth(defaultAnchor);
     const toMonth = options.toMonth ?? addMonths(fromMonth, DEFAULT_HORIZON_MONTHS);
 
     if (toMonth < fromMonth) {
@@ -487,7 +487,7 @@ export class ForecastService {
       // change-detector an approval snapshots (#292). Never a scenario value.
       capacitySignature: computeCapacitySignature(hosts),
       metricTypeId: metricType.id,
-      anchorMonth: firstOfMonth(anchor.capturedAt),
+      anchorMonth: startOfUtcMonth(anchor.capturedAt),
       bandEnabled: tenantSettings.forecastUncertaintyBandEnabled,
       bandMinAnchors: tenantSettings.forecastUncertaintyMinAnchors,
       bandWidth: tenantSettings.forecastUncertaintyBandWidth,
@@ -531,7 +531,7 @@ export class ForecastService {
     months: ForecastResult['months'],
   ): Promise<{ points: ForecastUncertaintyPoint[]; anchorCount: number } | undefined> {
     if (!prepared.bandEnabled) return undefined;
-    const thisMonth = firstOfMonth(new Date());
+    const thisMonth = startOfUtcMonth(new Date());
     // The retention window bounds the READ, not just the sweep (#318): the band
     // must be a function of the configured window, never of how recently the
     // sweep last ran — otherwise the same cluster yields a different band before
@@ -599,10 +599,6 @@ export class ForecastService {
 
 function parseMonth(month: string): Date {
   return new Date(`${month}T00:00:00.000Z`);
-}
-
-function firstOfMonth(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
 }
 
 function addMonths(date: Date, months: number): Date {
