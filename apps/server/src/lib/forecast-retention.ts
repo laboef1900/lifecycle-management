@@ -46,6 +46,13 @@ import {
  * unauthorised value into real, unrecoverable deletes the moment the sweep runs.
  * A bit-flipped column is not the authorisation Golden Rule 3 requires.
  *
+ * And clamping UP is not the safer direction either, which is the tempting
+ * mistake: a stored `5` may be a torn or partial write of what was meant to be
+ * `0` (disabled). In that case ANY non-null cutoff — clamped up to 12 or down —
+ * deletes history the operator explicitly asked to keep forever. Null for every
+ * out-of-range value is the only answer that cannot do that, which is why the
+ * check is a rejection and not a `Math.min`/`Math.max`.
+ *
  * The caller is expected to notice the `null`-with-nonzero-months case and log
  * it (`ForecastSnapshotCleanup.runSweep` does); silence would hide the tampering.
  */
