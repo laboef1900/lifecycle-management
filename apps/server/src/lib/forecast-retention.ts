@@ -31,17 +31,23 @@ import {
  * horizon's sample count.
  *
  * @ai-warning Any value outside `{0} ∪ [MIN, MAX]` returns `null` — retention
- * OFF — rather than being clamped into range. The schema already rejects those
- * on write, so reaching here means a direct DB write bypassed it, and the safe
- * response to an out-of-spec window on a DESTRUCTIVE operation is to prune
- * nothing rather than to invent a window nobody configured. Clamping would be
- * the weaker default CLAUDE.md's resilience rule forbids: it turns a bad value
- * into real, unrecoverable deletes. The caller is expected to notice the
- * `null`-with-nonzero-months case and log it (`ForecastSnapshotCleanup.runSweep`
- * does); silence would hide the tampering.
+ * OFF — rather than being clamped into range. This is the SAME rule
+ * `SettingsService.coerceBandWidth` already applies: fall back to the schema
+ * default. It just looks different here because
+ * `DEFAULT_FORECAST_SNAPSHOT_RETENTION_MONTHS` IS
+ * `FORECAST_SNAPSHOT_RETENTION_DISABLED` — this field's default is "off" — so
+ * "fall back to the default" and "prune nothing" are the same instruction. It
+ * is not a bespoke policy invented for this field.
  *
- * Mirrors `SettingsService`'s `coerceBandWidth`, which fails an out-of-enum
- * band width safe to the default for the same reason.
+ * Why not clamp: the schema forecloses the dead zone on every legitimate write
+ * path, so the only way an out-of-spec value reaches here is tampering or
+ * corruption — never an operator's intent partially expressed. There is no
+ * legitimate-intent case for clamping to serve, and clamping would convert an
+ * unauthorised value into real, unrecoverable deletes the moment the sweep runs.
+ * A bit-flipped column is not the authorisation Golden Rule 3 requires.
+ *
+ * The caller is expected to notice the `null`-with-nonzero-months case and log
+ * it (`ForecastSnapshotCleanup.runSweep` does); silence would hide the tampering.
  */
 export function retentionCutoffMonth(thisMonth: Date, retentionMonths: number): Date | null {
   if (retentionMonths <= FORECAST_SNAPSHOT_RETENTION_DISABLED) return null;
