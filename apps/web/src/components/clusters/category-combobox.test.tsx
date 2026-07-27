@@ -74,7 +74,10 @@ describe('<CategoryCombobox>', () => {
   it('announces as required without renaming the field', () => {
     render(<CategoryCombobox value="" onChange={vi.fn()} categories={[]} />);
 
-    // Category is `min(1)` on every item schema in `@lcm/shared`.
+    // Required at all three mounts, though not uniformly in the schemas:
+    // create and bulk-quarterly-growth make `category` `.trim().min(1)`, while
+    // `itemUpdateInputSchema` marks it `.optional()` — which permits an ABSENT
+    // key, never an empty one, and `edit-item-dialog` sends it every time.
     const input = screen.getByLabelText('Category');
     expect(input).toHaveAttribute('aria-required', 'true');
     // The `*` marker sits OUTSIDE the label, so the accessible name stays clean
@@ -111,16 +114,5 @@ describe('<CategoryCombobox>', () => {
     // the DOM. No dialog renders two today; nothing stops one from doing so.
     expect(screen.getByLabelText('Category')).toHaveAccessibleDescription('First problem');
     expect(screen.getByLabelText('Second category')).toHaveAccessibleDescription('Second problem');
-  });
-
-  it('drops the marker, `required` and `aria-required` together when opted out', () => {
-    // All three come off one flag, as in `Field` — a caller that turns the
-    // requirement off must not be left with a `*` the contract does not back.
-    render(<CategoryCombobox value="" onChange={vi.fn()} categories={[]} required={false} />);
-
-    const input = screen.getByLabelText('Category');
-    expect(input).not.toHaveAttribute('required');
-    expect(input).not.toHaveAttribute('aria-required');
-    expect(screen.queryByText('*')).not.toBeInTheDocument();
   });
 });

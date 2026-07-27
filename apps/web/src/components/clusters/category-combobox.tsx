@@ -8,15 +8,6 @@ interface CategoryComboboxProps {
   categories: string[];
   error?: string | undefined;
   label?: string;
-  /**
-   * Defaults to `true` because `category` is `.trim().min(1)` on every item
-   * schema in `@lcm/shared`, so every current mount is required. Kept as a prop
-   * anyway so this reproduces {@link Field}'s contract in full: there, the
-   * marker, `required` and `aria-required` are all derived from one flag, and a
-   * future optional-category caller must be able to turn all three off together
-   * rather than being stuck with a `*` that lies.
-   */
-  required?: boolean;
 }
 
 /**
@@ -28,6 +19,22 @@ interface CategoryComboboxProps {
  * The aria contract is {@link Field}'s, deliberately reproduced rather than
  * reused: `Field` renders its own `<Input>` and cannot host the `list`/
  * `<datalist>` pairing this control exists for.
+ *
+ * Requiredness is hardcoded, NOT a prop — deliberately diverging from `Field`,
+ * which derives it from one. `Field` is generic and serves fields whose
+ * requiredness varies; this control serves exactly one field whose contract
+ * fixes it. Every mount sends `category` on submit, and `@lcm/shared` rejects an
+ * empty one (see below), so a `required={false}` caller could only produce a
+ * field that claims to be optional and then 400s. Configurability here would be
+ * a way to contradict the contract, not a way to serve a caller.
+ *
+ * @ai-note "Required" is true of all three mounts, but not for the reason it
+ * looks like. `category` is `.trim().min(1)` on `itemCreateInputSchema` and
+ * `itemBulkCreateQuarterlyGrowthInputSchema`, while `itemUpdateInputSchema`
+ * marks it `.optional()` — that permits an ABSENT key, never an empty one, and
+ * `edit-item-dialog` includes `category` in every payload regardless. So it is
+ * required at all three call sites; a future mount that sends a genuine partial
+ * update would be the first case where that stops being true.
  */
 export function CategoryCombobox({
   value,
@@ -35,7 +42,6 @@ export function CategoryCombobox({
   categories,
   error,
   label = 'Category',
-  required = true,
 }: CategoryComboboxProps): React.JSX.Element {
   const inputId = useId();
   const listId = useId();
@@ -52,19 +58,17 @@ export function CategoryCombobox({
         <label htmlFor={inputId} className="text-sm font-medium">
           {label}
         </label>
-        {required ? (
-          <span aria-hidden className="text-destructive">
-            *
-          </span>
-        ) : null}
+        <span aria-hidden className="text-destructive">
+          *
+        </span>
       </div>
       <Input
         id={inputId}
         list={listId}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        required={required}
-        aria-required={required ? 'true' : undefined}
+        required
+        aria-required="true"
         aria-invalid={error ? 'true' : undefined}
         // Without this the message below was visible but not programmatically
         // associated: a screen-reader user moving through the form heard the
