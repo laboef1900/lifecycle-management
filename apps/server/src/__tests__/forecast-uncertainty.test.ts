@@ -224,6 +224,99 @@ describe('ForecastService — uncertainty band', () => {
     expect(result.uncertainty).toBeUndefined();
   });
 
+  describe('per-horizon sample count (#317)', () => {
+    it('reports each band point its own horizon evidence, well below the global N', async () => {
+      const { id, metricTypeId } = await makeCluster(prisma, {
+        baselineDate: monthStart(0),
+        baselineConsumption: 100,
+        baselineCapacity: 200,
+      });
+      // Actuals for every month that any projection lands on.
+      for (let i = -24; i <= 0; i++) {
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i), 0, 0.5);
+      }
+      // Horizon 1 measured NINE times (anchors −9..−1 → horizon months −8..0).
+      for (let i = -9; i <= -1; i++) {
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i + 1), 1, 0.6);
+      }
+      // Horizon 12 measured only THREE times (anchors −15..−13 → months −3..−1).
+      for (let i = -15; i <= -13; i++) {
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i + 12), 12, 0.6);
+      }
+
+      await enableBand(6);
+      const result = await new ForecastService(prisma).forCluster(TENANT, id, METRIC);
+
+      // 12 distinct anchors produced a paired error — the number the caption used
+      // to quote against EVERY month of the band.
+      expect(result.uncertaintyAnchorCount).toBe(12);
+
+      const at = (offset: number): number | undefined =>
+        result.uncertainty!.find((p) => p.month === toIso(monthStart(offset)))?.sampleCount;
+      expect(at(1)).toBe(9);
+      // The far end rests on a quarter of the claimed evidence. This gap is the
+      // whole reason the field exists.
+      expect(at(12)).toBe(3);
+
+      // Invariant: an anchor contributes at most one sample per horizon index, so
+      // no point can claim more evidence than the pool holds.
+      for (const p of result.uncertainty!) {
+        expect(p.sampleCount).toBeDefined();
+        expect(p.sampleCount!).toBeLessThanOrEqual(result.uncertaintyAnchorCount!);
+        expect(p.sampleCount!).toBeGreaterThanOrEqual(3); // PER_HORIZON_MIN_SAMPLES
+      }
+    });
+
+    it('shows the retention window capping evidence while N keeps climbing (#318 × #317)', async () => {
+      // The interaction #318 introduced: one retained month yields at most one
+      // sample per horizon index, so `retentionMonths` caps every horizon — but an
+      // anchor up to 24 months older than the window still projects INTO it, so
+      // the anchor count is not capped and keeps growing past it.
+      //
+      // Scope, so the numbers below are not mistaken for the worst case: this
+      // seeds evidence at two horizons (1 and 24), which exercises the MECHANISM
+      // and lands N at 15. The general bound is `retentionMonths + (maxHorizon -
+      // 1)` — the union of the per-horizon valid-anchor windows across horizons
+      // 1..maxHorizon spans that many months — so at the 24-month default with a
+      // 12-month window it is 35, and a longer requested span widens it further.
+      // Seeding all 24 horizons to reach 35 would grow the fixture without
+      // pinning anything these assertions do not already pin.
+      const { id, metricTypeId } = await makeCluster(prisma, {
+        baselineDate: monthStart(0),
+        baselineConsumption: 100,
+        baselineCapacity: 200,
+      });
+      for (let i = -30; i <= 0; i++) {
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i), 0, 0.5);
+      }
+      // Thirty monthly horizon-1 projections; only the twelve landing inside a
+      // 12-month window survive the read.
+      for (let i = -30; i <= -1; i++) {
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i + 1), 1, 0.6);
+      }
+      // Three ancient anchors (−35..−33) whose 24-month horizons land at −11..−9,
+      // i.e. inside the window. They count toward N without adding evidence to
+      // any horizon but 24.
+      for (let i = -35; i <= -33; i++) {
+        await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i + 24), 24, 0.6);
+      }
+
+      await enableBand(6, 'p10_p90', 12);
+      const result = await new ForecastService(prisma).forCluster(TENANT, id, METRIC);
+
+      const at = (offset: number): number | undefined =>
+        result.uncertainty!.find((p) => p.month === toIso(monthStart(offset)))?.sampleCount;
+      // Capped by the 12-month window, not by how many anchors exist.
+      expect(at(1)).toBe(12);
+      expect(at(24)).toBe(3);
+      // ...while N exceeds the window, because anchors older than it still project
+      // into it. A caption naming only N would claim 15 forecasts behind a band
+      // resting on 3.
+      expect(result.uncertaintyAnchorCount).toBe(15);
+      expect(at(24)!).toBeLessThan(result.uncertaintyAnchorCount!);
+    });
+  });
+
   describe('retention window bounds the READ (#318)', () => {
     /**
      * 24 monthly re-anchors, each over-forecasting horizon 1 by a margin that

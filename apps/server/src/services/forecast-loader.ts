@@ -591,6 +591,14 @@ export class ForecastService {
         month: m.month,
         low: m.utilization + band.low,
         high: m.utilization + band.high,
+        // Per-horizon, deliberately NOT `anchorCount` (#317). An anchor
+        // contributes at most one sample per horizon index, so this is ≤ the
+        // global count and typically far below it at the far end of the window —
+        // and a configured retention window (#318) caps it at `retentionMonths`
+        // while `anchorCount` keeps climbing past it. Quoting the global number
+        // against a far-out month would overstate its evidence on a purchasing
+        // surface.
+        sampleCount: band.sampleCount,
       });
     }
     return points.length > 0 ? { points, anchorCount } : undefined;

@@ -115,6 +115,24 @@ export interface ForecastUncertaintyPoint {
   month: string;
   low: number;
   high: number;
+  /**
+   * How many matured past forecasts were measured AT THIS MONTH'S HORIZON — the
+   * evidence behind *this* point, not the chart (#317).
+   *
+   * @ai-warning This is NOT {@link ForecastResponse.uncertaintyAnchorCount} and is
+   * usually much smaller. That counts distinct anchor months across the whole
+   * band; this counts the samples at one horizon index. An anchor contributes at
+   * most one sample per horizon, so `sampleCount <= uncertaintyAnchorCount`
+   * always — and the far end of the band typically sits near the engine's
+   * per-horizon floor while the near end has many more. Quoting the global count
+   * next to a far-out month overstates its evidence, which is exactly what this
+   * field exists to prevent.
+   *
+   * Additive/optional so a server build predating #317 still parses; when
+   * present it is `>= PER_HORIZON_MIN_SAMPLES` (a horizon below the floor draws
+   * no band at all, so a count the UI can render is never misleadingly tiny).
+   */
+  sampleCount?: number;
 }
 
 export interface ForecastResponse {
@@ -151,9 +169,17 @@ export interface ForecastResponse {
    */
   uncertainty?: ForecastUncertaintyPoint[];
   /**
-   * How many distinct past re-anchors the band was measured from — the "N" in the
-   * chart's empirical caption ("Range from N past forecasts' measured error").
-   * Present exactly when `uncertainty` is; ≥ the configured minimum-anchors floor.
+   * How many distinct past re-anchors the band was measured from, across ALL
+   * horizons. Present exactly when `uncertainty` is; ≥ the configured
+   * minimum-anchors floor.
+   *
+   * @ai-warning This is the size of the evidence POOL, not the evidence behind
+   * any one month of the band — see {@link ForecastUncertaintyPoint.sampleCount}.
+   * The two diverge sharply once a snapshot-retention window is configured
+   * (#318): the window caps each horizon's sample count at `retentionMonths`,
+   * while an anchor up to 24 months older than the window still projects into it,
+   * so this count keeps climbing to roughly `retentionMonths + 23`. Do not render
+   * it as the number a given month's band rests on.
    */
   uncertaintyAnchorCount?: number;
 }

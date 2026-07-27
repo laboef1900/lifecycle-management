@@ -219,6 +219,12 @@ export const forecastUncertaintyPointSchema: z.ZodType<ForecastUncertaintyPoint>
   month: z.string(),
   low: z.number(),
   high: z.number(),
+  // Additive (#317), same compat shape as `acknowledgment` below: a server build
+  // that predates per-horizon counts omits it and its band still parses, so a
+  // lagging `:dev` server cannot break a newer web bundle. `min(1)`, not
+  // `nonnegative()` — a horizon with no samples draws no band at all, so a zero
+  // here would be a fabricated point rather than an honest one.
+  sampleCount: z.number().int().min(1).exactOptional(),
 });
 
 export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
