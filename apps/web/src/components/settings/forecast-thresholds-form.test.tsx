@@ -275,6 +275,49 @@ describe('<ForecastThresholdsForm>', () => {
       expect(await screen.findByRole('status')).toHaveTextContent(/12 months/i);
     });
 
+    it('says so when the SAVED value is out of range and therefore inert', async () => {
+      // INV-R1a's other half. The server treats an out-of-spec stored window as
+      // retention-off, so without this the form renders `5` as a live 5-month
+      // window while nothing is pruned — the one scenario the invariant exists
+      // for is the one the UI would misreport. Reachable only by a direct DB
+      // write, which is precisely why the operator needs telling.
+      vi.spyOn(api.settings.tenant, 'get').mockResolvedValue({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 5,
+      });
+      renderWithClient(<ForecastThresholdsForm />);
+
+      const notice = await screen.findByRole('alert');
+      expect(notice).toHaveTextContent(/saved value \(5\)/i);
+      expect(notice).toHaveTextContent(/currently off/i);
+      // And it must NOT also claim deletions are about to happen.
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('keeps quiet about the saved value while it is in range', async () => {
+      // Non-vacuity partner for the test above: a legitimate 24 must not trip it.
+      vi.spyOn(api.settings.tenant, 'get').mockResolvedValue({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 24,
+      });
+      renderWithClient(<ForecastThresholdsForm />);
+
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(24));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
     it('stays quiet past the maximum, which is equally unsaveable', async () => {
       renderWithClient(<ForecastThresholdsForm />);
       await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
