@@ -65,9 +65,19 @@ test.describe('mobile layout at 390x844', () => {
     // what actually separates 1-up (tile spans the whole grid) from 2-up (about
     // half of it, less the gap), and it stays true when padding is retuned —
     // which is what made the original `> 340` rot.
-    const gridWidth = await first.evaluate(
-      (el) => el.parentElement?.parentElement?.getBoundingClientRect().width ?? 0,
-    );
+    //
+    // Resolved with `closest('.grid')` rather than by walking up a fixed number
+    // of parents: `parentElement.parentElement` silently lands on the col-span
+    // wrapper the moment anyone adds a layer of nesting, which restores the very
+    // tautology above with no test failure to announce it. `closest` can only
+    // ever return an element carrying the grid class — which the wrapper does
+    // not — so that degradation becomes impossible rather than merely unlikely.
+    // Null means the DOM moved out from under this assertion; fail loudly.
+    const gridWidth = await first.evaluate((el) => {
+      const grid = el.closest('.grid');
+      if (!grid) throw new Error('cluster tile is not inside a .grid container');
+      return grid.getBoundingClientRect().width;
+    });
     expect(gridWidth).toBeGreaterThan(0);
     expect(firstBox!.width).toBeGreaterThan(gridWidth - 1);
     // Independent floor so a collapsed grid can't satisfy the above by being
