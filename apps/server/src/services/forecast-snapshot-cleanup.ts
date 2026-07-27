@@ -1,4 +1,4 @@
-import { FORECAST_SNAPSHOT_RETENTION_DISABLED } from '@lcm/shared';
+import { FORECAST_SNAPSHOT_RETENTION_DISABLED, startOfUtcMonth } from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
 
 import { retentionCutoffMonth } from '../lib/forecast-retention.js';
@@ -120,7 +120,12 @@ export class ForecastSnapshotCleanup {
   }
 
   private async runSweep(now: Date): Promise<ForecastSnapshotSweepResult[]> {
-    const thisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    // `startOfUtcMonth`, never a local reimplementation: the band's read
+    // normalises with the same function, and three copies of this one rule is
+    // exactly how the sweep and the read drift apart with nothing pointing at
+    // the connection. `retentionCutoffMonth` normalises again internally, so
+    // this is belt-and-braces rather than load-bearing.
+    const thisMonth = startOfUtcMonth(now);
     const tenants = await this.prisma.tenantSettings
       .findMany({
         where: { forecastSnapshotRetentionMonths: { gt: FORECAST_SNAPSHOT_RETENTION_DISABLED } },
@@ -135,9 +140,20 @@ export class ForecastSnapshotCleanup {
     for (const tenant of tenants) {
       const retentionMonths = tenant.forecastSnapshotRetentionMonths;
       const cutoff = retentionCutoffMonth(thisMonth, retentionMonths);
-      // Unreachable via the `gt: 0` filter above; belt-and-braces so a future
-      // refactor of either side cannot turn "retention off" into "delete all".
-      if (!cutoff) continue;
+      if (!cutoff) {
+        // `retentionMonths > 0` per the filter above, so a null cutoff means the
+        // stored value is outside `{0} u [MIN, MAX]` — the schema rejects those
+        // on write, so it got there by a direct DB write. Retention fails SAFE
+        // to off (INV-R1a) rather than clamping, because clamping would turn a
+        // tampered value into real, unrecoverable deletes. Logged rather than
+        // skipped silently: an operator who set a window and sees no pruning
+        // needs the reason, and silence is how tampering stays invisible.
+        this.logger.warn(
+          { tenantId: tenant.tenantId, retentionMonths },
+          'forecast-snapshot retention is out of range; keeping everything and pruning nothing',
+        );
+        continue;
+      }
 
       // No index serves this predicate — both indexes on `forecast_snapshot`
       // lead with `cluster_id` — so each sweep sequentially scans the table.

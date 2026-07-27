@@ -248,6 +248,32 @@ describe('ForecastSnapshotCleanup (#318)', () => {
     );
   });
 
+  it('prunes NOTHING and warns when the stored window is out of range (INV-R1a)', async () => {
+    // Only reachable by a direct DB write — the schema rejects the 1..11 dead
+    // zone — which is exactly why the read path defends against it too. The
+    // failure mode being prevented is a CLAMP: honouring a tampered `5` would
+    // delete real, unrecoverable history on a window nobody configured.
+    const warn = vi.fn();
+    const { id } = await seedThreeYears();
+    await setRetention(0);
+    await prisma.tenantSettings.update({
+      where: { tenantId: TENANT },
+      data: { forecastSnapshotRetentionMonths: 5 },
+    });
+    const before = await prisma.forecastSnapshot.count({ where: { clusterId: id } });
+    const deleteMany = vi.spyOn(prisma.forecastSnapshot, 'deleteMany');
+
+    const results = await new ForecastSnapshotCleanup(prisma, { info: vi.fn(), warn }).sweep(NOW);
+
+    expect(results).toEqual([]);
+    expect(deleteMany).not.toHaveBeenCalled();
+    expect(await prisma.forecastSnapshot.count({ where: { clusterId: id } })).toBe(before);
+    expect(warn).toHaveBeenCalledWith(
+      { tenantId: TENANT, retentionMonths: 5 },
+      expect.stringContaining('out of range'),
+    );
+  });
+
   it('joins the run already in flight rather than sweeping twice at once', async () => {
     // A second concurrent sweep would overwrite `activeRun`, and whichever
     // settled first would clear it — leaving `stop()` draining a finished run
