@@ -40,9 +40,15 @@ describe('retentionCutoffMonth (#318)', () => {
     expect(retentionCutoffMonth(JULY_2026, 120)).not.toBeNull();
   });
 
-  it('normalizes a mid-month "now" before computing the cutoff', () => {
-    // The sweep passes a real `new Date()`; the read passes a normalized month.
-    // Both must land on the same cutoff or the sweep could outrun the read.
+  it('gives the same cutoff for a mid-month "now" as for a normalized one', () => {
+    // The sweep passes a real `new Date()`; the read passes an already-normalized
+    // month. Both must land on the same cutoff or the sweep could outrun the read.
+    //
+    // Characterization, NOT a regression guard for a fix: the function only ever
+    // read year and month off this argument and hardcoded day 1, so it already
+    // normalized implicitly — this passes under the pre-`startOfUtcMonth`
+    // arithmetic too. It is here to pin the property against a future rewrite
+    // (e.g. one reaching for `.getTime()`), not because it was ever broken.
     const midMonth = retentionCutoffMonth(new Date(Date.UTC(2026, 6, 17, 23, 59)), 12);
     expect(midMonth).toEqual(retentionCutoffMonth(JULY_2026, 12));
   });
