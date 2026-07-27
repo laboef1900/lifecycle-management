@@ -21,8 +21,30 @@ describe('retentionCutoffMonth (#318)', () => {
     expect(retentionCutoffMonth(JULY_2026, 12)).toEqual(new Date(Date.UTC(2025, 7, 1)));
   });
 
-  it('keeps only the current month at the degenerate window of 1', () => {
-    expect(retentionCutoffMonth(JULY_2026, 1)).toEqual(JULY_2026);
+  it('treats an in-range-looking but out-of-spec window as disabled, not clamped', () => {
+    // The 1..11 dead zone and anything past the max. The schema rejects these on
+    // write, so reaching here means a direct DB write bypassed it — and on a
+    // DESTRUCTIVE operation the safe answer is to prune nothing rather than to
+    // invent a window nobody configured. Clamping (to 12, or to 120) would turn
+    // a tampered value into real, unrecoverable deletes.
+    for (const months of [1, 5, 11]) {
+      expect(retentionCutoffMonth(JULY_2026, months)).toBeNull();
+    }
+    expect(retentionCutoffMonth(JULY_2026, 121)).toBeNull();
+    expect(retentionCutoffMonth(JULY_2026, 10_000)).toBeNull();
+  });
+
+  it('accepts both ends of the permitted range', () => {
+    // Guards the boundary the check above must not overshoot.
+    expect(retentionCutoffMonth(JULY_2026, 12)).not.toBeNull();
+    expect(retentionCutoffMonth(JULY_2026, 120)).not.toBeNull();
+  });
+
+  it('normalizes a mid-month "now" before computing the cutoff', () => {
+    // The sweep passes a real `new Date()`; the read passes a normalized month.
+    // Both must land on the same cutoff or the sweep could outrun the read.
+    const midMonth = retentionCutoffMonth(new Date(Date.UTC(2026, 6, 17, 23, 59)), 12);
+    expect(midMonth).toEqual(retentionCutoffMonth(JULY_2026, 12));
   });
 
   it('crosses year boundaries', () => {
