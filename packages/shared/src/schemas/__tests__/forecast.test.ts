@@ -70,8 +70,17 @@ describe('scenarioStackSchema (#323)', () => {
     expect(r.error?.issues[0]?.message).toBe('Each scenario kind may appear at most once');
   });
 
-  it(`rejects more than MAX_SCENARIO_STEPS (${MAX_SCENARIO_STEPS}) steps`, () => {
-    // Distinct kinds are exhausted at 3, so a 4th step trips the cap on its own.
+  /**
+   * @ai-warning The `.max()` cap and the uniqueness refine are CONFOUNDED by the
+   * pigeonhole principle: there are exactly three kinds, so any array long enough
+   * to exceed the cap necessarily repeats one, and a bare `success === false`
+   * assertion here passes with `.max(MAX_SCENARIO_STEPS)` deleted entirely (AI
+   * review verified that by removing it). So this asserts the cap's OWN issue —
+   * `too_big` — not merely that the body was rejected. That keeps the cap covered
+   * for its actual purpose: bounding the stack once a fourth kind exists and
+   * uniqueness stops implying a bound.
+   */
+  it(`rejects more than MAX_SCENARIO_STEPS (${MAX_SCENARIO_STEPS}) steps, on the cap's own issue`, () => {
     const r = scenarioStackSchema.safeParse({
       steps: [
         { kind: 'lose_hosts', count: 1 },
@@ -81,6 +90,10 @@ describe('scenarioStackSchema (#323)', () => {
       ],
     });
     expect(r.success).toBe(false);
+    expect(
+      r.error?.issues.some((issue) => issue.code === 'too_big'),
+      'the array-length cap must be the (or a) reason, not just the uniqueness refine',
+    ).toBe(true);
   });
 
   it('rejects an empty stack', () => {
@@ -130,5 +143,64 @@ describe('scenarioRequestSchema — additive single/stack union (#323)', () => {
   it('rejects a body that is neither shape', () => {
     expect(scenarioRequestSchema.safeParse({}).success).toBe(false);
     expect(scenarioRequestSchema.safeParse({ count: 2 }).success).toBe(false);
+  });
+
+  /**
+   * The ambiguity guard. Without it, `scenarioStackSchema` (a `strictObject`)
+   * rejects the extra `kind`/`count`, the union falls through to the bare branch,
+   * and that branch — stripping `z.object`s — discards `steps` and yields a
+   * one-step stack with a 200. A silently narrowed forecast on an endpoint that
+   * drives hardware purchasing is the worst available outcome, so it is a 400.
+   */
+  it('rejects a body carrying BOTH a bare scenario and a steps array', () => {
+    const r = scenarioRequestSchema.safeParse({
+      kind: 'lose_hosts',
+      count: 1,
+      steps: [{ kind: 'add_vms', count: 99, sizeGb: 999 }],
+    });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.some((i) => /never both/.test(i.message))).toBe(true);
+  });
+
+  it('does not let a bare scenario smuggle a stack past the cap or the uniqueness rule', () => {
+    // Every one of these parsed successfully before the guard, silently narrowed
+    // to `{ steps: [{ kind: 'lose_hosts', count: 1 }] }`. Prefixing a valid bare
+    // scenario made EVERY stack-level rule unreachable, because the whole `steps`
+    // key was dropped before any of them ran.
+    const bodies: unknown[] = [
+      // over the cap
+      {
+        kind: 'lose_hosts',
+        count: 1,
+        steps: [
+          { kind: 'lose_hosts', count: 1 },
+          { kind: 'add_vms', count: 1, sizeGb: 1 },
+          { kind: 'delay_procurement', months: 1 },
+          { kind: 'lose_hosts', count: 2 },
+        ],
+      },
+      // duplicate kind — the id-collision guard
+      {
+        kind: 'lose_hosts',
+        count: 1,
+        steps: [
+          { kind: 'add_vms', count: 10, sizeGb: 16 },
+          { kind: 'add_vms', count: 10, sizeGb: 16 },
+        ],
+      },
+      // empty, and outright malformed
+      { kind: 'lose_hosts', count: 1, steps: [] },
+      { kind: 'lose_hosts', count: 1, steps: 'not-an-array' },
+    ];
+    for (const body of bodies) {
+      expect(scenarioRequestSchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
+    }
+  });
+
+  it('still accepts each shape on its own, unambiguously', () => {
+    expect(scenarioRequestSchema.safeParse({ kind: 'lose_hosts', count: 1 }).success).toBe(true);
+    expect(
+      scenarioRequestSchema.safeParse({ steps: [{ kind: 'lose_hosts', count: 1 }] }).success,
+    ).toBe(true);
   });
 });

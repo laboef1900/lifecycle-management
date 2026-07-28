@@ -248,6 +248,9 @@ export const scenarioStackSchema = z
     path: ['steps'],
   });
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
 /**
  * What the preview endpoint accepts: a stack, or a bare single scenario
  * normalised to a one-step stack.
@@ -257,14 +260,42 @@ export const scenarioStackSchema = z
  * `LCM_IMAGE_TAG`, so a hard cutover would 400 every preview from an older SPA
  * in a mixed-tag deployment. Same discipline as the additive `acknowledgment`
  * (#292) and `uncertainty` (#316) response fields.
+ *
+ * @ai-warning The ambiguity guard below is load-bearing, NOT defensive
+ * boilerplate. A plain `z.union([stack, bare])` is silently wrong for a body
+ * carrying BOTH shapes: `scenarioStackSchema` is a `strictObject` so it rejects
+ * the extra `kind`/`count` keys, the union falls through to the bare branch, and
+ * that branch — a discriminated union of *stripping* `z.object`s — discards
+ * `steps` entirely and answers 200 with a one-step forecast. Every stack-level
+ * rule then becomes unreachable too: prefixing a valid bare scenario bypassed
+ * the `.max(MAX_SCENARIO_STEPS)` cap AND the duplicate-kind refine that the
+ * whole id-collision defence rests on. A silently narrowed forecast is the worst
+ * possible failure for an endpoint whose output drives hardware purchasing, so
+ * an ambiguous body is a 400 — never a guess about which shape was meant.
+ * (Found by AI review of the first implementation; reproduced end to end.)
  */
-export const scenarioRequestSchema = z.union([
-  scenarioStackSchema,
-  scenarioSchema.transform((scenario) => ({ steps: [scenario] })),
-]);
+export const scenarioRequestSchema = z
+  .unknown()
+  .superRefine((body, ctx) => {
+    if (isRecord(body) && 'steps' in body && 'kind' in body) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Send either a single scenario or { steps: [...] }, never both',
+        path: ['steps'],
+      });
+    }
+  })
+  .pipe(
+    z.union([scenarioStackSchema, scenarioSchema.transform((scenario) => ({ steps: [scenario] }))]),
+  );
 
 export type ScenarioStack = z.infer<typeof scenarioStackSchema>;
 export type ScenarioRequest = z.infer<typeof scenarioRequestSchema>;
 /** Wire (pre-transform) shapes — `startMonth` is `'YYYY-MM'`, not a `Date`. */
 export type ScenarioStackWire = z.input<typeof scenarioStackSchema>;
-export type ScenarioRequestWire = z.input<typeof scenarioRequestSchema>;
+/**
+ * Either accepted body shape. Written out rather than `z.input<typeof
+ * scenarioRequestSchema>`, which is `unknown` now that the schema opens with the
+ * ambiguity guard.
+ */
+export type ScenarioRequestWire = ScenarioStackWire | z.input<typeof scenarioSchema>;

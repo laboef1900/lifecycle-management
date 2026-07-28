@@ -356,84 +356,166 @@ describe('POST /api/clusters/:id/forecast/scenario', () => {
  * a newer server — or a `{ steps: [...] }` stack normalised to the same shape.
  */
 describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', () => {
-  const WINDOW = 'metric=memory_gb&from=2026-06&to=2026-08';
+  // The window must CONTAIN a future commissioning step, or `delay_procurement`
+  // is a no-op and every compound test below silently degenerates into a test of
+  // `add_vms` alone. `delayFutureCommissions` compares against the real clock, so
+  // the commissioning month is dated well ahead rather than pinned with fake
+  // timers (which would fight the HTTP-level injection).
+  const WINDOW = 'metric=memory_gb&from=2027-01&to=2027-12';
+  const COMMISSION_MONTH = new Date('2027-06-01T00:00:00.000Z');
 
-  const lastConsumption = (raw: string): number => {
-    const body = JSON.parse(raw) as { months: Array<{ consumption: number }> };
-    return body.months[body.months.length - 1]!.consumption;
-  };
+  /**
+   * @ai-warning This fixture is load-bearing, not scenery. AI review of the first
+   * version of this block found every test ran against `makeCluster`'s
+   * host-less cluster, where `lose_hosts` and `delay_procurement` both do nothing
+   * — so a route that folded only `steps[0]` kept the whole block green. Each
+   * step must be provably EFFECTIVE here, which is what `differsFromBaseline`
+   * below asserts before anything compares compounds.
+   */
+  beforeEach(async () => {
+    // Already deployed with real recorded capacity — the host `lose_hosts` ranks
+    // first and drops, removing capacity across the whole window.
+    await makeHost(prisma, {
+      clusterId,
+      name: 'compound-deployed',
+      commissionedAt: new Date('2026-01-01T00:00:00.000Z'),
+      initialCapacity: [{ effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), amount: 2048 }],
+    });
+    // Commissions INSIDE the window and in the future — the step
+    // `delay_procurement` pushes out beyond `toMonth`.
+    await makeHost(prisma, {
+      clusterId,
+      name: 'compound-future',
+      commissionedAt: COMMISSION_MONTH,
+      initialCapacity: [{ effectiveFrom: COMMISSION_MONTH, amount: 512 }],
+    });
+  });
 
-  it('composes the steps: the compound delta equals the sum of its parts', async () => {
+  // Narrowed to what these tests read, so no direct dependency on fastify's
+  // transitive `light-my-request` types is needed.
+  const post = (payload: Record<string, unknown>): Promise<{ statusCode: number; body: string }> =>
+    server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      payload,
+    });
+
+  const LOSE = { kind: 'lose_hosts', count: 1 } as const;
+  const ADD = { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2027-01' } as const;
+  const DELAY = { kind: 'delay_procurement', months: 12 } as const;
+
+  const series = (raw: string): string =>
+    JSON.stringify(
+      (JSON.parse(raw) as { months: Array<{ consumption: number; capacity: number }> }).months,
+    );
+
+  it('folds EVERY step — the compound differs from each single step in isolation', async () => {
     const base = await server.inject({
       method: 'GET',
       url: `/api/clusters/${clusterId}/forecast?${WINDOW}`,
     });
+    expect(base.statusCode).toBe(200);
 
-    // Two add-like steps whose effects are independent and additive here: 50×16
-    // GB of new VMs, and a 3-month procurement delay. The seeded cluster has no
-    // future commissions, so delay contributes 0 — which is the point: the
-    // compound must equal the single add_vms exactly, not drift.
-    const single = await server.inject({
-      method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
-      payload: { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2026-06' },
-    });
-    const compound = await server.inject({
-      method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
-      payload: {
-        steps: [
-          { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2026-06' },
-          { kind: 'delay_procurement', months: 3 },
-        ],
-      },
-    });
+    const singles = {
+      lose: await post({ steps: [LOSE] }),
+      add: await post({ steps: [ADD] }),
+      delay: await post({ steps: [DELAY] }),
+    };
 
+    // PRECONDITION, and the whole point of the fixture: each step on its own must
+    // actually move the forecast. Without this the "differs from each single"
+    // assertions below would pass against a route that ignored steps entirely.
+    for (const [name, res] of Object.entries(singles)) {
+      expect(res.statusCode, name).toBe(200);
+      expect(series(res.body), `${name} alone must move the forecast`).not.toBe(series(base.body));
+    }
+
+    const compound = await post({ steps: [LOSE, ADD, DELAY] });
     expect(compound.statusCode).toBe(200);
-    expect(lastConsumption(compound.body) - lastConsumption(base.body)).toBe(800);
-    expect(lastConsumption(compound.body)).toBe(lastConsumption(single.body));
+
+    // If the route folded only the first canonically-ordered step, the compound
+    // would be byte-identical to `lose` — this is the assertion that kills that.
+    for (const [name, res] of Object.entries(singles)) {
+      expect(series(compound.body), `compound collapsed to the ${name} step alone`).not.toBe(
+        series(res.body),
+      );
+    }
+    expect(series(compound.body)).not.toBe(series(base.body));
+  });
+
+  it("composes the parts: the compound carries each step's own effect", async () => {
+    const base = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?${WINDOW}`,
+    });
+    const baseMonths = (
+      JSON.parse(base.body) as {
+        months: Array<{ consumption: number; capacity: number }>;
+      }
+    ).months;
+
+    const compound = await post({ steps: [LOSE, ADD, DELAY] });
+    const compoundMonths = (
+      JSON.parse(compound.body) as {
+        months: Array<{ consumption: number; capacity: number }>;
+      }
+    ).months;
+
+    // add_vms: +50 × 16 GB = +800 GB of consumption from 2027-01 onward.
+    expect(compoundMonths[0]!.consumption - baseMonths[0]!.consumption).toBe(800);
+
+    // lose_hosts dropped the 2048 GB deployed host, and delay_procurement pushed
+    // the 512 GB commissioning step past `toMonth` — so the LAST month lost both.
+    const lastBase = baseMonths[baseMonths.length - 1]!;
+    const lastCompound = compoundMonths[compoundMonths.length - 1]!;
+    expect(lastBase.capacity - lastCompound.capacity).toBe(2048 + 512);
   });
 
   it('gives the same answer whichever order the steps arrive in', async () => {
-    const forward = await server.inject({
-      method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
-      payload: {
-        steps: [
-          { kind: 'lose_hosts', count: 1 },
-          { kind: 'add_vms', count: 4, sizeGb: 32, startMonth: '2026-06' },
-        ],
-      },
-    });
-    const reversed = await server.inject({
-      method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
-      payload: {
-        steps: [
-          { kind: 'add_vms', count: 4, sizeGb: 32, startMonth: '2026-06' },
-          { kind: 'lose_hosts', count: 1 },
-        ],
-      },
-    });
+    const forward = await post({ steps: [LOSE, ADD, DELAY] });
+    const reversed = await post({ steps: [DELAY, ADD, LOSE] });
     expect(forward.statusCode).toBe(200);
     expect(reversed.statusCode).toBe(200);
+    // Byte-identical, not merely equal totals: the canonical fold order must also
+    // fix the response's `hosts[]`/`applications[]` ordering.
     expect(reversed.body).toBe(forward.body);
   });
 
   it('still accepts a bare single scenario (wire back-compat for an older SPA)', async () => {
-    const bare = await server.inject({
-      method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
-      payload: { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2026-06' },
-    });
-    const wrapped = await server.inject({
-      method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
-      payload: { steps: [{ kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2026-06' }] },
-    });
+    const bare = await post(ADD);
+    const wrapped = await post({ steps: [ADD] });
     expect(bare.statusCode).toBe(200);
     expect(wrapped.statusCode).toBe(200);
     expect(wrapped.body).toBe(bare.body);
+  });
+
+  /**
+   * The ambiguity guard. A body carrying BOTH shapes used to answer 200 with the
+   * bare scenario alone, silently discarding `steps` — and, because the whole key
+   * was dropped, it also bypassed the step cap and the duplicate-kind rule. A
+   * silently narrowed forecast is the worst outcome for an endpoint that drives
+   * purchasing, so this is a 400. (AI review finding; reproduced end to end.)
+   */
+  it('rejects a body carrying BOTH a bare scenario and a steps array', async () => {
+    const ambiguous = await post({ ...LOSE, steps: [ADD, DELAY] });
+    expect(ambiguous.statusCode).toBe(400);
+  });
+
+  it('does not let a bare scenario smuggle a stack past the cap or the uniqueness rule', async () => {
+    // Both of these were 200 before the guard, silently previewing `LOSE` alone.
+    const overCap = await post({
+      ...LOSE,
+      steps: [LOSE, ADD, DELAY, { kind: 'lose_hosts', count: 2 }],
+    });
+    const duplicate = await post({
+      ...LOSE,
+      steps: [
+        { kind: 'add_vms', count: 10, sizeGb: 16 },
+        { kind: 'add_vms', count: 10, sizeGb: 16 },
+      ],
+    });
+    expect(overCap.statusCode).toBe(400);
+    expect(duplicate.statusCode).toBe(400);
   });
 
   it('rejects a duplicate kind with 400 — the id-collision guard', async () => {
@@ -486,6 +568,14 @@ describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', (
    * history and is never an approved order, so it must carry neither an
    * uncertainty band nor an acknowledgment — regardless of how many steps it has
    * or whether the band is switched on.
+   *
+   * @ai-warning On its own this assertion is NOT sufficient, and AI review was
+   * right to call the first version vacuous: this cluster has no forecast
+   * snapshots and no order approval, so `undefined`/`null` hold however the
+   * scenario path is wired. The POSITIVE CONTROL — the real read on the same
+   * cluster/window DOES produce a band and an acknowledgment, while the compound
+   * does not — lives in `forecast-uncertainty.test.ts`. Keep both: this one pins
+   * the HTTP shape, that one pins the invariant.
    */
   it('carries no uncertainty band and no acknowledgment (INV-1)', async () => {
     await prisma.tenantSettings.upsert({

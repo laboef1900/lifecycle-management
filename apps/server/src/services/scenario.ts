@@ -9,10 +9,19 @@ import type { ForecastApplication, ForecastHost, ForecastInput } from './forecas
  * yet. It is a forward-looking guarantee that the answer never depends on the
  * order a client happened to serialise the steps in.
  *
- * @ai-warning The commuting property is pinned by a permutation test in
- * `__tests__/scenario.test.ts`, NOT by an "order matters" test — that would pass
- * vacuously today and hide the day a non-commuting kind is added. If you add a
- * kind, that test fails and you must decide where it belongs in this order.
+ * @ai-warning The tripwire for a NEW kind is this TYPE, not a test.
+ * `Record<Scenario['kind'], number>` is exhaustive, so adding a member to the
+ * `Scenario` union without adding it here is a compile error — as is the missing
+ * `case` in `applyScenario`'s switch (`noFallthroughCasesInSwitch`). When that
+ * fires, decide deliberately where the new kind belongs in this order.
+ *
+ * Do NOT expect `applyScenarioStack`'s permutation test to catch it: that test
+ * asserts the SORTED fold is order-independent, which it is *by construction* —
+ * sorting makes the output a pure function of the step multiset, so it can never
+ * fail for non-commutativity. The commutativity of the individual transforms is
+ * pinned separately, by folding WITHOUT the sort ("the transforms themselves
+ * commute" in `__tests__/scenario.test.ts`). Corrected after AI review caught
+ * the original claim here being unfalsifiable.
  */
 const STEP_ORDER: Readonly<Record<Scenario['kind'], number>> = {
   lose_hosts: 0,
@@ -45,12 +54,19 @@ export function applyScenarioStack(
  * recompute side by side.
  *
  * `stepIndex` scopes the synthetic ids a step mints so they stay unique within a
- * stack; it defaults to 0 for a single-step preview.
+ * stack.
+ *
+ * @ai-warning `stepIndex` is REQUIRED, deliberately. It used to default to 0,
+ * which meant a hand-rolled fold (`for (const s of steps) acc = applyScenario(acc,
+ * s)`) typechecked, ran, and minted the SAME synthetic id for every step —
+ * silently defeating the id-collision defence the index exists to provide. Prefer
+ * {@link applyScenarioStack}; if you must fold by hand, you now have to state the
+ * index and think about it.
  */
 export function applyScenario(
   input: ForecastInput,
   scenario: Scenario,
-  stepIndex = 0,
+  stepIndex: number,
 ): ForecastInput {
   switch (scenario.kind) {
     case 'lose_hosts':

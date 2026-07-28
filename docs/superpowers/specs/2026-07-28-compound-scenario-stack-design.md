@@ -25,6 +25,7 @@ deterministically on the server, and leave the response shape untouched.
    `lose_hosts` → `add_vms` → `delay_procurement` — regardless of the order the
    client sent them in.
 3. The route keeps its existing path and its existing response.
+4. A body carrying **both** shapes is a 400, never a guess — see below.
 
 ### Why additive rather than a clean cutover
 
@@ -33,6 +34,29 @@ deterministically on the server, and leave the response shape untouched.
 deployment: a new SPA against an old server would 400. The union costs one
 `.transform()` and matches how `acknowledgment` (#292) and `uncertainty` (#316)
 were evolved. An old SPA keeps working against a new server forever.
+
+### Why an ambiguous body must be rejected, not resolved
+
+The first implementation of this design was a plain
+`z.union([stack, bare])`, and AI review found it silently wrong — reproduced end
+to end, not argued. For a body carrying both shapes
+(`{kind, count, steps:[…]}`), `scenarioStackSchema` is a `strictObject` so it
+rejects the extra `kind`/`count`; the union then falls through to the bare
+branch, which is a discriminated union of **stripping** `z.object`s and discards
+`steps` entirely. Result: 200, with a one-step forecast, and no signal that
+anything was ignored.
+
+It was worse than a dropped stack. Because the whole `steps` key vanished before
+any stack rule ran, prefixing a valid bare scenario bypassed **both** the
+`.max(MAX_SCENARIO_STEPS)` cap and the duplicate-kind refine that the entire
+id-collision defence rests on — over-cap, duplicate-kind, empty, and even
+`steps: 'not-an-array'` all returned 200.
+
+So `scenarioRequestSchema` now opens with a guard: if the body has both a `steps`
+key and a `kind` key, that is a validation error. This is the CLAUDE.md rule that
+integrity failures must not fall back to a weaker default — for an endpoint whose
+output drives hardware purchasing, a well-formed wrong answer is strictly worse
+than a 400.
 
 ### Why canonicalise the order when the steps commute
 
@@ -45,16 +69,24 @@ both preserve it), even for an adversarial host that is future-commissioned but
 carries a large capacity row effective in the past.
 
 So the fixed order buys nothing _today_ — it is a forward-looking guarantee that
-the answer never depends on which order a client happened to serialise. The risk
-that creates is a vacuous test: an "order matters" assertion would pass whatever
-the implementation did. This design therefore pins **permutation-invariance of
-the current kinds** instead, so the day a non-commuting kind is added, the test
-fails and forces the author to think about the fold order.
+the answer never depends on which order a client happened to serialise.
+
+The testing trap here is subtle, and the first draft fell into it. An "order
+matters" assertion would pass whatever the implementation did, so that was
+rejected in favour of a permutation test over `applyScenarioStack` — but AI review
+pointed out that assertion is _also_ unfalsifiable for the interesting reason:
+`applyScenarioStack` sorts before folding, so its output is a pure function of the
+step multiset and no non-commuting kind can ever make it differ. Both tests now
+exist, with their jobs stated: the sorted permutation test pins the **sort**, and a
+second test folds the transforms **raw** (no sort) to pin **commutativity** — that
+one goes red the day a kind stops commuting. See INV-5.
 
 ### Why "each kind at most once" is a correctness rule, not a UI convenience
 
-`addSyntheticVms` mints a deterministic id, `` `__scenario:add_vms:${count}x${sizeGb}` ``,
-and `computeForecast` keys `applicationContributions` on a `Map<id, …>`:
+`addSyntheticVms` mints a deterministic id from the step's own values — before
+this change, `` `__scenario:add_vms:${count}x${sizeGb}` `` with no step
+discriminator — and `computeForecast` keys `applicationContributions` on a
+`Map<id, …>`:
 `set(app.id, [])` per application, then `get(app.id)?.push(…)` per month, then
 `get(app.id) ?? []` per output entry. Two `add_vms` steps sharing an id therefore
 emit **two response entries carrying the same aliased array**, with two amounts
@@ -80,13 +112,14 @@ MAX_SCENARIO_STEPS = 3
 
 scenarioSchema            unchanged — one step
 scenarioStackSchema       { steps: Scenario[] }, 1..MAX_SCENARIO_STEPS, unique kind
-scenarioRequestSchema     union(stack, single→{steps:[single]})
+scenarioRequestSchema     ambiguity guard  ->  union(stack, single->{steps:[single]})
 ```
 
 `scenarioSchema` stays exported and unchanged: a step _is_ a scenario. Types:
-`ScenarioStack`, `ScenarioRequest`, and the wire-side `ScenarioStackWire` /
-`ScenarioRequestWire` (`z.input`, so `startMonth` is `'YYYY-MM'` rather than a
-`Date`).
+`ScenarioStack`, `ScenarioRequest`, and the wire-side `ScenarioStackWire`.
+`ScenarioRequestWire` is written out as `ScenarioStackWire | z.input<typeof
+scenarioSchema>` rather than derived, because the schema now opens with the
+ambiguity guard on `z.unknown()` and its `z.input` is therefore `unknown`.
 
 The cap is expressed as `.max(MAX_SCENARIO_STEPS)` **and** a uniqueness refine.
 They are independent rules: uniqueness happens to imply ≤ 3 while there are
@@ -94,9 +127,17 @@ exactly three kinds, and stops implying it the moment a fourth is added.
 
 ### Server fold (`apps/server/src/services/scenario.ts`)
 
-`applyScenario(input, scenario)` is unchanged and still exported — it is the
-per-step body. New: `applyScenarioStack(input, steps)`, which sorts a copy of the
-steps into canonical order and reduces `applyScenario` over them.
+`applyScenarioStack(input, steps)` is new: it sorts a copy of the steps into
+canonical order and reduces `applyScenario` over them.
+
+`applyScenario` is **not** unchanged — an earlier draft of this document claimed
+it was, which AI review correctly flagged. It gained a third parameter,
+`stepIndex`, and the synthetic id it mints changed shape accordingly. That
+parameter is **required**, deliberately: it briefly had a `= 0` default, which
+meant a hand-rolled fold (`for (const s of steps) acc = applyScenario(acc, s)`)
+typechecked, ran, and minted the same id for every step — silently defeating the
+very defence the index exists to provide. Prefer `applyScenarioStack`; folding by
+hand now forces you to state the index.
 
 `addSyntheticVms` gains a step index, which scopes its synthetic **id** only. The
 user-visible `name` stays unindexed: one `add_vms` per stack means it is already
@@ -136,8 +177,16 @@ admin gate so VIEWERs can run previews. A new path would 403 every VIEWER.
   `int().min(1)`).
 - **INV-3 — one `prepare()` per request** (see Loader above).
 - **INV-4 — at most one step per kind, ≤ 3 steps**, enforced in Zod.
-- **INV-5 — the answer is independent of step order** for the current three
-  kinds, pinned by a permutation test rather than assumed.
+- **INV-5 — the answer is independent of step order.** Pinned by TWO tests,
+  because one of them cannot fail for the interesting reason. The permutation test
+  over `applyScenarioStack` is true _by construction_ (sorting makes the output a
+  pure function of the step multiset) and exists to pin the sort itself. The test
+  that can actually fail folds the transforms **without** the sort, so the day a
+  kind stops commuting it goes red — at which point `STEP_ORDER` stops being an
+  arbitrary tie-break and starts deciding the forecast. AI review caught the
+  original single test claiming a tripwire it could never trip; the real tripwire
+  for a _new_ kind is the exhaustive `Record<Scenario['kind'], number>` type plus
+  `noFallthroughCasesInSwitch`, both compile errors.
 - **INV-6 — bounded compute.** ≤ 3 steps × the existing
   `MAX_FORECAST_SPAN_MONTHS = 120` window cap, one synthetic application per
   `add_vms`.
@@ -148,13 +197,14 @@ Trust boundary: the HTTP request body, parsed by Zod _inside_ the handler before
 anything touches the database. The route is read-only — it computes and returns a
 forecast and writes nothing.
 
-| Misuse                                                                      | Defence                                                                                                                        |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Unbounded `steps` array as a compute-amplification lever                    | `.max(3)` in Zod; the 1 MiB body limit and the 120-month window cap are unchanged                                              |
-| Duplicate `add_vms` to corrupt `applicationContributions`                   | Zod uniqueness (primary) + step-scoped synthetic id (defence in depth)                                                         |
-| VIEWER escalation via a new route path                                      | Path unchanged, so the `READ_ONLY_MUTATION_ROUTES` allowlist and its two tests still apply                                     |
-| Unknown/typo'd key (`parts` instead of `steps`) silently dropping the stack | The union has no branch that accepts an object without `steps` or `kind`, so a typo is a 400, not a silent single-step preview |
-| A hypothetical acquiring measured evidence and reading as a real forecast   | INV-1, re-proved on the compound path                                                                                          |
+| Misuse                                                                                                                               | Defence                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Unbounded `steps` array as a compute-amplification lever                                                                             | `.max(3)` in Zod; the 1 MiB body limit and the 120-month window cap are unchanged                                                         |
+| Duplicate `add_vms` to corrupt `applicationContributions`                                                                            | Zod uniqueness (primary) + step-scoped synthetic id (defence in depth)                                                                    |
+| VIEWER escalation via a new route path                                                                                               | Path unchanged, so the `READ_ONLY_MUTATION_ROUTES` allowlist and its two tests still apply                                                |
+| Unknown/typo'd key (`parts` instead of `steps`) silently dropping the stack                                                          | The union has no branch that accepts an object without `steps` or `kind`, so a typo is a 400, not a silent single-step preview            |
+| A body carrying BOTH shapes resolving to the narrower one — silently discarding the stack AND bypassing the cap and uniqueness rules | The ambiguity guard rejects it (see above). Reproduced against the first implementation; now covered at both the contract and HTTP layers |
+| A hypothetical acquiring measured evidence and reading as a real forecast                                                            | INV-1, re-proved on the compound path                                                                                                     |
 
 No new persistence, no new external calls, no secrets, no PII. Nothing about the
 request is logged beyond the existing request-id-correlated access log.
@@ -180,15 +230,37 @@ previews (it would 400 on a stack, visibly, not silently). Deployments pin
 ## Testing
 
 - `packages/shared` — first scenario contract tests in that package: bare
-  scenario normalises to one step; stack round-trips; 4 steps rejected;
-  duplicate kind rejected; empty `steps` rejected; typo'd key rejected.
+  scenario normalises to one step; stack round-trips; over-cap rejected;
+  duplicate kind rejected; empty `steps` rejected; typo'd key rejected;
+  ambiguous both-shapes body rejected, including each rule it used to bypass.
+  The over-cap test asserts the cap's **own** `too_big` issue rather than mere
+  rejection: with exactly three kinds, any over-length array necessarily repeats
+  a kind, so a bare `success === false` passes with `.max()` deleted (AI review
+  verified that confound).
 - `apps/server` unit — fold applies all three kinds; **all six permutations
   produce identical output** (INV-5); canonical order is applied regardless of
   input order; no mutation of the input across steps (INV-2); step-scoped
   synthetic ids are distinct.
-- `apps/server` integration — compound 200 with a consumption delta that is the
-  composition of its parts; legacy bare body still 200 (back-compat); over-cap
-  and duplicate-kind → 400; INV-1 re-proof on a compound with the band enabled.
+- `apps/server` integration — the compound fixture seeds **two real hosts** (one
+  deployed with recorded capacity, one commissioning inside the window) so all
+  three step kinds are provably effective. AI review found the first version ran
+  against a host-less cluster, where `lose_hosts` and `delay_procurement` do
+  nothing and a route folding only `steps[0]` kept every test green. Each single
+  step is now asserted to move the forecast _before_ the compound is compared
+  against it, and the compound must differ from every single step.
+- `apps/server` integration — legacy bare body still 200 (back-compat); over-cap,
+  duplicate-kind, and ambiguous bodies → 400; INV-1 shape re-proved on the HTTP
+  response.
+- **INV-1's real defence is a positive control** in `forecast-uncertainty.test.ts`:
+  on one cluster with seeded snapshots, `forCluster` is asserted to EARN a band
+  while `forClusterWithScenario` is asserted to refuse one. Without that, both
+  sides are `undefined` regardless of wiring — AI review demonstrated the merged
+  entry point leaving the whole suite green.
+- **Mutation-verified.** Each of the four defences above was checked by breaking
+  it and confirming the suite goes red: route folds `steps.slice(0, 1)` → 3
+  failures; merged entry point → the INV-1 positive control fails; `.max()`
+  deleted → the cap test fails; ambiguity guard removed → 2 failures at each of
+  the contract and HTTP layers.
 - Clock: any stack test pins the clock (`vi.useFakeTimers`) because
   `addSyntheticVms` defaults `startedAt` to `new Date()` and
   `delayFutureCommissions` compares against `new Date()`.

@@ -48,13 +48,13 @@ function makeInput(
 describe('applyScenario — lose_hosts', () => {
   it('drops the N largest hosts by capacity at the window start', () => {
     const input = makeInput([makeHost('small', 100), makeHost('big', 1000), makeHost('med', 500)]);
-    const r = applyScenario(input, { kind: 'lose_hosts', count: 1 });
+    const r = applyScenario(input, { kind: 'lose_hosts', count: 1 }, 0);
     expect(r.hosts.map((h) => h.id).sort()).toEqual(['med', 'small']);
   });
 
   it('drops all hosts when count >= total (does not error)', () => {
     const input = makeInput([makeHost('a', 100), makeHost('b', 200)]);
-    const r = applyScenario(input, { kind: 'lose_hosts', count: 5 });
+    const r = applyScenario(input, { kind: 'lose_hosts', count: 5 }, 0);
     expect(r.hosts).toEqual([]);
   });
 
@@ -63,13 +63,13 @@ describe('applyScenario — lose_hosts', () => {
     // contributes 0 and shouldn't be picked as the "biggest" to drop.
     const future = makeHost('future', 9999, { capEffective: new Date('2026-07-01T00:00:00Z') });
     const input = makeInput([makeHost('now', 500), future]);
-    const r = applyScenario(input, { kind: 'lose_hosts', count: 1 });
+    const r = applyScenario(input, { kind: 'lose_hosts', count: 1 }, 0);
     expect(r.hosts.map((h) => h.id)).toEqual(['future']);
   });
 
   it('does not mutate the original input', () => {
     const input = makeInput([makeHost('a', 100), makeHost('b', 200)]);
-    applyScenario(input, { kind: 'lose_hosts', count: 1 });
+    applyScenario(input, { kind: 'lose_hosts', count: 1 }, 0);
     expect(input.hosts).toHaveLength(2);
   });
 });
@@ -77,12 +77,16 @@ describe('applyScenario — lose_hosts', () => {
 describe('applyScenario — add_vms', () => {
   it('appends a synthetic Application with count*sizeGb allocation', () => {
     const input = makeInput([], [makeApp('existing', 200)]);
-    const r = applyScenario(input, {
-      kind: 'add_vms',
-      count: 30,
-      sizeGb: 16,
-      startMonth: new Date('2026-06-01T00:00:00.000Z'),
-    });
+    const r = applyScenario(
+      input,
+      {
+        kind: 'add_vms',
+        count: 30,
+        sizeGb: 16,
+        startMonth: new Date('2026-06-01T00:00:00.000Z'),
+      },
+      0,
+    );
     expect(r.applications).toHaveLength(2);
     const scenario = r.applications[1]!;
     expect(scenario.name).toMatch(/30.*16/);
@@ -92,7 +96,7 @@ describe('applyScenario — add_vms', () => {
 
   it('defaults startedAt to now when startMonth is omitted', () => {
     const before = Date.now();
-    const r = applyScenario(makeInput(), { kind: 'add_vms', count: 1, sizeGb: 8 });
+    const r = applyScenario(makeInput(), { kind: 'add_vms', count: 1, sizeGb: 8 }, 0);
     const after = Date.now();
     const t = r.applications[0]!.startedAt.getTime();
     expect(t).toBeGreaterThanOrEqual(before);
@@ -105,7 +109,7 @@ describe('applyScenario — delay_procurement', () => {
     const future = makeHost('upcoming', 500, {
       commissionedAt: new Date('2026-09-01T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 2 });
+    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 2 }, 0);
     expect(r.hosts[0]!.commissionedAt.toISOString()).toBe('2026-11-01T00:00:00.000Z');
   });
 
@@ -114,7 +118,7 @@ describe('applyScenario — delay_procurement', () => {
       commissionedAt: new Date('2026-09-01T00:00:00Z'),
       projDecom: new Date('2030-09-01T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 3 });
+    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 3 }, 0);
     expect(r.hosts[0]!.projectedDecommissionAt!.toISOString()).toBe('2030-12-01T00:00:00.000Z');
   });
 
@@ -122,7 +126,7 @@ describe('applyScenario — delay_procurement', () => {
     const future = makeHost('upcoming', 500, {
       commissionedAt: new Date('2026-08-31T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 1 });
+    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 1 }, 0);
     expect(r.hosts[0]!.commissionedAt.toISOString()).toBe('2026-09-30T00:00:00.000Z');
   });
 
@@ -141,7 +145,7 @@ describe('applyScenario — delay_procurement', () => {
         capacityDelta: null,
       },
     ];
-    const r = applyScenario(input, { kind: 'delay_procurement', months: 6 });
+    const r = applyScenario(input, { kind: 'delay_procurement', months: 6 }, 0);
     expect(r.events).toEqual(input.events);
   });
 
@@ -149,7 +153,7 @@ describe('applyScenario — delay_procurement', () => {
     const past = makeHost('deployed', 500, {
       commissionedAt: new Date('2020-01-01T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([past]), { kind: 'delay_procurement', months: 6 });
+    const r = applyScenario(makeInput([past]), { kind: 'delay_procurement', months: 6 }, 0);
     expect(r.hosts[0]!.commissionedAt.toISOString()).toBe('2020-01-01T00:00:00.000Z');
   });
 
@@ -157,7 +161,7 @@ describe('applyScenario — delay_procurement', () => {
     const past = makeHost('deployed', 500, {
       commissionedAt: new Date('2020-01-01T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([past]), { kind: 'delay_procurement', months: 6 });
+    const r = applyScenario(makeInput([past]), { kind: 'delay_procurement', months: 6 }, 0);
     expect(r).toEqual(makeInput([past]));
   });
 });
@@ -217,24 +221,28 @@ describe('applyScenarioStack — compound what-ifs (#323)', () => {
 
   it('is a single step when handed one — the back-compat path', () => {
     const single = applyScenarioStack(compoundInput(), [{ kind: 'lose_hosts', count: 1 }]);
-    expect(single).toEqual(applyScenario(compoundInput(), { kind: 'lose_hosts', count: 1 }));
+    expect(single).toEqual(applyScenario(compoundInput(), { kind: 'lose_hosts', count: 1 }, 0));
   });
 
+  const permute = <T>(xs: T[]): T[][] =>
+    xs.length <= 1
+      ? [xs]
+      : xs.flatMap((x, i) =>
+          permute([...xs.slice(0, i), ...xs.slice(i + 1)]).map((rest) => [x, ...rest]),
+        );
+
   /**
-   * INV-5. Deliberately a permutation test rather than an "order matters" one:
-   * the three kinds commute today (lose_hosts ranks off capacity rows,
-   * delay_procurement moves only commissioning dates, add_vms touches only
-   * applications), so an order-sensitivity assertion would pass vacuously and
-   * hide the day a non-commuting kind is added. This fails then, loudly.
+   * INV-5, part 1: the PUBLIC guarantee. A caller gets the same answer whatever
+   * order it serialises the steps in.
+   *
+   * @ai-warning This one is true BY CONSTRUCTION — `applyScenarioStack` sorts
+   * before folding, so its output is a pure function of the step multiset and this
+   * assertion cannot fail for non-commutativity. It is here to pin the sort (delete
+   * the `.sort()` and it goes red), NOT to detect a non-commuting kind. The test
+   * below is the one that does that. Corrected after AI review pointed out the
+   * original single test was claiming a tripwire it could never trip.
    */
   it('gives the same answer for all six step orders, including array ordering', () => {
-    const permute = <T>(xs: T[]): T[][] =>
-      xs.length <= 1
-        ? [xs]
-        : xs.flatMap((x, i) =>
-            permute([...xs.slice(0, i), ...xs.slice(i + 1)]).map((rest) => [x, ...rest]),
-          );
-
     const orders = permute(ALL_THREE);
     expect(orders).toHaveLength(6);
 
@@ -244,6 +252,33 @@ describe('applyScenarioStack — compound what-ifs (#323)', () => {
         JSON.stringify(applyScenarioStack(compoundInput(), order)),
         `order ${order.map((s) => s.kind).join(' → ')} diverged`,
       ).toBe(canonical);
+    }
+  });
+
+  /**
+   * INV-5, part 2: the transforms THEMSELVES commute — folded raw, bypassing the
+   * canonical sort. This is the assertion that can actually fail: add a kind that
+   * rewrites state another kind reads (e.g. one that scales `host.capacities`,
+   * which is what `lose_hosts` ranks by) and this goes red while the sorted test
+   * above stays green.
+   *
+   * Why it matters even though the sort makes the public answer stable: the day
+   * the transforms stop commuting, `STEP_ORDER` stops being an arbitrary
+   * tie-break and starts *deciding the forecast*. That is a decision an author
+   * must make deliberately, not inherit from whatever order the literal happened
+   * to be written in.
+   */
+  it('the transforms themselves commute, folded without the canonical sort', () => {
+    const rawFold = (order: readonly Scenario[]): string =>
+      JSON.stringify(order.reduce((acc, step) => applyScenario(acc, step, 0), compoundInput()));
+
+    const orders = permute(ALL_THREE);
+    const reference = rawFold(ALL_THREE);
+    for (const order of orders) {
+      expect(
+        rawFold(order),
+        `raw fold ${order.map((s) => s.kind).join(' → ')} diverged — a kind no longer commutes, so STEP_ORDER now decides the forecast`,
+      ).toBe(reference);
     }
   });
 

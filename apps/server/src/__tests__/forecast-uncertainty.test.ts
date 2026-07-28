@@ -201,6 +201,68 @@ describe('ForecastService — uncertainty band', () => {
     expect(h1!.high).toBeLessThan(0.5);
   });
 
+  /**
+   * INV-1 with a POSITIVE CONTROL — the assertion that actually defends the
+   * invariant (#323).
+   *
+   * @ai-warning Every other scenario-INV-1 assertion in this repo runs on a
+   * cluster with no snapshots and no approval, where `uncertainty === undefined`
+   * and `acknowledgment === null` hold no matter how the code is wired. AI review
+   * demonstrated the consequence: applying the exact refactor the design doc warns
+   * against — making `forClusterWithScenario` attach the band and the
+   * acknowledgment the way `forCluster` does — left the entire suite green.
+   *
+   * This test closes that hole by proving BOTH directions on the SAME cluster and
+   * window: the real read earns a band, and the compound scenario read does not.
+   * Do not "simplify" it by dropping the `forCluster` half — that half is the
+   * whole point.
+   */
+  it('earns a band on the real read and still refuses one for a compound scenario (INV-1)', async () => {
+    const anchor = monthStart(0);
+    const { id, metricTypeId } = await makeCluster(prisma, {
+      baselineDate: anchor,
+      baselineConsumption: 500,
+      baselineCapacity: 1000,
+    });
+    await makeHost(prisma, {
+      clusterId: id,
+      commissionedAt: monthStart(-12),
+      initialCapacity: [{ effectiveFrom: monthStart(-12), amount: 1000 }],
+    });
+    for (let i = -6; i <= 0; i++) {
+      await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i), 0, 0.5);
+    }
+    for (let i = -6; i <= -1; i++) {
+      await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i + 1), 1, 0.6);
+    }
+    await enableBand(6);
+
+    const svc = new ForecastService(prisma);
+
+    // POSITIVE CONTROL: the real read genuinely produces a band here. Without
+    // this, the negative assertion below proves nothing.
+    const real = await svc.forCluster(TENANT, id, METRIC);
+    expect(real.uncertainty).toBeDefined();
+    expect(real.uncertainty!.length).toBeGreaterThan(0);
+    expect(real.uncertaintyAnchorCount).toBe(6);
+
+    // …and the compound scenario on the same cluster/window refuses it, along with
+    // the acknowledgment slot. A hypothetical has no measured error history.
+    const scenario = await svc.forClusterWithScenario(TENANT, id, METRIC, [
+      { kind: 'lose_hosts', count: 1 },
+      { kind: 'add_vms', count: 10, sizeGb: 16 },
+      { kind: 'delay_procurement', months: 3 },
+    ]);
+    expect(scenario.uncertainty).toBeUndefined();
+    expect(scenario.uncertaintyAnchorCount).toBeUndefined();
+    expect(scenario.acknowledgment).toBeNull();
+
+    // Same window either way, so the two are genuinely comparable — the scenario
+    // did not dodge the band by landing on a different range.
+    expect(scenario.fromMonth).toBe(real.fromMonth);
+    expect(scenario.toMonth).toBe(real.toMonth);
+  });
+
   it('does not count matured re-anchors that produced no measured actual (honest N)', async () => {
     // Review Finding 2 / F2: a matured anchor whose horizon month was never
     // measured (a data gap — no h0 for that month) contributes no sample and must
