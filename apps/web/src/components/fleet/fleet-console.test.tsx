@@ -3,7 +3,7 @@ import type {
   ForecastEntityContribution,
   ForecastResponse,
   ProcurementInfo,
-  TenantSettings,
+  TenantSettingsResolved,
 } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -258,7 +258,9 @@ function makeCluster(overrides: Partial<ClusterResponse> = {}): ClusterResponse 
   };
 }
 
-function makeTenantSettings(overrides: Partial<TenantSettings> = {}): TenantSettings {
+function makeTenantSettings(
+  overrides: Partial<TenantSettingsResolved> = {},
+): TenantSettingsResolved {
   return {
     warnThreshold: 0.7,
     critThreshold: 0.9,

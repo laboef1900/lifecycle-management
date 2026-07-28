@@ -73,16 +73,37 @@ export const forecastSnapshotRetentionMonthsSchema = z
     },
   );
 
+/**
+ * The `PUT /api/settings/tenant` body.
+ *
+ * @ai-warning The four forecast fields are OPTIONAL on input while being
+ * REQUIRED on the response (`tenantSettingsResponseSchema`), and that asymmetry
+ * is deliberate. This is a full-object PUT, and the fields were added after 0.5.0
+ * shipped — so a caller written against 0.5.0 (a script, or simply a browser tab
+ * left open across a deploy) sends a four-field body. Requiring them made that a
+ * hard 400 with no deprecation window.
+ *
+ * They are optional rather than `.default()`ed for a sharper reason: a default
+ * would make an old-shaped PUT *succeed* while silently resetting an admin's
+ * configured band and retention settings. Absent must mean "I do not know about
+ * this field, leave it alone" — never "set it to the default". `SettingsService.
+ * updateTenant` implements that by omitting absent fields from the Prisma
+ * `update`, so the stored value survives; only a first-time `create` falls back
+ * to the DEFAULT_* constants below.
+ *
+ * Still `strictObject`: an unknown or misspelled key is a 400, not a silent
+ * no-op.
+ */
 export const tenantSettingsSchema = z
   .strictObject({
     warnThreshold: percentSchema,
     critThreshold: percentSchema,
     procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
     idempotencyKeyRetentionHours: idempotencyKeyRetentionHoursSchema,
-    forecastUncertaintyBandEnabled: z.boolean(),
-    forecastUncertaintyMinAnchors: forecastUncertaintyMinAnchorsSchema,
-    forecastUncertaintyBandWidth: forecastUncertaintyBandWidthSchema,
-    forecastSnapshotRetentionMonths: forecastSnapshotRetentionMonthsSchema,
+    forecastUncertaintyBandEnabled: z.boolean().optional(),
+    forecastUncertaintyMinAnchors: forecastUncertaintyMinAnchorsSchema.optional(),
+    forecastUncertaintyBandWidth: forecastUncertaintyBandWidthSchema.optional(),
+    forecastSnapshotRetentionMonths: forecastSnapshotRetentionMonthsSchema.optional(),
   })
   .refine((s) => s.warnThreshold < s.critThreshold, {
     message: 'warnThreshold must be less than critThreshold',
@@ -117,7 +138,26 @@ export const clusterSettingsResponseSchema = z.object({
   effective: effectiveThresholdsSchema,
 });
 
+/**
+ * The PUT body — the four forecast fields are optional here (see the schema's
+ * `@ai-warning`). For the always-populated shape, use {@link TenantSettingsResolved}.
+ */
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
+
+/**
+ * Tenant settings as READ back: every field populated, because the underlying
+ * columns are all `NOT NULL DEFAULT`. This is what `GET`/`PUT` return and what
+ * the forecast engine consumes — only the *request* tolerates omissions.
+ *
+ * Derived from the schema above rather than re-listed, so it cannot drift.
+ * `Required<>` alone is NOT enough here: Zod infers `.optional()` as
+ * `prop?: T | undefined`, and stripping only the `?` leaves the `| undefined` in
+ * the value type — so every consumer would still see `boolean | undefined`. The
+ * `-?` modifier plus `NonNullable` removes both.
+ */
+export type TenantSettingsResolved = {
+  [K in keyof TenantSettings]-?: NonNullable<TenantSettings[K]>;
+};
 export type ForecastUncertaintyBandWidth = z.infer<typeof forecastUncertaintyBandWidthSchema>;
 
 /** Defaults for the opt-in uncertainty band, mirrored by the Prisma column defaults. */

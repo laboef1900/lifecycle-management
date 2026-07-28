@@ -74,6 +74,102 @@ describe('PUT /api/settings/tenant', () => {
     expect(body.procurementLeadTimeWeeks).toBe(10);
   });
 
+  /**
+   * Forward compatibility for a 0.5.0-shaped body (#340 review). The four
+   * forecast fields were added after 0.5.0 shipped; requiring them on this
+   * full-object PUT made any older caller — a script, or simply a browser tab
+   * left open across a deploy — a hard 400 with no deprecation window.
+   */
+  describe('a 0.5.0-shaped body (no forecast fields)', () => {
+    const legacyBody = {
+      warnThreshold: 0.6,
+      critThreshold: 0.8,
+      procurementLeadTimeWeeks: 9,
+      idempotencyKeyRetentionHours: 30,
+    };
+
+    it('is accepted', async () => {
+      const res = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/tenant',
+        payload: legacyBody,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { warnThreshold: number; procurementLeadTimeWeeks: number };
+      expect(body.warnThreshold).toBeCloseTo(0.6);
+      expect(body.procurementLeadTimeWeeks).toBe(9);
+    });
+
+    /**
+     * @ai-warning The point of the whole change. Making the fields `.default()`ed
+     * instead of optional would ALSO make this request succeed — while silently
+     * resetting an admin's configured band and retention settings to defaults. A
+     * silent config wipe is worse than the 400 it replaces, so absent must mean
+     * "leave it alone".
+     */
+    it('leaves the admin-configured forecast settings untouched', async () => {
+      // An admin configures the band and a retention window.
+      const configured = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/tenant',
+        payload: {
+          ...legacyBody,
+          forecastUncertaintyBandEnabled: true,
+          forecastUncertaintyMinAnchors: 12,
+          forecastUncertaintyBandWidth: 'p05_p95',
+          forecastSnapshotRetentionMonths: 24,
+        },
+      });
+      expect(configured.statusCode).toBe(200);
+
+      // A 0.5.0-shaped client then writes thresholds, knowing nothing about them.
+      const legacy = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/tenant',
+        payload: { ...legacyBody, warnThreshold: 0.55 },
+      });
+      expect(legacy.statusCode).toBe(200);
+
+      const after = legacy.json() as {
+        warnThreshold: number;
+        forecastUncertaintyBandEnabled: boolean;
+        forecastUncertaintyMinAnchors: number;
+        forecastUncertaintyBandWidth: string;
+        forecastSnapshotRetentionMonths: number;
+      };
+      expect(after.warnThreshold).toBeCloseTo(0.55); // the field it DID send changed
+      expect(after.forecastUncertaintyBandEnabled).toBe(true); // …and these survived
+      expect(after.forecastUncertaintyMinAnchors).toBe(12);
+      expect(after.forecastUncertaintyBandWidth).toBe('p05_p95');
+      expect(after.forecastSnapshotRetentionMonths).toBe(24);
+
+      // GET agrees — the write really persisted, not just the echoed response.
+      const read = await server.inject({ method: 'GET', url: '/api/settings/tenant' });
+      expect(
+        (read.json() as { forecastSnapshotRetentionMonths: number })
+          .forecastSnapshotRetentionMonths,
+      ).toBe(24);
+    });
+
+    it('still rejects an unknown key — optional is not lax', async () => {
+      const res = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/tenant',
+        payload: { ...legacyBody, forecastUncertaintyBandWith: 'p05_p95' }, // typo
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('still validates a forecast field when it IS supplied', async () => {
+      const res = await server.inject({
+        method: 'PUT',
+        url: '/api/settings/tenant',
+        payload: { ...legacyBody, forecastSnapshotRetentionMonths: 6 }, // 1-11 rejected
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
   it('rejects warn >= crit', async () => {
     const res = await server.inject({
       method: 'PUT',
