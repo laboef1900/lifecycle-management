@@ -226,6 +226,35 @@ export type Scenario = z.infer<typeof scenarioSchema>;
 export const MAX_SCENARIO_STEPS = 3;
 
 /**
+ * The order a compound scenario's steps are applied in — and, because the UI
+ * lists its rows the same way, the order they are shown in.
+ *
+ * Lives here rather than beside the fold because **both** the server and the web
+ * app need it: the server sorts by it in `applyScenarioStack`, the rail renders
+ * its removable rows by it, and the summary text lists them by it. Two copies
+ * would let the rail claim one order while the forecast folds in another.
+ *
+ * @ai-warning This exhaustive `Record` is the real tripwire for a new scenario
+ * kind: adding a member to the `Scenario` union without adding it here is a
+ * compile error (TS2741). Its sibling tripwire is `applyScenario`'s switch, which
+ * errors with TS2366 — "lacks ending return statement" — because of its explicit
+ * return type under `strictNullChecks`. (An earlier comment credited
+ * `noFallthroughCasesInSwitch`; that flag only reports a case falling THROUGH to
+ * the next one and says nothing about a missing case.) Neither tripwire is a
+ * test, and the permutation test in `scenario.test.ts` deliberately cannot catch
+ * this — see its `@ai-warning`.
+ */
+export const SCENARIO_STEP_ORDER: Readonly<Record<Scenario['kind'], number>> = {
+  lose_hosts: 0,
+  add_vms: 1,
+  delay_procurement: 2,
+};
+
+/** Sort comparator for {@link SCENARIO_STEP_ORDER}; use on a COPY of the array. */
+export const compareScenarioSteps = (a: Scenario['kind'], b: Scenario['kind']): number =>
+  SCENARIO_STEP_ORDER[a] - SCENARIO_STEP_ORDER[b];
+
+/**
  * A compound what-if: several scenario steps evaluated as one hypothetical.
  *
  * @ai-warning A kind may appear AT MOST ONCE, and that is a correctness rule

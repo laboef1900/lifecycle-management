@@ -356,35 +356,67 @@ describe('POST /api/clusters/:id/forecast/scenario', () => {
  * a newer server — or a `{ steps: [...] }` stack normalised to the same shape.
  */
 describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', () => {
-  // The window must CONTAIN a future commissioning step, or `delay_procurement`
-  // is a no-op and every compound test below silently degenerates into a test of
-  // `add_vms` alone. `delayFutureCommissions` compares against the real clock, so
-  // the commissioning month is dated well ahead rather than pinned with fake
-  // timers (which would fight the HTTP-level injection).
-  const WINDOW = 'metric=memory_gb&from=2027-01&to=2027-12';
-  const COMMISSION_MONTH = new Date('2027-06-01T00:00:00.000Z');
+  /**
+   * Every date here is RELATIVE TO THE REAL CLOCK, and that is deliberate.
+   *
+   * `delay_procurement` only shifts commissions dated after `new Date()`, so the
+   * window has to contain a future commissioning step or the step is a no-op and
+   * this whole block silently degenerates into a test of `add_vms` alone — the
+   * exact vacuity AI review found in its first version. Hard-coded months would
+   * have re-created that the moment the wall clock passed them: the original
+   * `2027-06-01` fixture had a roughly 11-month shelf life, after which the block
+   * would have gone quietly green-and-meaningless.
+   *
+   * Fake timers are not an option at the HTTP-injection layer, so the fixture
+   * moves with the clock instead. The cluster's own baseline is relative too —
+   * `lose_hosts` ranks by capacity at the BASELINE date, so a relative host
+   * against the factory's fixed default would eventually rank as 0 and drop the
+   * wrong host.
+   */
+  const monthStartUtc = (offsetMonths: number): Date => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offsetMonths, 1));
+  };
+  const monthParam = (date: Date): string =>
+    `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+
+  const BASELINE_MONTH = monthStartUtc(0);
+  const DEPLOYED_MONTH = monthStartUtc(-6); // always past, always before the baseline
+  const COMMISSION_MONTH = monthStartUtc(6); // always future, always inside the window
+  const FROM_MONTH = monthStartUtc(1);
+  const TO_MONTH = monthStartUtc(12);
+  const WINDOW = `metric=memory_gb&from=${monthParam(FROM_MONTH)}&to=${monthParam(TO_MONTH)}`;
 
   /**
    * @ai-warning This fixture is load-bearing, not scenery. AI review of the first
-   * version of this block found every test ran against `makeCluster`'s
-   * host-less cluster, where `lose_hosts` and `delay_procurement` both do nothing
-   * — so a route that folded only `steps[0]` kept the whole block green. Each
-   * step must be provably EFFECTIVE here, which is what `differsFromBaseline`
-   * below asserts before anything compares compounds.
+   * version of this block found every test ran against `makeCluster`'s host-less
+   * cluster, where `lose_hosts` and `delay_procurement` both do nothing — so a
+   * route that folded only `steps[0]` kept the whole block green. Each step must
+   * be provably EFFECTIVE here, which the "must move the forecast" preconditions
+   * below assert before anything compares compounds.
    */
+  let compoundClusterId: string;
+
   beforeEach(async () => {
+    const cluster = await makeCluster(prisma, {
+      baselineDate: BASELINE_MONTH,
+      baselineConsumption: 3378,
+      baselineCapacity: 7680,
+    });
+    compoundClusterId = cluster.id;
+
     // Already deployed with real recorded capacity — the host `lose_hosts` ranks
     // first and drops, removing capacity across the whole window.
     await makeHost(prisma, {
-      clusterId,
+      clusterId: compoundClusterId,
       name: 'compound-deployed',
-      commissionedAt: new Date('2026-01-01T00:00:00.000Z'),
-      initialCapacity: [{ effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), amount: 2048 }],
+      commissionedAt: DEPLOYED_MONTH,
+      initialCapacity: [{ effectiveFrom: DEPLOYED_MONTH, amount: 2048 }],
     });
     // Commissions INSIDE the window and in the future — the step
-    // `delay_procurement` pushes out beyond `toMonth`.
+    // `delay_procurement` pushes it out beyond `toMonth`.
     await makeHost(prisma, {
-      clusterId,
+      clusterId: compoundClusterId,
       name: 'compound-future',
       commissionedAt: COMMISSION_MONTH,
       initialCapacity: [{ effectiveFrom: COMMISSION_MONTH, amount: 512 }],
@@ -396,12 +428,13 @@ describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', (
   const post = (payload: Record<string, unknown>): Promise<{ statusCode: number; body: string }> =>
     server.inject({
       method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?${WINDOW}`,
       payload,
     });
 
   const LOSE = { kind: 'lose_hosts', count: 1 } as const;
-  const ADD = { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2027-01' } as const;
+  const ADD = { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: monthParam(FROM_MONTH) };
+  // 12 months pushes a commission at +6 out past the window end at +12.
   const DELAY = { kind: 'delay_procurement', months: 12 } as const;
 
   const series = (raw: string): string =>
@@ -412,7 +445,7 @@ describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', (
   it('folds EVERY step — the compound differs from each single step in isolation', async () => {
     const base = await server.inject({
       method: 'GET',
-      url: `/api/clusters/${clusterId}/forecast?${WINDOW}`,
+      url: `/api/clusters/${compoundClusterId}/forecast?${WINDOW}`,
     });
     expect(base.statusCode).toBe(200);
 
@@ -446,7 +479,7 @@ describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', (
   it("composes the parts: the compound carries each step's own effect", async () => {
     const base = await server.inject({
       method: 'GET',
-      url: `/api/clusters/${clusterId}/forecast?${WINDOW}`,
+      url: `/api/clusters/${compoundClusterId}/forecast?${WINDOW}`,
     });
     const baseMonths = (
       JSON.parse(base.body) as {
@@ -461,7 +494,8 @@ describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', (
       }
     ).months;
 
-    // add_vms: +50 × 16 GB = +800 GB of consumption from 2027-01 onward.
+    // add_vms: +50 × 16 GB = +800 GB of consumption from the window's first
+    // month (`FROM_MONTH`) onward.
     expect(compoundMonths[0]!.consumption - baseMonths[0]!.consumption).toBe(800);
 
     // lose_hosts dropped the 2048 GB deployed host, and delay_procurement pushed
@@ -521,7 +555,7 @@ describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', (
   it('rejects a duplicate kind with 400 — the id-collision guard', async () => {
     const res = await server.inject({
       method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?metric=memory_gb`,
       payload: {
         steps: [
           { kind: 'add_vms', count: 10, sizeGb: 16 },
@@ -535,7 +569,7 @@ describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', (
   it('rejects a stack over the step cap with 400', async () => {
     const res = await server.inject({
       method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?metric=memory_gb`,
       payload: {
         steps: [
           { kind: 'lose_hosts', count: 1 },
@@ -551,12 +585,12 @@ describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', (
   it('rejects an empty stack and a mistyped container key with 400', async () => {
     const empty = await server.inject({
       method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?metric=memory_gb`,
       payload: { steps: [] },
     });
     const typo = await server.inject({
       method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?metric=memory_gb`,
       payload: { parts: [{ kind: 'lose_hosts', count: 1 }] },
     });
     expect(empty.statusCode).toBe(400);
@@ -586,7 +620,7 @@ describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', (
 
     const res = await server.inject({
       method: 'POST',
-      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?${WINDOW}`,
       payload: {
         steps: [
           { kind: 'lose_hosts', count: 1 },

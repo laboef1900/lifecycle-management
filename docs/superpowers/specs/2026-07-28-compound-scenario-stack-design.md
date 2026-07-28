@@ -100,8 +100,9 @@ Two independent defences, both implemented:
   collision is unreachable through the API.
 - **Defence in depth:** the synthetic id is now step-index-scoped
   (`__scenario:<i>:add_vms:…`), so relaxing the uniqueness rule later cannot
-  silently corrupt the response. Nothing reads this id — it appears exactly once
-  in the codebase, at its definition — so scoping it is not a contract change.
+  silently corrupt the response. No consumer reads this id — it appears only at
+  its definition in `scenario.ts` and in the test that pins the scoping — so
+  changing its shape is not a contract change.
 
 ## Architecture
 
@@ -113,7 +114,15 @@ MAX_SCENARIO_STEPS = 3
 scenarioSchema            unchanged — one step
 scenarioStackSchema       { steps: Scenario[] }, 1..MAX_SCENARIO_STEPS, unique kind
 scenarioRequestSchema     ambiguity guard  ->  union(stack, single->{steps:[single]})
+SCENARIO_STEP_ORDER       canonical apply/render order, exhaustive over Scenario['kind']
+compareScenarioSteps      sort comparator over the above
 ```
+
+`SCENARIO_STEP_ORDER` lives in the shared package rather than beside the fold
+because **both** sides need it: the server sorts by it, and the rail renders its
+removable rows and composes its summary text by it. Two copies would let the UI
+list one order while the forecast folds in another — the CLAUDE.md rule that
+anything used by both server and web belongs here, not duplicated.
 
 `scenarioSchema` stays exported and unchanged: a step _is_ a scenario. Types:
 `ScenarioStack`, `ScenarioRequest`, and the wire-side `ScenarioStackWire`.
@@ -182,11 +191,16 @@ admin gate so VIEWERs can run previews. A new path would 403 every VIEWER.
   over `applyScenarioStack` is true _by construction_ (sorting makes the output a
   pure function of the step multiset) and exists to pin the sort itself. The test
   that can actually fail folds the transforms **without** the sort, so the day a
-  kind stops commuting it goes red — at which point `STEP_ORDER` stops being an
-  arbitrary tie-break and starts deciding the forecast. AI review caught the
-  original single test claiming a tripwire it could never trip; the real tripwire
-  for a _new_ kind is the exhaustive `Record<Scenario['kind'], number>` type plus
-  `noFallthroughCasesInSwitch`, both compile errors.
+  kind stops commuting it goes red — at which point the canonical order stops
+  being an arbitrary tie-break and starts deciding the forecast. AI review caught
+  the original single test claiming a tripwire it could never trip; the real
+  tripwire for a _new_ kind is a pair of compile errors — TS2741 from the
+  exhaustive `SCENARIO_STEP_ORDER: Record<Scenario['kind'], number>` in
+  `@lcm/shared`, and TS2366 from `applyScenario`'s switch under its explicit
+  return type. (An earlier draft credited `noFallthroughCasesInSwitch`; that flag
+  only reports a case falling THROUGH to the next one and says nothing about a
+  missing case. Both real errors were confirmed by adding a fourth kind during AI
+  review.)
 - **INV-6 — bounded compute.** ≤ 3 steps × the existing
   `MAX_FORECAST_SPAN_MONTHS = 120` window cap, one synthetic application per
   `add_vms`.
@@ -261,9 +275,14 @@ previews (it would 400 on a stack, visibly, not silently). Deployments pin
   failures; merged entry point → the INV-1 positive control fails; `.max()`
   deleted → the cap test fails; ambiguity guard removed → 2 failures at each of
   the contract and HTTP layers.
-- Clock: any stack test pins the clock (`vi.useFakeTimers`) because
-  `addSyntheticVms` defaults `startedAt` to `new Date()` and
-  `delayFutureCommissions` compares against `new Date()`.
+- Clock, two different strategies for two layers. The pure unit tests pin it
+  (`vi.useFakeTimers`), because `addSyntheticVms` defaults `startedAt` to
+  `new Date()` and `delayFutureCommissions` compares against it. The HTTP-level
+  integration tests deliberately do NOT — fake timers fight `server.inject` — so
+  their fixture is instead computed RELATIVE to the real clock (baseline at +0,
+  deployed host at −6, commissioning at +6, window +1..+12). Hard-coded months
+  would have re-introduced the vacuity they exist to prevent the moment the wall
+  clock passed them; the first version had roughly an 11-month shelf life.
 
 ## Out of scope
 

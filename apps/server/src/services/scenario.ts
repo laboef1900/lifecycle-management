@@ -1,37 +1,24 @@
-import { addUtcMonths, type Scenario } from '@lcm/shared';
+import { addUtcMonths, compareScenarioSteps, type Scenario } from '@lcm/shared';
 
 import type { ForecastApplication, ForecastHost, ForecastInput } from './forecast.js';
 
 /**
- * Canonical fold order for a compound scenario (#323). The steps commute today —
- * `lose_hosts` ranks off capacity rows, `delay_procurement` moves only
- * commissioning dates, `add_vms` touches only applications — so this buys nothing
- * yet. It is a forward-looking guarantee that the answer never depends on the
- * order a client happened to serialise the steps in.
- *
- * @ai-warning The tripwire for a NEW kind is this TYPE, not a test.
- * `Record<Scenario['kind'], number>` is exhaustive, so adding a member to the
- * `Scenario` union without adding it here is a compile error — as is the missing
- * `case` in `applyScenario`'s switch (`noFallthroughCasesInSwitch`). When that
- * fires, decide deliberately where the new kind belongs in this order.
- *
- * Do NOT expect `applyScenarioStack`'s permutation test to catch it: that test
- * asserts the SORTED fold is order-independent, which it is *by construction* —
- * sorting makes the output a pure function of the step multiset, so it can never
- * fail for non-commutativity. The commutativity of the individual transforms is
- * pinned separately, by folding WITHOUT the sort ("the transforms themselves
- * commute" in `__tests__/scenario.test.ts`). Corrected after AI review caught
- * the original claim here being unfalsifiable.
- */
-const STEP_ORDER: Readonly<Record<Scenario['kind'], number>> = {
-  lose_hosts: 0,
-  add_vms: 1,
-  delay_procurement: 2,
-};
-
-/**
  * Apply a compound what-if — an ordered fold of {@link applyScenario} over the
- * steps, sorted into {@link STEP_ORDER} first. Returns a NEW input.
+ * steps, sorted into the canonical order first. Returns a NEW input.
+ *
+ * The order itself (`SCENARIO_STEP_ORDER`) lives in `@lcm/shared` because the web
+ * rail renders its rows by the same order; see the `@ai-warning` there for the
+ * new-kind tripwire. The steps commute today — `lose_hosts` ranks off capacity
+ * rows, `delay_procurement` moves only commissioning dates, `add_vms` touches
+ * only applications — so the order is a forward-looking guarantee that the answer
+ * never depends on how a client happened to serialise the steps.
+ *
+ * @ai-warning Do NOT expect the permutation test to catch a non-commuting kind:
+ * it asserts the SORTED fold is order-independent, which it is *by construction*
+ * — sorting makes the output a pure function of the step multiset. The
+ * commutativity of the individual transforms is pinned separately, by folding
+ * WITHOUT the sort ("the transforms themselves commute" in
+ * `__tests__/scenario.test.ts`).
  *
  * The step index handed to each step comes from the SORTED order, not the
  * caller's: it seeds `add_vms`'s synthetic application id, so deriving it from
@@ -43,7 +30,7 @@ export function applyScenarioStack(
   steps: readonly Scenario[],
 ): ForecastInput {
   return [...steps]
-    .sort((a, b) => STEP_ORDER[a.kind] - STEP_ORDER[b.kind])
+    .sort((a, b) => compareScenarioSteps(a.kind, b.kind))
     .reduce((acc, step, index) => applyScenario(acc, step, index), input);
 }
 
