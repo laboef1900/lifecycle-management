@@ -34,7 +34,7 @@ import {
   percentSchema,
   procurementLeadTimeWeeksSchema,
 } from './settings.js';
-import type { TenantSettings } from './settings.js';
+import type { TenantSettingsResolved } from './settings.js';
 import {
   entitySourceSchema,
   vsphereConnectionStatusSchema,
@@ -298,7 +298,7 @@ export const orderApprovalResponseSchema: z.ZodType<OrderApprovalResponse> = z.o
 
 // Non-strict on purpose: responses tolerate additive server fields
 // (forward compatibility); the server enforces warn < crit on write.
-export const tenantSettingsResponseSchema: z.ZodType<TenantSettings> = z.object({
+export const tenantSettingsResponseSchema: z.ZodType<TenantSettingsResolved> = z.object({
   warnThreshold: percentSchema,
   critThreshold: percentSchema,
   procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
