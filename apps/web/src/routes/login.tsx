@@ -1,6 +1,6 @@
 import { useDeferredValue, useState } from 'react';
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { ShieldCheck, TriangleAlert, Unlock } from 'lucide-react';
+import { Check, ShieldCheck, TriangleAlert, Unlock } from 'lucide-react';
 import { z } from 'zod';
 
 import { type LoginErrorCode, loginErrorCodeSchema, safeRedirectPath } from '@lcm/shared';
@@ -452,11 +452,82 @@ export function SignInPlate({
  * accessible name is "Switch theme (current: …)", and it is last in DOM order
  * so it costs the fast path nothing.
  */
+const HERO_POINTS = [
+  'Runs on your infrastructure',
+  'Every forecast is traceable',
+  'Live vSphere sync',
+  'Role-based access',
+] as const;
+
+/**
+ * Brand panel of the split-screen layout. Purely presentational: it carries no
+ * control needed to sign in, which is what lets it drop out entirely below
+ * `lg` (the sign-in plate is the priority on a phone).
+ *
+ * @ai-warning must never contain a link whose accessible name matches
+ * /sign in/i — three OIDC e2e specs resolve the SSO control with
+ * `getByRole('link', { name: /sign in/i })` under Playwright strict mode, and a
+ * second match fails the whole `oidc-e2e` job.
+ */
+export function LoginHero(): React.JSX.Element {
+  return (
+    <aside className="login-hero relative hidden flex-col justify-between overflow-hidden border-r border-border p-10 lg:flex xl:p-14">
+      <div className="flex items-center gap-2.5 font-display font-semibold">
+        <BrandMark className="h-8 w-8" />
+        <span>Capacity Forecast</span>
+      </div>
+
+      <div className="max-w-xl">
+        {/* Opaque `bg-card` chip, deliberately NOT the accent-soft `Badge`
+            variant: the steel `--accent` label needs to sit on the solid card
+            surface, where it clears AA 4.5:1 in both themes — the translucent
+            wash over the hero grid would not guarantee that. Copy is a factual
+            honesty proof (the PRODUCT.md "reads vCenter, never writes" voice),
+            not a marketing tagline. */}
+        <span className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-card px-3 py-1 text-xs font-medium text-accent shadow-[var(--shadow-card)]">
+          <ShieldCheck aria-hidden className="h-3.5 w-3.5" />
+          Reads vCenter — never writes
+        </span>
+
+        {/* A display-styled paragraph rather than a heading: the hero is
+            decorative and hidden below `lg`, so an <h1> here would leave the
+            page with no h1 at all on a phone. The sign-in plate owns the h1. */}
+        <p className="mt-7 font-display text-4xl font-semibold leading-[1.08] tracking-[-0.025em] xl:text-5xl">
+          Capacity you can see coming.
+        </p>
+        <p className="mt-5 max-w-lg text-base leading-relaxed text-fg-muted">
+          Memory-capacity forecasting for your vSphere fleet — one source of truth for every
+          purchasing decision.
+        </p>
+
+        {/* Each tick is paired with its label, so the list never leans on color
+            alone to carry meaning (SC 1.4.1). */}
+        <ul className="mt-10 grid grid-cols-2 gap-x-6 gap-y-4">
+          {HERO_POINTS.map((point) => (
+            <li key={point} className="flex items-start gap-2.5 text-sm">
+              <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+              <span>{point}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Balances the flex column against the brand lockup so the content block
+          sits optically centred. */}
+      <div aria-hidden />
+    </aside>
+  );
+}
+
 export function BaseRail({ secure }: { secure: boolean }): React.JSX.Element {
   return (
     <footer className="border-t border-border px-6 py-4">
       <div className="mx-auto flex max-w-[880px] flex-wrap items-center justify-center gap-x-5 gap-y-1.5 sm:gap-y-2">
-        <p className="flex items-center gap-1.5 text-caption text-fg-subtle">
+        {/* `lg:hidden` — the hero carries this same claim as a chip at `lg`+,
+            and stating it twice on one screen reads as insecurity about it
+            rather than emphasis. Below `lg` the hero is gone, so the rail is
+            the only place it appears. */}
+        <p className="flex items-center gap-1.5 text-caption text-fg-subtle lg:hidden">
           <ShieldCheck aria-hidden className="h-3.5 w-3.5 shrink-0" />
           Reads capacity from vCenter on a schedule — never writes to it.
         </p>
@@ -493,22 +564,30 @@ function LoginPage(): React.JSX.Element {
   return (
     // No `bg-background`: the body already paints the lit --surface-backdrop,
     // and /login was the one surface flattening it.
-    <div className="flex min-h-screen flex-col text-foreground">
-      <main
-        className="flex flex-1 items-start justify-center px-4 pb-8 pt-8 sm:items-center sm:px-6 sm:py-12"
-        aria-labelledby="login-title"
-      >
-        <SignInPlate
-          message={message}
-          showLocal={showLocal}
-          showOidc={showOidc}
-          methodsKnown={auth.loginMethods !== undefined}
-          loginHref={loginHref}
-          redirectTo={redirectParam}
-          returnTo={safeRedirectPath(redirectParam)}
-          host={host}
-        />
-      </main>
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
+      {/* Split screen at `lg`+: the restyled brand hero on the left, the sign-in
+          plate on the right. Below `lg` the hero drops out entirely and the
+          plate is the whole page — it is the only thing needed to sign in. The
+          base rail spans both columns so the theme toggle and the plain-HTTP
+          warning stay page-level rather than belonging to one column. */}
+      <div className="grid flex-1 grid-cols-1 lg:grid-cols-[1.05fr_1fr]">
+        <LoginHero />
+        <main
+          className="flex items-start justify-center px-4 pb-8 pt-8 sm:items-center sm:px-6 sm:py-12"
+          aria-labelledby="login-title"
+        >
+          <SignInPlate
+            message={message}
+            showLocal={showLocal}
+            showOidc={showOidc}
+            methodsKnown={auth.loginMethods !== undefined}
+            loginHref={loginHref}
+            redirectTo={redirectParam}
+            returnTo={safeRedirectPath(redirectParam)}
+            host={host}
+          />
+        </main>
+      </div>
       <BaseRail secure={secure} />
     </div>
   );

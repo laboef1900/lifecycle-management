@@ -5,7 +5,7 @@ import { loginErrorCodeSchema } from '@lcm/shared';
 
 import { ThemeContext, type ThemeContextValue } from '@/components/theme/use-theme';
 
-import { BaseRail, loginErrorMessage, SignInPlate } from '../login.js';
+import { BaseRail, LoginHero, loginErrorMessage, SignInPlate } from '../login.js';
 
 vi.mock('@/lib/api-client', () => ({
   localLogin: vi.fn(),
@@ -191,12 +191,12 @@ describe('SignInPlate', () => {
   });
 
   /**
-   * Migrated from the deleted `LoginHero` block. The hero was removed, but its
-   * two structural invariants are properties of the *page*, not of that
-   * component — deleting them with it would have been the "delete a test to
-   * make it pass" failure. They are re-asserted here across every mode.
+   * These two invariants are properties of the *page*, not of the hero — they
+   * must hold below `lg`, where the hero is not rendered at all. `LoginHero`'s
+   * own suite asserts the complementary half (that it contributes no heading
+   * and no link of its own), so the page holds at both breakpoints.
    */
-  describe('page-level structural invariants (migrated from LoginHero)', () => {
+  describe('page-level structural invariants', () => {
     it.each(MODES)('declares exactly one level-1 heading in $name mode', ({ props }) => {
       const { container } = renderPlate(props);
       render(
@@ -305,5 +305,45 @@ describe('loginErrorMessage', () => {
     const message = loginErrorMessage('<img src=x onerror=alert(1)>');
     expect(message).toBe('Sign-in didn’t complete. Try again from this page.');
     expect(message).not.toContain('img');
+  });
+});
+/**
+ * The hero returned after being deleted in the first draft of this redesign
+ * (owner call: keep the steel-restyled panel from #319). These are the three
+ * invariants that made it safe to render alongside the sign-in plate — each one
+ * guards a way the hero could break the page or the e2e suite.
+ */
+describe('LoginHero', () => {
+  it('renders the approved brand copy and the 2x2 checklist', () => {
+    render(<LoginHero />);
+
+    expect(screen.getByText(/reads vcenter — never writes/i)).toBeInTheDocument();
+    expect(screen.getByText(/capacity you can see coming\./i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/one source of truth for every purchasing decision/i),
+    ).toBeInTheDocument();
+
+    const items = within(screen.getByRole('list')).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      'Runs on your infrastructure',
+      'Every forecast is traceable',
+      'Live vSphere sync',
+      'Role-based access',
+    ]);
+  });
+
+  // Playwright strict mode resolves the SSO control with
+  // getByRole('link', { name: /sign in/i }); a hero link matching that name
+  // would break the entire oidc-e2e job.
+  it('contains no links at all, so it cannot collide with the SSO selector', () => {
+    render(<LoginHero />);
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+  });
+
+  // The hero is decorative and hidden below `lg`; the sign-in plate owns the h1
+  // so a phone-width render is not left with a heading-less page.
+  it('declares no heading', () => {
+    render(<LoginHero />);
+    expect(screen.queryAllByRole('heading')).toHaveLength(0);
   });
 });
