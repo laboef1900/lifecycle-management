@@ -186,19 +186,30 @@ export interface ForecastResponse {
 
 // ---------- What-if scenarios ----------
 
-export const loseHostsScenarioSchema = z.object({
+/**
+ * @ai-warning All three step schemas are `strictObject`, matching the stack
+ * container. A plain `z.object` STRIPS unknown keys, which on this endpoint means
+ * a caller that sends `{ kind: 'lose_hosts', count: 1, months: 3 }` — meaning to
+ * delay by 3 months, having picked the wrong `kind` — gets a silent
+ * lose-one-host forecast back with a 200 and no indication that half its request
+ * was discarded. The same reasoning as the ambiguity guard below: on an endpoint
+ * whose output drives hardware purchasing, a well-formed wrong answer is worse
+ * than a rejection. Do not relax these to `z.object` for "compatibility" — no
+ * client sends extra keys, and the ones that would are the ones getting it wrong.
+ */
+export const loseHostsScenarioSchema = z.strictObject({
   kind: z.literal('lose_hosts'),
   count: z.number().int().min(1),
 });
 
-export const addVmsScenarioSchema = z.object({
+export const addVmsScenarioSchema = z.strictObject({
   kind: z.literal('add_vms'),
   count: z.number().int().min(1),
   sizeGb: z.number().positive(),
   startMonth: monthOnly.optional(),
 });
 
-export const delayProcurementScenarioSchema = z.object({
+export const delayProcurementScenarioSchema = z.strictObject({
   kind: z.literal('delay_procurement'),
   months: z.number().int().min(1),
 });

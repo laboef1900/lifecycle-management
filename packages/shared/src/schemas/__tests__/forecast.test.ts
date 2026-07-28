@@ -6,6 +6,7 @@ import {
   MAX_SCENARIO_STEPS,
   scenarioRequestSchema,
   scenarioStackSchema,
+  type ScenarioRequestWire,
 } from '../forecast.js';
 
 describe('forecastQuerySchema range bounds', () => {
@@ -107,6 +108,46 @@ describe('scenarioStackSchema (#323)', () => {
     expect(r.success).toBe(false);
   });
 
+  /**
+   * Steps are `strictObject` too, not just the container. A stripping `z.object`
+   * would accept a step carrying another kind's fields and silently drop them —
+   * so a caller meaning "delay 3 months" who picked the wrong `kind` would get a
+   * lose-one-host forecast back with a 200 and no hint that half the request
+   * vanished. Same reasoning as the ambiguity guard: on this endpoint a
+   * well-formed wrong answer is worse than a rejection.
+   */
+  it("rejects a step carrying a foreign kind's fields instead of dropping them", () => {
+    const misdirected = scenarioStackSchema.safeParse({
+      steps: [{ kind: 'lose_hosts', count: 1, months: 3 }],
+    });
+    expect(misdirected.success).toBe(false);
+
+    // …and the same for the bare form, which shares these schemas.
+    expect(
+      scenarioRequestSchema.safeParse({ kind: 'lose_hosts', count: 1, months: 3 }).success,
+    ).toBe(false);
+    expect(
+      scenarioRequestSchema.safeParse({ kind: 'add_vms', count: 5, sizeGb: 8, bogus: 'x' }).success,
+    ).toBe(false);
+  });
+
+  it('still accepts every legitimate step shape, including the optional startMonth', () => {
+    expect(
+      scenarioStackSchema.safeParse({
+        steps: [
+          { kind: 'lose_hosts', count: 1 },
+          { kind: 'add_vms', count: 5, sizeGb: 8 },
+          { kind: 'delay_procurement', months: 2 },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      scenarioStackSchema.safeParse({
+        steps: [{ kind: 'add_vms', count: 5, sizeGb: 8, startMonth: '2026-12' }],
+      }).success,
+    ).toBe(true);
+  });
+
   it('rejects a mistyped container key instead of silently dropping the stack', () => {
     // strictObject: `parts` is both an unknown key and a missing `steps`. Were
     // this a plain z.object, `parts` would be stripped and `steps` would fail —
@@ -202,5 +243,54 @@ describe('scenarioRequestSchema — additive single/stack union (#323)', () => {
     expect(
       scenarioRequestSchema.safeParse({ steps: [{ kind: 'lose_hosts', count: 1 }] }).success,
     ).toBe(true);
+  });
+});
+
+/**
+ * `ScenarioRequestWire` is the one wire type in this package that is NOT derived
+ * via `z.input` — it cannot be, because `scenarioRequestSchema` opens with the
+ * ambiguity guard on `z.unknown()`, whose `z.input` is `unknown`. So it is hand
+ * written, and nothing in the type system ties it to the schema it describes.
+ *
+ * These tests are that tie, in both directions:
+ *  - TOO NARROW is a compile error — each sample is annotated
+ *    `ScenarioRequestWire`, so a shape the endpoint accepts but the type omits
+ *    fails `pnpm typecheck`.
+ *  - TOO WIDE is a test failure — every sample is parsed, so a shape the type
+ *    admits but the schema rejects fails here.
+ *
+ * @ai-warning If you add an accepted request shape, add it here too. This file is
+ * the only thing keeping that type honest.
+ */
+describe('ScenarioRequestWire matches what scenarioRequestSchema accepts (#323)', () => {
+  const samples: ScenarioRequestWire[] = [
+    // Bare single scenario — one per kind, since each is a separate union member.
+    { kind: 'lose_hosts', count: 2 },
+    { kind: 'add_vms', count: 10, sizeGb: 16 },
+    { kind: 'add_vms', count: 10, sizeGb: 16, startMonth: '2026-09' },
+    { kind: 'delay_procurement', months: 3 },
+    // Stack form: minimum, and a full one at the cap.
+    { steps: [{ kind: 'lose_hosts', count: 1 }] },
+    {
+      steps: [
+        { kind: 'lose_hosts', count: 1 },
+        { kind: 'add_vms', count: 4, sizeGb: 8, startMonth: '2026-10' },
+        { kind: 'delay_procurement', months: 6 },
+      ],
+    },
+  ];
+
+  it('every value the type admits actually parses', () => {
+    for (const sample of samples) {
+      const result = scenarioRequestSchema.safeParse(sample);
+      expect(result.success, `ScenarioRequestWire value rejected: ${JSON.stringify(sample)}`).toBe(
+        true,
+      );
+    }
+  });
+
+  it('covers both accepted shapes, so the sample set cannot pass by only testing one', () => {
+    expect(samples.some((s) => 'kind' in s)).toBe(true);
+    expect(samples.some((s) => 'steps' in s)).toBe(true);
   });
 });

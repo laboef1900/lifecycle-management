@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Scenario } from '@lcm/shared';
+import { MAX_SCENARIO_STEPS, type Scenario } from '@lcm/shared';
 
 import type { ForecastApplication, ForecastHost, ForecastInput } from '../forecast.js';
 import { applyScenario, applyScenarioStack } from '../scenario.js';
@@ -307,6 +307,37 @@ describe('applyScenarioStack — compound what-ifs (#323)', () => {
     const before = JSON.stringify(input);
     applyScenarioStack(input, ALL_THREE);
     expect(JSON.stringify(input)).toBe(before);
+  });
+
+  /**
+   * INV-4 and INV-6 enforced at the FOLD, not only at the HTTP boundary. The
+   * route's Zod parse makes these unreachable through the API today — that is why
+   * these tests call the function directly. The point is the second caller: this
+   * function is exported and takes a bare array, so a future path that skips
+   * validation would otherwise corrupt the response (duplicate `add_vms`) or run
+   * an unbounded fold.
+   */
+  it('refuses a stack over MAX_SCENARIO_STEPS even when called directly', () => {
+    const tooMany: Scenario[] = [
+      { kind: 'lose_hosts', count: 1 },
+      { kind: 'add_vms', count: 1, sizeGb: 8 },
+      { kind: 'delay_procurement', months: 1 },
+      { kind: 'lose_hosts', count: 2 },
+    ];
+    expect(() => applyScenarioStack(compoundInput(), tooMany)).toThrow(/MAX_SCENARIO_STEPS/);
+  });
+
+  it('refuses a duplicate kind even when called directly — the id-collision guard', () => {
+    const duplicated: Scenario[] = [
+      { kind: 'add_vms', count: 10, sizeGb: 16 },
+      { kind: 'add_vms', count: 10, sizeGb: 16 },
+    ];
+    expect(() => applyScenarioStack(compoundInput(), duplicated)).toThrow(/at most once/);
+  });
+
+  it('still accepts a full, distinct stack at exactly the cap', () => {
+    expect(() => applyScenarioStack(compoundInput(), ALL_THREE)).not.toThrow();
+    expect(ALL_THREE).toHaveLength(MAX_SCENARIO_STEPS);
   });
 
   it('scopes the synthetic application id per step so contributions cannot alias', () => {

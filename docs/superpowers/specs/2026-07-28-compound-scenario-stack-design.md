@@ -124,11 +124,16 @@ removable rows and composes its summary text by it. Two copies would let the UI
 list one order while the forecast folds in another — the CLAUDE.md rule that
 anything used by both server and web belongs here, not duplicated.
 
-`scenarioSchema` stays exported and unchanged: a step _is_ a scenario. Types:
+`scenarioSchema` stays exported: a step _is_ a scenario. Its three members are
+`strictObject` like the container, so a step carrying another kind's fields is a
+400 rather than a silent narrowing. Types:
 `ScenarioStack`, `ScenarioRequest`, and the wire-side `ScenarioStackWire`.
 `ScenarioRequestWire` is written out as `ScenarioStackWire | z.input<typeof
 scenarioSchema>` rather than derived, because the schema now opens with the
-ambiguity guard on `z.unknown()` and its `z.input` is therefore `unknown`.
+ambiguity guard on `z.unknown()` and its `z.input` is therefore `unknown`. Being
+hand-written it is the one wire type nothing type-checks against its schema, so a
+test pins it in both directions: samples annotated `ScenarioRequestWire` (too
+narrow ⇒ compile error) that are each parsed (too wide ⇒ test failure).
 
 The cap is expressed as `.max(MAX_SCENARIO_STEPS)` **and** a uniqueness refine.
 They are independent rules: uniqueness happens to imply ≤ 3 while there are
@@ -185,7 +190,10 @@ admin gate so VIEWERs can run previews. A new path would 403 every VIEWER.
   step. Those branches are unreachable through the API (both schemas are
   `int().min(1)`).
 - **INV-3 — one `prepare()` per request** (see Loader above).
-- **INV-4 — at most one step per kind, ≤ 3 steps**, enforced in Zod.
+- **INV-4 — at most one step per kind, ≤ 3 steps.** Enforced in Zod at the route
+  **and** re-checked inside `applyScenarioStack`, which throws. The fold is
+  exported and takes a bare array, so it cannot assume its caller validated —
+  today's single caller does, and the guard is for the next one.
 - **INV-5 — the answer is independent of step order.** Pinned by TWO tests,
   because one of them cannot fail for the interesting reason. The permutation test
   over `applyScenarioStack` is true _by construction_ (sorting makes the output a
@@ -203,7 +211,7 @@ admin gate so VIEWERs can run previews. A new path would 403 every VIEWER.
   review.)
 - **INV-6 — bounded compute.** ≤ 3 steps × the existing
   `MAX_FORECAST_SPAN_MONTHS = 120` window cap, one synthetic application per
-  `add_vms`.
+  `add_vms`. Bounded at both the boundary and the fold (see INV-4).
 
 ## Threat model / misuse cases
 
@@ -211,14 +219,15 @@ Trust boundary: the HTTP request body, parsed by Zod _inside_ the handler before
 anything touches the database. The route is read-only — it computes and returns a
 forecast and writes nothing.
 
-| Misuse                                                                                                                               | Defence                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Unbounded `steps` array as a compute-amplification lever                                                                             | `.max(3)` in Zod; the 1 MiB body limit and the 120-month window cap are unchanged                                                         |
-| Duplicate `add_vms` to corrupt `applicationContributions`                                                                            | Zod uniqueness (primary) + step-scoped synthetic id (defence in depth)                                                                    |
-| VIEWER escalation via a new route path                                                                                               | Path unchanged, so the `READ_ONLY_MUTATION_ROUTES` allowlist and its two tests still apply                                                |
-| Unknown/typo'd key (`parts` instead of `steps`) silently dropping the stack                                                          | The union has no branch that accepts an object without `steps` or `kind`, so a typo is a 400, not a silent single-step preview            |
-| A body carrying BOTH shapes resolving to the narrower one — silently discarding the stack AND bypassing the cap and uniqueness rules | The ambiguity guard rejects it (see above). Reproduced against the first implementation; now covered at both the contract and HTTP layers |
-| A hypothetical acquiring measured evidence and reading as a real forecast                                                            | INV-1, re-proved on the compound path                                                                                                     |
+| Misuse                                                                                                                               | Defence                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unbounded `steps` array as a compute-amplification lever                                                                             | `.max(3)` in Zod at the boundary, **and** re-checked inside `applyScenarioStack` so the fold holds INV-6 for any caller; the 1 MiB body limit and the 120-month window cap are unchanged |
+| Duplicate `add_vms` to corrupt `applicationContributions`                                                                            | Zod uniqueness at the boundary (primary), re-checked in `applyScenarioStack`, + step-scoped synthetic id (defence in depth)                                                              |
+| VIEWER escalation via a new route path                                                                                               | Path unchanged, so the `READ_ONLY_MUTATION_ROUTES` allowlist and its two tests still apply                                                                                               |
+| Unknown/typo'd key (`parts` instead of `steps`) silently dropping the stack                                                          | The union has no branch that accepts an object without `steps` or `kind`, so a typo is a 400, not a silent single-step preview                                                           |
+| A step carrying another kind's fields (`{kind:'lose_hosts', count:1, months:3}`) being silently narrowed                             | The step schemas are `strictObject` too, not just the container, so the mismatch is a 400 rather than a dropped intent                                                                   |
+| A body carrying BOTH shapes resolving to the narrower one — silently discarding the stack AND bypassing the cap and uniqueness rules | The ambiguity guard rejects it (see above). Reproduced against the first implementation; now covered at both the contract and HTTP layers                                                |
+| A hypothetical acquiring measured evidence and reading as a real forecast                                                            | INV-1, re-proved on the compound path with a positive control on both halves                                                                                                             |
 
 No new persistence, no new external calls, no secrets, no PII. Nothing about the
 request is logged beyond the existing request-id-correlated access log.

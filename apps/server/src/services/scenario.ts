@@ -1,4 +1,4 @@
-import { addUtcMonths, compareScenarioSteps, type Scenario } from '@lcm/shared';
+import { addUtcMonths, compareScenarioSteps, MAX_SCENARIO_STEPS, type Scenario } from '@lcm/shared';
 
 import type { ForecastApplication, ForecastHost, ForecastInput } from './forecast.js';
 
@@ -24,11 +24,32 @@ import type { ForecastApplication, ForecastHost, ForecastInput } from './forecas
  * caller's: it seeds `add_vms`'s synthetic application id, so deriving it from
  * the received order would make the response depend on step order and break
  * permutation-invariance.
+ *
+ * @ai-warning The cap and uniqueness checks below are NOT redundant with the
+ * route's Zod parse. INV-4 and INV-6 are stated in the design as properties of
+ * the FOLD, and this function is exported, takes a bare array, and has no way to
+ * know whether its caller validated. Today the preview route is the only caller
+ * and it does; the second caller is the one this guards against — a duplicate
+ * `add_vms` silently corrupts the response (two entries sharing one aliased
+ * contributions array) rather than failing, and an unbounded array walks straight
+ * into the O(months × rows) loop that `MAX_FORECAST_SPAN_MONTHS` exists to bound.
+ * These throw rather than filter: a violation here is a programmer error on a
+ * purchasing-critical path, and silently repairing it would hide the bug.
  */
 export function applyScenarioStack(
   input: ForecastInput,
   steps: readonly Scenario[],
 ): ForecastInput {
+  if (steps.length > MAX_SCENARIO_STEPS) {
+    throw new Error(
+      `applyScenarioStack: ${steps.length} steps exceeds MAX_SCENARIO_STEPS (${MAX_SCENARIO_STEPS})`,
+    );
+  }
+  const kinds = new Set(steps.map((step) => step.kind));
+  if (kinds.size !== steps.length) {
+    throw new Error('applyScenarioStack: each scenario kind may appear at most once');
+  }
+
   return [...steps]
     .sort((a, b) => compareScenarioSteps(a.kind, b.kind))
     .reduce((acc, step, index) => applyScenario(acc, step, index), input);
