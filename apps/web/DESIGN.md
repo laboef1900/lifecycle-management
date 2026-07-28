@@ -231,7 +231,7 @@ Three corner radii and one pill: **8px** for controls (`--radius`: buttons, inpu
 - **Background:** `--card` (dark cards gradient-lit via `--surface-card`).
 - **Shadow:** `--shadow-card` at rest → `--shadow-card-hover` on interactive cards.
 - **Border:** 1px `--border`.
-- **Internal padding:** 14px (`p-3.5`) across header / content / footer.
+- **Internal padding:** 14px (`p-3.5`) across header / content / footer. _Recorded deviation:_ the standalone auth plate on `/login` is the one surface at 24px padding (20px below `sm`) — it is a page-level object, not a bento tile.
 
 ### Inputs / Fields
 

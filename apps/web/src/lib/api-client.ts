@@ -132,20 +132,36 @@ export function describeApiError(err: unknown, fallback: string): string {
 }
 
 /**
- * Local admin login: POSTs username/password to the local-auth endpoint. On
- * success the server sets the session cookie and responds 204; any other
- * status (401 bad credentials, etc.) resolves to false rather than throwing,
- * so the caller can show one generic "invalid credentials" message without
- * distinguishing wrong-username from wrong-password.
+ * Outcome of a local sign-in attempt. Deliberately NOT a boolean: the auth
+ * routes carry their own tighter 30/min per-IP limiter (`authRoutes`'
+ * `authRateLimit`), so a 429 is reachable by one admin fat-fingering a password
+ * a few times — and collapsing it into "false" made the form say "Invalid
+ * username or password", which is a factual lie. Each non-`ok` value gets its
+ * own copy in the login form.
  */
-export async function localLogin(username: string, password: string): Promise<boolean> {
+export type LocalLoginResult = 'ok' | 'invalid' | 'rate_limited' | 'error';
+
+/**
+ * Local account login: POSTs username/password to the local-auth endpoint. On
+ * success the server sets the session cookie and responds 204. Failures resolve
+ * to a discriminated result rather than throwing, so the caller can name the
+ * actual condition; 401 stays deliberately undifferentiated (`invalid`) so the
+ * form never reveals whether the username exists.
+ *
+ * @ai-warning only a network-level failure (offline/DNS/CORS) rejects — every
+ * HTTP status resolves. The caller must still handle the rejection.
+ */
+export async function localLogin(username: string, password: string): Promise<LocalLoginResult> {
   const res = await fetch('/api/auth/local/login', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ username, password }),
   });
-  return res.status === 204;
+  if (res.status === 204) return 'ok';
+  if (res.status === 401) return 'invalid';
+  if (res.status === 429) return 'rate_limited';
+  return 'error';
 }
 
 // ---------- Wire body types ----------
