@@ -5,10 +5,14 @@ import {
   startOfUtcMonth,
   type BaselineHistoryPoint,
   type ForecastAcknowledgment,
+  type ForecastUncertaintyBandWidth,
+  type ForecastUncertaintyPoint,
   type ProcurementInfo,
   type Scenario,
 } from '@lcm/shared';
 import type { PrismaClient } from '@prisma/client';
+
+import { retentionCutoffMonth } from '../lib/forecast-retention.js';
 
 import { NotFoundError, UnprocessableError } from './errors.js';
 import {
@@ -20,6 +24,7 @@ import {
   type ForecastResult,
   type HostMembershipInterval,
 } from './forecast.js';
+import { computeForecastErrorBands, type ForecastErrorSample } from './forecast-error.js';
 import { projectedDecommissionDate } from './host-projection.js';
 import {
   computeCapacitySignature,
@@ -27,7 +32,7 @@ import {
   type StoredApprovalSnapshot,
 } from './order-approval-coverage.js';
 import { computeProcurementInfo } from './procurement.js';
-import { applyScenario } from './scenario.js';
+import { applyScenarioStack } from './scenario.js';
 import { SettingsService } from './settings.js';
 
 const DEFAULT_HORIZON_MONTHS = 24;
@@ -35,6 +40,28 @@ const DEFAULT_HORIZON_MONTHS = 24;
 interface LoadOptions {
   fromMonth?: Date;
   toMonth?: Date;
+}
+
+/**
+ * Write-path-only superset of {@link LoadOptions}. `clampAnchorToToday` lives
+ * here — deliberately NOT on the public `LoadOptions` — so the read-path
+ * entry points (`forCluster`/`forClusterWithScenario`), whose signatures expose
+ * only `LoadOptions`, cannot thread the clamp through even by mistake (#303
+ * mechanical-review hardening). `liveBreachContext` is the sole constructor of
+ * this type; only `prepare` consumes it.
+ *
+ * `clampAnchorToToday` (WRITE-PATH ONLY, #303): when no explicit `fromMonth` is
+ * given, clamp the default baseline anchor to `min(capturedAt, today)` before
+ * deriving the window. A no-op for the normal past/present-dated baseline
+ * (`min` returns `capturedAt`); for a FUTURE-dated baseline it pulls the window
+ * start back to today so the snapshotted `orderByDate` matches the
+ * today-anchored chip read instead of landing months later and falsely tripping
+ * the ≥ T supersede rule. The read path never sees this option, so its
+ * baseline-anchored window — and the `all` view that depends on it — is
+ * unchanged (see the #300 window-alignment rejection in DESIGN.md §3).
+ */
+interface InternalLoadOptions extends LoadOptions {
+  clampAnchorToToday?: boolean;
 }
 
 interface PreparedForecastInput {
@@ -51,6 +78,20 @@ interface PreparedForecastInput {
    * REAL loaded hosts, so it never reflects a scenario transform.
    */
   capacitySignature: number;
+  /** Metric row id — used by the uncertainty band's snapshot lookup. */
+  metricTypeId: string;
+  /** The re-anchor month (first-of-month of the newest baseline). */
+  anchorMonth: Date;
+  /** Tenant uncertainty-band settings, snapshotted alongside the rest of prepare(). */
+  bandEnabled: boolean;
+  bandMinAnchors: number;
+  bandWidth: ForecastUncertaintyBandWidth;
+  /**
+   * Months of snapshot evidence the band may consider; 0 = unbounded (#318).
+   * Bounds the READ as well as the sweep, so the band is a function of the
+   * setting rather than of when the sweep last ran.
+   */
+  snapshotRetentionMonths: number;
 }
 
 /** Live procurement context for the order-approval write path (#292). */
@@ -76,26 +117,92 @@ export class ForecastService {
       warnThreshold: result.effectiveThresholds.warn,
       capacitySignature: prepared.capacitySignature,
     });
-    return { ...result, acknowledgment };
+    // Empirical uncertainty band — REAL read only (never scenarios, INV-1).
+    // Computed AFTER finalize, so the forecast maths and its characterization
+    // snapshot are untouched; omitted entirely when disabled or unearned.
+    const uncertainty = await this.computeUncertainty(clusterId, prepared, result.months);
+    return uncertainty
+      ? {
+          ...result,
+          acknowledgment,
+          uncertainty: uncertainty.points,
+          uncertaintyAnchorCount: uncertainty.anchorCount,
+        }
+      : { ...result, acknowledgment };
   }
 
   /**
    * Same as forCluster but applies a what-if transform between loading and
-   * computing. The baseline DB state is never modified — the scenario forecast
-   * lives only in this response. `acknowledgment` stays `null`: a hypothetical is
-   * never an approved order (INV-1), and coverage would otherwise be evaluated
-   * against scenario-mutated capacity/order-by values.
+   * computing. `steps` is a compound stack (#323) — one step is the common case
+   * and is just a one-element array. The baseline DB state is never modified —
+   * the scenario forecast lives only in this response. `acknowledgment` stays
+   * `null`: a hypothetical is never an approved order (INV-1), and coverage would
+   * otherwise be evaluated against scenario-mutated capacity/order-by values.
+   *
+   * @ai-warning Three statements on purpose, and INV-1 rides on all of them.
+   * `prepare()` runs ONCE: `capacitySignature`, `anchorMonth` and
+   * `baselineHistory` must describe the REAL loaded state, and the #292
+   * order-approval coverage rule depends on the signature being scenario-free —
+   * folding by re-preparing per step would let a scenario-mutated host list reach
+   * `computeCapacitySignature`. And this must keep returning `finalize()`
+   * DIRECTLY: `finalize` hardcodes `acknowledgment: null` and never calls
+   * `computeUncertainty` (whose only call site is in `forCluster`), which is the
+   * entire structural proof that a hypothetical carries no measured evidence.
+   * Merging the two entry points into one shared method would silently hand
+   * scenarios a band and an acknowledgment.
    */
   async forClusterWithScenario(
     tenantId: string,
     clusterId: string,
     metricKey: string,
-    scenario: Scenario,
+    steps: readonly Scenario[],
     options: LoadOptions = {},
   ): Promise<ForecastResult> {
     const prepared = await this.prepare(tenantId, clusterId, metricKey, options);
-    const scenarioInput = applyScenario(prepared.input, scenario);
+    const scenarioInput = applyScenarioStack(prepared.input, steps);
     return this.finalize(prepared, scenarioInput);
+  }
+
+  /**
+   * Persist this cluster/metric's forecast as ForecastSnapshots keyed on the
+   * re-anchor month. Call at each re-anchor (baseline capture) so the empirical
+   * uncertainty band accrues over time (Option A1, snapshot-forward). Idempotent
+   * per (cluster, metric, anchor, horizon) via the unique index. BEST-EFFORT:
+   * callers MUST NOT let a snapshot failure fail the capture that triggered it.
+   *
+   * Stores the anchor-month row (`horizonIndex === 0`) AS WELL AS the future
+   * projections. The horizon-0 row is the MEASURED actual utilization at the
+   * anchor month — it is `computeForecast`'s month-0 output, which folds host
+   * capacity exactly as the projections do. This is the band's source of
+   * "actuals": reading them back from `ClusterBaselineHistory` would divide by
+   * the raw baseline-capacity scalar, which is 0 for every vSphere-synced cluster
+   * (the hosts ARE the capacity), yielding a null utilization and a band that
+   * could NEVER appear for synced clusters — the product's primary case. Captured
+   * at the instant of re-anchor, so it never reconstructs historical host
+   * capacity (the "A2" minefield the design rejected, docs §4).
+   */
+  async snapshotForecast(tenantId: string, clusterId: string, metricKey: string): Promise<void> {
+    const prepared = await this.prepare(tenantId, clusterId, metricKey, {});
+    const computed = computeForecast(prepared.input, prepared.fromMonth, prepared.toMonth);
+    const rows = computed.months.flatMap((m) => {
+      if (m.utilization === null) return [];
+      const horizonMonth = parseMonth(m.month);
+      const horizonIndex = monthsBetweenUtc(prepared.anchorMonth, horizonMonth);
+      if (horizonIndex < 0) return []; // the anchor month (0) and its future (≥1) only
+      return [
+        {
+          clusterId,
+          metricTypeId: prepared.metricTypeId,
+          tenantId,
+          anchorMonth: prepared.anchorMonth,
+          horizonMonth,
+          horizonIndex,
+          projectedUtil: m.utilization,
+        },
+      ];
+    });
+    if (rows.length === 0) return;
+    await this.prisma.forecastSnapshot.createMany({ data: rows, skipDuplicates: true });
   }
 
   /**
@@ -103,40 +210,47 @@ export class ForecastService {
    * the current breach, the warn threshold, and the capacity signature — all from
    * the REAL (non-scenario) forecast.
    *
-   * @ai-warning This evaluates the SERVER DEFAULT window (baseline-anchored:
-   * `fromMonth = firstOfMonth(newest baseline)`), which is NOT identical to the
-   * window the recommendation chip reads. The web chip requests a TODAY-anchored
-   * window (`resolveWindow` in `apps/web/src/components/clusters/window-controls.tsx`
-   * — `from = firstOfMonth(today)` for the 12/24-mo views), so under a stale
-   * baseline anchor the write and read windows diverge. This is deliberate and,
-   * NOT "exactly what the chip shows", FAILS SAFE **only while the newest
-   * baseline's `capturedAt` is not later than today** (the normal case): then the
-   * baseline-anchored window starts no later than any chip window, so the
-   * snapshotted `orderByDate` is never later than the live one — the ≥ T supersede
-   * rule (INV-5) can never *falsely* supersede on any view (a genuine worsening
-   * reads as improving/unchanged, so an acknowledgment can only linger, never
-   * vanish), and live chip urgency escalates independently regardless. The one
-   * visible-but-safe symptom in that case is a 422 on Approve for a breach past
-   * this window's `to` (anchor + horizon) yet within the chip's (today + horizon).
+   * @ai-warning This evaluates the SERVER DEFAULT window with its anchor CLAMPED
+   * to `min(capturedAt, today)` (`clampAnchorToToday`, #303), NOT the raw
+   * baseline-anchored window and NOT the exact window the chip reads. The web
+   * chip requests a TODAY-anchored window (`resolveWindow` in
+   * `apps/web/src/components/clusters/window-controls.tsx` — `from =
+   * startOfUtcMonth(today)` for the 12/24-mo views).
    *
-   * KNOWN LIMITATION — future-dated baseline (behavioral fix tracked as #303):
-   * future-dated baselines are accepted with no upper bound (see the anchor
-   * @ai-warning in `prepare` — `capturedAt <= today` is deliberately NOT enforced).
-   * When `capturedAt` is LATER than today this write window starts LATER than the
-   * today-anchored chip window, so the snapshotted `orderByDate` can be later than
-   * the live one and the ≥ T rule then FALSELY supersedes the approval the instant
-   * it is created (the acknowledgment never appears). The fails-safe reasoning
-   * above does NOT cover this; it is a genuine defect fixed under #303, not here.
-   * Aligning the write window to `today` would fix the 422 but REGRESS the "all"
-   * view (whose `from` is the baseline) into false supersedes — see DESIGN.md §3
-   * "Window divergence" for both edges.
+   *   - PAST/PRESENT-dated baseline (`capturedAt ≤ today`, the normal case): the
+   *     clamp is a no-op, so this stays baseline-anchored and starts no later than
+   *     any chip window. The snapshotted `orderByDate` is never later than the
+   *     live one, so the ≥ T supersede rule (INV-5) can never *falsely* supersede
+   *     on any view (a genuine worsening reads as improving/unchanged, so an
+   *     acknowledgment can only linger, never vanish), and live chip urgency
+   *     escalates independently regardless. The one visible-but-safe symptom is a
+   *     422 on Approve for a breach past this window's `to` (anchor + horizon) yet
+   *     within the chip's (today + horizon).
+   *   - FUTURE-dated baseline (`capturedAt > today`): the clamp pulls the window
+   *     start back to `startOfUtcMonth(today)`, matching the chip's 12/24-mo anchor.
+   *     Without it (the pre-#303 defect) the raw baseline anchor started the write
+   *     window LATER than the chip's, so the snapshotted `orderByDate` landed later
+   *     than the live one and the ≥ T rule FALSELY superseded the approval the
+   *     instant it was created (the acknowledgment never appeared). Future-dated
+   *     baselines are accepted with no upper bound (see the anchor @ai-warning in
+   *     `prepare` — `capturedAt <= today` is deliberately NOT enforced), which is
+   *     why the write path, not the accept path, is where this is corrected.
+   *
+   * The clamp is deliberately write-path only and does NOT align the full window
+   * with the chip: the read path keeps its baseline-anchored `all` view, whose
+   * `from` is the baseline. Aligning the whole write window to `today` was
+   * rejected because it regresses that `all` view into false supersedes — see
+   * DESIGN.md §3 "Window divergence" for both edges.
    */
   async liveBreachContext(
     tenantId: string,
     clusterId: string,
     metricKey: string,
   ): Promise<LiveBreachContext> {
-    const prepared = await this.prepare(tenantId, clusterId, metricKey, {});
+    // #303: clamp the default anchor to min(capturedAt, today) for the snapshot.
+    const prepared = await this.prepare(tenantId, clusterId, metricKey, {
+      clampAnchorToToday: true,
+    });
     const result = this.finalize(prepared, prepared.input);
     return {
       procurement: result.procurement,
@@ -178,7 +292,7 @@ export class ForecastService {
     tenantId: string,
     clusterId: string,
     metricKey: string,
-    options: LoadOptions,
+    options: InternalLoadOptions,
   ): Promise<PreparedForecastInput> {
     const metricType = await this.prisma.metricType.findUnique({ where: { key: metricKey } });
     if (!metricType) {
@@ -235,7 +349,19 @@ export class ForecastService {
       );
     }
 
-    const fromMonth = options.fromMonth ?? firstOfMonth(anchor.capturedAt);
+    // @ai-context #303 write-path anchor clamp. The DEFAULT anchor is the newest
+    // baseline's `capturedAt`; the write path (`liveBreachContext`) additionally
+    // clamps it to `min(capturedAt, today)` so a FUTURE-dated baseline does not
+    // start the snapshot window later than the today-anchored chip window and
+    // falsely supersede a fresh approval. `min` makes it a no-op for any
+    // past/present baseline, so the read path (no `clampAnchorToToday`) is
+    // untouched. `startOfUtcMonth` is monotonic, so clamping the instant then
+    // snapping equals snapping both then taking the earlier month.
+    const defaultAnchor =
+      options.clampAnchorToToday && anchor.capturedAt.getTime() > Date.now()
+        ? new Date()
+        : anchor.capturedAt;
+    const fromMonth = options.fromMonth ?? startOfUtcMonth(defaultAnchor);
     const toMonth = options.toMonth ?? addMonths(fromMonth, DEFAULT_HORIZON_MONTHS);
 
     if (toMonth < fromMonth) {
@@ -373,6 +499,12 @@ export class ForecastService {
       // From the REAL loaded hosts (metric-filtered by the include above) — the
       // change-detector an approval snapshots (#292). Never a scenario value.
       capacitySignature: computeCapacitySignature(hosts),
+      metricTypeId: metricType.id,
+      anchorMonth: startOfUtcMonth(anchor.capturedAt),
+      bandEnabled: tenantSettings.forecastUncertaintyBandEnabled,
+      bandMinAnchors: tenantSettings.forecastUncertaintyMinAnchors,
+      bandWidth: tenantSettings.forecastUncertaintyBandWidth,
+      snapshotRetentionMonths: tenantSettings.forecastSnapshotRetentionMonths,
     };
   }
 
@@ -393,10 +525,101 @@ export class ForecastService {
       acknowledgment: null,
     };
   }
+
+  /**
+   * Empirical uncertainty band for the projected months of the REAL forecast.
+   * Reads matured ForecastSnapshots (horizonMonth ≤ this month, and ≥ the
+   * retention cutoff when retention is on), pairs each with the measured actual
+   * from that month's OWN horizon-0 snapshot row — NOT from baselineHistory,
+   * whose baseline scalar is 0 for synced clusters (see `snapshotForecast`) —
+   * runs the pure error math, and applies the per-horizon offsets to this
+   * forecast's future months.
+   * Returns undefined when disabled or the anchor floor is unmet — an honest
+   * omission, never a fabricated band. Additive: never touches the forecast maths
+   * (INV-1); invoked only by `forCluster`, never scenarios.
+   */
+  private async computeUncertainty(
+    clusterId: string,
+    prepared: PreparedForecastInput,
+    months: ForecastResult['months'],
+  ): Promise<{ points: ForecastUncertaintyPoint[]; anchorCount: number } | undefined> {
+    if (!prepared.bandEnabled) return undefined;
+    const thisMonth = startOfUtcMonth(new Date());
+    // The retention window bounds the READ, not just the sweep (#318): the band
+    // must be a function of the configured window, never of how recently the
+    // sweep last ran — otherwise the same cluster yields a different band before
+    // and after a tick. `snapshotRetentionMonths === 0` keeps it unbounded, which
+    // is the default (nothing is deleted, so nothing is hidden).
+    const retentionCutoff = retentionCutoffMonth(thisMonth, prepared.snapshotRetentionMonths);
+    const snapshots = await this.prisma.forecastSnapshot.findMany({
+      where: {
+        clusterId,
+        metricTypeId: prepared.metricTypeId,
+        horizonMonth: retentionCutoff
+          ? { gte: retentionCutoff, lte: thisMonth }
+          : { lte: thisMonth },
+      },
+    });
+    if (snapshots.length === 0) return undefined;
+
+    // Actuals come from each re-anchor's OWN month-0 capture (horizonIndex 0):
+    // the measured utilization at that month, folding host capacity exactly as
+    // the projection did. Deriving actuals from ClusterBaselineHistory instead
+    // would divide by the raw baseline scalar — 0 for synced clusters — and the
+    // band could never appear for them (see snapshotForecast's docstring).
+    const actualByMonth = new Map<string, number>();
+    for (const s of snapshots) {
+      if (s.horizonIndex === 0)
+        actualByMonth.set(formatDateIso(s.horizonMonth), s.projectedUtil.toNumber());
+    }
+    const samples: ForecastErrorSample[] = [];
+    // Distinct re-anchors that produced a PAIRED, measured error — the honest "N".
+    const sampledAnchors = new Set<string>();
+    for (const s of snapshots) {
+      if (s.horizonIndex < 1) continue; // projections only; the h0 rows are actuals
+      const actual = actualByMonth.get(formatDateIso(s.horizonMonth));
+      if (actual === undefined) continue; // horizon fell in a data gap — no error to learn from
+      samples.push({ horizonIndex: s.horizonIndex, projected: s.projectedUtil.toNumber(), actual });
+      sampledAnchors.add(formatDateIso(s.anchorMonth));
+    }
+    // The global floor AND the caption's "N" both mean re-anchors we actually
+    // LEARNED from (a paired measured error), not merely matured ones — a matured
+    // anchor whose horizon month was never measured contributes nothing and must
+    // not inflate either the gate or the evidence claimed to the user.
+    const anchorCount = sampledAnchors.size;
+    const bands = computeForecastErrorBands(
+      samples,
+      anchorCount,
+      prepared.bandWidth,
+      prepared.bandMinAnchors,
+    );
+    if (bands.size === 0) return undefined;
+
+    const points: ForecastUncertaintyPoint[] = [];
+    for (const m of months) {
+      if (m.utilization === null) continue;
+      const band = bands.get(monthsBetweenUtc(prepared.anchorMonth, parseMonth(m.month)));
+      if (!band) continue;
+      points.push({
+        month: m.month,
+        low: m.utilization + band.low,
+        high: m.utilization + band.high,
+        // Per-horizon, deliberately NOT `anchorCount` (#317). An anchor
+        // contributes at most one sample per horizon index, so this is ≤ the
+        // global count and typically far below it at the far end of the window —
+        // and a configured retention window (#318) caps it at `retentionMonths`
+        // while `anchorCount` keeps climbing past it. Quoting the global number
+        // against a far-out month would overstate its evidence on a purchasing
+        // surface.
+        sampleCount: band.sampleCount,
+      });
+    }
+    return points.length > 0 ? { points, anchorCount } : undefined;
+  }
 }
 
-function firstOfMonth(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+function parseMonth(month: string): Date {
+  return new Date(`${month}T00:00:00.000Z`);
 }
 
 function addMonths(date: Date, months: number): Date {

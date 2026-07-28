@@ -351,12 +351,304 @@ describe('POST /api/clusters/:id/forecast/scenario', () => {
 });
 
 /**
+ * COMPOUND WHAT-IFS (#323). The request contract accepts either a bare single
+ * scenario — every case above, which must keep working for an older SPA against
+ * a newer server — or a `{ steps: [...] }` stack normalised to the same shape.
+ */
+describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', () => {
+  /**
+   * Every date here is RELATIVE TO THE REAL CLOCK, and that is deliberate.
+   *
+   * `delay_procurement` only shifts commissions dated after `new Date()`, so the
+   * window has to contain a future commissioning step or the step is a no-op and
+   * this whole block silently degenerates into a test of `add_vms` alone — the
+   * exact vacuity AI review found in its first version. Hard-coded months would
+   * have re-created that the moment the wall clock passed them: the original
+   * `2027-06-01` fixture had a roughly 11-month shelf life, after which the block
+   * would have gone quietly green-and-meaningless.
+   *
+   * Fake timers are not an option at the HTTP-injection layer, so the fixture
+   * moves with the clock instead. The cluster's own baseline is relative too —
+   * `lose_hosts` ranks by capacity at the BASELINE date, so a relative host
+   * against the factory's fixed default would eventually rank as 0 and drop the
+   * wrong host.
+   */
+  const monthStartUtc = (offsetMonths: number): Date => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offsetMonths, 1));
+  };
+  const monthParam = (date: Date): string =>
+    `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+
+  const BASELINE_MONTH = monthStartUtc(0);
+  const DEPLOYED_MONTH = monthStartUtc(-6); // always past, always before the baseline
+  const COMMISSION_MONTH = monthStartUtc(6); // always future, always inside the window
+  const FROM_MONTH = monthStartUtc(1);
+  const TO_MONTH = monthStartUtc(12);
+  const WINDOW = `metric=memory_gb&from=${monthParam(FROM_MONTH)}&to=${monthParam(TO_MONTH)}`;
+
+  /**
+   * @ai-warning This fixture is load-bearing, not scenery. AI review of the first
+   * version of this block found every test ran against `makeCluster`'s host-less
+   * cluster, where `lose_hosts` and `delay_procurement` both do nothing — so a
+   * route that folded only `steps[0]` kept the whole block green. Each step must
+   * be provably EFFECTIVE here, which the "must move the forecast" preconditions
+   * below assert before anything compares compounds.
+   */
+  let compoundClusterId: string;
+
+  beforeEach(async () => {
+    const cluster = await makeCluster(prisma, {
+      baselineDate: BASELINE_MONTH,
+      baselineConsumption: 3378,
+      baselineCapacity: 7680,
+    });
+    compoundClusterId = cluster.id;
+
+    // Already deployed with real recorded capacity — the host `lose_hosts` ranks
+    // first and drops, removing capacity across the whole window.
+    await makeHost(prisma, {
+      clusterId: compoundClusterId,
+      name: 'compound-deployed',
+      commissionedAt: DEPLOYED_MONTH,
+      initialCapacity: [{ effectiveFrom: DEPLOYED_MONTH, amount: 2048 }],
+    });
+    // Commissions INSIDE the window and in the future — the step
+    // `delay_procurement` pushes it out beyond `toMonth`.
+    await makeHost(prisma, {
+      clusterId: compoundClusterId,
+      name: 'compound-future',
+      commissionedAt: COMMISSION_MONTH,
+      initialCapacity: [{ effectiveFrom: COMMISSION_MONTH, amount: 512 }],
+    });
+  });
+
+  // Narrowed to what these tests read, so no direct dependency on fastify's
+  // transitive `light-my-request` types is needed.
+  const post = (payload: Record<string, unknown>): Promise<{ statusCode: number; body: string }> =>
+    server.inject({
+      method: 'POST',
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?${WINDOW}`,
+      payload,
+    });
+
+  const LOSE = { kind: 'lose_hosts', count: 1 } as const;
+  const ADD = { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: monthParam(FROM_MONTH) };
+  // 12 months pushes a commission at +6 out past the window end at +12.
+  const DELAY = { kind: 'delay_procurement', months: 12 } as const;
+
+  const series = (raw: string): string =>
+    JSON.stringify(
+      (JSON.parse(raw) as { months: Array<{ consumption: number; capacity: number }> }).months,
+    );
+
+  it('folds EVERY step — the compound differs from each single step in isolation', async () => {
+    const base = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${compoundClusterId}/forecast?${WINDOW}`,
+    });
+    expect(base.statusCode).toBe(200);
+
+    const singles = {
+      lose: await post({ steps: [LOSE] }),
+      add: await post({ steps: [ADD] }),
+      delay: await post({ steps: [DELAY] }),
+    };
+
+    // PRECONDITION, and the whole point of the fixture: each step on its own must
+    // actually move the forecast. Without this the "differs from each single"
+    // assertions below would pass against a route that ignored steps entirely.
+    for (const [name, res] of Object.entries(singles)) {
+      expect(res.statusCode, name).toBe(200);
+      expect(series(res.body), `${name} alone must move the forecast`).not.toBe(series(base.body));
+    }
+
+    const compound = await post({ steps: [LOSE, ADD, DELAY] });
+    expect(compound.statusCode).toBe(200);
+
+    // If the route folded only the first canonically-ordered step, the compound
+    // would be byte-identical to `lose` — this is the assertion that kills that.
+    for (const [name, res] of Object.entries(singles)) {
+      expect(series(compound.body), `compound collapsed to the ${name} step alone`).not.toBe(
+        series(res.body),
+      );
+    }
+    expect(series(compound.body)).not.toBe(series(base.body));
+  });
+
+  it("composes the parts: the compound carries each step's own effect", async () => {
+    const base = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${compoundClusterId}/forecast?${WINDOW}`,
+    });
+    const baseMonths = (
+      JSON.parse(base.body) as {
+        months: Array<{ consumption: number; capacity: number }>;
+      }
+    ).months;
+
+    const compound = await post({ steps: [LOSE, ADD, DELAY] });
+    const compoundMonths = (
+      JSON.parse(compound.body) as {
+        months: Array<{ consumption: number; capacity: number }>;
+      }
+    ).months;
+
+    // add_vms: +50 × 16 GB = +800 GB of consumption from the window's first
+    // month (`FROM_MONTH`) onward.
+    expect(compoundMonths[0]!.consumption - baseMonths[0]!.consumption).toBe(800);
+
+    // lose_hosts dropped the 2048 GB deployed host, and delay_procurement pushed
+    // the 512 GB commissioning step past `toMonth` — so the LAST month lost both.
+    const lastBase = baseMonths[baseMonths.length - 1]!;
+    const lastCompound = compoundMonths[compoundMonths.length - 1]!;
+    expect(lastBase.capacity - lastCompound.capacity).toBe(2048 + 512);
+  });
+
+  it('gives the same answer whichever order the steps arrive in', async () => {
+    const forward = await post({ steps: [LOSE, ADD, DELAY] });
+    const reversed = await post({ steps: [DELAY, ADD, LOSE] });
+    expect(forward.statusCode).toBe(200);
+    expect(reversed.statusCode).toBe(200);
+    // Byte-identical, not merely equal totals: the canonical fold order must also
+    // fix the response's `hosts[]`/`applications[]` ordering.
+    expect(reversed.body).toBe(forward.body);
+  });
+
+  it('still accepts a bare single scenario (wire back-compat for an older SPA)', async () => {
+    const bare = await post(ADD);
+    const wrapped = await post({ steps: [ADD] });
+    expect(bare.statusCode).toBe(200);
+    expect(wrapped.statusCode).toBe(200);
+    expect(wrapped.body).toBe(bare.body);
+  });
+
+  /**
+   * The ambiguity guard. A body carrying BOTH shapes used to answer 200 with the
+   * bare scenario alone, silently discarding `steps` — and, because the whole key
+   * was dropped, it also bypassed the step cap and the duplicate-kind rule. A
+   * silently narrowed forecast is the worst outcome for an endpoint that drives
+   * purchasing, so this is a 400. (AI review finding; reproduced end to end.)
+   */
+  it('rejects a body carrying BOTH a bare scenario and a steps array', async () => {
+    const ambiguous = await post({ ...LOSE, steps: [ADD, DELAY] });
+    expect(ambiguous.statusCode).toBe(400);
+  });
+
+  it('does not let a bare scenario smuggle a stack past the cap or the uniqueness rule', async () => {
+    // Both of these were 200 before the guard, silently previewing `LOSE` alone.
+    const overCap = await post({
+      ...LOSE,
+      steps: [LOSE, ADD, DELAY, { kind: 'lose_hosts', count: 2 }],
+    });
+    const duplicate = await post({
+      ...LOSE,
+      steps: [
+        { kind: 'add_vms', count: 10, sizeGb: 16 },
+        { kind: 'add_vms', count: 10, sizeGb: 16 },
+      ],
+    });
+    expect(overCap.statusCode).toBe(400);
+    expect(duplicate.statusCode).toBe(400);
+  });
+
+  it('rejects a duplicate kind with 400 — the id-collision guard', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?metric=memory_gb`,
+      payload: {
+        steps: [
+          { kind: 'add_vms', count: 10, sizeGb: 16 },
+          { kind: 'add_vms', count: 10, sizeGb: 16 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a stack over the step cap with 400', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?metric=memory_gb`,
+      payload: {
+        steps: [
+          { kind: 'lose_hosts', count: 1 },
+          { kind: 'add_vms', count: 1, sizeGb: 1 },
+          { kind: 'delay_procurement', months: 1 },
+          { kind: 'lose_hosts', count: 2 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects an empty stack and a mistyped container key with 400', async () => {
+    const empty = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?metric=memory_gb`,
+      payload: { steps: [] },
+    });
+    const typo = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?metric=memory_gb`,
+      payload: { parts: [{ kind: 'lose_hosts', count: 1 }] },
+    });
+    expect(empty.statusCode).toBe(400);
+    expect(typo.statusCode).toBe(400);
+  });
+
+  /**
+   * INV-1 re-proof on the compound path. A hypothetical has no measured error
+   * history and is never an approved order, so it must carry neither an
+   * uncertainty band nor an acknowledgment — regardless of how many steps it has
+   * or whether the band is switched on.
+   *
+   * @ai-warning On its own this assertion is NOT sufficient, and AI review was
+   * right to call the first version vacuous: this cluster has no forecast
+   * snapshots and no order approval, so `undefined`/`null` hold however the
+   * scenario path is wired. The POSITIVE CONTROL — the real read on the same
+   * cluster/window DOES produce a band and an acknowledgment, while the compound
+   * does not — lives in `forecast-uncertainty.test.ts`. Keep both: this one pins
+   * the HTTP shape, that one pins the invariant.
+   */
+  it('carries no uncertainty band and no acknowledgment (INV-1)', async () => {
+    await prisma.tenantSettings.upsert({
+      where: { tenantId: 'default' },
+      update: { forecastUncertaintyBandEnabled: true },
+      create: { tenantId: 'default', forecastUncertaintyBandEnabled: true },
+    });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${compoundClusterId}/forecast/scenario?${WINDOW}`,
+      payload: {
+        steps: [
+          { kind: 'lose_hosts', count: 1 },
+          { kind: 'add_vms', count: 10, sizeGb: 16, startMonth: '2026-06' },
+          { kind: 'delay_procurement', months: 3 },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      acknowledgment: unknown;
+      uncertainty?: unknown;
+      uncertaintyAnchorCount?: unknown;
+    };
+    expect(body.acknowledgment).toBeNull();
+    expect(body.uncertainty).toBeUndefined();
+    expect(body.uncertaintyAnchorCount).toBeUndefined();
+  });
+});
+
+/**
  * THE /forecast LOADER'S OWN ABSORPTION BOUNDARY.
  *
  * `absorbed` is fed from TWO independent places. `ClustersService.toResponse`
  * builds a per-metric input for `ClusterResponse.metrics`, and `ForecastService`
  * builds a different one here — different query, different window
- * (`fromMonth = firstOfMonth(anchor.capturedAt)`), and it is this one that
+ * (`fromMonth = startOfUtcMonth(anchor.capturedAt)`), and it is this one that
  * produces `procurement.breachMonth`, `procurement.orderByDate` and the 24-month
  * chart hardware purchasing is decided from. Coverage of one says nothing about
  * the other: before these tests, deleting the `baselineMeasuredAt` line in

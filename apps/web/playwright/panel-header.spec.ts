@@ -5,8 +5,9 @@ import { expect, test, type Page } from '@playwright/test';
  * real focus order, focus return to the trigger tile, the instant (no
  * transform) entrance, and the Esc chain over the new anatomy.
  *
- * NOT run by CI (see scenario-pane.spec.ts header note) — local suite against
- * the seeded dev stack; every test skips cleanly on an empty database.
+ * Run by CI on the `dev → main` sync PR only (see scenario-pane.spec.ts header
+ * note), and locally against the seeded dev stack. The per-test skips are a
+ * local convenience; under CI a skip fails the run.
  */
 
 async function openFirstCluster(page: Page): Promise<void> {
@@ -234,6 +235,7 @@ test('unknown-capacity recommendation chip jumps focus to the Hosts tab (#243 Pa
   // Anchored to the end so this never also catches the forecast/settings
   // sub-paths under the same cluster id (golden-path.spec.ts's own route
   // convention).
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
   await page.route(new RegExp(`/api/clusters/${cluster.id}$`), (route) =>
     route.fulfill({ json: unknownCapacityBody }),
   );

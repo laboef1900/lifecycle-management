@@ -4,11 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
   # Bumps the tag@digest pins in docker/Dockerfile.* (Dockerfiles only —
   # compose files are handled by the docker-compose ecosystem below).
   # NOTE: the dhi.io base images live in a private registry and no
@@ -20,6 +24,8 @@ updates:
     directory: /docker
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
   # Bumps image pins in docker/docker-compose*.yml (the `docker` ecosystem
   # does not scan compose files). Same dhi.io registry-credentials caveat
   # as above applies to dhi.io/postgres; public images (e.g. postgres in
@@ -28,3 +34,5 @@ updates:
     directory: /docker
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7

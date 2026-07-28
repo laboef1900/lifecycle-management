@@ -1,0 +1,157 @@
+# Design proposal — Forecast uncertainty band (opt-in)
+
+**Status:** Design APPROVED by owner 2026-07-24 (§9). **Risk:** High (forecast-engine, purchasing-critical). **Author:** AI (impeccable shape), 2026-07-24. Ready to become an implementation plan; the build still requires the full high-risk rigor in §7.
+
+## 9. Owner decisions (2026-07-24)
+
+1. **Methodology: A1 (snapshot-forward).** The band appears once a cluster has enough real anchors of measured error; no risky backfill.
+2. **Minimum anchors (K): default 6, CONFIGURABLE** in Settings → Forecasting.
+3. **Band width: CONFIGURABLE** in Settings → Forecasting, default **p10_p90** (spans 80% of the measured error). `p05_p95` spans 90% and is the WIDER/more-conservative option; `stddev` is the bias-corrected ±1σ reading. (Corrected 2026-07-24: an earlier draft called p10/p90 "the widest," which is wrong — p05/p95 is wider.)
+4. **Spec non-goal OVERRIDDEN.** Amend `2026-07-16-mission-bento-ui-design.md:107` to record "empirical, opt-in uncertainty band" as the superseding decision (cite this doc).
+
+So Settings → Forecasting gains **three** controls, not one: an on/off toggle, the minimum-anchors number, and the band-width selector.
+
+## 1. Problem
+
+Both critique reviewers flagged the same gap: the measured consumption series is scrupulously honest (`connectNulls={false}`, no interpolation, unknown shown as unknown), but the **forecast projection** is a single confident dashed line with no expression of uncertainty — "the honesty stance stops exactly where the money is spent." The owner asked to add an **uncertainty band, gated behind a setting** (off by default), to reconcile it with the spec's non-goal.
+
+## 2. The core tension (why this isn't a quick toggle)
+
+- The forecast is a **deterministic pure function** over baselines/hosts/apps/events (PRODUCT.md). It has **no intrinsic statistical uncertainty** to draw. A band pulled from nothing would be _fabricated_ — violating the product's "confidently-wrong is worse than unknown; do not fabricate" principle and the tracked spec's explicit non-goal (`2026-07-16-mission-bento-ui-design.md:107`, "Forecast uncertainty bands (engine is deterministic — do not fabricate)").
+- Making it a **setting, off by default** addresses the _spec-override_ half (the owner opts in deliberately) but **not** the _fabrication_ half. The band must be **measured, not invented**.
+
+## 3. Methodology — DECISION NEEDED
+
+The only honest band is **empirical**: derived from how wrong past forecasts turned out to be.
+
+| Option                                         | What the band means                                                               | Honesty                                           | Feasible now?                               |
+| ---------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------- |
+| **A. Empirical re-anchor error (recommended)** | The observed spread of (forecast − actual) at past monthly re-anchors, by horizon | ✅ measured                                       | ⚠️ needs error data we don't store yet (§4) |
+| B. Labeled fixed ± envelope                    | A configured ±X% cone, labeled "illustrative, not measured"                       | ⚠️ honest only if labeled loudly; still arbitrary | ✅ trivial                                  |
+| C. Do nothing                                  | —                                                                                 | ✅                                                | ✅                                          |
+
+**Recommendation: Option A.** It's the only version that earns its place on a purchasing surface. B risks reintroducing exactly the "confident-looking but arbitrary" quality the honesty stance rejects; if chosen, its label must make "not a measured prediction" unmissable and it must never be the default.
+
+## 4. Data prerequisite (the crux — surfaced during shaping)
+
+**The system does not persist computed forecasts today** (schema has `ClusterBaselineHistory` but no forecast-snapshot table; nothing in `apps/server/src` stores a forecast). So the (forecast − actual) error series for Option A **does not exist yet**. Two ways to get it:
+
+- **A1 — Snapshot forward (clean, slow):** at each monthly re-anchor, persist the forecast the engine produced. After N months, compare each stored forecast to the now-measured actual → real error distribution. Band is **empty/hidden until enough history accrues** (e.g. ≥6 anchors). Honest and simple; the feature ships "on" but shows nothing until it has earned a band.
+- **A2 — Backfill by reconstruction (fast, complex, risky):** re-run the pure forecast function at past anchor months using the time-scoped historical state (`ClusterBaselineHistory` + time-scoped host membership + measurements) and compare to later actuals. Gives a band immediately but is error-prone and must exactly reproduce the engine's past behavior — a correctness minefield on a purchasing surface.
+
+**Recommendation: A1** (snapshot forward). Start collecting now; reveal the band once each cluster has enough anchors. A2 only if the owner needs a band before ~6 months of accrual and accepts the reconstruction risk.
+
+## 5. Proposed shape (if A1 approved)
+
+- **Backend:**
+  - New `ForecastSnapshot` model (clusterId, metricKey, anchorMonth, horizonMonth, projectedValue, capturedAt) written by the existing monthly re-anchor snapshot job.
+  - A pure `computeForecastError(snapshots, measurements)` → per-horizon error quantiles (p10/p90 or ±1σ). Fully unit-tested; **it is forecast-engine code → full high-risk rigor.**
+  - Expose `forecast.uncertainty?: { horizonMonth, low, high }[]` on the forecast response DTO (`@lcm/shared` schema) **only when** (a) the setting is on AND (b) enough anchors exist; otherwise omit (honest absence, not zeros).
+- **Settings (`TenantSettings`, all in Settings → Forecasting):**
+  - `forecastUncertaintyBandEnabled: boolean` — default **false** (satisfies the spec-override / opt-in requirement).
+  - `forecastUncertaintyMinAnchors: number` — default **6**, bounded (e.g. 3–24); below this a cluster shows no band.
+  - `forecastUncertaintyBandWidth: 'p10_p90' | 'p05_p95' | 'stddev'` — default **`p10_p90`**.
+  - All three added to the `TenantSettings` Zod schema in `@lcm/shared` (contract-first), consumed by the settings form and the forecast service.
+- **UI (`ForecastChart`, cluster detail only — NOT the fleet tile sparkline):** a translucent band (Recharts `Area` between low/high) behind the consumption line, in a muted neutral (not amber/violet/steel — it's context, not a series). Legend entry + caption: **"Range from N past forecasts' measured error"** so it's unmistakably empirical. No band on the tile charts.
+
+## 6. Invariants & misuse cases
+
+- **Never fabricate.** No band unless it is computed from ≥ K real anchors of measured error (K owner-set, e.g. 6). Fewer → omit entirely, with a one-line "not enough history yet" note if the setting is on.
+- **Off by default.** The stored config starts `false`; enabling is a deliberate owner action.
+- **Empirical labeling is mandatory.** The band's accessible name + visible caption state it is measured past error, never a guarantee.
+- **Band ≠ the line's authority.** The measured series and the point forecast keep their current treatment; the band is added context, and never widens/narrows the actual projection.
+- **Tile sparklines stay bandless** (too small; the fleet console already got the BulletMeter anchor).
+
+## 7. Risk, approval, rollback
+
+- **High-risk** (forecast correctness drives hardware spend). Per CLAUDE.md: written design (this doc) + threat/misuse cases (§6) + full verification + independent AI review (two reviewers) OR human sign-off, recorded in the PR.
+- **Rollback:** settings-gated + off by default; flipping the setting off (or shipping with it off) fully hides the feature. The `ForecastSnapshot` collection is additive and harmless if unused.
+
+## 8. Implementation order (contract-first)
+
+1. **`@lcm/shared`** — extend `TenantSettings` (three fields, §5) + add optional `forecast.uncertainty` to the forecast response DTO. Contract + compat tests. _(lowest risk; unblocks both sides)_
+2. **Migration** — `ForecastSnapshot` model (additive; verified backup per CLAUDE.md even though dev).
+3. **Snapshot job** — persist the engine's forecast at each monthly re-anchor.
+4. **Engine** — pure `computeForecastError` (per-horizon quantiles) + exhaustive unit tests. _(the high-risk core)_
+5. **Forecast service** — attach `uncertainty` to the response only when enabled AND ≥K anchors exist.
+6. **Settings → Forecasting UI** — the three controls.
+7. **`ForecastChart`** — muted neutral band, empirical caption, both themes; tiles stay bandless.
+8. **Amend the spec** (§9.4) + record the high-risk approval (two AI reviewers or human) in the PR.
+
+Each step lands as its own commit on `feat/forecast-uncertainty-band`; steps 2 and 4 carry full high-risk rigor.
+
+## 11. Integration map (discovered 2026-07-24, for the wiring pass)
+
+- **Actuals** — ⚠️ **superseded during implementation.** The plan below assumed `baselineHistory[]`'s per-period `utilization`. The shipped code deliberately does NOT use it: `baselineCapacity` is `0` for every vSphere-synced cluster (the hosts ARE the capacity), so that utilization is `null` and the band could never appear for the product's primary case. Actuals instead come from each anchor's OWN `horizonIndex === 0` snapshot row, captured at re-anchor. See `ForecastService.snapshotForecast`'s docstring.
+- **Attach**: in `finalize()`, exposed only through `forCluster` (real read). NEVER `forClusterWithScenario` — a hypothetical has no measured error (INV-1). Attaching an optional `uncertainty` is additive and must not alter the pure `computeForecast` output (a **characterization snapshot** test guards this — keep it green).
+- **Persist a `ForecastSnapshot`** at each re-anchor: the baseline-capture points — `clusters.ts` (manual baseline upsert ~L493) and `vsphere-snapshot.ts` (`createMany` ~L117). Compute the forecast once at capture and store per-horizon projected utilization %.
+- **Read path**: on `forCluster`, gather matured `ForecastSnapshot` rows (horizonMonth ≤ current, and ≥ the retention cutoff when retention is on — §12), pair each with the actual from the `horizonIndex === 0` row at that same horizon month (NOT `baselineHistory`, per the correction above) → `ForecastErrorSample[]`, then `computeForecastErrorBands(samples, distinctAnchorCount, bandWidth, minAnchors)` → apply per-horizon offsets to the current forecast's future months → `forecast.uncertainty`.
+- **DTO**: add optional `uncertainty?: { month, low, high, sampleCount? }[]` to the forecast response schema in `@lcm/shared` (omit when the setting is off or the global floor is unmet — honest absence). `sampleCount` is the per-horizon evidence added by #317 — see §13.
+- **Chart** (`apps/web/src/components/clusters/forecast-chart.tsx`): a muted-neutral Recharts band between low/high, empirical caption; tiles stay bandless. Won't visibly render until real snapshots accrue — verify via unit/integration tests + synthetic data.
+- **RISK**: `forecast-loader.ts` is invariant-heavy (INV-1, characterization snapshot, #292/#300/#303 anchor semantics). This wiring is the mandatory two-reviewer high-risk change (§7).
+
+## 12. Retention window (#318, added 2026-07-26)
+
+`forecast_snapshot` is append-only and accrues ≤ 25 rows per anchor, at most one anchor per calendar month per cluster/metric (the unique index plus `skipDuplicates` collapse repeat captures), for one seeded metric — so ≤ 300 rows/cluster/year. Growth is not the pressing problem; an unbounded, ever-growing READ on a purchasing surface is. Retention addresses both with one window.
+
+**This section covers the window itself and the read that honours it.** The sweep that actually deletes rows landed as a separate change and is described in §12.1 — the read bound had to exist first, which is what makes deleting safe.
+
+**The setting.** `TenantSettings.forecastSnapshotRetentionMonths`. `0` = keep forever and is the **default** — pruning destroys forecast history nothing else records, so per Golden Rule 3 it is opt-in. Otherwise 12–120 months.
+
+**Keyed on `horizonMonth`, never `anchorMonth`/`createdAt`.** A projection and the horizon-0 row supplying its measured actual share a `horizonMonth`, so one predicate retains or deletes **both** — the pairing hazard is structurally impossible rather than merely tested for. An `anchorMonth`-keyed window is also pairing-safe but silently caps the band's horizon: dropping an anchor discards its h24 row, the only possible evidence of 24-month error, so the far end of the chart would lose its band first and without any signal.
+
+**Invariants.**
+
+- **INV-R1 — one cutoff.** `retentionCutoffMonth()` (`apps/server/src/lib/forecast-retention.ts`) is the single definition. Everything that needs the cutoff calls it; nothing computes its own. It normalises its own `thisMonth` argument via `@lcm/shared`'s `startOfUtcMonth` — likewise the single definition of that — so a caller passing a raw `new Date()` and one passing an already-normalised month land on the same cutoff, and the read and sweep cannot disagree across a timezone or a mid-month tick.
+- **INV-R1a — an out-of-spec window disables retention; it is never clamped.** Any value outside `{0} ∪ [12, 120]` yields `null` (retention off). This is the same rule `SettingsService.coerceBandWidth` already applies — fall back to the schema default — and only looks different because `DEFAULT_FORECAST_SNAPSHOT_RETENTION_MONTHS` **is** `FORECAST_SNAPSHOT_RETENTION_DISABLED`: this field's default is "off", so "fall back to the default" and "prune nothing" are one instruction. Not a bespoke policy for this field. Clamping is rejected because the schema forecloses the dead zone on every legitimate write path, so an out-of-spec value can only arrive by tampering or corruption — never as an operator's intent partially expressed. There is no legitimate-intent case for clamping to serve, and clamping would convert an unauthorised value into real, unrecoverable deletes; a bit-flipped column is not the authorisation Golden Rule 3 requires. Nor is clamping _up_ the safer direction, which is the tempting mistake: a stored `5` may be a torn write of what was meant to be `0`, and in that case any non-null cutoff — clamped up or down — deletes history the operator explicitly asked to keep forever. Null for every out-of-range value is the only answer that cannot. The case is surfaced on both sides so it cannot pass silently: the sweep logs it at `warn` (§12.1), and Settings → Forecasting renders an alert saying the saved value is out of range and retention is therefore off — without which the form would show the stored number as a live window while nothing was being pruned, misreporting the exact scenario this invariant exists for.
+- **INV-R2 — the read is bounded by the window, not by what still exists.** `computeUncertainty` applies the cutoff itself, so the band is a function of the configured window rather than of which rows happen to be on disk. This is what makes deletion safe to add later: a sweep using the same cutoff can only ever remove rows the band had already stopped considering, so **a band never changes because a sweep ran**.
+- **INV-R3 — the window is inclusive of the current month.** 12 months at 2026-07 retains 2025-08…2026-07.
+
+**Why there is NO cross-validation against `forecastUncertaintyMinAnchors`.** The two count different things. `anchorCount` counts distinct _anchor_ months among paired samples, and an anchor up to 24 months older than the window still projects _into_ it — so `anchorCount` reaches roughly `retentionMonths + 23` and is never the binding constraint. The real floor is `PER_HORIZON_MIN_SAMPLES` (3): one retained month yields at most one sample per horizon index, so `retentionMonths` caps every horizon's sample count. The schema's 12-month minimum clears that floor with margin, which is why a 12-month window alongside the maximum 24 minimum-anchors is legitimate and accepted.
+
+**Migration.** Additive: the column defaults to `0`, so applying it deletes nothing and changes no behaviour. It also rebuilds `forecast_snapshot_cluster_metric_idx` to trail `horizon_month`, matching the now-windowed read's key order. The rebuild is a `DROP` + `CREATE` inside the migration transaction and takes an `ACCESS EXCLUSIVE` lock for its duration — correct at this table's size, and the reason it is stated here rather than reached for reflexively on a larger one.
+
+**Rollback.** Revert the code. The column is inert at its default, so there is no schema debt and nothing to undo in data — this half of #318 deletes nothing.
+
+## 12.1 The prune sweep (#318, added 2026-07-26)
+
+`ForecastSnapshotCleanup` (`apps/server/src/services/forecast-snapshot-cleanup.ts`) deletes `forecast_snapshot` rows whose `horizon_month` falls outside each tenant's window. **This is the destructive half**: it removes capacity-forecast history nothing else records, recoverable only from a `pg_dump` backup.
+
+Its safety rests on §12's window already bounding the read (INV-R2), plus one invariant of its own:
+
+- **INV-R4 — retention off means no delete is issued at all.** The sweep filters tenants on `retentionMonths > 0` and skips them outright; no cutoff is computed and no `deleteMany` runs. A bug in the cutoff maths therefore cannot reach a default-configured deployment. Asserted both by row count and by spying that `deleteMany` is never called — the second is the one that proves the safety comes from skipping rather than from a predicate that happens to match nothing.
+
+The pairing property in §12 is what makes the delete predicate safe: because a projection and the horizon-0 row supplying its actual share a `horizon_month`, one predicate takes or spares both, and the sweep cannot strand a projection whose actual is gone (`computeUncertainty` skips unpaired rows silently, so that failure would be invisible). Pinned against a synced 0-capacity cluster, which has no fallback source of actuals. INV-R2's consequence — the band is identical either side of a sweep — has its own regression test (`forecast-snapshot-cleanup.test.ts` → "leaves the band unchanged").
+
+**Divergence from `IdempotencyCleanup`.** That sweep reads a precomputed `expiresAt` stamped at write time, so it consults no settings and retention changes are not retroactive. A snapshot has no write-time expiry — maturity is what matters — so the cutoff is resolved per tenant on every tick and a retention change applies retroactively. The plugin/service/drain/never-throws skeleton transfers; the expiry model does not.
+
+**Cadence.** A fixed six-hour `setInterval`, not a setting, and with no leading run — so the first prune after a boot is up to six hours out. Both are immaterial to correctness: retention is measured in months, and a row that ages out is excluded from the band's read the moment it crosses the cutoff whether or not the sweep has caught up. The tick only decides when the disk catches up with the read.
+
+**Concurrency.** `sweep()` is not re-entrant: an overlapping call joins the run in flight. Two concurrent sweeps would be harmless in themselves, but the second would overwrite the tracked run and the first to settle would clear it, leaving `stop()` draining a finished run while a live one kept deleting through shutdown.
+
+**Query shape.** The delete is `WHERE tenant_id = ? AND horizon_month < ?`, which no index on `forecast_snapshot` serves — both existing indexes lead with `cluster_id`. Each sweep therefore sequentially scans the table. That is a deliberate accept, not an oversight: at the ≤ 300 rows/cluster/year budget above, on a six-hour tick, the scan is cheaper than the write amplification of an index maintained solely for it. Revisit if the row budget or the tick rate changes materially.
+
+**Failure behaviour.** The sweep never throws: a failed tenant is logged at `warn` and the next tick retries; other tenants in the same tick are unaffected. A tenant whose stored window is out of range (INV-R1a — reachable only by a direct DB write, since the schema rejects it) is skipped with no delete issued and logged at `warn`, because an operator who configured a window and sees no pruning needs the reason, and silence is how tampering stays invisible. Every tenant it actually pruned is logged at `info` with tenant, window, cutoff and deleted count — pruning is destructive and otherwise leaves no trace, so the server log must be enough to reconstruct what went and when.
+
+**Rollback.** Set retention back to `0`: the sweep stops issuing deletes immediately and the read unbounds. That restores the _behaviour_, not the rows — already-pruned snapshots need a `pg_dump` restore. Confirm deployment state before enabling a window on a live deployment.
+
+## 13. Per-horizon sample count (#317, added 2026-07-27)
+
+The band's caption named one **N** for the whole chart — `uncertaintyAnchorCount`, the count of distinct past re-anchors that produced a paired measured error — and applied it to every displayed horizon. But `computeForecastErrorBands` gates each horizon **separately** on `PER_HORIZON_MIN_SAMPLES = 3`, so the far end of the band can sit exactly on that floor while the near end draws on many more. One number for the whole chart therefore overstates the evidence behind the months furthest out, which are the months a purchase is planned against.
+
+**#318 sharpened this materially, and is the reason a non-blocking follow-up became worth doing.** The snapshot-retention window caps how much evidence any single horizon index can hold: one retained month yields at most one sample per horizon index, so every horizon's count is bounded by `retentionMonths`. `uncertaintyAnchorCount` is bounded by nothing of the sort — an anchor up to 24 months older than the window still projects _into_ it, so it climbs to roughly `retentionMonths + 23` (§12's "no cross-validation" note is the same arithmetic seen from the other side). Before retention existed the two grew together and the discrepancy was mild; with a 12-month window the caption can read **"35 past forecasts"** over a far horizon's band resting on **3**. The numerator is capped, the caption's number is not.
+
+**The fix is disclosure, not maths.** Nothing about a band's magnitude, direction, or gating changes; `PER_HORIZON_MIN_SAMPLES` is untouched.
+
+- **Engine.** `ErrorBand` gains `sampleCount` — `errors.length` for the horizon being emitted, set identically in the quantile and stddev branches because the count is evidence, not a property of the width. It is `>= PER_HORIZON_MIN_SAMPLES` by construction: a thinner horizon is omitted from the map rather than emitted with a small count, so no consumer can ever read a misleadingly tiny number.
+- **DTO.** `ForecastUncertaintyPoint.sampleCount?: number`, `z.number().int().min(1).exactOptional()`. Per-point rather than a parallel array, because `computeUncertainty` already resolves each future month to its horizon index — neither side re-derives one. Optional for the #292 compat reason: a lagging `:dev` server that omits it must not fail a newer web bundle's parse and blank the whole forecast. `min(1)`, not `nonnegative()` — a zero would be a fabricated point, since a horizon with no samples draws no band at all.
+- **Invariant.** `sampleCount <= uncertaintyAnchorCount` always, from the `forecast_snapshot_unique` index on `(clusterId, metricTypeId, anchorMonth, horizonMonth)`: one anchor contributes at most one sample per horizon index, so a horizon cannot claim more evidence than the pool holds.
+- **Chart.** The caption leads with the per-horizon figure and names the pool only where the two differ — which is precisely where naming it is the disclosure rather than the overstatement. Uniform counts get "Every month's band rests on N past forecasts measured at that horizon"; a spread gets "Of N past forecasts, each month's band rests only on the min–max measured at its own horizon". The range is computed over the months that actually **draw** a band, so the caption and the shading cannot disagree. A tooltip row gives the hovered month's exact count.
+
+**Accessibility.** `accessibilityLayer` stays `false` (§ the recharts v3 note in `forecast-chart.tsx`), so the tooltip is pointer-only — as every other number in that tooltip already is. A disclosure whose purpose is to stop overstating evidence must not itself be the one thing a keyboard or screen-reader user cannot reach, so the same information is carried by the always-visible caption **and** appended to the chart's `aria-label`. The tooltip is the precise-value convenience, never the sole carrier.
+
+**Deliberately NOT done.** The issue floats widening `PER_HORIZON_MIN_SAMPLES` or gating far horizons more strictly. Both change _which_ bands appear on a purchasing surface — a product decision with a different risk profile from a disclosure change, and arguably a tenant setting alongside `forecastUncertaintyMinAnchors` rather than a hard-coded constant. Left for a separate owner decision.
+
+**Residual weakness (unchanged by this work).** Showing `n = 3` does not make a 3-sample p10/p90 a real 80% interval: the interpolated `p90` lands 80% of the way from median to max, so the band is near min-to-max and understates tail risk. Nor are a horizon's samples independent — successive anchors' errors at one horizon share underlying months. The copy therefore says "past forecasts measured at that horizon", never "independent samples", and never implies a converged distribution. Counts also need not fall monotonically with horizon: a data gap (`actualByMonth` miss) can leave a nearer horizon thinner than a farther one, so no copy or test may assume a monotone decline.
+
+**Rollback.** Revert the code. The field is additive and optional at every layer; a client that ignores it renders the pre-#317 caption.

@@ -19,6 +19,7 @@ const css = readFileSync(fileURLToPath(new URL('../styles.css', import.meta.url)
 /** Grab the declaration body of a top-level rule (`:root { … }` / `html.dark { … }`). */
 function ruleBody(selector: string): string {
   const escaped = selector.replace(/[.]/g, '\\$&');
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
   const match = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`, 'm').exec(css);
   if (!match?.[1]) throw new Error(`could not find CSS rule for "${selector}"`);
   return match[1];
@@ -63,6 +64,7 @@ const ROLE_TOKENS: Record<keyof ChartFallback, string> = {
   utilizationCrit: '--chart-utilization-crit',
   eventAdds: '--chart-event-adds',
   eventConsumes: '--chart-event-consumes',
+  band: '--chart-band',
 };
 
 describe.each([

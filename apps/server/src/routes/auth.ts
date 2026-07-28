@@ -188,6 +188,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     });
     // Return to the originally-requested deep link when one was stored (and is
     // still a valid same-origin path — re-validated as defense in depth), else /.
+    // nosemgrep: javascript.express.open-redirect-deepsemgrep.open-redirect-deepsemgrep, javascript.express.web.tainted-redirect-express.tainted-redirect-express
     return reply.redirect(safeRedirectPath(login.redirect) ?? '/');
   });
 

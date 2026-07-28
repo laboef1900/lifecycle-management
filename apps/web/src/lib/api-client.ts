@@ -31,6 +31,7 @@ import {
   liveUsageListResponseSchema,
   hostCreateInputSchema,
   hostLifecycleEventResponseSchema,
+  hostMoveInputSchema,
   hostReplacementCreateInputSchema,
   hostReplacementResponseSchema,
   hostResponseSchema,
@@ -153,6 +154,7 @@ export async function localLogin(username: string, password: string): Promise<bo
 // PRE-transform (wire) shape — e.g. `dateOnly`/`monthOnly` are `string` on input
 // but `Date` after parsing. This keeps the request bodies in lockstep with the
 // server's Zod contracts instead of hand-maintaining parallel types.
+/** One what-if step. A compound scenario is an array of these (#323). */
 export type ScenarioWire = z.input<typeof scenarioSchema>;
 export type ClusterCreateInputWire = z.input<typeof clusterCreateInputSchema>;
 export type ClusterUpdateInputWire = z.input<typeof clusterUpdateInputSchema>;
@@ -167,6 +169,7 @@ export type ItemBulkCreateQuarterlyGrowthInputWire = z.input<
   typeof itemBulkCreateQuarterlyGrowthInputSchema
 >;
 export type HostTransitionInputWire = z.input<typeof hostTransitionInputSchema>;
+export type HostMoveInputWire = z.input<typeof hostMoveInputSchema>;
 export type HostReplacementCreateInputWire = z.input<typeof hostReplacementCreateInputSchema>;
 export type HostCommissioningConfirmInputWire = z.input<typeof hostCommissioningConfirmInputSchema>;
 export type OrderApprovalCreateInputWire = z.input<typeof orderApprovalCreateInputSchema>;
@@ -227,17 +230,23 @@ export const api = {
         forecastResponseSchema,
       );
     },
+    /**
+     * Preview a compound what-if. `steps` is sent as `{ steps: [...] }`, the
+     * stack form of the additive request contract (#323) — the server also still
+     * accepts a bare single scenario, but there is no reason for new code to use
+     * that shape.
+     */
     forecastScenario: (
       id: string,
       params: { metric: string; from?: string; to?: string },
-      scenario: ScenarioWire,
+      steps: readonly ScenarioWire[],
     ) => {
       const search = new URLSearchParams({ metric: params.metric });
       if (params.from) search.set('from', params.from);
       if (params.to) search.set('to', params.to);
       return request(
         `/api/clusters/${id}/forecast/scenario?${search.toString()}`,
-        { method: 'POST', body: JSON.stringify(scenario) },
+        { method: 'POST', body: JSON.stringify({ steps }) },
         forecastResponseSchema,
       );
     },
@@ -281,6 +290,15 @@ export const api = {
       }),
     listLifecycle: (id: string) =>
       request(`/api/hosts/${id}/lifecycle`, undefined, z.array(hostLifecycleEventResponseSchema)),
+    // Move a manual host to a different cluster with a time-scoped membership
+    // (#289/#301). `moveDate` must be first-of-month on the wire; the server
+    // enforces it too (400 otherwise). Returns the host under its new cluster.
+    move: (id: string, input: HostMoveInputWire) =>
+      request(
+        `/api/hosts/${id}/move`,
+        { method: 'POST', body: JSON.stringify(input) },
+        hostResponseSchema,
+      ),
   },
   hostReplacements: {
     create: (input: HostReplacementCreateInputWire) =>

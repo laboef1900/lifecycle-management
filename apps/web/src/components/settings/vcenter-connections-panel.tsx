@@ -1,8 +1,11 @@
 import type {
+  VsphereConnectionCreate,
   VsphereConnectionResponse,
+  VsphereProbe,
   VsphereProbeResult,
   VsphereSyncOutcome,
 } from '@lcm/shared';
+import { vsphereConnectionCreateSchema, vsphereProbeSchema } from '@lcm/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RefreshCw, ShieldCheck, ShieldAlert, Trash2 } from 'lucide-react';
 import * as React from 'react';
@@ -10,6 +13,7 @@ import { toast } from 'sonner';
 
 import { AdminOnly } from '@/components/auth/admin-only';
 import { ConfirmDialog } from '@/components/form/confirm-dialog';
+import { Field, useFocusFirstInvalidField } from '@/components/form/field';
 import { CertificateFingerprint } from '@/components/settings/certificate-fingerprint';
 import {
   isTrustableStatus,
@@ -19,7 +23,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, describeApiError } from '@/lib/api-client';
 
@@ -32,6 +35,9 @@ interface AddFormState {
   password: string;
 }
 
+type AddFormField = keyof AddFormState;
+type FieldErrors = Partial<Record<AddFormField, string>>;
+
 const EMPTY_FORM: AddFormState = {
   name: '',
   hostname: '',
@@ -39,6 +45,71 @@ const EMPTY_FORM: AddFormState = {
   username: '',
   password: '',
 };
+
+/** Everything the probe is allowed to see. Notably: no credential. */
+const PROBE_FIELDS: readonly AddFormField[] = ['hostname', 'port'];
+const CREATE_FIELDS: readonly AddFormField[] = ['name', 'hostname', 'port', 'username', 'password'];
+
+/**
+ * Blank-field copy in the panel's own words. The shared schemas remain the
+ * authority on what is *valid* — bounds are never restated here — but their
+ * `min(1)` text ("Too small: expected string to have >=1 characters") is wire
+ * copy describing a contract, not something to put in front of an admin.
+ */
+const BLANK_MESSAGES: Readonly<Record<AddFormField, string>> = {
+  name: 'Give this connection a name.',
+  hostname: 'Enter the vCenter hostname or IP address.',
+  port: 'Enter the HTTPS port vCenter listens on.',
+  username: 'Enter the read-only service account.',
+  password: 'Enter the password for that account.',
+};
+
+/**
+ * "Blank" the way each field's own contract measures it. `name`, `hostname`, and
+ * `username` are `.trim()`ed by the schema, so whitespace-only is empty for them
+ * — but `password` deliberately is NOT, because a credential may legitimately
+ * contain leading or trailing whitespace. Measuring it uniformly would reject a
+ * password the contract accepts.
+ */
+function isBlank(field: AddFormField, value: string): boolean {
+  return field === 'password' ? value.length === 0 : value.trim().length === 0;
+}
+
+/** Blank (and non-integer port) cases, which the schemas can only describe in wire terms. */
+function blankFieldErrors(form: AddFormState, fields: readonly AddFormField[]): FieldErrors {
+  const errors: FieldErrors = {};
+  for (const field of fields) {
+    if (isBlank(field, form[field])) errors[field] = BLANK_MESSAGES[field];
+  }
+  // `Number('')` is 0 and `Number('44.5')` is 44.5: both are number-typed, so the
+  // schema would answer in `Too small`/`expected int` terms instead of plainly.
+  if (fields.includes('port') && errors.port === undefined) {
+    if (!Number.isInteger(Number(form.port))) {
+      errors.port = 'Port must be a whole number.';
+    }
+  }
+  return errors;
+}
+
+/** Zod issues → the field that owns each one, discarding anything unowned. */
+function issuesToFieldErrors(
+  issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }>,
+): FieldErrors {
+  const errors: FieldErrors = {};
+  for (const issue of issues) {
+    const root = issue.path[0];
+    if (
+      root === 'name' ||
+      root === 'hostname' ||
+      root === 'port' ||
+      root === 'username' ||
+      root === 'password'
+    ) {
+      errors[root] = issue.message;
+    }
+  }
+  return errors;
+}
 
 /**
  * Settings panel for vCenter connections (#175, epic #172).
@@ -62,17 +133,22 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
 
   const [form, setForm] = React.useState<AddFormState>(EMPTY_FORM);
   const [probe, setProbe] = React.useState<VsphereProbeResult | null>(null);
+  const [errors, setErrors] = React.useState<FieldErrors>({});
   const [deleteTarget, setDeleteTarget] = React.useState<VsphereConnectionResponse | null>(null);
   const [trustTarget, setTrustTarget] = React.useState<VsphereConnectionResponse | null>(null);
+  const formRef = React.useRef<HTMLFormElement>(null);
+  useFocusFirstInvalidField(formRef, errors);
 
   const invalidate = (): void => {
     void queryClient.invalidateQueries({ queryKey: ['vsphere-connections'] });
   };
 
   // Step 1 — reachability + certificate. No credential leaves the browser here.
+  // Takes its payload as a mutation variable rather than reading `form`, so the
+  // only thing that can reach the endpoint is a value `vsphereProbeSchema`
+  // accepted (see `onCheckCertificate`).
   const probeMutation = useMutation({
-    mutationFn: () =>
-      api.settings.vsphere.probe({ hostname: form.hostname, port: Number(form.port) }),
+    mutationFn: (input: VsphereProbe) => api.settings.vsphere.probe(input),
     onSuccess: (result) => {
       setProbe(result);
       if (result.outcome === 'unreachable') toast.error('Could not reach that host');
@@ -81,23 +157,70 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
   });
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      api.settings.vsphere.connections.create({
-        name: form.name,
-        hostname: form.hostname,
-        port: Number(form.port),
-        username: form.username,
-        password: form.password,
-        enabled: true,
-      }),
+    mutationFn: (input: VsphereConnectionCreate) => api.settings.vsphere.connections.create(input),
     onSuccess: () => {
       invalidate();
       setForm(EMPTY_FORM);
       setProbe(null);
+      setErrors({});
       toast.success('vCenter connection saved');
     },
     onError: (err) => toast.error(describeApiError(err, 'Could not save the connection')),
   });
+
+  /**
+   * @ai-warning The probe must never fire with an unvalidated hostname or port.
+   * It opens a TLS connection to whatever it is handed and returns the
+   * fingerprint the admin then confirms — and that fingerprint becomes the trust
+   * anchor the stored credential is later sent to. A parser-differential
+   * hostname (`vcenter.corp.local@attacker.example`) is exactly what
+   * `vcenterHostname` in `@lcm/shared` exists to reject, so it is validated here
+   * before the request, not only after it.
+   */
+  const onCheckCertificate = (): void => {
+    const blank = blankFieldErrors(form, PROBE_FIELDS);
+    if (Object.keys(blank).length > 0) {
+      setErrors(blank);
+      return;
+    }
+    const parsed = vsphereProbeSchema.safeParse({
+      hostname: form.hostname,
+      port: Number(form.port),
+    });
+    if (!parsed.success) {
+      setErrors(issuesToFieldErrors(parsed.error.issues));
+      return;
+    }
+    setErrors({});
+    probeMutation.mutate(parsed.data);
+  };
+
+  const onSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    const blank = blankFieldErrors(form, CREATE_FIELDS);
+    if (Object.keys(blank).length > 0) {
+      setErrors(blank);
+      return;
+    }
+    const parsed = vsphereConnectionCreateSchema.safeParse({
+      name: form.name,
+      hostname: form.hostname,
+      port: Number(form.port),
+      username: form.username,
+      password: form.password,
+      enabled: true,
+    });
+    if (!parsed.success) {
+      const fieldErrors = issuesToFieldErrors(parsed.error.issues);
+      setErrors(fieldErrors);
+      if (Object.keys(fieldErrors).length === 0) {
+        toast.error(parsed.error.issues[0]?.message ?? 'Could not save the connection');
+      }
+      return;
+    }
+    setErrors({});
+    createMutation.mutate(parsed.data);
+  };
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.settings.vsphere.connections.remove(id),
@@ -211,68 +334,83 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
         </ul>
       )}
 
-      <form
-        className="flex flex-col gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          createMutation.mutate();
-        }}
-      >
+      {/* `noValidate`: the browser's bubble is transient, unstyled, and stops at
+          the first offending field — and on this surface it was the ONLY
+          validation, so the handlers above had to become the real gate before it
+          could be switched off. Errors now render through `Field`, and focus
+          moves to the first invalid control. */}
+      <form ref={formRef} className="flex flex-col gap-3" onSubmit={onSubmit} noValidate>
+        {/* Every `Field` here carries an explicit `id`, and it is load-bearing
+            rather than cosmetic. `Field` otherwise derives its id from
+            `name ?? label`, so a bare `label="Name"` renders `id="field-name"` —
+            and this panel shares `/settings/inventory` with `AddClusterPanel`,
+            whose "Add cluster" dialog has a `Name` field of its own. With two
+            `#field-name` in one document the dialog's `<label for>` resolves to
+            THIS input instead: the dialog's own control loses its accessible
+            name, clicking its label throws focus out of the modal, and its
+            `aria-describedby` points at this form's error paragraph.
+
+            @ai-warning Namespaced via `id`, deliberately NOT via `name`. Adding
+            a `name` to a credential form is what turns a browser's autofill and
+            save-password heuristics on for this vCenter service account, and
+            that credential is the one thing the two-step probe/verify flow above
+            exists to keep contained. Do not drop these, and do not "simplify"
+            them into `name` props. */}
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm">
-            <span>Name</span>
-            <Input
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="vc-prod"
-              required
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span>Hostname</span>
-            <Input
-              value={form.hostname}
-              onChange={(e) => {
-                setForm({ ...form, hostname: e.target.value });
-                setProbe(null); // a new host means the old certificate says nothing
-              }}
-              placeholder="vcenter.corp.local"
-              required
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span>Port</span>
-            <Input
-              type="number"
-              min={1}
-              max={65535}
-              value={form.port}
-              onChange={(e) => {
-                setForm({ ...form, port: e.target.value });
-                setProbe(null); // a different port is a different endpoint
-              }}
-              placeholder="443"
-              required
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span>Username</span>
-            <Input
-              value={form.username}
-              onChange={(e) => setForm({ ...form, username: e.target.value })}
-              placeholder="svc-lcm@vsphere.local"
-              required
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span>Password</span>
-            <Input
-              type="password"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
-              required
-            />
-          </label>
+          <Field
+            label="Name"
+            id="vcenter-name"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            error={errors.name}
+            placeholder="vc-prod"
+            required
+          />
+          <Field
+            label="Hostname"
+            id="vcenter-hostname"
+            value={form.hostname}
+            onChange={(e) => {
+              setForm({ ...form, hostname: e.target.value });
+              setProbe(null); // a new host means the old certificate says nothing
+            }}
+            error={errors.hostname}
+            placeholder="vcenter.corp.local"
+            required
+          />
+          <Field
+            label="Port"
+            id="vcenter-port"
+            type="number"
+            min={1}
+            max={65535}
+            value={form.port}
+            onChange={(e) => {
+              setForm({ ...form, port: e.target.value });
+              setProbe(null); // a different port is a different endpoint
+            }}
+            error={errors.port}
+            placeholder="443"
+            required
+          />
+          <Field
+            label="Username"
+            id="vcenter-username"
+            value={form.username}
+            onChange={(e) => setForm({ ...form, username: e.target.value })}
+            error={errors.username}
+            placeholder="svc-lcm@vsphere.local"
+            required
+          />
+          <Field
+            label="Password"
+            id="vcenter-password"
+            type="password"
+            value={form.password}
+            onChange={(e) => setForm({ ...form, password: e.target.value })}
+            error={errors.password}
+            required
+          />
         </div>
 
         <div className="flex items-center gap-2">
@@ -280,7 +418,7 @@ export function VcenterConnectionsPanel(): React.JSX.Element {
             type="button"
             variant="outline"
             disabled={!form.hostname || probeMutation.isPending}
-            onClick={() => probeMutation.mutate()}
+            onClick={onCheckCertificate}
           >
             {probeMutation.isPending ? 'Checking…' : 'Check certificate'}
           </Button>

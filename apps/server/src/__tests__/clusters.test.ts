@@ -100,6 +100,52 @@ describe('POST /api/clusters', () => {
     });
   });
 
+  it('accrues forecast snapshots on baseline capture (uncertainty-band re-anchor)', async () => {
+    // The route's best-effort re-anchor hook persists the current forecast so the
+    // empirical uncertainty band can later measure projected-vs-actual (Option A1).
+    // A snapshot failure must not fail the write, so this asserts the happy path
+    // actually accrued rows rather than silently swallowing.
+    const name = uniqueName('snapshot-hook');
+    const created = await server.inject({
+      method: 'POST',
+      url: '/api/clusters',
+      payload: {
+        name,
+        baselineDate: '2026-05-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 100, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const { id } = created.json() as { id: string };
+
+    const snapshots = await prisma.forecastSnapshot.findMany({ where: { clusterId: id } });
+    expect(snapshots.length).toBeGreaterThan(0);
+    // The anchor-month actual (h0) plus future horizons; none negative.
+    expect(snapshots.some((s) => s.horizonIndex === 0)).toBe(true);
+    expect(snapshots.some((s) => s.horizonIndex >= 1)).toBe(true);
+    expect(snapshots.every((s) => s.horizonIndex >= 0)).toBe(true);
+
+    // The PUT re-anchor path accrues too: editing baselines for a NEW period
+    // captures a fresh anchor's snapshots (review F4 — previously untested).
+    const put = await server.inject({
+      method: 'PUT',
+      url: `/api/clusters/${id}`,
+      payload: {
+        baselineDate: '2026-06-01',
+        baselines: [
+          { metricTypeKey: 'memory_gb', baselineConsumption: 120, baselineCapacity: 1000 },
+        ],
+      },
+    });
+    expect(put.statusCode).toBe(200);
+    const afterPut = await prisma.forecastSnapshot.findMany({
+      where: { clusterId: id, anchorMonth: new Date('2026-06-01T00:00:00.000Z') },
+    });
+    expect(afterPut.length).toBeGreaterThan(0);
+  });
+
   it('reports utilization null (never 0) for a zero-capacity cluster', async () => {
     // A cluster with capacity 0 — a synced cluster before its hosts carry capacity,
     // or any zero-capacity month. Rendering "0% used" here reads as "healthy, plenty

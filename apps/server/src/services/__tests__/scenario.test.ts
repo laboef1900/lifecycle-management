@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { MAX_SCENARIO_STEPS, type Scenario } from '@lcm/shared';
 
 import type { ForecastApplication, ForecastHost, ForecastInput } from '../forecast.js';
-import { applyScenario } from '../scenario.js';
+import { applyScenario, applyScenarioStack } from '../scenario.js';
 
 function makeHost(
   id: string,
@@ -46,13 +48,13 @@ function makeInput(
 describe('applyScenario — lose_hosts', () => {
   it('drops the N largest hosts by capacity at the window start', () => {
     const input = makeInput([makeHost('small', 100), makeHost('big', 1000), makeHost('med', 500)]);
-    const r = applyScenario(input, { kind: 'lose_hosts', count: 1 });
+    const r = applyScenario(input, { kind: 'lose_hosts', count: 1 }, 0);
     expect(r.hosts.map((h) => h.id).sort()).toEqual(['med', 'small']);
   });
 
   it('drops all hosts when count >= total (does not error)', () => {
     const input = makeInput([makeHost('a', 100), makeHost('b', 200)]);
-    const r = applyScenario(input, { kind: 'lose_hosts', count: 5 });
+    const r = applyScenario(input, { kind: 'lose_hosts', count: 5 }, 0);
     expect(r.hosts).toEqual([]);
   });
 
@@ -61,13 +63,13 @@ describe('applyScenario — lose_hosts', () => {
     // contributes 0 and shouldn't be picked as the "biggest" to drop.
     const future = makeHost('future', 9999, { capEffective: new Date('2026-07-01T00:00:00Z') });
     const input = makeInput([makeHost('now', 500), future]);
-    const r = applyScenario(input, { kind: 'lose_hosts', count: 1 });
+    const r = applyScenario(input, { kind: 'lose_hosts', count: 1 }, 0);
     expect(r.hosts.map((h) => h.id)).toEqual(['future']);
   });
 
   it('does not mutate the original input', () => {
     const input = makeInput([makeHost('a', 100), makeHost('b', 200)]);
-    applyScenario(input, { kind: 'lose_hosts', count: 1 });
+    applyScenario(input, { kind: 'lose_hosts', count: 1 }, 0);
     expect(input.hosts).toHaveLength(2);
   });
 });
@@ -75,12 +77,16 @@ describe('applyScenario — lose_hosts', () => {
 describe('applyScenario — add_vms', () => {
   it('appends a synthetic Application with count*sizeGb allocation', () => {
     const input = makeInput([], [makeApp('existing', 200)]);
-    const r = applyScenario(input, {
-      kind: 'add_vms',
-      count: 30,
-      sizeGb: 16,
-      startMonth: new Date('2026-06-01T00:00:00.000Z'),
-    });
+    const r = applyScenario(
+      input,
+      {
+        kind: 'add_vms',
+        count: 30,
+        sizeGb: 16,
+        startMonth: new Date('2026-06-01T00:00:00.000Z'),
+      },
+      0,
+    );
     expect(r.applications).toHaveLength(2);
     const scenario = r.applications[1]!;
     expect(scenario.name).toMatch(/30.*16/);
@@ -90,7 +96,7 @@ describe('applyScenario — add_vms', () => {
 
   it('defaults startedAt to now when startMonth is omitted', () => {
     const before = Date.now();
-    const r = applyScenario(makeInput(), { kind: 'add_vms', count: 1, sizeGb: 8 });
+    const r = applyScenario(makeInput(), { kind: 'add_vms', count: 1, sizeGb: 8 }, 0);
     const after = Date.now();
     const t = r.applications[0]!.startedAt.getTime();
     expect(t).toBeGreaterThanOrEqual(before);
@@ -103,7 +109,7 @@ describe('applyScenario — delay_procurement', () => {
     const future = makeHost('upcoming', 500, {
       commissionedAt: new Date('2026-09-01T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 2 });
+    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 2 }, 0);
     expect(r.hosts[0]!.commissionedAt.toISOString()).toBe('2026-11-01T00:00:00.000Z');
   });
 
@@ -112,7 +118,7 @@ describe('applyScenario — delay_procurement', () => {
       commissionedAt: new Date('2026-09-01T00:00:00Z'),
       projDecom: new Date('2030-09-01T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 3 });
+    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 3 }, 0);
     expect(r.hosts[0]!.projectedDecommissionAt!.toISOString()).toBe('2030-12-01T00:00:00.000Z');
   });
 
@@ -120,7 +126,7 @@ describe('applyScenario — delay_procurement', () => {
     const future = makeHost('upcoming', 500, {
       commissionedAt: new Date('2026-08-31T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 1 });
+    const r = applyScenario(makeInput([future]), { kind: 'delay_procurement', months: 1 }, 0);
     expect(r.hosts[0]!.commissionedAt.toISOString()).toBe('2026-09-30T00:00:00.000Z');
   });
 
@@ -139,7 +145,7 @@ describe('applyScenario — delay_procurement', () => {
         capacityDelta: null,
       },
     ];
-    const r = applyScenario(input, { kind: 'delay_procurement', months: 6 });
+    const r = applyScenario(input, { kind: 'delay_procurement', months: 6 }, 0);
     expect(r.events).toEqual(input.events);
   });
 
@@ -147,7 +153,7 @@ describe('applyScenario — delay_procurement', () => {
     const past = makeHost('deployed', 500, {
       commissionedAt: new Date('2020-01-01T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([past]), { kind: 'delay_procurement', months: 6 });
+    const r = applyScenario(makeInput([past]), { kind: 'delay_procurement', months: 6 }, 0);
     expect(r.hosts[0]!.commissionedAt.toISOString()).toBe('2020-01-01T00:00:00.000Z');
   });
 
@@ -155,7 +161,203 @@ describe('applyScenario — delay_procurement', () => {
     const past = makeHost('deployed', 500, {
       commissionedAt: new Date('2020-01-01T00:00:00Z'),
     });
-    const r = applyScenario(makeInput([past]), { kind: 'delay_procurement', months: 6 });
+    const r = applyScenario(makeInput([past]), { kind: 'delay_procurement', months: 6 }, 0);
     expect(r).toEqual(makeInput([past]));
+  });
+});
+
+describe('applyScenarioStack — compound what-ifs (#323)', () => {
+  // `delayFutureCommissions` compares commissionedAt against `new Date()` and
+  // `addSyntheticVms` defaults startedAt to it, so the clock is pinned — same
+  // reason forecast-characterization.test.ts pins it.
+  const NOW = new Date('2026-06-15T12:00:00.000Z');
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const FUTURE = new Date('2026-09-01T00:00:00Z');
+
+  /** One host of each disposition plus an app, so every kind has something to bite. */
+  function compoundInput(): ForecastInput {
+    return makeInput(
+      [
+        makeHost('big-deployed', 2048, { commissionedAt: new Date('2025-01-01T00:00:00Z') }),
+        makeHost('small-deployed', 128, { commissionedAt: new Date('2025-01-01T00:00:00Z') }),
+        makeHost('future', 512, {
+          commissionedAt: FUTURE,
+          projDecom: new Date('2031-09-01T00:00:00Z'),
+          capEffective: FUTURE,
+        }),
+      ],
+      [makeApp('app-1', 900)],
+    );
+  }
+
+  const ALL_THREE: Scenario[] = [
+    { kind: 'lose_hosts', count: 1 },
+    { kind: 'add_vms', count: 10, sizeGb: 16, startMonth: new Date('2026-07-01T00:00:00Z') },
+    { kind: 'delay_procurement', months: 3 },
+  ];
+
+  it('applies every step of the stack', () => {
+    const r = applyScenarioStack(compoundInput(), ALL_THREE);
+
+    // lose_hosts dropped the largest host…
+    expect(r.hosts.map((h) => h.id)).toEqual(['small-deployed', 'future']);
+    // …delay_procurement shifted the one future commission by 3 months…
+    const future = r.hosts.find((h) => h.id === 'future')!;
+    expect(future.commissionedAt.toISOString()).toBe('2026-12-01T00:00:00.000Z');
+    expect(future.projectedDecommissionAt?.toISOString()).toBe('2031-12-01T00:00:00.000Z');
+    // …and add_vms appended one synthetic application of count × sizeGb.
+    expect(r.applications).toHaveLength(2);
+    const synthetic = r.applications[1]!;
+    expect(synthetic.allocations[0]!.amount).toBe(160);
+    expect(synthetic.name).toBe('Scenario: +10 × 16 GB');
+  });
+
+  it('is a single step when handed one — the back-compat path', () => {
+    const single = applyScenarioStack(compoundInput(), [{ kind: 'lose_hosts', count: 1 }]);
+    expect(single).toEqual(applyScenario(compoundInput(), { kind: 'lose_hosts', count: 1 }, 0));
+  });
+
+  const permute = <T>(xs: T[]): T[][] =>
+    xs.length <= 1
+      ? [xs]
+      : xs.flatMap((x, i) =>
+          permute([...xs.slice(0, i), ...xs.slice(i + 1)]).map((rest) => [x, ...rest]),
+        );
+
+  /**
+   * INV-5, part 1: the PUBLIC guarantee. A caller gets the same answer whatever
+   * order it serialises the steps in.
+   *
+   * @ai-warning This one is true BY CONSTRUCTION — `applyScenarioStack` sorts
+   * before folding, so its output is a pure function of the step multiset and this
+   * assertion cannot fail for non-commutativity. It is here to pin the sort (delete
+   * the `.sort()` and it goes red), NOT to detect a non-commuting kind. The test
+   * below is the one that does that. Corrected after AI review pointed out the
+   * original single test was claiming a tripwire it could never trip.
+   */
+  it('gives the same answer for all six step orders, including array ordering', () => {
+    const orders = permute(ALL_THREE);
+    expect(orders).toHaveLength(6);
+
+    const canonical = JSON.stringify(applyScenarioStack(compoundInput(), ALL_THREE));
+    for (const order of orders) {
+      expect(
+        JSON.stringify(applyScenarioStack(compoundInput(), order)),
+        `order ${order.map((s) => s.kind).join(' → ')} diverged`,
+      ).toBe(canonical);
+    }
+  });
+
+  /**
+   * INV-5, part 2: the transforms THEMSELVES commute — folded raw, bypassing the
+   * canonical sort. This is the assertion that can actually fail: add a kind that
+   * rewrites state another kind reads (e.g. one that scales `host.capacities`,
+   * which is what `lose_hosts` ranks by) and this goes red while the sorted test
+   * above stays green.
+   *
+   * Why it matters even though the sort makes the public answer stable: the day
+   * the transforms stop commuting, `STEP_ORDER` stops being an arbitrary
+   * tie-break and starts *deciding the forecast*. That is a decision an author
+   * must make deliberately, not inherit from whatever order the literal happened
+   * to be written in.
+   */
+  it('the transforms themselves commute, folded without the canonical sort', () => {
+    const rawFold = (order: readonly Scenario[]): string =>
+      JSON.stringify(order.reduce((acc, step) => applyScenario(acc, step, 0), compoundInput()));
+
+    const orders = permute(ALL_THREE);
+    const reference = rawFold(ALL_THREE);
+    for (const order of orders) {
+      expect(
+        rawFold(order),
+        `raw fold ${order.map((s) => s.kind).join(' → ')} diverged — a kind no longer commutes, so STEP_ORDER now decides the forecast`,
+      ).toBe(reference);
+    }
+  });
+
+  it('folds in canonical order (lose → add → delay) whatever order it receives', () => {
+    // A host that is future-commissioned but whose capacity row is already
+    // effective: lose_hosts ranks it by that row, so it is the one dropped no
+    // matter when delay_procurement runs. If the fold ever consulted
+    // commissionedAt for ranking, reversing the steps would drop a different host.
+    const input = makeInput([
+      makeHost('big-but-future', 2048, {
+        commissionedAt: FUTURE,
+        capEffective: new Date('2025-01-01T00:00:00Z'),
+      }),
+      makeHost('small-deployed', 128, { commissionedAt: new Date('2025-01-01T00:00:00Z') }),
+    ]);
+    const steps: Scenario[] = [
+      { kind: 'delay_procurement', months: 6 },
+      { kind: 'lose_hosts', count: 1 },
+    ];
+    const r = applyScenarioStack(input, steps);
+    expect(r.hosts.map((h) => h.id)).toEqual(['small-deployed']);
+  });
+
+  it('does not mutate the input across steps (INV-2)', () => {
+    const input = compoundInput();
+    const before = JSON.stringify(input);
+    applyScenarioStack(input, ALL_THREE);
+    expect(JSON.stringify(input)).toBe(before);
+  });
+
+  /**
+   * INV-4 and INV-6 enforced at the FOLD, not only at the HTTP boundary. The
+   * route's Zod parse makes these unreachable through the API today — that is why
+   * these tests call the function directly. The point is the second caller: this
+   * function is exported and takes a bare array, so a future path that skips
+   * validation would otherwise corrupt the response (duplicate `add_vms`) or run
+   * an unbounded fold.
+   */
+  it('refuses a stack over MAX_SCENARIO_STEPS even when called directly', () => {
+    const tooMany: Scenario[] = [
+      { kind: 'lose_hosts', count: 1 },
+      { kind: 'add_vms', count: 1, sizeGb: 8 },
+      { kind: 'delay_procurement', months: 1 },
+      { kind: 'lose_hosts', count: 2 },
+    ];
+    expect(() => applyScenarioStack(compoundInput(), tooMany)).toThrow(/MAX_SCENARIO_STEPS/);
+  });
+
+  it('refuses a duplicate kind even when called directly — the id-collision guard', () => {
+    const duplicated: Scenario[] = [
+      { kind: 'add_vms', count: 10, sizeGb: 16 },
+      { kind: 'add_vms', count: 10, sizeGb: 16 },
+    ];
+    expect(() => applyScenarioStack(compoundInput(), duplicated)).toThrow(/at most once/);
+  });
+
+  it('still accepts a full, distinct stack at exactly the cap', () => {
+    expect(() => applyScenarioStack(compoundInput(), ALL_THREE)).not.toThrow();
+    expect(ALL_THREE).toHaveLength(MAX_SCENARIO_STEPS);
+  });
+
+  it('scopes the synthetic application id per step so contributions cannot alias', () => {
+    // The schema forbids two add_vms steps, so this asserts the second,
+    // structural defence directly: the id carries the step index it was minted
+    // at. The engine keys per-application contributions on a Map<id, …>, so a
+    // shared id would hand two response entries the same aliased array.
+    const one = applyScenarioStack(compoundInput(), [{ kind: 'add_vms', count: 1, sizeGb: 8 }]);
+    const second = applyScenarioStack(compoundInput(), [
+      { kind: 'lose_hosts', count: 1 },
+      { kind: 'add_vms', count: 1, sizeGb: 8 },
+    ]);
+    const idOf = (i: ForecastInput): string => i.applications.at(-1)!.id;
+    expect(idOf(one)).toBe('__scenario:0:add_vms:1x8');
+    expect(idOf(second)).toBe('__scenario:1:add_vms:1x8');
+    expect(idOf(one)).not.toBe(idOf(second));
+  });
+
+  it('defaults the synthetic startedAt to the pinned clock when startMonth is omitted', () => {
+    const r = applyScenarioStack(compoundInput(), [{ kind: 'add_vms', count: 2, sizeGb: 32 }]);
+    expect(r.applications.at(-1)!.startedAt.toISOString()).toBe(NOW.toISOString());
   });
 });

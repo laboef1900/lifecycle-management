@@ -5,8 +5,9 @@ import { assertShellContainsScroll } from '../playwright/support/scroll-containm
 /**
  * The scroll-containment invariant (see support/scroll-containment) is
  * auth-mode-agnostic, but the smoke suite that exercises it in AUTH_MODE=disabled
- * does not run in CI. This OIDC suite is the browser-level e2e that CI runs, so
- * verify the invariant here too — post-login, on the real app shell.
+ * only runs on the `dev → main` sync PR (the `golden-path-e2e` job, #334). This
+ * OIDC suite runs on *every* PR, so keep verifying the invariant here too —
+ * post-login, on the real app shell — rather than deferring it to promotion.
  */
 test.describe('app-shell scroll containment (authenticated)', () => {
   test('document does not scroll; topbar stays pinned while main scrolls', async ({ page }) => {

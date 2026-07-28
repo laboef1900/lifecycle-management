@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   clusterSettingsInputSchema,
+  DEFAULT_FORECAST_SNAPSHOT_RETENTION_MONTHS,
+  FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS,
+  FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS,
+  forecastSnapshotRetentionMonthsSchema,
   effectiveThresholdsSchema,
   percentSchema,
   tenantSettingsSchema,
@@ -28,12 +32,20 @@ describe('tenantSettingsSchema', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       }),
     ).toEqual({
       warnThreshold: 0.7,
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
       idempotencyKeyRetentionHours: 24,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
+      forecastSnapshotRetentionMonths: 0,
     });
   });
 
@@ -84,7 +96,15 @@ describe('tenantSettingsSchema', () => {
 });
 
 describe('tenantSettingsSchema — idempotencyKeyRetentionHours', () => {
-  const base = { warnThreshold: 0.7, critThreshold: 0.9, procurementLeadTimeWeeks: 8 };
+  const base = {
+    warnThreshold: 0.7,
+    critThreshold: 0.9,
+    procurementLeadTimeWeeks: 8,
+    forecastUncertaintyBandEnabled: false,
+    forecastUncertaintyMinAnchors: 6,
+    forecastUncertaintyBandWidth: 'p10_p90',
+    forecastSnapshotRetentionMonths: 0,
+  };
 
   it('accepts the default of 24', () => {
     expect(tenantSettingsSchema.parse({ ...base, idempotencyKeyRetentionHours: 24 })).toMatchObject(
@@ -163,5 +183,56 @@ describe('effectiveThresholdsSchema', () => {
     expect(() =>
       effectiveThresholdsSchema.parse({ warn: 0.7, crit: 0.9, source: 'galaxy' }),
     ).toThrow();
+  });
+});
+
+describe('forecastSnapshotRetentionMonthsSchema (#318)', () => {
+  it('accepts 0 — keep forever, the default', () => {
+    expect(forecastSnapshotRetentionMonthsSchema.parse(0)).toBe(0);
+    expect(DEFAULT_FORECAST_SNAPSHOT_RETENTION_MONTHS).toBe(0);
+  });
+
+  it('accepts the permitted window, inclusive of both bounds', () => {
+    expect(
+      forecastSnapshotRetentionMonthsSchema.parse(FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS),
+    ).toBe(12);
+    expect(
+      forecastSnapshotRetentionMonthsSchema.parse(FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS),
+    ).toBe(120);
+    expect(forecastSnapshotRetentionMonthsSchema.parse(36)).toBe(36);
+  });
+
+  it('rejects the 1..11 dead zone — a window that short starves every horizon', () => {
+    // PER_HORIZON_MIN_SAMPLES is 3 and one retained month yields at most one
+    // sample per horizon, so anything under the floor risks a band that can
+    // never appear. 0 means "keep forever", NOT "prune everything".
+    for (const v of [1, 3, 6, 11]) {
+      expect(() => forecastSnapshotRetentionMonthsSchema.parse(v)).toThrow();
+    }
+  });
+
+  it('rejects negatives, non-integers and values past the max', () => {
+    expect(() => forecastSnapshotRetentionMonthsSchema.parse(-1)).toThrow();
+    expect(() => forecastSnapshotRetentionMonthsSchema.parse(24.5)).toThrow();
+    expect(() => forecastSnapshotRetentionMonthsSchema.parse(121)).toThrow();
+  });
+
+  it('is NOT cross-validated against forecastUncertaintyMinAnchors', () => {
+    // The two count different things: minAnchors counts distinct ANCHOR months
+    // among paired samples, and an anchor up to 24 months older than the window
+    // still projects into it, so anchorCount runs well ahead of retentionMonths.
+    // A 12-month window with the maximum 24 minimum-anchors is legitimate.
+    expect(() =>
+      tenantSettingsSchema.parse({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: true,
+        forecastUncertaintyMinAnchors: 24,
+        forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 12,
+      }),
+    ).not.toThrow();
   });
 });

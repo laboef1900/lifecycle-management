@@ -16,6 +16,7 @@ import type { Env } from './env.js';
 import { authConfigPlugin } from './plugins/auth-config.js';
 import { authPlugin, authStartupWarnings, type AuthStartupWarning } from './plugins/auth.js';
 import { errorHandlerPlugin } from './plugins/error-handler.js';
+import { forecastSnapshotCleanupPlugin } from './plugins/forecast-snapshot-cleanup.js';
 import { idempotencyCleanupPlugin } from './plugins/idempotency-cleanup.js';
 import { oidcPlugin } from './plugins/oidc.js';
 import { prismaPlugin } from './plugins/prisma.js';
@@ -138,6 +139,14 @@ export async function buildServer(options: BuildServerOptions): Promise<FastifyI
   // rule as the vSphere scheduler above, for the same reason (isolate:false
   // means a stray background tick could race assertions across files).
   await server.register(idempotencyCleanupPlugin, {
+    autostart: env.NODE_ENV !== 'test',
+  });
+
+  // Prunes forecast snapshots past each tenant's retention window (#318). Inert
+  // unless an operator has set a window: the default is keep-forever, and the
+  // sweep skips those tenants without issuing a delete. Same never-ticks-in-test
+  // rule as the two schedulers above.
+  await server.register(forecastSnapshotCleanupPlugin, {
     autostart: env.NODE_ENV !== 'test',
   });
 

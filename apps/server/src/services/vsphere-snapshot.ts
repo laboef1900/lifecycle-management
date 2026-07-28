@@ -1,8 +1,14 @@
 import { startOfUtcMonth, type VsphereSyncOutcome } from '@lcm/shared';
 import { Prisma, type PrismaClient } from '@prisma/client';
 
+import { ForecastService } from './forecast-loader.js';
 import type { CollectedInventory, VsphereInventoryCollector } from './vsphere-inventory.js';
 import { VsphereSyncService } from './vsphere-sync.js';
+
+/** Structured warn sink (mirrors {@link VsphereSyncService}); best-effort only. */
+interface SnapshotLogger {
+  warn(details: Record<string, unknown>, message: string): void;
+}
 
 /**
  * Appends a measured baseline per synced cluster (#178, epic #172).
@@ -24,6 +30,8 @@ export class VsphereSnapshotService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly collector: VsphereInventoryCollector,
+    /** Optional warn sink for the best-effort re-anchor snapshot hook. */
+    private readonly logger?: SnapshotLogger,
   ) {}
 
   /**
@@ -93,6 +101,7 @@ export class VsphereSnapshotService {
     // rather than something application code has to remember.
     const period = startOfUtcMonth(measuredAt);
     let clustersSnapshotted = 0;
+    const forecast = new ForecastService(this.prisma);
 
     for (const collected of inventory.clusters) {
       const cluster = await this.prisma.cluster.findUnique({
@@ -132,6 +141,22 @@ export class VsphereSnapshotService {
         skipDuplicates: true,
       });
       clustersSnapshotted += written.count;
+
+      // Re-anchor hook (Option A1, snapshot-forward): a NEW baseline this period
+      // (written.count > 0; a skipped duplicate re-anchors nothing) is exactly the
+      // moment to persist the current forecast so the empirical uncertainty band
+      // can later measure projected-vs-actual. BEST-EFFORT — a snapshot failure
+      // MUST NOT fail the sync/measure it follows; the band just skips this period.
+      if (written.count > 0) {
+        try {
+          await forecast.snapshotForecast(tenantId, cluster.id, metric.key);
+        } catch (err) {
+          this.logger?.warn(
+            { err, clusterId: cluster.id, metricKey: metric.key },
+            'forecast snapshot skipped (best-effort, uncertainty band)',
+          );
+        }
+      }
     }
 
     return { syncOutcome: 'ok', syncError: null, snapshotPeriod: period, clustersSnapshotted };

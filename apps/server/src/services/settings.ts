@@ -1,15 +1,32 @@
 import type { PrismaClient } from '@prisma/client';
 
 import {
+  DEFAULT_FORECAST_SNAPSHOT_RETENTION_MONTHS,
+  DEFAULT_FORECAST_UNCERTAINTY_BAND_WIDTH,
+  DEFAULT_FORECAST_UNCERTAINTY_MIN_ANCHORS,
+  forecastUncertaintyBandWidthSchema,
   resolveThresholds,
   SYSTEM_DEFAULTS,
   type ClusterSettingsInput,
   type ClusterSettingsResponse,
   type EffectiveThresholds,
   type TenantSettings,
+  type TenantSettingsResolved,
 } from '@lcm/shared';
 
 import { NotFoundError, UnprocessableError } from './errors.js';
+
+/**
+ * The band-width column is free `TEXT`; the API validates it on write, but a
+ * direct DB write could leave a value outside the enum. Reading it into
+ * `QUANTILES[bandWidth]` would then throw and 500 the forecast read (a
+ * purchasing surface), so an unrecognised value fails SAFE to the default
+ * instead of taking the read down (review F6).
+ */
+function coerceBandWidth(value: string): TenantSettingsResolved['forecastUncertaintyBandWidth'] {
+  const parsed = forecastUncertaintyBandWidthSchema.safeParse(value);
+  return parsed.success ? parsed.data : DEFAULT_FORECAST_UNCERTAINTY_BAND_WIDTH;
+}
 
 function decimalToNumber(value: unknown): number {
   if (value === null || value === undefined) {
@@ -29,7 +46,7 @@ function decimalToNullableNumber(value: unknown): number | null {
 export class SettingsService {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async getTenant(tenantId: string): Promise<TenantSettings> {
+  async getTenant(tenantId: string): Promise<TenantSettingsResolved> {
     const row = await this.prisma.tenantSettings.upsert({
       where: { tenantId },
       create: { tenantId },
@@ -40,10 +57,24 @@ export class SettingsService {
       critThreshold: decimalToNumber(row.critThreshold),
       procurementLeadTimeWeeks: row.procurementLeadTimeWeeks,
       idempotencyKeyRetentionHours: row.idempotencyKeyRetentionHours,
+      forecastUncertaintyBandEnabled: row.forecastUncertaintyBandEnabled,
+      forecastUncertaintyMinAnchors: row.forecastUncertaintyMinAnchors,
+      forecastUncertaintyBandWidth: coerceBandWidth(row.forecastUncertaintyBandWidth),
+      forecastSnapshotRetentionMonths: row.forecastSnapshotRetentionMonths,
     };
   }
 
-  async updateTenant(tenantId: string, input: TenantSettings): Promise<TenantSettings> {
+  /**
+   * @ai-warning An ABSENT forecast field means "leave it alone", never "reset it
+   * to the default". The four fields are optional on the request so a 0.5.0-shaped
+   * body (a script, or a browser tab open across a deploy) still works — but this
+   * is a full-object PUT, so defaulting them would have let such a request
+   * silently wipe an admin's configured band and retention settings. Absent fields
+   * are therefore omitted from the Prisma `update` entirely, leaving the stored
+   * value untouched; only a first-time `create` falls back to the DEFAULT_*
+   * constants (which mirror the column defaults anyway).
+   */
+  async updateTenant(tenantId: string, input: TenantSettings): Promise<TenantSettingsResolved> {
     const row = await this.prisma.tenantSettings.upsert({
       where: { tenantId },
       create: {
@@ -52,12 +83,33 @@ export class SettingsService {
         critThreshold: input.critThreshold,
         procurementLeadTimeWeeks: input.procurementLeadTimeWeeks,
         idempotencyKeyRetentionHours: input.idempotencyKeyRetentionHours,
+        // No stored row to preserve, so an omitted field takes the shared default.
+        forecastUncertaintyBandEnabled: input.forecastUncertaintyBandEnabled ?? false,
+        forecastUncertaintyMinAnchors:
+          input.forecastUncertaintyMinAnchors ?? DEFAULT_FORECAST_UNCERTAINTY_MIN_ANCHORS,
+        forecastUncertaintyBandWidth:
+          input.forecastUncertaintyBandWidth ?? DEFAULT_FORECAST_UNCERTAINTY_BAND_WIDTH,
+        forecastSnapshotRetentionMonths:
+          input.forecastSnapshotRetentionMonths ?? DEFAULT_FORECAST_SNAPSHOT_RETENTION_MONTHS,
       },
       update: {
         warnThreshold: input.warnThreshold,
         critThreshold: input.critThreshold,
         procurementLeadTimeWeeks: input.procurementLeadTimeWeeks,
         idempotencyKeyRetentionHours: input.idempotencyKeyRetentionHours,
+        // Omitted, not defaulted — Prisma leaves an absent key unchanged.
+        ...(input.forecastUncertaintyBandEnabled !== undefined && {
+          forecastUncertaintyBandEnabled: input.forecastUncertaintyBandEnabled,
+        }),
+        ...(input.forecastUncertaintyMinAnchors !== undefined && {
+          forecastUncertaintyMinAnchors: input.forecastUncertaintyMinAnchors,
+        }),
+        ...(input.forecastUncertaintyBandWidth !== undefined && {
+          forecastUncertaintyBandWidth: input.forecastUncertaintyBandWidth,
+        }),
+        ...(input.forecastSnapshotRetentionMonths !== undefined && {
+          forecastSnapshotRetentionMonths: input.forecastSnapshotRetentionMonths,
+        }),
       },
     });
     return {
@@ -65,6 +117,10 @@ export class SettingsService {
       critThreshold: decimalToNumber(row.critThreshold),
       procurementLeadTimeWeeks: row.procurementLeadTimeWeeks,
       idempotencyKeyRetentionHours: row.idempotencyKeyRetentionHours,
+      forecastUncertaintyBandEnabled: row.forecastUncertaintyBandEnabled,
+      forecastUncertaintyMinAnchors: row.forecastUncertaintyMinAnchors,
+      forecastUncertaintyBandWidth: coerceBandWidth(row.forecastUncertaintyBandWidth),
+      forecastSnapshotRetentionMonths: row.forecastSnapshotRetentionMonths,
     };
   }
 

@@ -66,20 +66,19 @@ Open <http://localhost:5173>. The Vite dev server proxies `/api/*`,
 ## Run the production stack
 
 ```bash
-cp .env.example .env
-# edit .env — at least set POSTGRES_PASSWORD
+cp docker/.env.example docker/.env
+# edit docker/.env — at least set POSTGRES_PASSWORD
 
-docker compose pull
-SEED_ON_BOOT=true docker compose up -d
+docker compose -f docker/docker-compose.yml --env-file docker/.env pull
+SEED_ON_BOOT=true docker compose -f docker/docker-compose.yml --env-file docker/.env up -d
 # first boot: server applies migrations + seeds reference clusters
 ```
 
-`.env` sets `COMPOSE_FILE=docker/docker-compose.yml`, so the standard
-`docker compose ...` commands above pick up the production file from
-`docker/` without needing `-f`. Run all commands from the repo root.
+`docker/.env` configures the stack environment for `docker/docker-compose.yml`.
+Run commands from the repo root or inside `docker/`.
 
 The compose file pulls `lcm-server` and `lcm-web` from GHCR; set
-`LCM_IMAGE_TAG=0.5` in `.env` to pin a release instead of `:latest`.
+`LCM_IMAGE_TAG=0.6` in `docker/.env` to pin a release instead of `:latest`.
 
 The web container listens on `${HTTP_PORT:-80}` and serves both the SPA and a
 reverse proxy to the server at `/api/*`. After the first successful boot,
@@ -117,7 +116,7 @@ All three containers run on [Docker Hardened Images](https://www.docker.com/prod
 | `POSTGRES_PASSWORD`     | `— (required)`                            | db + server (compose)  | Postgres password (compose refuses to start if unset)                                                           |
 | `POSTGRES_DB`           | `lcm`                                     | db (compose)           | Postgres database name                                                                                          |
 | `HTTP_PORT`             | `80`                                      | web (compose)          | Host port mapped to nginx :8080                                                                                 |
-| `LCM_IMAGE_TAG`         | `latest`                                  | server + web (compose) | GHCR image tag (e.g. `0.5`, `dev`)                                                                              |
+| `LCM_IMAGE_TAG`         | `latest`                                  | server + web (compose) | GHCR image tag (e.g. `0.6`, `dev`)                                                                              |
 | `CONFIG_ENCRYPTION_KEY` | `— (required)`                            | server (compose)       | Encrypts the DB-backed OIDC config; compose refuses to start if unset — generate with `openssl rand -base64 32` |
 | `RECOVERY_DISABLE_AUTH` | `false`                                   | server (compose)       | Break-glass: forces auth off for that boot only, in memory — the stored auth config is left untouched           |
 
@@ -167,4 +166,4 @@ pnpm --filter @lcm/server db:import-xlsx [path]
 
 Short version: branch off `dev` as `feat/<short-slug>`, make a focused commit,
 open a PR against `dev` that closes the issue, ensure CI is green. Long
-version: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+version: [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).

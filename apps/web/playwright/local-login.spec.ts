@@ -55,6 +55,26 @@ test('local admin can sign in and reach the dashboard', async ({ page, request }
     });
     expect(enableResp.ok()).toBe(true);
 
+    // Does the running server actually ENFORCE the mode we just stored?
+    //
+    // `RECOVERY_DISABLE_AUTH=true` is the documented break-glass flag and, since
+    // the dev database grew a stored `auth_config`, the only way to run this
+    // stack locally with an open API (`AUTH_MODE` is a first-boot-only seed var
+    // and is ignored once `auth_config` exists). It degrades auth in memory for
+    // that boot without touching the stored config — so the PUT above succeeds,
+    // reports `local`, and changes nothing about enforcement. This test then
+    // failed on `/login`, looking like a login regression when the server was
+    // simply never asked to require one.
+    //
+    // Probed behaviourally rather than by reading config, because the stored
+    // config is exactly what does NOT tell you the answer. `request` holds no
+    // session cookie, so an enforcing server answers 401 here.
+    const enforcementProbe = await request.get(`${API_BASE}/api/clusters`);
+    test.skip(
+      enforcementProbe.status() !== 401,
+      'server is running with auth force-disabled (RECOVERY_DISABLE_AUTH); it cannot require a login. Restart the API without that flag to run this test.',
+    );
+
     await page.goto('/login');
     await page.getByLabel(/username/i).fill(username);
     await page.getByLabel(/password/i).fill(password);

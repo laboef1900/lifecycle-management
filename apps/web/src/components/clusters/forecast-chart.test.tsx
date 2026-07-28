@@ -44,6 +44,14 @@ const containerProbe = vi.hoisted(() => ({
   withholdOnResize: false,
 }));
 
+/**
+ * Stands in for a pointer hovering one month. Real recharts renders the
+ * `content` render-prop only while the pointer is inside the plot area, so the
+ * stub renders nothing until a test names a month — leaving every other test
+ * with the previous "Tooltip: () => null" behaviour.
+ */
+const tooltipProbe = vi.hoisted(() => ({ hoveredMonth: null as string | null }));
+
 vi.mock('recharts', async () => {
   const { useEffect } = await import('react');
   const Pass = ({ children }: { children?: React.ReactNode }): React.JSX.Element => <>{children}</>;
@@ -101,7 +109,33 @@ vi.mock('recharts', async () => {
         data-ticks={JSON.stringify(ticks ?? null)}
       />
     ),
-    Tooltip: () => null,
+    Tooltip: ({
+      content,
+    }: {
+      content?: (props: {
+        active: boolean;
+        payload: Array<{ dataKey: string; value: number }>;
+        label: string;
+      }) => React.ReactNode;
+    }): React.JSX.Element | null => {
+      const label = tooltipProbe.hoveredMonth;
+      if (label === null || !content) return null;
+      return (
+        <div data-testid="tooltip">
+          {content({
+            active: true,
+            // Real recharts supplies one entry per rendered series; only the
+            // three the content reads are worth standing in for.
+            payload: [
+              { dataKey: 'consumption', value: 520 },
+              { dataKey: 'headroom', value: 480 },
+              { dataKey: 'capacity', value: 1000 },
+            ],
+            label,
+          })}
+        </div>
+      );
+    },
     Area: ({ dataKey }: { dataKey: string }) => <div data-testid={`area-${dataKey}`} />,
     Line: ({
       dataKey,
@@ -380,6 +414,70 @@ describe('ForecastChart props mapping', () => {
     // swatch is specific to Headroom, not a blanket change.
     const capacitySwatch = screen.getByTestId('legend-swatch-capacity');
     expect(capacitySwatch.className).not.toContain('rounded-sm');
+  });
+
+  // Note: the band points here carry no `sampleCount`, so this also pins the
+  // fallback for a server build predating #317 — the caption keeps the original
+  // pool-only wording rather than inventing a per-horizon number.
+  it('shows the uncertainty-band legend + empirical caption (naming N) only when the band is present', () => {
+    // Opt-in: nothing by default.
+    const { unmount } = renderChart(makeForecast());
+    expect(screen.queryByTestId('legend-swatch-band')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('forecast-band-caption')).not.toBeInTheDocument();
+    unmount();
+
+    // Present with measured bounds + anchor count → labeled empirical, names N,
+    // and states it is not a guarantee (mandatory empirical labeling).
+    renderChart(
+      makeForecast({
+        uncertainty: [{ month: '2026-07-01', low: 0.12, high: 0.24 }],
+        uncertaintyAnchorCount: 6,
+      }),
+    );
+    expect(screen.getByTestId('legend-swatch-band')).toBeInTheDocument();
+    const caption = screen.getByTestId('forecast-band-caption');
+    expect(caption).toHaveTextContent('6 past forecasts');
+    expect(caption).toHaveTextContent(/not a guarantee/i);
+  });
+
+  it('converts band fractions to GB per month, clamps low at 0, and omits non-forecast months', () => {
+    // today is the current month → with months starting this month, index 0 is the
+    // anchor and 1..N are forecast months. Bands attach to forecast months only.
+    renderChart(
+      makeForecast({
+        fromMonth: currentMonth,
+        months: [
+          { month: currentMonth, consumption: 500, capacity: 1000, utilization: 0.5 },
+          {
+            month: shiftMonth(currentMonth, 1),
+            consumption: 520,
+            capacity: 1000,
+            utilization: 0.52,
+          },
+          {
+            month: shiftMonth(currentMonth, 2),
+            consumption: 540,
+            capacity: 1000,
+            utilization: 0.54,
+          },
+        ],
+        uncertainty: [
+          { month: shiftMonth(currentMonth, 1), low: 0.4, high: 0.62 },
+          { month: shiftMonth(currentMonth, 2), low: -0.05, high: 0.7 }, // low must clamp to 0
+        ],
+        uncertaintyAnchorCount: 6,
+      }),
+    );
+    const rows = JSON.parse(
+      screen.getByTestId('chart').getAttribute('data-rows') ?? '[]',
+    ) as Array<{ month: string; bandRange: [number, number] | null }>;
+    const byMonth = new Map(rows.map((r) => [r.month, r.bandRange]));
+    // fraction * capacity, rounded.
+    expect(byMonth.get(shiftMonth(currentMonth, 1))).toEqual([400, 620]);
+    // low clamped at 0; high left to the axis.
+    expect(byMonth.get(shiftMonth(currentMonth, 2))).toEqual([0, 700]);
+    // The anchor (non-forecast) month carries no band.
+    expect(byMonth.get(currentMonth)).toBeNull();
   });
 
   it('debounces container resize past the LONGEST pane transition so it settles in one window', () => {
@@ -952,5 +1050,130 @@ describe('<ForecastChart> baseline history (#177)', () => {
     // missing measurement into a trend nobody recorded, on the series that drives
     // hardware purchasing.
     expect(screen.getByTestId('line-measured').dataset.connectNulls).toBe('false');
+  });
+});
+
+describe('ForecastChart per-horizon band evidence (#317)', () => {
+  afterEach(() => {
+    tooltipProbe.hoveredMonth = null;
+  });
+
+  /**
+   * A five-month window (`now − 1` … `now + 3`) with a band over the three
+   * forecast months, each carrying its own sample count. The leading month sits
+   * BEFORE "now" so a test can put an undrawn band point there.
+   */
+  function bandedForecast(counts: [number, number, number], anchorCount: number): ForecastResponse {
+    return makeForecast({
+      fromMonth: shiftMonth(currentMonth, -1),
+      toMonth: shiftMonth(currentMonth, 3),
+      months: [-1, 0, 1, 2, 3].map((offset) => ({
+        month: shiftMonth(currentMonth, offset),
+        consumption: 500 + offset * 20,
+        capacity: 1000,
+        utilization: 0.5 + offset * 0.02,
+      })),
+      uncertainty: counts.map((sampleCount, i) => ({
+        month: shiftMonth(currentMonth, i + 1),
+        low: 0.4,
+        high: 0.62,
+        sampleCount,
+      })),
+      uncertaintyAnchorCount: anchorCount,
+    });
+  }
+
+  it('captions the per-horizon range alongside the pool when horizons differ', () => {
+    renderChart(bandedForecast([9, 5, 3], 12));
+    const caption = screen.getByTestId('forecast-band-caption');
+    // Both numbers, and the relationship between them: the pool is 12, but no
+    // single month's band rests on more than 9 or fewer than 3.
+    expect(caption).toHaveTextContent('3 to 9 past forecasts measured at its own horizon');
+    expect(caption).toHaveTextContent('12 total across the chart');
+    expect(caption).toHaveTextContent(/not a guarantee/i);
+    // The pre-#317 claim — the pool presented AS the band's measured error — must
+    // be gone; that is the overstatement this issue exists to remove.
+    expect(caption).not.toHaveTextContent('12 past forecasts’ measured error');
+  });
+
+  it('does not open the caption with the pool figure', () => {
+    // Ordering is load-bearing, not styling. Leading with the pool puts the
+    // largest and least relevant number where a skim-reader lands and defers the
+    // qualifier that undercuts it — a quieter version of the overstatement this
+    // caption exists to remove, on a surface people skim before spending money.
+    renderChart(bandedForecast([9, 5, 3], 12));
+    const text = screen.getByTestId('forecast-band-caption').textContent ?? '';
+
+    const perHorizonAt = text.indexOf('3 to 9');
+    const poolAt = text.indexOf('12 total');
+    expect(perHorizonAt).toBeGreaterThan(-1);
+    expect(poolAt).toBeGreaterThan(-1);
+    expect(perHorizonAt).toBeLessThan(poolAt);
+    expect(text).not.toMatch(/^Of \d+ past forecasts/);
+  });
+
+  it('captions a single figure when every banded horizon rests on the same evidence', () => {
+    renderChart(bandedForecast([6, 6, 6], 6));
+    expect(screen.getByTestId('forecast-band-caption')).toHaveTextContent(
+      'Every month’s band rests on 6 past forecasts measured at that horizon',
+    );
+  });
+
+  it('quotes only the months the chart actually bands', () => {
+    // A point for a month BEFORE "now" is never drawn (the band attaches to
+    // forecast months only), so its count must not widen the stated range —
+    // otherwise the caption would describe evidence the shading does not show.
+    const base = bandedForecast([9, 5, 3], 12);
+    renderChart({
+      ...base,
+      uncertainty: [
+        { month: shiftMonth(currentMonth, -1), low: 0.4, high: 0.62, sampleCount: 99 },
+        ...base.uncertainty!,
+      ],
+    });
+    expect(screen.getByTestId('forecast-band-caption')).not.toHaveTextContent('99');
+  });
+
+  it('names the hovered month’s OWN sample count in the tooltip', () => {
+    tooltipProbe.hoveredMonth = shiftMonth(currentMonth, 3);
+    renderChart(bandedForecast([9, 5, 3], 12));
+    expect(screen.getByTestId('tooltip-band-samples')).toHaveTextContent('3 past forecasts');
+  });
+
+  it('reports the near-term month’s larger count on that month', () => {
+    tooltipProbe.hoveredMonth = shiftMonth(currentMonth, 1);
+    renderChart(bandedForecast([9, 5, 3], 12));
+    expect(screen.getByTestId('tooltip-band-samples')).toHaveTextContent('9 past forecasts');
+  });
+
+  it('omits the tooltip row entirely for a month with no band', () => {
+    tooltipProbe.hoveredMonth = currentMonth; // banded months start at now + 1
+    renderChart(bandedForecast([9, 5, 3], 12));
+    expect(screen.getByTestId('tooltip')).toBeInTheDocument();
+    expect(screen.queryByTestId('tooltip-band-samples')).not.toBeInTheDocument();
+  });
+
+  it('announces the evidence range in the aria-label, not only on hover', () => {
+    // accessibilityLayer stays false, so the recharts tooltip is pointer-only. A
+    // disclosure about overstated evidence must not itself be unreachable to
+    // assistive tech — the label and the caption both carry it.
+    renderChart(bandedForecast([9, 5, 3], 12));
+    expect(screen.getByRole('img').getAttribute('aria-label') ?? '').toContain(
+      'between 3 and 9 past forecasts',
+    );
+  });
+
+  it('announces a single figure when every horizon rests on the same evidence', () => {
+    renderChart(bandedForecast([4, 4, 4], 4));
+    expect(screen.getByRole('img').getAttribute('aria-label') ?? '').toContain(
+      'from 4 past forecasts at every horizon',
+    );
+  });
+
+  it('says nothing about a band in the aria-label when there is none', () => {
+    renderChart(makeForecast());
+    expect(screen.getByRole('img').getAttribute('aria-label') ?? '').not.toContain(
+      'Uncertainty band',
+    );
   });
 });

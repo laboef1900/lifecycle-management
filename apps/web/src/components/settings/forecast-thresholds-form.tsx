@@ -1,13 +1,38 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { TriangleAlert } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
+
+import {
+  FORECAST_SNAPSHOT_RETENTION_DISABLED,
+  FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS,
+  FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS,
+  type ForecastUncertaintyBandWidth,
+  type TenantSettings,
+} from '@lcm/shared';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { api, describeApiError } from '@/lib/api-client';
 
 type NumInput = number | '';
+
+const BAND_WIDTH_LABELS: Record<ForecastUncertaintyBandWidth, string> = {
+  // p10–p90 spans 80% of the measured error; p5–p95 spans 90% and is the WIDER
+  // (more conservative) reading. Labels must not invert that on a purchasing UI.
+  p10_p90: 'p10–p90 (default)',
+  p05_p95: 'p5–p95 (widest)',
+  stddev: '±1 std dev',
+};
+const BAND_WIDTHS = Object.keys(BAND_WIDTH_LABELS) as ForecastUncertaintyBandWidth[];
 
 export function ForecastThresholdsForm(): React.JSX.Element {
   const queryClient = useQueryClient();
@@ -23,7 +48,17 @@ export function ForecastThresholdsForm(): React.JSX.Element {
   const [critEdit, setCritEdit] = React.useState<NumInput | null>(null);
   const [leadEdit, setLeadEdit] = React.useState<NumInput | null>(null);
   const [retentionEdit, setRetentionEdit] = React.useState<NumInput | null>(null);
+  const [bandEnabledEdit, setBandEnabledEdit] = React.useState<boolean | null>(null);
+  const [minAnchorsEdit, setMinAnchorsEdit] = React.useState<NumInput | null>(null);
+  const [bandWidthEdit, setBandWidthEdit] = React.useState<ForecastUncertaintyBandWidth | null>(
+    null,
+  );
+  const [snapshotRetentionEdit, setSnapshotRetentionEdit] = React.useState<NumInput | null>(null);
   const [validationError, setValidationError] = React.useState<string | null>(null);
+  // Generated, not a literal: a fixed id would collide the moment this card is
+  // rendered twice on a page, and `aria-describedby` resolving to a real-but-wrong
+  // element is indistinguishable from a correct one in the DOM.
+  const retentionHelpId = React.useId();
 
   const initialWarn = settingsQuery.data
     ? Math.round(settingsQuery.data.warnThreshold * 100)
@@ -33,19 +68,40 @@ export function ForecastThresholdsForm(): React.JSX.Element {
     : null;
   const initialLead = settingsQuery.data?.procurementLeadTimeWeeks ?? null;
   const initialRetention = settingsQuery.data?.idempotencyKeyRetentionHours ?? null;
+  const initialBandEnabled = settingsQuery.data?.forecastUncertaintyBandEnabled ?? null;
+  const initialMinAnchors = settingsQuery.data?.forecastUncertaintyMinAnchors ?? null;
+  const initialBandWidth = settingsQuery.data?.forecastUncertaintyBandWidth ?? null;
+  const initialSnapshotRetention = settingsQuery.data?.forecastSnapshotRetentionMonths ?? null;
 
   const warnPct: NumInput = warnEdit ?? initialWarn ?? '';
   const critPct: NumInput = critEdit ?? initialCrit ?? '';
   const leadWeeks: NumInput = leadEdit ?? initialLead ?? '';
   const retentionHours: NumInput = retentionEdit ?? initialRetention ?? '';
+  const bandEnabled: boolean = bandEnabledEdit ?? initialBandEnabled ?? false;
+  const minAnchors: NumInput = minAnchorsEdit ?? initialMinAnchors ?? '';
+  const bandWidth: ForecastUncertaintyBandWidth = bandWidthEdit ?? initialBandWidth ?? 'p10_p90';
+  const snapshotRetention: NumInput = snapshotRetentionEdit ?? initialSnapshotRetention ?? '';
+
+  /**
+   * The value the SERVER currently has stored is outside `{0} ∪ [MIN, MAX]`, so
+   * `retentionCutoffMonth` is treating it as retention-off (INV-R1a) and nothing
+   * is being pruned — while this form would otherwise render it as a live
+   * window. Only reachable by a direct DB write, since the schema rejects it on
+   * save, but that is exactly the case INV-R1a exists to defend, and a defence
+   * the operator cannot see is half a defence.
+   *
+   * Keyed on the LOADED value, never the edited one: keying it on the current
+   * input would fire on the `1` that everyone types on the way to `12`, the same
+   * mistake the deletion warning below already had to have corrected.
+   */
+  const storedRetentionOutOfRange =
+    initialSnapshotRetention !== null &&
+    initialSnapshotRetention !== FORECAST_SNAPSHOT_RETENTION_DISABLED &&
+    (initialSnapshotRetention < FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS ||
+      initialSnapshotRetention > FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS);
 
   const mutation = useMutation({
-    mutationFn: (input: {
-      warnThreshold: number;
-      critThreshold: number;
-      procurementLeadTimeWeeks: number;
-      idempotencyKeyRetentionHours: number;
-    }) => api.settings.tenant.update(input),
+    mutationFn: (input: TenantSettings) => api.settings.tenant.update(input),
     onSuccess: (data) => {
       queryClient.setQueryData(['tenant-settings'], data);
       void queryClient.invalidateQueries({ queryKey: ['forecast'] });
@@ -56,6 +112,10 @@ export function ForecastThresholdsForm(): React.JSX.Element {
       setCritEdit(null);
       setLeadEdit(null);
       setRetentionEdit(null);
+      setBandEnabledEdit(null);
+      setMinAnchorsEdit(null);
+      setBandWidthEdit(null);
+      setSnapshotRetentionEdit(null);
     },
     onError: (err) => toast.error(describeApiError(err, 'Could not save settings')),
   });
@@ -65,14 +125,24 @@ export function ForecastThresholdsForm(): React.JSX.Element {
     typeof critPct === 'number' &&
     typeof leadWeeks === 'number' &&
     typeof retentionHours === 'number' &&
+    typeof minAnchors === 'number' &&
+    typeof snapshotRetention === 'number' &&
     initialWarn !== null &&
     initialCrit !== null &&
     initialLead !== null &&
     initialRetention !== null &&
+    initialBandEnabled !== null &&
+    initialMinAnchors !== null &&
+    initialBandWidth !== null &&
+    initialSnapshotRetention !== null &&
     (warnPct !== initialWarn ||
       critPct !== initialCrit ||
       leadWeeks !== initialLead ||
-      retentionHours !== initialRetention);
+      retentionHours !== initialRetention ||
+      bandEnabled !== initialBandEnabled ||
+      minAnchors !== initialMinAnchors ||
+      bandWidth !== initialBandWidth ||
+      snapshotRetention !== initialSnapshotRetention);
 
   const handleSubmit = (e: React.FormEvent): void => {
     e.preventDefault();
@@ -96,11 +166,33 @@ export function ForecastThresholdsForm(): React.JSX.Element {
       setValidationError('Idempotency key retention must be a whole number from 1 to 168 hours.');
       return;
     }
+    if (typeof minAnchors !== 'number') return;
+    if (!Number.isInteger(minAnchors) || minAnchors < 3 || minAnchors > 24) {
+      setValidationError('Minimum anchors must be a whole number from 3 to 24.');
+      return;
+    }
+    if (typeof snapshotRetention !== 'number') return;
+    if (
+      !Number.isInteger(snapshotRetention) ||
+      snapshotRetention < FORECAST_SNAPSHOT_RETENTION_DISABLED ||
+      snapshotRetention > FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS ||
+      (snapshotRetention !== FORECAST_SNAPSHOT_RETENTION_DISABLED &&
+        snapshotRetention < FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS)
+    ) {
+      setValidationError(
+        `Forecast snapshot retention must be 0 (keep forever) or a whole number from ${FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS} to ${FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS} months.`,
+      );
+      return;
+    }
     mutation.mutate({
       warnThreshold: warnPct / 100,
       critThreshold: critPct / 100,
       procurementLeadTimeWeeks: leadWeeks,
       idempotencyKeyRetentionHours: retentionHours,
+      forecastUncertaintyBandEnabled: bandEnabled,
+      forecastUncertaintyMinAnchors: minAnchors,
+      forecastUncertaintyBandWidth: bandWidth,
+      forecastSnapshotRetentionMonths: snapshotRetention,
     });
   };
 
@@ -187,6 +279,121 @@ export function ForecastThresholdsForm(): React.JSX.Element {
             hours (24 default).
           </span>
         </label>
+        <div className="space-y-2 rounded-md border border-border p-3">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={bandEnabled}
+              onChange={(e) => setBandEnabledEdit(e.target.checked)}
+              className="h-3.5 w-3.5 accent-[var(--accent)]"
+            />
+            <span>Show forecast uncertainty band</span>
+          </label>
+          <p className="max-w-md text-[11px] text-fg-subtle">
+            Empirical only: a band derived from how far past forecasts missed the measured actual.
+            It appears on a cluster&rsquo;s forecast chart once that cluster has at least the
+            minimum re-anchors below — never fabricated, off by default.
+          </p>
+          <div className="flex flex-wrap items-end gap-4">
+            <label className="block">
+              <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+                Minimum anchors
+              </span>
+              <Input
+                type="number"
+                min={3}
+                max={24}
+                step={1}
+                aria-label="Minimum anchors"
+                value={minAnchors}
+                onChange={(e) => setMinAnchorsEdit(parseInput(e.target.value))}
+                disabled={!bandEnabled}
+                className="mt-1 w-24"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+                Band width
+              </span>
+              <Select
+                value={bandWidth}
+                onValueChange={(v) => setBandWidthEdit(v as ForecastUncertaintyBandWidth)}
+                disabled={!bandEnabled}
+              >
+                <SelectTrigger aria-label="Band width" className="h-8 w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="start">
+                  {BAND_WIDTHS.map((w) => (
+                    <SelectItem key={w} value={w}>
+                      {BAND_WIDTH_LABELS[w]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+          </div>
+        </div>
+        {/* Deliberately OUTSIDE the band box and never disabled by it: snapshots
+            are written on every re-anchor whether or not the band is shown, so
+            retention prunes them either way. */}
+        <div className="space-y-2 rounded-md border border-border p-3">
+          <label className="block">
+            <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+              Forecast snapshot retention (months)
+            </span>
+            <Input
+              type="number"
+              min={FORECAST_SNAPSHOT_RETENTION_DISABLED}
+              max={FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS}
+              step={1}
+              aria-label="Forecast snapshot retention (months)"
+              aria-describedby={retentionHelpId}
+              value={snapshotRetention}
+              onChange={(e) => setSnapshotRetentionEdit(parseInput(e.target.value))}
+              className="mt-1 w-24"
+            />
+          </label>
+          <p id={retentionHelpId} className="max-w-md text-[11px] text-fg-subtle">
+            <strong className="font-medium text-foreground">0 keeps every snapshot forever</strong>{' '}
+            — the default. Any other value permanently deletes the record of what the forecast
+            projected in months older than the window, and narrows the uncertainty band&rsquo;s
+            evidence to that window straight away. Nothing else stores this history; only a database
+            backup can recover it. {FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS}–
+            {FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS} months when enabled.
+          </p>
+          {/* Gated on the accepted range, not merely on "not 0": values in the
+              1..11 dead zone are rejected on submit, so warning about deletions
+              they can never cause would announce a consequence of a save that
+              cannot happen — and it fires on the way past `1` for anyone typing
+              `12`. */}
+          {typeof snapshotRetention === 'number' &&
+          snapshotRetention >= FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS &&
+          snapshotRetention <= FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS ? (
+            <p className="flex max-w-md items-start gap-1.5 text-[11px] text-warning" role="status">
+              <TriangleAlert aria-hidden className="mt-px h-3 w-3 shrink-0" />
+              <span>
+                Saving deletes forecast snapshots older than {snapshotRetention} months, and keeps
+                deleting them as they age out.
+              </span>
+            </p>
+          ) : null}
+          {storedRetentionOutOfRange ? (
+            <p
+              className="flex max-w-md items-start gap-1.5 text-[11px] text-destructive"
+              role="alert"
+            >
+              <TriangleAlert aria-hidden className="mt-px h-3 w-3 shrink-0" />
+              <span>
+                The saved value ({initialSnapshotRetention}) is outside the permitted range, so
+                retention is currently <strong className="font-medium">off</strong> and nothing is
+                being deleted. It cannot have been set here — change it to 0, or to{' '}
+                {FORECAST_SNAPSHOT_RETENTION_MIN_MONTHS}–{FORECAST_SNAPSHOT_RETENTION_MAX_MONTHS},
+                and save to clear this.
+              </span>
+            </p>
+          ) : null}
+        </div>
         {validationError ? (
           <p className="text-sm text-destructive" role="alert">
             {validationError}

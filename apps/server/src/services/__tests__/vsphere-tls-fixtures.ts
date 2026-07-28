@@ -18,6 +18,7 @@
  */
 
 /** Self-signed for `vcenter.test.local`, also valid for 127.0.0.1. */
+// nosemgrep: generic.secrets.security.detected-private-key.detected-private-key
 export const TEST_KEY_PEM = `-----BEGIN PRIVATE KEY-----
 MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDJvBxv/X+xUoft
 2LN2xLxyBF6XuOuW1oHTlThU1ldPIe/h95pt8zDZ7PwRw25FTHJVivqSlmPvS1VZ

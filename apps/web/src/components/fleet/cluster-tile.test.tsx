@@ -2,6 +2,7 @@ import type { ClusterResponse, ForecastMonthPoint, ForecastResponse } from '@lcm
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { TooltipProvider } from '@/components/ui/tooltip';
 import type { ClusterForecastEntry } from '@/lib/forecast-summary';
 
 import { ClusterTile } from './cluster-tile';
@@ -139,6 +140,43 @@ describe('<ClusterTile>', () => {
     // conveys urgency, and the tile's aria-label still carries the
     // relative-days detail for assistive tech.
     expect(chip.textContent).toBe('ORDER BY DEC 28');
+  });
+
+  it('renders a BulletMeter utilization anchor with the current % figure', () => {
+    render(
+      <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+    );
+    // The absolute anchor the per-tile-scaled chart lacks: a BulletMeter (role
+    // img, carries the exact utilization in its accessible name) + a mono %.
+    expect(
+      screen.getByRole('img', { name: /utilization 77\.7 percent of capacity/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('78%')).toBeInTheDocument();
+    // The meter carries utilization, so the verdict no longer repeats "X% used".
+    expect(screen.queryByText(/77\.7% used/)).toBeNull();
+  });
+
+  it('drops the forecast chart in compact density but keeps the meter', () => {
+    const { rerender } = render(
+      <ClusterTile
+        entry={entry()}
+        forecast={forecast()}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        compact={false}
+      />,
+    );
+    expect(screen.getByTestId('tile-chart')).toBeInTheDocument();
+    rerender(
+      <ClusterTile
+        entry={entry()}
+        forecast={forecast()}
+        thresholds={{ warn: 0.7, crit: 0.9 }}
+        compact
+      />,
+    );
+    expect(screen.queryByTestId('tile-chart')).not.toBeInTheDocument();
+    // The BulletMeter stays — it's what makes compact viable (util at a glance).
+    expect(screen.getByText('78%')).toBeInTheDocument();
   });
 
   // Spec §4.4 amendment (2026-07-20, #268): the ORDER BY chip moved up to the
@@ -629,6 +667,63 @@ describe('<ClusterTile>', () => {
     );
     expect(screen.getByText(/no breach in the 2-month window/i)).toBeInTheDocument();
     expect(screen.queryByText(/2\+-month window/i)).toBeNull();
+  });
+
+  // #302 (follow-up to #292/#300): the order-approval acknowledgment must
+  // also surface on the fleet console tile, not just the cluster detail
+  // panel's `RecommendationChip`. Reuses that exact component (same icon,
+  // same data, same testid) rather than inventing a new tile-only pattern.
+  describe('order-approval acknowledgment (#302)', () => {
+    const ack = {
+      note: 'PO raised — 2 nodes',
+      approvedByLabel: 'Ada Admin',
+      approvedAt: '2026-07-14T09:00:00.000Z',
+    };
+
+    it('shows the Acknowledged annotation on the tile when the forecast carries a covering approval', () => {
+      render(
+        <TooltipProvider>
+          <ClusterTile
+            entry={entry()}
+            forecast={forecast({ acknowledgment: ack })}
+            thresholds={{ warn: 0.7, crit: 0.9 }}
+          />
+        </TooltipProvider>,
+      );
+
+      // Same testid/component as RecommendationChip's detail-panel treatment
+      // (recommendation-chip.tsx) — this IS that component, reused.
+      const badge = screen.getByTestId('recommendation-acknowledged');
+      expect(badge).toHaveTextContent('Ada Admin');
+      expect(badge).toHaveTextContent('PO raised — 2 nodes');
+      // Never color alone: an icon accompanies the text (WCAG 1.4.1).
+      expect(badge.querySelector('svg')).not.toBeNull();
+    });
+
+    it("names the acknowledgment in the tile aria-label, since aria-label overrides the tile's visible content", () => {
+      render(
+        <TooltipProvider>
+          <ClusterTile
+            entry={entry()}
+            forecast={forecast({ acknowledgment: ack })}
+            thresholds={{ warn: 0.7, crit: 0.9 }}
+          />
+        </TooltipProvider>,
+      );
+
+      expect(screen.getByRole('link').getAttribute('aria-label')).toContain(
+        'order acknowledged by Ada Admin',
+      );
+    });
+
+    it('omits the Acknowledged annotation entirely when there is no covering approval (not-yet-acknowledged state)', () => {
+      render(
+        <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
+      );
+
+      expect(screen.queryByTestId('recommendation-acknowledged')).toBeNull();
+      expect(screen.getByRole('link').getAttribute('aria-label')).not.toContain('acknowledged');
+    });
   });
 
   // Finding: sub-10px micro text on tiles violates the design system's own

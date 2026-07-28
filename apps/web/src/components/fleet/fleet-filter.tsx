@@ -28,18 +28,23 @@ import { cn } from '@/lib/utils';
 export function FleetFilter({
   showArchived,
   onShowArchivedChange,
+  attentionOnly,
+  onAttentionOnlyChange,
   archivedCount,
   open,
   onOpenChange,
 }: {
   showArchived: boolean;
   onShowArchivedChange: (next: boolean) => void;
+  /** Show only clusters at/over warn utilization or with an order due now/soon. */
+  attentionOnly: boolean;
+  onAttentionOnlyChange: (next: boolean) => void;
   /** Live archived-cluster count; null while the query has not resolved. */
   archivedCount: number | null;
   open: boolean;
   onOpenChange: (next: boolean) => void;
 }): React.JSX.Element {
-  const activeCount = showArchived ? 1 : 0;
+  const activeCount = (showArchived ? 1 : 0) + (attentionOnly ? 1 : 0);
   // Radix PopoverContent renders role="dialog" and moves focus into it; a
   // dialog takes no name from its content, so wire the visible "Filters"
   // micro-label as its accessible name or SR users enter an unnamed dialog.
@@ -57,7 +62,10 @@ export function FleetFilter({
           <Funnel className="h-3.5 w-3.5" aria-hidden />
           Filter
           {activeCount > 0 ? (
-            <span data-testid="fleet-filter-count" aria-label={`${activeCount} filter active`}>
+            <span
+              data-testid="fleet-filter-count"
+              aria-label={`${activeCount} filter${activeCount === 1 ? '' : 's'} active`}
+            >
               · {activeCount}
             </span>
           ) : null}
@@ -70,6 +78,15 @@ export function FleetFilter({
         >
           Filters
         </p>
+        <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-foreground">
+          <input
+            type="checkbox"
+            checked={attentionOnly}
+            onChange={(event) => onAttentionOnlyChange(event.target.checked)}
+            className="h-3.5 w-3.5 accent-[var(--accent)]"
+          />
+          <span>Needs attention only</span>
+        </label>
         <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"

@@ -49,6 +49,7 @@ GRADh9/QGoN7w8iq2kAa
 -----END CERTIFICATE-----
 `;
 
+// nosemgrep: generic.secrets.security.detected-private-key.detected-private-key
 export const VCSIM_KEY_PEM = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDLe0+1W8FHepsb
 ZghBQWeJZIFLVjyUF3a63HubD1hT+5mpWjpvORxM7mPkFkcaWuNUOuYQole6zm1f

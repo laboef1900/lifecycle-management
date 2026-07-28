@@ -110,7 +110,7 @@ export function FleetVerdict({
         ) : earliest ? (
           <>
             Fleet runway is{' '}
-            <strong className={cn(EMPHASIS, 'text-accent')}>
+            <strong className={cn(EMPHASIS, 'text-warning')}>
               {runwayMonths(runway, summary.fleetMonths.length)} mo
             </strong>{' '}
             {'—'}{' '}
@@ -126,7 +126,7 @@ export function FleetVerdict({
               {earliest.cluster.name}
             </Link>{' '}
             needs an order by{' '}
-            <strong className={cn(EMPHASIS, 'text-accent')}>
+            <strong className={cn(EMPHASIS, 'text-warning')}>
               {earliest.procurement.orderByDate
                 ? formatDateShort(earliest.procurement.orderByDate)
                 : '—'}
@@ -164,7 +164,7 @@ export function FleetVerdict({
               <span className="font-mono text-base font-bold text-fg-muted">UNKNOWN</span>
             ) : (
               <>
-                <span className="font-mono text-base font-bold tabular-nums text-accent">
+                <span className="font-mono text-base font-bold tabular-nums text-foreground">
                   {utilPct.toFixed(1)}%
                 </span>
                 <BulletMeter
@@ -178,7 +178,7 @@ export function FleetVerdict({
             )}
           </Instrument>
           <Instrument label="Headroom">
-            <span className="font-mono text-base font-bold tabular-nums text-accent">
+            <span className="font-mono text-base font-bold tabular-nums text-foreground">
               {headroom === null ? 'UNKNOWN' : formatGb(headroom)}
             </span>
           </Instrument>

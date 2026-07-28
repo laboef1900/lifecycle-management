@@ -9,6 +9,7 @@ import type {
   ForecastEventMarker,
   ForecastMonthPoint,
   ForecastResponse,
+  ForecastUncertaintyPoint,
   ProcurementInfo,
 } from './forecast.js';
 import type { OrderApprovalResponse } from './order-approval.js';
@@ -26,11 +27,14 @@ import type {
 import type { Paginated } from './pagination.js';
 import {
   effectiveThresholdsSchema,
+  forecastSnapshotRetentionMonthsSchema,
+  forecastUncertaintyBandWidthSchema,
+  forecastUncertaintyMinAnchorsSchema,
   idempotencyKeyRetentionHoursSchema,
   percentSchema,
   procurementLeadTimeWeeksSchema,
 } from './settings.js';
-import type { TenantSettings } from './settings.js';
+import type { TenantSettingsResolved } from './settings.js';
 import {
   entitySourceSchema,
   vsphereConnectionStatusSchema,
@@ -211,6 +215,18 @@ export const forecastAcknowledgmentSchema: z.ZodType<ForecastAcknowledgment> = z
   approvedAt: z.string(),
 });
 
+export const forecastUncertaintyPointSchema: z.ZodType<ForecastUncertaintyPoint> = z.object({
+  month: z.string(),
+  low: z.number(),
+  high: z.number(),
+  // Additive (#317), same compat shape as `acknowledgment` below: a server build
+  // that predates per-horizon counts omits it and its band still parses, so a
+  // lagging `:dev` server cannot break a newer web bundle. `min(1)`, not
+  // `nonnegative()` — a horizon with no samples draws no band at all, so a zero
+  // here would be a fabricated point rather than an honest one.
+  sampleCount: z.number().int().min(1).exactOptional(),
+});
+
 export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   fromMonth: z.string(),
   toMonth: z.string(),
@@ -225,6 +241,10 @@ export const forecastResponseSchema: z.ZodType<ForecastResponse> = z.object({
   // while `.nullable()` carries the "no/ superseded acknowledgment" case the
   // current server always emits.
   acknowledgment: forecastAcknowledgmentSchema.nullable().exactOptional(),
+  // Additive/optional: omitted when the setting is off or the anchor floor is
+  // unmet (honest absence), so an older server and the disabled case both parse.
+  uncertainty: z.array(forecastUncertaintyPointSchema).exactOptional(),
+  uncertaintyAnchorCount: z.number().int().nonnegative().exactOptional(),
 });
 
 // ---------- Categories ----------
@@ -278,11 +298,15 @@ export const orderApprovalResponseSchema: z.ZodType<OrderApprovalResponse> = z.o
 
 // Non-strict on purpose: responses tolerate additive server fields
 // (forward compatibility); the server enforces warn < crit on write.
-export const tenantSettingsResponseSchema: z.ZodType<TenantSettings> = z.object({
+export const tenantSettingsResponseSchema: z.ZodType<TenantSettingsResolved> = z.object({
   warnThreshold: percentSchema,
   critThreshold: percentSchema,
   procurementLeadTimeWeeks: procurementLeadTimeWeeksSchema,
   idempotencyKeyRetentionHours: idempotencyKeyRetentionHoursSchema,
+  forecastUncertaintyBandEnabled: z.boolean(),
+  forecastUncertaintyMinAnchors: forecastUncertaintyMinAnchorsSchema,
+  forecastUncertaintyBandWidth: forecastUncertaintyBandWidthSchema,
+  forecastSnapshotRetentionMonths: forecastSnapshotRetentionMonthsSchema,
 });
 
 // ---------- Pagination envelope ----------

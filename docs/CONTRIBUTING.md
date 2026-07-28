@@ -31,7 +31,14 @@ timeline`.
   evidence (screenshots for UI work, commands run for backend work).
 - CI must be green before merging; the workflow runs lint, typecheck, the
   full test suite (server uses Testcontainers — needs Docker, ubuntu-latest has
-  it), and the web build.
+  it), the web build, the OIDC auth e2e, and a Semgrep SAST scan.
+- **One extra job runs only on the `dev → main` sync PR:** `golden-path-e2e`
+  boots Postgres + the API + Vite and runs the 39-test Playwright golden path.
+  It is skipped on `feat/* → dev` PRs by design (issue #334) — the suite needs a
+  full stack and mutates tenant settings, clusters, and the stored auth mode, so
+  it is paid for once at promotion rather than on every feature PR. A skipped
+  job counts as passing for branch protection, so it is safe to require on
+  `main`. Expect the sync PR to take a few minutes longer than a feature PR.
 - Merge with `--merge` (default; preserves the per-task TDD history of feature
   branches). Squash-merge is fine for branches with churn that nobody will
   ever want to bisect (typo fixes, lint sweeps, dependency bumps).
@@ -91,7 +98,17 @@ merge is clean.
   prop mapping) get a Vitest + React Testing Library unit test next to the
   component.
 - The Playwright golden path in `apps/web/playwright/` covers the
-  end-to-end smoke; extend it if a major user flow changes.
+  end-to-end smoke; extend it if a major user flow changes. It gates the
+  `dev → main` sync PR (see above), so keep it green — run it locally with
+  `pnpm --filter @lcm/web test:e2e` against a seeded dev DB and an API started
+  with `RATE_LIMIT_MAX=2000`.
+- **A skipped golden-path test fails the run under CI.** Every spec opens with a
+  `test.skip(condition, reason)` precondition, and Playwright exits 0 when those
+  fire — so an all-skipped run is indistinguishable from an all-passed one.
+  `playwright/support/forbid-skipped-reporter.ts` escalates any skip to a
+  failure when `CI` is set (locally it only prints the list). If it fires, repair
+  the environment — an unseeded database, or an `auth_config.mode` left at
+  `local` by a hard-killed run — rather than relaxing the skip condition.
 - **The Vitest suites resolve `@lcm/shared` to its TypeScript source, not the
   built `dist`.** Both `apps/web/vitest.config.ts` and
   `apps/server/vitest.config.ts` alias `@lcm/shared` to `packages/shared/src`,

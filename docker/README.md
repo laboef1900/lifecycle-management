@@ -1,27 +1,25 @@
 # Production deployment
 
 This directory holds the Docker assets for self-hosted deployment.
-`docker-compose.yml` here wires them together; the root `.env.example`
-sets `COMPOSE_FILE=docker/docker-compose.yml` so `docker compose ...` from
-the repo root finds it without `-f`.
+`docker-compose.yml` here wires them together using configuration from `docker/.env`.
 
 ## Quickstart
 
 ```sh
-cp .env.example .env
-# edit .env — at least set POSTGRES_PASSWORD
+cp docker/.env.example docker/.env
+# edit docker/.env — at least set POSTGRES_PASSWORD
 
-docker compose pull
-SEED_ON_BOOT=true docker compose up -d
+docker compose -f docker/docker-compose.yml --env-file docker/.env pull
+SEED_ON_BOOT=true docker compose -f docker/docker-compose.yml --env-file docker/.env up -d
 # first boot: server applies migrations + seeds reference clusters
 
 # subsequent boots
-docker compose up -d
+docker compose -f docker/docker-compose.yml --env-file docker/.env up -d
 ```
 
 The compose file pulls `ghcr.io/laboef1900/lcm-server` and `lcm-web` from
 the GitHub container registry; there are no `build:` blocks. Set
-`LCM_IMAGE_TAG=0.1` (or `dev`) in `.env` to pin a release / track the dev
+`LCM_IMAGE_TAG=0.1` (or `dev`) in `docker/.env` to pin a release / track the dev
 channel instead of `:latest`.
 
 The web container listens on `${HTTP_PORT:-80}` and serves both the SPA at
@@ -144,14 +142,14 @@ Restart `pnpm dev`, browse to <http://localhost:5173>, and sign in as
 
 Auth is off by default (`AUTH_MODE=disabled` seed value). OIDC is
 DB-backed and configured from the running app's **Settings → Authentication**
-panel (admin-only once oidc mode is active) — not by editing `.env` and
+panel (admin-only once oidc mode is active) — not by editing `docker/.env` and
 redeploying. To turn it on in the production stack:
 
-1. Make sure `CONFIG_ENCRYPTION_KEY` is set in `.env` (it's required for
+1. Make sure `CONFIG_ENCRYPTION_KEY` is set in `docker/.env` (it's required for
    compose to start at all — see the fail-closed guard in
    `docker-compose.yml`). Without it OIDC can never be enabled: the server
    has nowhere to safely store a client secret.
-2. Start the stack (`docker compose up -d`) and open the app. Go to
+2. Start the stack (`docker compose -f docker/docker-compose.yml --env-file docker/.env up -d`) and open the app. Go to
    **Settings → Authentication**, fill in the issuer URL, client ID,
    client secret, and app base URL, then save — the server re-tests OIDC
    discovery before it will actually flip the mode to `oidc`, so a save
@@ -163,7 +161,7 @@ redeploying. To turn it on in the production stack:
    ```
    Any other result means auth is NOT enabled.
 
-The `AUTH_MODE`/`OIDC_*` vars in `.env.example` still exist as a **seed-only**
+The `AUTH_MODE`/`OIDC_*` vars in `docker/.env.example` still exist as a **seed-only**
 path for unattended first-boot provisioning (they're read once, only when
 `auth_config` has no row yet); once a row exists, editing them and
 restarting has no effect. See

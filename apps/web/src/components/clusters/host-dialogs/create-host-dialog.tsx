@@ -4,6 +4,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
 import { Field, useFocusFirstInvalidField } from '@/components/form/field';
+import { REQUIRED_AMOUNT_MESSAGE, parseRequiredAmount } from '@/components/form/required-amount';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -43,7 +44,12 @@ const blankHostForm = (): HostFormState => ({
   name: '',
   description: '',
   commissionedAt: todayIso(),
-  capacityAmount: '0',
+  // Blank, NOT '0'. A pre-filled zero is a measurement the operator never made,
+  // and it is the single worst value to invent here: it posts a host that
+  // provides no capacity, which reads downstream as free headroom rather than as
+  // missing data. `parseRequiredAmount` is what keeps the blank from silently
+  // becoming that same 0 on submit.
+  capacityAmount: '',
   serialNumber: '',
   vendor: '',
   model: '',
@@ -80,6 +86,7 @@ export function CreateHostDialog({
     event.preventDefault();
     setErrors({});
     const description = form.description.trim();
+    const capacityAmount = parseRequiredAmount(form.capacityAmount);
     const payload: HostCreateInputWire = {
       name: form.name,
       commissionedAt: form.commissionedAt,
@@ -87,7 +94,7 @@ export function CreateHostDialog({
         {
           metricTypeKey: 'memory_gb',
           effectiveFrom: form.commissionedAt,
-          amount: Number(form.capacityAmount),
+          amount: capacityAmount,
         },
       ],
       ...(description.length > 0 && { description }),
@@ -101,11 +108,21 @@ export function CreateHostDialog({
     };
     const parsed = hostCreateInputSchema.safeParse(payload);
     if (!parsed.success) {
-      const fieldErrors = mapIssuesToFieldErrors(parsed.error.issues, {
+      // `capacities[0].effectiveFrom` mirrors `commissionedAt`, so one bad date
+      // raises TWO issues. The `capacities` root maps to the capacity AMOUNT
+      // field, which would blame the wrong input for a date problem — drop those
+      // and let the date field carry the message it already gets.
+      const issues = parsed.error.issues.filter(
+        (issue) => !(issue.path[0] === 'capacities' && issue.path[2] === 'effectiveFrom'),
+      );
+      const fieldErrors = mapIssuesToFieldErrors(issues, {
         name: 'name',
         commissionedAt: 'commissionedAt',
         capacities: 'capacityAmount',
       });
+      // A blank capacity arrives as NaN and is already rejected; this only swaps
+      // Zod's "received NaN" for language an operator can act on.
+      if (Number.isNaN(capacityAmount)) fieldErrors.capacityAmount = REQUIRED_AMOUNT_MESSAGE;
       setErrors(fieldErrors);
       if (Object.keys(fieldErrors).length === 0) {
         toast.error(parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -133,7 +150,10 @@ export function CreateHostDialog({
             Capacity provider for this cluster. Initial memory capacity required.
           </DialogDescription>
         </DialogHeader>
-        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
+        {/* noValidate: the browser's bubble fires before submit and would preempt the
+            Field errors below — transient, unstyled, first-field-only, and invisible to
+            a re-read. Safe because every `required` field here fails the parse too. */}
+        <form ref={formRef} noValidate onSubmit={onSubmit} className="space-y-4">
           <Field
             label="Name"
             value={form.name}

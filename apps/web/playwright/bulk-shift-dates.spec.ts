@@ -114,15 +114,35 @@ test.describe('bulk-shift dates', () => {
       // must truncate, not blow the dialog's grid column past its own width and
       // shove the old→new dates off the right edge. `toBeVisible()` alone does
       // not catch it — the dates stay "visible" in the 1280px viewport while
-      // sitting outside the 576px dialog. Assert the new date's right edge is
-      // within the dialog's right edge instead.
-      const dialogBox = await dialog.boundingBox();
-      const newDateBox = await dialog.getByText('2026-07-02').boundingBox();
-      expect(dialogBox).not.toBeNull();
-      expect(newDateBox).not.toBeNull();
-      if (dialogBox && newDateBox) {
-        expect(newDateBox.x + newDateBox.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width);
-      }
+      // sitting outside the 576px dialog.
+      //
+      // Both rectangles are read in ONE page evaluation, on purpose. Two
+      // sequential `boundingBox()` calls each trigger their own round-trip, and
+      // `DialogContent` opens with `zoom-in-[0.97]` + `slide-in-from-*` over
+      // `duration-150` — so the parent could be sampled at one animation frame
+      // and the child at another, comparing a rect at 97% scale against one at
+      // 100%. That made this assertion flaky (~1 run in 3) with a *varying*
+      // dialog edge, which is the tell: a statically centred dialog measures
+      // identically every time. A single synchronous read is immune, because
+      // mid-animation both rects scale together and containment still holds.
+      // The date element is resolved inside the page rather than passed in as an
+      // ElementHandle: a handle would have to be awaited first, and `getByText`
+      // has already auto-waited for this node above, so re-finding it in the
+      // evaluate costs nothing and keeps the whole measurement in one frame.
+      const overflowPx = await dialog.evaluate((dialogEl, dateText) => {
+        const target = Array.from(dialogEl.querySelectorAll<HTMLElement>('*')).find(
+          (el) => el.children.length === 0 && el.textContent?.trim() === dateText,
+        );
+        // Loudly, rather than returning a number that would pass: a preview that
+        // stopped rendering the new date must not read as "nothing overflows".
+        if (!target) throw new Error(`no leaf element in the dialog renders "${dateText}"`);
+        const d = dialogEl.getBoundingClientRect();
+        const n = target.getBoundingClientRect();
+        return n.right - d.right;
+      }, '2026-07-02');
+      // Half a pixel of slack for sub-pixel layout rounding; the real bug
+      // overflowed by ~30px.
+      expect(overflowPx).toBeLessThanOrEqual(0.5);
 
       // The dialog (surfaces 2 + 4: preview list, truncating name, arrow, mono
       // new date; and the header) in both themes.

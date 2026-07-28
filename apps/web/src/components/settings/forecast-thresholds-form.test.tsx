@@ -28,12 +28,20 @@ describe('<ForecastThresholdsForm>', () => {
       critThreshold: 0.9,
       procurementLeadTimeWeeks: 8,
       idempotencyKeyRetentionHours: 24,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
+      forecastSnapshotRetentionMonths: 0,
     });
     vi.spyOn(api.settings.tenant, 'update').mockResolvedValue({
       warnThreshold: 0.65,
       critThreshold: 0.85,
       procurementLeadTimeWeeks: 6,
       idempotencyKeyRetentionHours: 12,
+      forecastUncertaintyBandEnabled: false,
+      forecastUncertaintyMinAnchors: 6,
+      forecastUncertaintyBandWidth: 'p10_p90',
+      forecastSnapshotRetentionMonths: 0,
     });
   });
 
@@ -72,6 +80,10 @@ describe('<ForecastThresholdsForm>', () => {
         critThreshold: 0.85,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       });
     });
   });
@@ -124,6 +136,10 @@ describe('<ForecastThresholdsForm>', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 12,
         idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       });
     });
   });
@@ -200,6 +216,10 @@ describe('<ForecastThresholdsForm>', () => {
         critThreshold: 0.9,
         procurementLeadTimeWeeks: 8,
         idempotencyKeyRetentionHours: 48,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 0,
       });
     });
   });
@@ -214,5 +234,129 @@ describe('<ForecastThresholdsForm>', () => {
     await userEvent.click(screen.getByRole('button', { name: /save/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/1 (and|to) 168/i);
     expect(api.settings.tenant.update).not.toHaveBeenCalled();
+  });
+  describe('forecast snapshot retention (#318)', () => {
+    const retentionField = /forecast snapshot retention/i;
+
+    it('defaults to 0 and shows no deletion warning', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('stays editable while the uncertainty band is off — snapshots accrue either way', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toBeEnabled());
+      // The band's own controls ARE gated on the toggle; retention is not.
+      expect(screen.getByLabelText(/minimum anchors/i)).toBeDisabled();
+    });
+
+    it('warns before saving that a non-zero window deletes history', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
+      await userEvent.clear(screen.getByLabelText(retentionField));
+      await userEvent.type(screen.getByLabelText(retentionField), '24');
+      expect(await screen.findByRole('status')).toHaveTextContent(/deletes forecast snapshots/i);
+      expect(await screen.findByRole('status')).toHaveTextContent(/24 months/i);
+    });
+
+    it('stays quiet across the rejected dead zone on the way to a valid window', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
+      await userEvent.clear(screen.getByLabelText(retentionField));
+
+      // `1` cannot be saved, so promising that saving deletes everything older
+      // than 1 month describes a consequence that cannot occur — and every
+      // operator typing `12` passes through `1` on the way.
+      await userEvent.type(screen.getByLabelText(retentionField), '1');
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+      await userEvent.type(screen.getByLabelText(retentionField), '2');
+      expect(await screen.findByRole('status')).toHaveTextContent(/12 months/i);
+    });
+
+    it('says so when the SAVED value is out of range and therefore inert', async () => {
+      // INV-R1a's other half. The server treats an out-of-spec stored window as
+      // retention-off, so without this the form renders `5` as a live 5-month
+      // window while nothing is pruned — the one scenario the invariant exists
+      // for is the one the UI would misreport. Reachable only by a direct DB
+      // write, which is precisely why the operator needs telling.
+      vi.spyOn(api.settings.tenant, 'get').mockResolvedValue({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 5,
+      });
+      renderWithClient(<ForecastThresholdsForm />);
+
+      const notice = await screen.findByRole('alert');
+      expect(notice).toHaveTextContent(/saved value \(5\)/i);
+      expect(notice).toHaveTextContent(/currently off/i);
+      // And it must NOT also claim deletions are about to happen.
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('keeps quiet about the saved value while it is in range', async () => {
+      // Non-vacuity partner for the test above: a legitimate 24 must not trip it.
+      vi.spyOn(api.settings.tenant, 'get').mockResolvedValue({
+        warnThreshold: 0.7,
+        critThreshold: 0.9,
+        procurementLeadTimeWeeks: 8,
+        idempotencyKeyRetentionHours: 24,
+        forecastUncertaintyBandEnabled: false,
+        forecastUncertaintyMinAnchors: 6,
+        forecastUncertaintyBandWidth: 'p10_p90',
+        forecastSnapshotRetentionMonths: 24,
+      });
+      renderWithClient(<ForecastThresholdsForm />);
+
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(24));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('stays quiet past the maximum, which is equally unsaveable', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
+      await userEvent.clear(screen.getByLabelText(retentionField));
+      await userEvent.type(screen.getByLabelText(retentionField), '121');
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('rejects the 1..11 dead zone rather than silently pruning to it', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
+      await userEvent.clear(screen.getByLabelText(retentionField));
+      await userEvent.type(screen.getByLabelText(retentionField), '6');
+      await userEvent.click(screen.getByRole('button', { name: /save/i }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(/0 \(keep forever\) or/i);
+      expect(api.settings.tenant.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a window past the maximum', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
+      await userEvent.clear(screen.getByLabelText(retentionField));
+      await userEvent.type(screen.getByLabelText(retentionField), '121');
+      await userEvent.click(screen.getByRole('button', { name: /save/i }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(/120 months/i);
+      expect(api.settings.tenant.update).not.toHaveBeenCalled();
+    });
+
+    it('submits an accepted window', async () => {
+      renderWithClient(<ForecastThresholdsForm />);
+      await waitFor(() => expect(screen.getByLabelText(retentionField)).toHaveValue(0));
+      await userEvent.clear(screen.getByLabelText(retentionField));
+      await userEvent.type(screen.getByLabelText(retentionField), '36');
+      await userEvent.click(screen.getByRole('button', { name: /save/i }));
+      await waitFor(() => {
+        expect(api.settings.tenant.update).toHaveBeenCalledWith(
+          expect.objectContaining({ forecastSnapshotRetentionMonths: 36 }),
+        );
+      });
+    });
   });
 });

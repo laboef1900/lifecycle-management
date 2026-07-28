@@ -1,4 +1,4 @@
-import type { HostResponse, HostState } from '@lcm/shared';
+import type { ClusterResponse, HostResponse, HostState } from '@lcm/shared';
 import { useQueryClient } from '@tanstack/react-query';
 
 export interface CommonDialogProps {
@@ -60,6 +60,29 @@ export function optionalText(value: string): string | null {
  */
 export function optionalDate(value: string): string | null {
   return value.length > 0 ? value : null;
+}
+
+/**
+ * Destination cluster choices for moving a host (#301, backend #289): the
+ * host's current cluster is never a valid destination (the server rejects a
+ * same-cluster move with `HOST_ALREADY_IN_CLUSTER`), and a `source: 'vsphere'`
+ * cluster's host membership is sync-owned (the server rejects it with
+ * `SYNC_OWNED_FIELD`). Filtering both out here is a UX affordance only — same
+ * posture as `AdminOnly`/`canManage` elsewhere: the server remains the real
+ * enforcement point, so a stale cache that lets one slip through still 409s
+ * rather than corrupting anything.
+ *
+ * Absence of `source` (a server build that predates sync metadata) is treated
+ * as manual/eligible here, same call as everywhere else that only needs a
+ * best-effort UI hint rather than a security decision.
+ */
+export function filterMoveDestinations(
+  clusters: readonly ClusterResponse[],
+  currentClusterId: string,
+): ClusterResponse[] {
+  return clusters.filter(
+    (candidate) => candidate.id !== currentClusterId && candidate.source !== 'vsphere',
+  );
 }
 
 /**

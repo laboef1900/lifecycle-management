@@ -110,6 +110,20 @@ export function ForecastChart({
     measuredByMonth.set(h.capturedAt, Math.round(h.consumption));
   }
 
+  // Empirical uncertainty band (opt-in, cluster detail only). Bounds are
+  // utilization FRACTIONS; converted to GB per month via that month's capacity so
+  // the band hugs the projection. Naturally absent on a scenario: `activeForecast`
+  // is then the scenario forecast, which never carries `uncertainty` (INV-1).
+  const bandByMonth = new Map<string, { low: number; high: number; sampleCount?: number }>();
+  for (const p of activeForecast.uncertainty ?? []) {
+    bandByMonth.set(p.month, {
+      low: p.low,
+      high: p.high,
+      ...(p.sampleCount !== undefined && { sampleCount: p.sampleCount }),
+    });
+  }
+  const hasBand = bandByMonth.size > 0;
+
   // History predating the forecast window gets its own leading rows: the window
   // opens at the NEWEST baseline, so without these every older measurement would
   // be invisible — which is precisely what #172 exists to fix.
@@ -126,11 +140,24 @@ export function ForecastChart({
       critLevel: null,
       baselineConsumption: null,
       measured: Math.round(h.consumption),
+      bandRange: null as [number, number] | null,
+      // Pre-window rows predate the forecast entirely, so they never draw a band
+      // and never carry evidence; padded for the same shape-parity reason as
+      // `bandRange` above.
+      bandSampleCount: null as number | null,
     }));
 
   const windowData = activeForecast.months.map((point, index) => {
     const capacity = Math.round(point.capacity);
     const consumption = Math.round(point.consumption);
+    // Band → GB around the projection, on FORECAST months only (index >= now).
+    // Fraction bounds may run below 0 or above 1; clamp the low at 0 and let the
+    // y-axis clip a high above capacity (an honest "uncertainty exceeds capacity").
+    const band = index >= currentIndex ? bandByMonth.get(point.month) : undefined;
+    const bandRange: [number, number] | null =
+      band && capacity > 0
+        ? [Math.max(0, Math.round(band.low * capacity)), Math.round(band.high * capacity)]
+        : null;
     return {
       month: point.month,
       consumption,
@@ -145,10 +172,31 @@ export function ForecastChart({
       baselineConsumption: scenario ? (baselineByMonth.get(point.month) ?? null) : null,
       // null (not 0) for months with no measurement — see the `measured` <Line>.
       measured: measuredByMonth.get(point.month) ?? null,
+      bandRange,
+      // Carried on the row rather than collected by side-effecting the map
+      // callback above: the count belongs to the month that draws the band, and
+      // deriving it here keeps ONE definition of "this month has a band" — a
+      // second copy of the `bandRange && …` condition elsewhere could drift and
+      // caption a month the chart never shaded.
+      bandSampleCount: bandRange && band?.sampleCount !== undefined ? band.sampleCount : null,
     };
   });
 
   const data = [...preWindow, ...windowData];
+  // Per-horizon evidence for the months that actually DRAW a band (#317), keyed
+  // by month so the tooltip and the caption quote the same numbers the shaded
+  // area rests on. Read out of the rows in an explicit pass rather than
+  // accumulated as a side effect while building them. Empty against a server
+  // build predating #317 — the caption then falls back to the global count.
+  const bandSamplesByMonth = new Map<string, number>();
+  for (const row of windowData) {
+    if (row.bandSampleCount !== null) bandSamplesByMonth.set(row.month, row.bandSampleCount);
+  }
+  // Spread of per-horizon evidence across the drawn band (#317). A single number
+  // for the whole chart misstates the far end: a near horizon can rest on many
+  // past forecasts while a far one sits on the engine's per-horizon floor, and a
+  // configured retention window (#318) widens that gap further.
+  const bandSampleRange = minMax([...bandSamplesByMonth.values()]);
   const maxCeiling = data.reduce((max, d) => Math.max(max, d.capacity ?? 0), 0);
   const { top: axisTop, ticks: axisTicks } = niceAxisTicks(maxCeiling > 0 ? maxCeiling * 1.05 : 0);
   const lastIndex = data.length - 1;
@@ -207,7 +255,12 @@ export function ForecastChart({
         className="w-full"
         style={{ height: CHART_HEIGHT }}
         role="img"
-        aria-label={forecastChartAriaLabel(activeForecast, maxCeiling, Boolean(scenario))}
+        aria-label={forecastChartAriaLabel(
+          activeForecast,
+          maxCeiling,
+          Boolean(scenario),
+          bandSampleRange,
+        )}
       >
         <ResponsiveContainer
           width="100%"
@@ -285,6 +338,12 @@ export function ForecastChart({
                   consumption + headroom;
                 const utilization = capacity > 0 ? (consumption / capacity) * 100 : 0;
                 const monthEvents = eventsByMonth.get(label) ?? [];
+                // Per-horizon evidence for THIS month (#317). Supplementary
+                // detail only — like every other number in this tooltip it is
+                // pointer-reachable, so the same disclosure is carried in the
+                // always-visible caption and the chart's aria-label, which is
+                // what assistive tech and keyboard users get.
+                const bandSamples = bandSamplesByMonth.get(label);
                 return (
                   <div className="rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-[var(--overlay-shadow)]">
                     <div className="font-medium">{formatMonthShort(label)}</div>
@@ -305,6 +364,17 @@ export function ForecastChart({
                       <dd className="text-right font-mono tabular-nums">
                         {utilization.toFixed(1)}%
                       </dd>
+                      {bandSamples !== undefined ? (
+                        <>
+                          <dt className="text-fg-muted">Range based on</dt>
+                          <dd
+                            data-testid="tooltip-band-samples"
+                            className="text-right tabular-nums"
+                          >
+                            {bandSamples} past forecast{bandSamples === 1 ? '' : 's'}
+                          </dd>
+                        </>
+                      ) : null}
                     </dl>
                     {monthEvents.length > 0 ? (
                       <ul className="mt-2 space-y-1 border-t border-border pt-2">
@@ -327,6 +397,25 @@ export function ForecastChart({
                 );
               }}
             />
+            {/* Empirical uncertainty band (opt-in, cluster detail only). A ranged
+                Area between [low, high] GB, drawn FIRST so it sits behind every
+                series — it is measured context around the projection, not a line.
+                Muted neutral, translucent; both themes via the --chart-band token.
+                Absent by default and on scenarios (bandRange is null there). */}
+            {hasBand ? (
+              <Area
+                type="monotone"
+                dataKey="bandRange"
+                name="Forecast range"
+                stroke="none"
+                fill={colors.band}
+                fillOpacity={0.18}
+                connectNulls={false}
+                isAnimationActive={false}
+                legendType="none"
+                activeDot={false}
+              />
+            ) : null}
             <Area
               type="monotone"
               dataKey="consumption"
@@ -525,6 +614,8 @@ export function ForecastChart({
         events={activeForecast.events}
         colors={colors}
         showBaselineGhost={Boolean(scenario)}
+        bandAnchorCount={hasBand ? activeForecast.uncertaintyAnchorCount : undefined}
+        bandSampleRange={hasBand ? bandSampleRange : undefined}
       />
       {scenarioDeltaLabel ? (
         <p
@@ -656,6 +747,7 @@ function forecastChartAriaLabel(
   activeForecast: ForecastResponse,
   maxCeiling: number,
   scenarioActive: boolean,
+  bandSampleRange: { min: number; max: number } | undefined,
 ): string {
   const { warn, crit } = activeForecast.effectiveThresholds;
   const monthCount = activeForecast.months.length;
@@ -673,8 +765,28 @@ function forecastChartAriaLabel(
   if (maxCeiling > 0) {
     parts.push(`Capacity ceiling ${numberFormat.format(Math.round(maxCeiling))} GB.`);
   }
+  // The band's evidence is announced here, not left to the pointer-only tooltip
+  // (#317). A disclosure whose whole purpose is not overstating the evidence
+  // must not itself be the one thing a screen-reader user cannot reach.
+  if (bandSampleRange) {
+    parts.push(
+      bandSampleRange.min === bandSampleRange.max
+        ? `Uncertainty band shown, measured from ${bandSampleRange.min} past forecast${bandSampleRange.min === 1 ? '' : 's'} at every horizon.`
+        : `Uncertainty band shown, measured from between ${bandSampleRange.min} and ${bandSampleRange.max} past forecasts depending on the horizon.`,
+    );
+  }
   if (scenarioActive) parts.push('A what-if scenario is active.');
   return parts.join(' ');
+}
+
+/** Smallest and largest of `values`; undefined for an empty list. */
+function minMax(values: number[]): { min: number; max: number } | undefined {
+  const [first, ...rest] = values;
+  if (first === undefined) return undefined;
+  return rest.reduce((acc, v) => ({ min: Math.min(acc.min, v), max: Math.max(acc.max, v) }), {
+    min: first,
+    max: first,
+  });
 }
 
 interface ChartLegendProps {
@@ -682,71 +794,148 @@ interface ChartLegendProps {
   colors: ReturnType<typeof useChartColors>;
   /** True when a scenario is active — adds the "was: baseline" ghost entry. */
   showBaselineGhost: boolean;
+  /**
+   * Distinct past re-anchors the uncertainty band was measured from, when the
+   * band is shown; undefined otherwise. Gates the band legend entry + caption.
+   */
+  bandAnchorCount?: number | undefined;
+  /**
+   * Smallest and largest PER-HORIZON sample count across the months that draw a
+   * band (#317); undefined when the server build predates the field. This — not
+   * {@link bandAnchorCount} — is what any single month's band actually rests on.
+   */
+  bandSampleRange?: { min: number; max: number } | undefined;
 }
 
-function ChartLegend({ events, colors, showBaselineGhost }: ChartLegendProps): React.JSX.Element {
+function ChartLegend({
+  events,
+  colors,
+  showBaselineGhost,
+  bandAnchorCount,
+  bandSampleRange,
+}: ChartLegendProps): React.JSX.Element {
   const hasAddsEvent = events.some((e) => (e.capacityDelta ?? 0) > 0);
   const hasConsumesEvent = events.some((e) => !((e.capacityDelta ?? 0) > 0));
+  const showBand = bandAnchorCount !== undefined;
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
-      {/* The solid/dashed convention (actual-to-now, then forecast) gets its
+    <>
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-fg-muted">
+        {/* The solid/dashed convention (actual-to-now, then forecast) gets its
           own two entries instead of one ambiguous "Consumption" swatch. */}
-      <LegendItem swatch={colors.consumption} label="Actual —" testId="legend-swatch-actual" />
-      <LegendItem
-        swatch={colors.consumption}
-        label="Forecast ⌁"
-        dashed
-        testId="legend-swatch-forecast"
-      />
-      {/* The dotted measured-baseline series (rendered whenever there's
+        <LegendItem swatch={colors.consumption} label="Actual —" testId="legend-swatch-actual" />
+        <LegendItem
+          swatch={colors.consumption}
+          label="Forecast ⌁"
+          dashed
+          testId="legend-swatch-forecast"
+        />
+        {/* The dotted measured-baseline series (rendered whenever there's
           history) previously had no legend entry at all. */}
-      <LegendItem
-        swatch={colors.consumption}
-        label="Measured baseline"
-        dotted
-        testId="legend-swatch-measured"
-      />
-      <LegendItem
-        swatch={colors.capacity}
-        label="Capacity ceiling"
-        dashed
-        testId="legend-swatch-capacity"
-      />
-      {/* Headroom is a filled band on the chart, not a line — swatch it as a
+        <LegendItem
+          swatch={colors.consumption}
+          label="Measured baseline"
+          dotted
+          testId="legend-swatch-measured"
+        />
+        <LegendItem
+          swatch={colors.capacity}
+          label="Capacity ceiling"
+          dashed
+          testId="legend-swatch-capacity"
+        />
+        {/* Headroom is a filled band on the chart, not a line — swatch it as a
           small filled square so it isn't mis-swatched as another dashed line. */}
-      <LegendItem
-        swatch={colors.capacity}
-        label="Headroom"
-        area
-        faint
-        testId="legend-swatch-headroom"
-      />
-      {showBaselineGhost ? (
-        <LegendItem swatch={colors.utilizationOk} label="was: baseline" dashed />
-      ) : null}
-      {events.length > 0 ? (
-        <span aria-hidden className="mx-1">
-          ·
-        </span>
-      ) : null}
-      {hasAddsEvent ? (
         <LegendItem
-          swatch={colors.eventAdds}
-          label="Adds capacity"
-          dot
-          testId="legend-swatch-event-adds"
+          swatch={colors.capacity}
+          label="Headroom"
+          area
+          faint
+          testId="legend-swatch-headroom"
         />
+        {showBand ? (
+          <LegendItem
+            swatch={colors.band}
+            label="Forecast range"
+            area
+            faint
+            testId="legend-swatch-band"
+          />
+        ) : null}
+        {showBaselineGhost ? (
+          <LegendItem swatch={colors.utilizationOk} label="was: baseline" dashed />
+        ) : null}
+        {events.length > 0 ? (
+          <span aria-hidden className="mx-1">
+            ·
+          </span>
+        ) : null}
+        {hasAddsEvent ? (
+          <LegendItem
+            swatch={colors.eventAdds}
+            label="Adds capacity"
+            dot
+            testId="legend-swatch-event-adds"
+          />
+        ) : null}
+        {hasConsumesEvent ? (
+          <LegendItem
+            swatch={colors.eventConsumes}
+            label="Consumes capacity"
+            dot
+            testId="legend-swatch-event-consumes"
+          />
+        ) : null}
+      </div>
+      {/* Empirical labeling is mandatory (design §uncertainty): the band is
+          MEASURED past error, stated as such and never as a guarantee. Since
+          #317 the count it quotes is PER HORIZON, because that is what a given
+          month's band rests on — the global anchor count is the size of the
+          evidence pool and overstates the far end (badly so once a retention
+          window is configured, #318). */}
+      {showBand ? (
+        <p data-testid="forecast-band-caption" className="mt-1.5 text-[11px] text-fg-subtle">
+          {bandCaption(bandAnchorCount, bandSampleRange)}
+        </p>
       ) : null}
-      {hasConsumesEvent ? (
-        <LegendItem
-          swatch={colors.eventConsumes}
-          label="Consumes capacity"
-          dot
-          testId="legend-swatch-event-consumes"
-        />
-      ) : null}
-    </div>
+    </>
   );
+}
+
+/**
+ * The band's empirical caption (#317).
+ *
+ * Leads with the PER-HORIZON evidence, because that is what the shaded area at
+ * any given month was measured from. `anchorCount` — the pool of distinct past
+ * re-anchors — appears only when it differs from that, where naming it is the
+ * disclosure rather than the overstatement: with a snapshot-retention window
+ * configured (#318) the pool keeps growing while each horizon's samples are
+ * capped, so a caption quoting the pool alone can claim dozens of forecasts
+ * behind a band resting on three.
+ *
+ * `sampleRange` is undefined only against a server build that predates the
+ * field; that case keeps the original pool-only wording rather than inventing a
+ * per-horizon number it was never told.
+ */
+function bandCaption(
+  anchorCount: number,
+  sampleRange: { min: number; max: number } | undefined,
+): string {
+  const plural = (n: number): string => (n === 1 ? '' : 's');
+  if (!sampleRange) {
+    return `Shaded range: the spread of this cluster’s ${anchorCount} past forecast${plural(anchorCount)}’ measured error — not a guarantee.`;
+  }
+  const lead = 'Shaded range: this cluster’s measured forecast error — not a guarantee.';
+  if (sampleRange.min === sampleRange.max) {
+    return `${lead} Every month’s band rests on ${sampleRange.min} past forecast${plural(sampleRange.min)} measured at that horizon.`;
+  }
+  // Per-horizon figure FIRST, pool trailing in parentheses — not the reverse.
+  // An earlier revision opened with "Of N past forecasts, each month's band
+  // rests only on…", which put the largest and least relevant number where a
+  // skim-reader lands and left the qualifier that undercuts it to be read
+  // second. On a surface people skim before spending money that re-commits a
+  // quieter version of the exact overstatement this caption exists to remove.
+  // The pool is context for the range, so it is written as context.
+  return `${lead} Each month’s band rests on ${sampleRange.min} to ${sampleRange.max} past forecasts measured at its own horizon (${anchorCount} total across the chart).`;
 }
 
 function LegendItem({

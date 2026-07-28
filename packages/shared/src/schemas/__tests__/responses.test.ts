@@ -295,6 +295,56 @@ describe('forecastResponseSchema', () => {
     };
     expect(forecastResponseSchema.safeParse(bad).success).toBe(false);
   });
+
+  describe('uncertainty band (#316) with per-horizon sample counts (#317)', () => {
+    const banded: ForecastResponse = {
+      ...literal,
+      uncertainty: [
+        { month: '2026-02', low: 0.45, high: 0.58, sampleCount: 9 },
+        { month: '2026-03', low: 0.4, high: 0.66, sampleCount: 3 },
+      ],
+      uncertaintyAnchorCount: 12,
+    };
+
+    it('carries the per-horizon counts across the boundary WITHOUT stripping them', () => {
+      const parsed = forecastResponseSchema.parse(banded);
+      // Each point keeps its OWN count — the far horizon must not inherit the
+      // near one's, nor the global anchor count.
+      expect(parsed.uncertainty?.map((p) => p.sampleCount)).toEqual([9, 3]);
+      expect(parsed.uncertaintyAnchorCount).toBe(12);
+    });
+
+    it('accepts a band from a server build that predates per-horizon counts', () => {
+      // A lagging `:dev` server omits the field; its band must still parse rather
+      // than blanking the whole forecast for a newer web bundle.
+      const older = {
+        ...literal,
+        uncertainty: [{ month: '2026-02', low: 0.45, high: 0.58 }],
+        uncertaintyAnchorCount: 12,
+      };
+      const parsed = forecastResponseSchema.safeParse(older);
+      expect(parsed.success).toBe(true);
+      expect(parsed.data?.uncertainty?.[0]?.sampleCount).toBeUndefined();
+    });
+
+    it('rejects a zero sample count — a banded horizon always has samples', () => {
+      // Zero would be a fabricated point: a horizon below the engine's floor
+      // draws no band at all, so there is no honest way to report 0 here.
+      const zero = {
+        ...banded,
+        uncertainty: [{ month: '2026-02', low: 0.45, high: 0.58, sampleCount: 0 }],
+      };
+      expect(forecastResponseSchema.safeParse(zero).success).toBe(false);
+    });
+
+    it('rejects a fractional sample count', () => {
+      const fractional = {
+        ...banded,
+        uncertainty: [{ month: '2026-02', low: 0.45, high: 0.58, sampleCount: 2.5 }],
+      };
+      expect(forecastResponseSchema.safeParse(fractional).success).toBe(false);
+    });
+  });
 });
 
 describe('vsphereConnectionResponseSchema', () => {
@@ -399,6 +449,10 @@ describe('tenantSettingsResponseSchema', () => {
     critThreshold: 0.9,
     procurementLeadTimeWeeks: 6,
     idempotencyKeyRetentionHours: 24,
+    forecastUncertaintyBandEnabled: false,
+    forecastUncertaintyMinAnchors: 6,
+    forecastUncertaintyBandWidth: 'p10_p90',
+    forecastSnapshotRetentionMonths: 0,
   };
 
   it('round-trips a representative tenant settings response', () => {

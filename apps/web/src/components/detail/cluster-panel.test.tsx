@@ -1,31 +1,31 @@
 import type { ClusterResponse, ForecastResponse, HostResponse } from '@lcm/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { LazyMotion, MotionConfig, domAnimation } from 'motion/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { api } from '@/lib/api-client';
+import { todayIso } from '@/lib/format';
 
 import {
   ClusterPanel,
-  PANE_CLOSED,
   collectFocusable,
   computeScenarioDeltaLabel,
+  deriveBlockedPresets,
   isEscapeTargetInsidePanel,
-  paneIsOnScreen,
-  panePresenceReducer,
-  scenarioPaneLayout,
+  resolvePresentKpi,
+  scenarioChangesNothing,
 } from './cluster-panel';
 
 const CLUSTER_ID = 'cl-1';
 
 /**
  * The panel reads two viewport breakpoints (`640px` for the compact chart,
- * `1024px` for pane side-by-side vs. overlay). The shared setup stub answers
- * `false` to every query, i.e. the narrowest viewport — good for the overlay
- * cases, useless for the side-by-side ones, so tests that care state a width.
+ * `1024px` for whether the Scenario rail docks beside the content column or
+ * stacks inline under the chart). The shared setup stub answers `false` to
+ * every query, i.e. the narrowest viewport — good for the inline cases,
+ * useless for the docked ones, so tests that care state a width.
  */
 function stubViewportWidth(width: number): void {
   vi.stubGlobal(
@@ -42,70 +42,6 @@ function stubViewportWidth(width: number): void {
       };
     }),
   );
-}
-
-/**
- * Like `stubViewportWidth`, but the returned setter also notifies the `change`
- * listeners `useMediaQuery` subscribes with — the only way to exercise a
- * breakpoint crossing (rotate / resize / split view) on a mounted panel.
- */
-function stubResizableViewport(initialWidth: number): (width: number) => void {
-  let width = initialWidth;
-  const listeners = new Set<() => void>();
-  vi.stubGlobal(
-    'matchMedia',
-    vi.fn().mockImplementation((query: string) => {
-      const minWidth = /min-width:\s*(\d+)px/.exec(query)?.[1];
-      return {
-        // A getter, not a snapshot: `useSyncExternalStore` re-reads
-        // `matchMedia(query).matches` after every notification.
-        get matches(): boolean {
-          return minWidth === undefined ? false : width >= Number(minWidth);
-        },
-        media: query,
-        onchange: null,
-        addEventListener: (_type: string, cb: () => void) => listeners.add(cb),
-        removeEventListener: (_type: string, cb: () => void) => listeners.delete(cb),
-        dispatchEvent: () => false,
-      };
-    }),
-  );
-  return (next: number) => {
-    width = next;
-    act(() => {
-      for (const notify of listeners) notify();
-    });
-  };
-}
-
-/** jsdom has no layout, so `getClientRects()` is empty for every element and
- *  the panel's Tab trap short-circuits. Give every element a box so the trap
- *  actually runs. */
-function stubLayoutBoxes(): void {
-  const rects = [{ width: 10, height: 10 }] as unknown as DOMRectList;
-  vi.spyOn(Element.prototype, 'getClientRects').mockReturnValue(rects);
-}
-/**
- * Records any attempt to move focus into the content column while that column
- * is inert.
- *
- * `focusin` fires synchronously from `.focus()`, so this is a pure ordering
- * check with no dependency on how long the exit animation happens to take —
- * unlike sampling the DOM on a timer or on mutations, which races the
- * animation and flakes on a loaded runner.
- */
-function watchFocusIntoInert(): { violations: string[]; stop: () => void } {
-  const violations: string[] = [];
-  const onFocusIn = (event: Event): void => {
-    const target = event.target;
-    if (target instanceof HTMLElement && target.closest('[inert]') !== null) {
-      violations.push(
-        `focus moved into the inert column: ${target.dataset.testid ?? target.tagName}`,
-      );
-    }
-  };
-  document.addEventListener('focusin', onFocusIn);
-  return { violations, stop: () => document.removeEventListener('focusin', onFocusIn) };
 }
 
 const navigateMock = vi.fn();
@@ -192,17 +128,82 @@ function cluster(overrides: Partial<ClusterResponse> = {}): ClusterResponse {
   };
 }
 
+/**
+ * A month label N months from the CURRENT month, in the forecast's own
+ * `YYYY-MM-01` shape. The panel's present-tense KPIs look up `todayIso()` on the
+ * active forecast, so hardcoded fixture months would silently stop exercising
+ * that path the moment the calendar moved past them — every assertion would
+ * still pass, against the fallback.
+ */
+function monthFromNow(offset: number): string {
+  const start = new Date(`${todayIso()}T00:00:00Z`);
+  const month = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + offset, 1));
+  return `${month.getUTCFullYear()}-${String(month.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
+
+/** One forecast point, `offset` months from the current month. */
+function monthPoint(
+  offset: number,
+  consumption: number,
+  capacity: number,
+): ForecastResponse['months'][number] {
+  return {
+    month: monthFromNow(offset),
+    consumption,
+    capacity,
+    utilization: capacity === 0 ? null : consumption / capacity,
+  };
+}
+
+/**
+ * Tracked hosts that each contribute real capacity. A host contributing 0 to
+ * every month is a host whose capacity was never recorded — dropping it cannot
+ * move the forecast, which is exactly what makes the "Lose hosts" preset
+ * inapplicable, so fixtures that want the preset available must say so.
+ */
+function hostsWithCapacity(count: number, amount = 500): ForecastResponse['hosts'] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `h${i + 1}`,
+    name: `h${i + 1}`,
+    contributions: [{ month: monthFromNow(0), amount }],
+  }));
+}
+
+/**
+ * Hosts where one comes online INSIDE the window — its contribution rises from
+ * 0 partway through. That rise is the only input `delay_procurement` can act on:
+ * `delayFutureCommissions` (apps/server/src/services/scenario.ts) shifts
+ * `commissionedAt` for hosts commissioned in the future, and
+ * `effectiveCapacityAt` contributes 0 before that date. A cluster with no such
+ * host has nothing for the preset to shift, whether or not a breach is
+ * projected.
+ */
+function hostsWithFutureCommission(): ForecastResponse['hosts'] {
+  return [
+    {
+      id: 'h1',
+      name: 'esx-01',
+      contributions: [0, 1, 2].map((offset) => ({ month: monthFromNow(offset), amount: 1000 })),
+    },
+    {
+      id: 'h2',
+      name: 'esx-02-new',
+      contributions: [
+        { month: monthFromNow(0), amount: 0 },
+        { month: monthFromNow(1), amount: 0 },
+        { month: monthFromNow(2), amount: 500 },
+      ],
+    },
+  ];
+}
+
 function forecast(overrides: Partial<ForecastResponse> = {}): ForecastResponse {
   return {
-    fromMonth: '2026-07-01',
-    toMonth: '2026-09-01',
-    months: [
-      { month: '2026-07-01', consumption: 500, capacity: 1000, utilization: 0.5 },
-      { month: '2026-08-01', consumption: 550, capacity: 1000, utilization: 0.55 },
-      { month: '2026-09-01', consumption: 600, capacity: 1000, utilization: 0.6 },
-    ],
+    fromMonth: monthFromNow(0),
+    toMonth: monthFromNow(2),
+    months: [monthPoint(0, 500, 1000), monthPoint(1, 550, 1000), monthPoint(2, 600, 1000)],
     events: [],
-    hosts: [],
+    hosts: hostsWithCapacity(1, 1000),
     applications: [],
     effectiveThresholds: { warn: 0.7, crit: 0.9, source: 'tenant' },
     procurement: { leadTimeWeeks: 6, orderByDate: null, breachMonth: null },
@@ -244,28 +245,6 @@ function Harness({ show }: { show: boolean }): React.JSX.Element {
       <TooltipProvider>
         <button type="button">Open trigger</button>
         {show ? <ClusterPanel clusterId={CLUSTER_ID} /> : null}
-      </TooltipProvider>
-    </QueryClientProvider>
-  );
-}
-
-/**
- * `Harness` deliberately omits LazyMotion, so `m.*` renders as plain DOM and
- * AnimatePresence removes an exiting child immediately — which is why every
- * other test here sees closing as instantaneous. This harness mirrors app.tsx
- * instead, so the pane's 200ms exit actually occupies wall-clock time and the
- * window between "closing" and "gone" can be asserted.
- */
-function AnimatedHarness(): React.JSX.Element {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return (
-    <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <LazyMotion features={domAnimation} strict>
-          <MotionConfig reducedMotion="user">
-            <ClusterPanel clusterId={CLUSTER_ID} />
-          </MotionConfig>
-        </LazyMotion>
       </TooltipProvider>
     </QueryClientProvider>
   );
@@ -326,12 +305,7 @@ describe('<ClusterPanel>', () => {
       }),
     );
     vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
-      forecast({
-        months: [
-          { month: '2026-07-01', consumption: 500, capacity: 0, utilization: null },
-          { month: '2026-08-01', consumption: 550, capacity: 0, utilization: null },
-        ],
-      }),
+      forecast({ months: [monthPoint(0, 500, 0), monthPoint(1, 550, 0)] }),
     );
 
     render(<Harness show />);
@@ -432,8 +406,8 @@ describe('<ClusterPanel>', () => {
   // Same finding, the "Forecast" section heading's half: it was plain Inter
   // (text-base font-semibold, no font-display) — the section-title
   // inconsistency the audit's "three sibling screens, two typefaces" note
-  // named. The chrome-less Scenario pane heading is deliberately NOT
-  // touched (spec §5) — it is an 11px mono micro-label by design, not a
+  // named. The docked Scenario pane heading is deliberately NOT touched
+  // (spec §5) — it is an 11px mono micro-label by design, not a
   // page-hierarchy section title.
   it('adopts font-display + text-h2 for the Forecast section heading', async () => {
     render(<Harness show />);
@@ -472,12 +446,12 @@ describe('<ClusterPanel>', () => {
     expect(dialog).toHaveAccessibleName('Cluster detail');
   });
 
-  it('names the dialog from an attribute on itself, never from inside the coverable content column', async () => {
-    // The cluster heading lives in the content column, which goes `inert` while
-    // the Scenario sheet covers it below `lg` — and inert subtrees are removed
-    // from the accessibility tree. jsdom's accname implementation ignores
-    // `inert` entirely, so asserting the *name* alone would pass either way;
-    // what has to hold is that the name's source is not in that subtree.
+  it('names the dialog from an attribute on itself, never from inside the content column', async () => {
+    // The cluster heading lives in the content column; the dialog names itself
+    // via its own `aria-label` attribute rather than pointing `aria-labelledby`
+    // at a node inside that column, so the label always resolves. Assert the
+    // name and that no `aria-labelledby` source (if one ever existed) sits
+    // inside the content column.
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
@@ -634,8 +608,8 @@ describe('<ClusterPanel>', () => {
 
   it('announces scenario activation and clearing via the live region (IMPORTANT #4)', async () => {
     vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(forecast());
-    // Side-by-side width: the pane stays open across Apply → Clear (below lg
-    // a successful change now dismisses the covering sheet, #243 Part B).
+    // Docked width keeps the pane open across activate → clear; the pane now
+    // stays open on every scenario change (live presets + sliders, #226).
     stubViewportWidth(1280);
     const user = userEvent.setup();
     render(<Harness show />);
@@ -643,24 +617,107 @@ describe('<ClusterPanel>', () => {
     await waitFor(() => expect(screen.getByTestId('panel-back-link')).toHaveFocus());
     await screen.findByTestId('kpi-strip');
 
-    // ScenarioControls now lives in the slide-in pane (#226) — open it first.
+    // ScenarioControls lives in the Scenario rail (#226) — open it first.
     await user.click(screen.getByTestId('scenario-button'));
 
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    // Selecting a preset applies its default immediately — there is no Apply
+    // step; lose_hosts defaults to count 1.
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
     await waitFor(() =>
       expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
         'Scenario active: Lose 1 host.',
       ),
     );
 
-    await user.click(screen.getByTestId('scenario-clear'));
+    // Re-tapping the now-active preset returns to the baseline forecast.
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Baseline forecast restored.',
+      ),
+    );
+  });
+
+  it('posts a compound stack and names every step in the indicator and announcement (#323)', async () => {
+    // `add_vms` as the second step: it is the one preset `deriveBlockedPresets`
+    // never gates, so the stack does not depend on the fixture growing a
+    // commissioning step (which is what `delay_procurement` needs).
+    const scenarioSpy = vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 900, 1000), monthPoint(2, 950, 1000)],
+      }),
+    );
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await user.click(screen.getByTestId('scenario-preset-add_vms'));
+
+    // The request carries BOTH steps, in canonical order — the panel must not
+    // quietly send only the last one tapped.
+    await waitFor(() =>
+      expect(scenarioSpy).toHaveBeenLastCalledWith(expect.any(String), expect.any(Object), [
+        { kind: 'lose_hosts', count: 1 },
+        { kind: 'add_vms', count: 20, sizeGb: 16 },
+      ]),
+    );
+
+    // The header indicator is the only place a closed rail still reveals that the
+    // forecast is hypothetical, so it has to name the WHOLE compound.
+    await waitFor(() =>
+      expect(screen.getByTestId('scenario-active-indicator')).toHaveTextContent(
+        'Lose 1 host + Add 20 × 16 GB VMs',
+      ),
+    );
     expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+      'Scenario active: Lose 1 host + Add 20 × 16 GB VMs.',
+    );
+  });
+
+  it('drops back to the baseline only when the LAST step is removed (#323)', async () => {
+    const scenarioSpy = vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 900, 1000), monthPoint(2, 950, 1000)],
+      }),
+    );
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await user.click(screen.getByTestId('scenario-preset-add_vms'));
+    await waitFor(() => expect(scenarioSpy).toHaveBeenCalled());
+
+    // Removing one of two leaves a scenario still active — the indicator must not
+    // vanish and the panel must not claim the baseline is back.
+    await user.click(screen.getByTestId('scenario-step-remove-lose_hosts'));
+    await waitFor(() =>
+      expect(screen.getByTestId('scenario-active-indicator')).toHaveTextContent(
+        'Add 20 × 16 GB VMs',
+      ),
+    );
+    expect(screen.getByTestId('scenario-active-indicator')).not.toHaveTextContent('Lose 1 host');
+    expect(screen.getByTestId('panel-live-region')).not.toHaveTextContent(
       'Baseline forecast restored.',
     );
+
+    // Removing the last one does restore the baseline.
+    await user.click(screen.getByTestId('scenario-step-remove-add_vms'));
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Baseline forecast restored.',
+      ),
+    );
+    expect(screen.queryByTestId('scenario-active-indicator')).toBeNull();
   });
 });
 
-describe('<ClusterPanel> scenario pane (#226)', () => {
+describe('<ClusterPanel> scenario pane (#226, docked rail)', () => {
   beforeEach(() => {
     navigateMock.mockClear();
     vi.spyOn(api.clusters, 'get').mockResolvedValue(cluster());
@@ -680,51 +737,99 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('does not render ScenarioControls inline; it lives in the pane opened from the header button', async () => {
+  it('does not render ScenarioControls until the rail is opened from the header button', async () => {
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
-    // Inline controls are gone until the pane is opened.
+    // The rail is closed on load — no controls, no body.
     expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('scenario-pane-body')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId('scenario-button'));
     expect(await screen.findByTestId('scenario-controls')).toBeInTheDocument();
   });
 
-  it('closes the covering sheet after Apply so the chart is visible (#243 Part B High-4)', async () => {
+  it('docks the rail as a fixed-width <aside> beside the content at lg+, leaving the column interactive', async () => {
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    const paneBody = await screen.findByTestId('scenario-pane-body');
+
+    // A single instance, docked as an <aside> sibling of the content column —
+    // a fixed 340px, border-left column, not inside panel-content.
+    const aside = paneBody.closest('aside');
+    expect(aside).not.toBeNull();
+    expect(aside).toHaveClass('w-[340px]', 'border-l');
+
+    const content = screen.getByTestId('panel-content');
+    expect(content).not.toContainElement(paneBody);
+    // The content column is never inert now — it stays fully interactive
+    // beside the docked rail (no covering sheet, no focus containment).
+    expect(content).not.toHaveAttribute('inert');
+
+    // A plain docked body: no glass card, no motion wrapper.
+    expect(paneBody.tagName).toBe('DIV');
+    expect(paneBody).not.toHaveClass('scenario-card');
+  });
+
+  it('stacks the rail inline inside the content column below lg, never covering it', async () => {
+    stubViewportWidth(900); // below lg — no room to dock beside the column
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    const content = screen.getByTestId('panel-content');
+    expect(content).not.toHaveAttribute('inert');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    const paneBody = await screen.findByTestId('scenario-pane-body');
+
+    // Single instance, stacked inline in the content flow — the docked <aside>
+    // only exists at lg+, so below lg there is no aside and the body sits
+    // inside the (still-interactive) content column.
+    expect(paneBody.closest('aside')).toBeNull();
+    expect(content).toContainElement(paneBody);
+    expect(content).not.toHaveAttribute('inert');
+  });
+
+  it('keeps the rail open after selecting a preset so live edits stay reachable (#226)', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
 
-    // The sheet dismisses itself — the user lands on the updated forecast…
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    // …with the change announced and the header indicator as the visible cue…
-    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
-      'Scenario active: Lose 1 host.',
+    // No Apply step and no auto-close: the rail stays open so the sliders keep
+    // driving the forecast live (#226 presets + live sliders)…
+    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
+    // …the change is announced…
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Lose 1 host.',
+      ),
     );
+    // …and the header indicator marks the active scenario.
     expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
-    // …and focus back on the toggle that reopens the pane.
-    await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
   });
 
   it('surfaces an inline error with retry when the scenario forecast fails, and stops claiming an active scenario (#243 Part B item 1)', async () => {
     vi.spyOn(api.clusters, 'forecastScenario').mockRejectedValue(new Error('boom'));
+    // lg+ so `panel-content` (with the inline error + Retry) stays visible
+    // beside the now-permanently-open rail (#226 — no auto-close on change).
+    stubViewportWidth(1280);
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
-
-    // Sub-lg (the default width here): Apply still dismisses the covering
-    // sheet on ANY submit — closePane() doesn't wait on the query — so the
-    // user is routed straight onto the chart the error must be visible on.
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
+    // Selecting a preset sets the scenario, whose forecast fetch rejects.
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
 
     // The correction is announced instead of the (never reached) "Scenario
     // active" text.
@@ -761,32 +866,33 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
   });
 
-  it('closes the covering sheet after Clear too, announcing the baseline restore (#243 Part B High-4)', async () => {
+  it('keeps the rail open after clearing the scenario, announcing the baseline restore', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
-    // Apply from the sheet (closes it), reopen, then Clear — the other
-    // "successful change" path must dismiss the covering sheet the same way.
+    // Activate a preset, then clear it by re-tapping the now-active preset —
+    // the rail stays open through both (#226 live editing, no auto-close).
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-
-    await user.click(screen.getByTestId('scenario-button'));
-    await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByTestId('scenario-clear'));
-
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
-      'Baseline forecast restored.',
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await waitFor(() =>
+      expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument(),
     );
-    // The scenario is gone: no active indicator remains on the toggle.
+
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+
+    // Still open, baseline restore announced, and the active indicator is gone.
+    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Baseline forecast restored.',
+      ),
+    );
     expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId('scenario-button')).toHaveFocus());
   });
 
-  it('keeps the side-by-side pane open after Apply at lg+ — the chart updates live beside it', async () => {
+  it('keeps the docked rail open after selecting a preset at lg+ — the chart updates live beside it', async () => {
     stubViewportWidth(1280);
     const user = userEvent.setup();
     render(<Harness show />);
@@ -794,7 +900,7 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
 
     await waitFor(() =>
       expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
@@ -805,47 +911,80 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(screen.getByTestId('scenario-summary')).toHaveTextContent('Active: Lose 1 host');
   });
 
-  it('keeps the covering sheet open when Apply fails validation — the error must stay visible', async () => {
+  it('holds the previous scenario forecast on screen while the next slider value fetches', async () => {
+    stubViewportWidth(1280);
+    // Enough hosts for the "Hosts lost" slider to be enabled and movable.
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(forecast({ hosts: hostsWithCapacity(4) }));
+    // The second scenario fetch is held open so the in-flight window is
+    // observable rather than a race.
+    let releaseSecond: (value: ForecastResponse) => void = () => {};
+    const second = new Promise<ForecastResponse>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const scenarioSpy = vi
+      .spyOn(api.clusters, 'forecastScenario')
+      .mockResolvedValueOnce(forecast())
+      .mockReturnValueOnce(second);
+
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    const count = screen.getByLabelText(/hosts lost/i);
-    await user.clear(count);
-    await user.type(count, '0');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    // First scenario resolved: the KPI strip says the numbers are hypothetical.
+    await screen.findByTestId('scenario-badge');
 
-    // No scenario change happened, so the sheet must NOT dismiss (#243 Part B
-    // High-4 closes it only on a *successful* Apply/Clear) — the inline error
-    // lives inside the sheet and would vanish with it.
-    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('Count must be ≥ 1.');
+    // Drag to a new value. Every debounced settle is a NEW query key, so
+    // without `placeholderData: keepPreviousData` the scenario data would go
+    // undefined here and the whole panel would blink back to the baseline
+    // mid-drag — the exact flicker the live redesign exists to avoid.
+    fireEvent.change(screen.getByLabelText(/hosts lost/i), { target: { value: '3' } });
+    await waitFor(() => expect(scenarioSpy).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByTestId('scenario-badge')).toBeInTheDocument();
+
+    releaseSecond(forecast());
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Lose 3 hosts.',
+      ),
+    );
+    expect(screen.getByTestId('scenario-badge')).toBeInTheDocument();
+  });
+
+  it('drops the held scenario forecast when the next one fails — the chart must match the error', async () => {
+    stubViewportWidth(1280);
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(forecast({ hosts: hostsWithCapacity(4) }));
+    vi.spyOn(api.clusters, 'forecastScenario')
+      .mockResolvedValueOnce(forecast())
+      .mockRejectedValueOnce(new Error('boom'));
+
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await screen.findByTestId('scenario-badge');
+
+    fireEvent.change(screen.getByLabelText(/hosts lost/i), { target: { value: '3' } });
+
+    // The inline error says "showing baseline forecast", so the panel must
+    // actually fall back to the baseline — NOT keep the previous slider
+    // position's what-if on screen under an error that contradicts it.
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario could not be computed — showing baseline.',
+      ),
+    );
+    expect(screen.queryByTestId('scenario-badge')).not.toBeInTheDocument();
     expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
   });
 
-  it('auto-closes on Apply after a resize below lg mid-session — coversContent is read live', async () => {
-    const resizeTo = stubResizableViewport(1280);
-    const user = userEvent.setup();
-    render(<Harness show />);
-    await screen.findByTestId('kpi-strip');
-
-    await user.click(screen.getByTestId('scenario-button'));
-    await screen.findByTestId('scenario-controls');
-
-    // Cross below lg with the pane open: the side-by-side pane becomes the
-    // covering sheet, so the next Apply must dismiss it — a stale
-    // `paneCoversContent` closure would keep the sheet over the chart,
-    // exactly the High-4 failure this fix exists to prevent.
-    resizeTo(900);
-
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    expect(screen.getByTestId('scenario-active-indicator')).toBeInTheDocument();
-  });
-
-  it('opening the pane moves focus into it; closing returns focus to the Scenario button', async () => {
+  it('opening the rail moves focus into it; closing returns focus to the Scenario button', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
@@ -858,12 +997,12 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
 
     await user.click(paneClose);
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    // `waitFor`, not a bare assertion: the restore now waits for the exit to
-    // finish (see the containment test) rather than firing on the click.
+    // Focus returns to the toggle because it held it (focus was inside the
+    // rail when it closed).
     await waitFor(() => expect(scenarioButton).toHaveFocus());
   });
 
-  it('Esc closes the pane first (focus back on the button), then a second Esc closes the panel', async () => {
+  it('Esc closes the rail first (focus back on the button), then a second Esc closes the panel', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
@@ -872,32 +1011,34 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     await user.click(scenarioButton);
     await screen.findByTestId('scenario-controls');
 
-    // First Esc: closes the pane only — the panel must NOT navigate.
+    // First Esc: closes the rail only — the panel must NOT navigate.
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
     expect(navigateMock).not.toHaveBeenCalled();
     await waitFor(() => expect(scenarioButton).toHaveFocus());
 
-    // Second Esc (focus on the in-panel button): now the panel closes.
+    // Second Esc (focus on the header button): now the panel closes.
     await user.keyboard('{Escape}');
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: '/' }));
   });
 
-  it('keeps the active scenario clearly indicated on the header button after the pane is closed', async () => {
+  it('keeps the active scenario clearly indicated on the header button after the rail is closed', async () => {
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
     await waitFor(() =>
       expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
         'Scenario active: Lose 1 host.',
       ),
     );
 
-    // Applying from the covering sheet dismisses it (#243 Part B High-4); the
-    // applied scenario must survive and stay visible on the header button.
+    // The rail no longer auto-closes on change (#226); closing it explicitly
+    // must leave the applied scenario in place and visible on the header button.
+    await user.click(screen.getByRole('button', { name: 'Close scenario pane' }));
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
 
     const indicator = screen.getByTestId('scenario-active-indicator');
@@ -921,7 +1062,7 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
-    // Opening the pane alone must not tint the toggle — only an applied
+    // Opening the rail alone must not tint the toggle — only an applied
     // scenario does, so the tint means "the chart is showing a scenario".
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
@@ -930,8 +1071,8 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(screen.queryByTestId('scenario-active-indicator')).not.toBeInTheDocument();
   });
 
-  it('exposes disclosure state on the header button and toggles the pane closed on a second click', async () => {
-    stubViewportWidth(1280); // side-by-side: the header button stays interactive
+  it('exposes disclosure state on the header button and toggles the rail closed on a second click', async () => {
+    stubViewportWidth(1280); // docked: the header button stays interactive
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
@@ -959,77 +1100,12 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(scenarioButton).toHaveFocus();
   });
 
-  it('becomes a full-panel modal sheet below lg, so the inert column is genuinely covered (WCAG 2.4.11)', async () => {
-    stubViewportWidth(900); // below lg
-    stubLayoutBoxes();
-    const user = userEvent.setup();
-    render(<Harness show />);
-    await screen.findByTestId('kpi-strip');
-
-    const content = screen.getByTestId('panel-content');
-    expect(content).not.toHaveAttribute('inert');
-
-    await user.click(screen.getByTestId('scenario-button'));
-    const paneClose = await screen.findByRole('button', { name: 'Close scenario pane' });
-    await waitFor(() => expect(paneClose).toHaveFocus());
-
-    // The pane still spans the whole panel below lg — since #243 as a
-    // scrim-tinted aside with the controls on a floating glass card, rather
-    // than an opaque full-height sheet body. A 340px strip over a 100vw panel
-    // would leave ~560px of this column reachable by pointer while inert —
-    // a worse defect than the focus-obscured bug the inert is here to fix.
-    // jsdom applies no stylesheets and does not run the width animation to a
-    // deterministic point, so the material/geometry are asserted structurally
-    // here; the real bounding-box + hit-test proof lives in
-    // playwright/scenario-pane.spec.ts.
-    const paneBody = screen.getByTestId('scenario-pane-body');
-    expect(paneBody).toHaveClass('scenario-card');
-    const paneAside = paneBody.closest('aside');
-    expect(paneAside).not.toBeNull();
-    expect(paneAside).toHaveClass('max-lg:bg-black/40');
-
-    // Only because the sheet layer takes every pointer hit is `inert` on the
-    // whole column honest — including the back link and Scenario button it
-    // covers.
-    expect(content).toHaveAttribute('inert');
-    const backLink = screen.getByTestId('panel-back-link');
-    expect(content).toContainElement(backLink);
-
-    // ...and the panel's own Tab trap agrees: Shift+Tab off the pane's first
-    // control wraps to the pane's last control, never onto a covered one.
-    await user.tab({ shift: true });
-    expect(backLink).not.toHaveFocus();
-    expect(screen.getByRole('button', { name: 'Apply' })).toHaveFocus();
-
-    // Closing the pane hands the column back.
-    await user.keyboard('{Escape}');
-    await waitFor(() => expect(content).not.toHaveAttribute('inert'));
-  });
-
-  it('stays a 340px sibling at lg and up, covering nothing and leaving the column interactive', async () => {
-    stubViewportWidth(1280);
-    const user = userEvent.setup();
-    render(<Harness show />);
-    await screen.findByTestId('kpi-strip');
-
-    await user.click(screen.getByTestId('scenario-button'));
-    await screen.findByTestId('scenario-controls');
-    // The 340px reserved gutter (the aside) still compresses the column; the
-    // card floats inside it at 348px — 16px right inset + 24px overlap under
-    // the column's 24px right padding (#243). Class-level assertions: jsdom
-    // computes no Tailwind; the pixel geometry is Playwright's job.
-    expect(screen.getByTestId('scenario-pane-body')).toHaveClass('scenario-card', 'lg:w-[348px]');
-    expect(screen.getByTestId('panel-content')).not.toHaveAttribute('inert');
-  });
-
   it('shows a visible Esc keycap on the pane close control, sourced from ui/kbd.tsx', async () => {
     // Two requirements that pull against each other.
     //
     // 1. The keycap must stay VISIBLE. `aria-keyshortcuts` alone is not an
     //    affordance — no browser renders it — so dropping the keycap would
-    //    silently remove the hint sighted pointer users had, and would leave
-    //    this control inconsistent with the BackButton a few elements away in
-    //    the panel header, which shows the same kind of hint.
+    //    silently remove the hint sighted pointer users had.
     // 2. It must not be a hand-rolled <kbd>. The control used to carry a
     //    verbatim copy of BackButton's <kbd> class string, which is what made
     //    ui/kbd.tsx's "every keycap comes from here" claim false.
@@ -1048,12 +1124,6 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
 
     const keycap = paneBody.querySelector('kbd');
     expect(keycap).not.toBeNull();
-    // NOT `toBeVisible()`: the glass card fades in (#243) and motion never
-    // advances past the initial `opacity: 0` keyframe under jsdom, so
-    // jest-dom would report the card's subtree invisible forever. The
-    // real-browser visibility half of this requirement is asserted in
-    // playwright/scenario-pane.spec.ts ("the close control shows a visible
-    // Esc keycap"); this test owns the structural half.
     // Two separate negations: multi-arg toHaveClass is an ALL-of check, so a
     // single negated call would only fail when BOTH classes are present.
     expect(keycap).not.toHaveClass('sr-only');
@@ -1072,100 +1142,9 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(close).toHaveTextContent('Close');
   });
 
-  it('holds the containment until the closing sheet has finished painting over the column', async () => {
-    // The sheet keeps covering the column for AnimatePresence's 200ms exit.
-    // Releasing `inert` the instant `paneOpen` flips false would re-create the
-    // focus-obscured condition for that window — and would also try to restore
-    // focus into a subtree that is still inert, where `focus()` is a no-op.
-    stubViewportWidth(900);
-    const user = userEvent.setup();
-    render(<AnimatedHarness />);
-    await screen.findByTestId('kpi-strip');
-
-    const scenarioButton = screen.getByTestId('scenario-button');
-    const content = screen.getByTestId('panel-content');
-    await user.click(scenarioButton);
-    await screen.findByTestId('scenario-controls');
-    expect(content).toHaveAttribute('inert');
-    const paneClose = screen.getByRole('button', { name: 'Close scenario pane' });
-    expect(paneClose).toHaveFocus();
-
-    const closing = watchFocusIntoInert();
-
-    // Synchronous dispatch, with nothing awaited before the assertions below:
-    // an animation frame can only run once the stack unwinds, so what is
-    // observed is exactly the commit `closePane` produced. (`user.keyboard`
-    // awaits internally, which on a loaded runner can let the whole 200ms exit
-    // finish first — a race with the animation, not a behaviour difference.)
-    fireEvent.keyDown(paneClose, { key: 'Escape' });
-
-    // Still mounted, so still painted over the column...
-    expect(screen.getByTestId('scenario-controls')).toBeInTheDocument();
-    expect(content).toHaveAttribute('inert');
-    // ...and therefore focus has not been handed back into it yet.
-    expect(scenarioButton).not.toHaveFocus();
-
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    closing.stop();
-
-    // Focus was never pushed into the column while it was still inert — where
-    // `focus()` is a no-op in a real browser and would strand focus on <body>.
-    expect(closing.violations).toEqual([]);
-    expect(content).not.toHaveAttribute('inert');
-    await waitFor(() => expect(scenarioButton).toHaveFocus());
-  });
-
-  it('re-homes focus into the pane when a resize turns the content column inert', async () => {
-    // Focus in the content column with the pane open is reachable at lg and up
-    // (that is what the Esc-without-focus-steal behaviour supports). Crossing
-    // below lg then turns that column inert underneath the focused element: a
-    // real browser blurs it and focus falls to <body>, from where Tab never
-    // reaches the panel's React `onKeyDown` trap — focus escapes the modal
-    // entirely unless the pane reclaims it. jsdom does not implement inert, so
-    // here `document.activeElement` stays on the tab trigger instead; the code
-    // treats both as lost focus.
-    const resizeTo = stubResizableViewport(1280);
-    const user = userEvent.setup();
-    render(<Harness show />);
-    await screen.findByTestId('kpi-strip');
-
-    await user.click(screen.getByTestId('scenario-button'));
-    await screen.findByTestId('scenario-controls');
-
-    const hostsTab = screen.getByRole('tab', { name: 'Hosts' });
-    hostsTab.focus();
-    expect(hostsTab).toHaveFocus();
-
-    resizeTo(900);
-
-    const content = screen.getByTestId('panel-content');
-    expect(content).toHaveAttribute('inert');
-    expect(content).toContainElement(hostsTab);
-    expect(hostsTab).not.toHaveFocus();
-    expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus();
-  });
-
-  it('leaves focus alone when a resize hands the content column back', async () => {
-    // The mirror case: growing past lg un-inerts the column, which loses
-    // nothing — the re-home must not fire and steal the user's place.
-    const resizeTo = stubResizableViewport(900);
-    const user = userEvent.setup();
-    render(<Harness show />);
-    await screen.findByTestId('kpi-strip');
-
-    await user.click(screen.getByTestId('scenario-button'));
-    const countInput = await screen.findByLabelText(/hosts lost/i);
-    countInput.focus();
-
-    resizeTo(1280);
-
-    expect(screen.getByTestId('panel-content')).not.toHaveAttribute('inert');
-    expect(countInput).toHaveFocus();
-  });
-
-  it('Esc with the pane open but focus in the content column closes the pane without stealing focus', async () => {
+  it('Esc with the rail open but focus in the content column closes the rail without stealing focus', async () => {
     // Reachable only at lg and up, where the column stays interactive beside
-    // the pane. The pane must still swallow the first Esc (the panel stays
+    // the rail. The rail must still swallow the first Esc (the panel stays
     // open), but the user keeps their place in the content.
     stubViewportWidth(1280);
     const user = userEvent.setup();
@@ -1188,178 +1167,565 @@ describe('<ClusterPanel> scenario pane (#226)', () => {
     expect(scenarioButton).not.toHaveFocus();
   });
 
-  it('re-seeds the form from the applied scenario when the pane is reopened', async () => {
+  it('re-seeds the form from the applied scenario when the rail is reopened', async () => {
+    // Enough tracked hosts that the "Hosts lost" slider (bounded by maxHosts)
+    // can reach 3.
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(forecast({ hosts: hostsWithCapacity(4) }));
     const user = userEvent.setup();
     render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
     await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
     const countInput = await screen.findByLabelText(/hosts lost/i);
-    await user.clear(countInput);
-    await user.type(countInput, '3');
-    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    // Sliders drive the scenario live (debounced ~200ms), no Apply step.
+    fireEvent.change(countInput, { target: { value: '3' } });
     await waitFor(() =>
       expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
         'Scenario active: Lose 3 hosts.',
       ),
     );
 
-    // At this (default, sub-lg) width the successful Apply itself dismisses
-    // the covering sheet (#243 Part B High-4) — no manual Escape, which would
-    // now hit the panel-close path instead (#243 Part B review).
+    // The rail no longer auto-closes on change (#226); close it explicitly,
+    // then reopen it.
+    await user.click(screen.getByRole('button', { name: 'Close scenario pane' }));
     await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
 
     await user.click(screen.getByTestId('scenario-button'));
     await screen.findByTestId('scenario-controls');
-    // Not the DEFAULT_DRAFT "1": a stray Apply must not silently replace the
-    // applied scenario with the defaults.
-    expect(screen.getByLabelText(/hosts lost/i)).toHaveValue(3);
+    // Not the DEFAULT_DRAFT "1": the reopened rail re-seeds from the applied
+    // scenario rather than silently resetting to the defaults.
+    expect(screen.getByLabelText(/hosts lost/i)).toHaveValue('3');
+  });
+});
+
+/**
+ * Scenario KPI honesty. The strip used to be wired so that "Current
+ * utilization" and "Headroom" read the cluster's BASELINE metric while the
+ * badge above them claimed every KPI reflected the hypothetical forecast — a
+ * scenario that visibly lifted the chart left the two present-tense tiles
+ * byte-identical. These pin both halves of the correction: the tiles follow the
+ * active forecast's current-month point, and nothing claims a hypothetical the
+ * wiring cannot deliver.
+ */
+describe('<ClusterPanel> scenario KPI honesty', () => {
+  beforeEach(() => {
+    navigateMock.mockClear();
+    vi.spyOn(api.clusters, 'get').mockResolvedValue(cluster());
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(forecast());
+    vi.spyOn(api.clusters, 'liveUsage').mockResolvedValue({ items: [] });
+    vi.spyOn(api.hosts, 'listByCluster').mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 500,
+      offset: 0,
+    });
   });
 
-  it('recovers cleanly when the pane is reopened mid-exit and closed again', async () => {
-    // Guards the AnimatePresence exit-window race: a same-key child that
-    // re-enters mid-exit is recycled, not remounted, so focus must be driven by
-    // the open state rather than by the pane body's mount.
-    //
-    // MUST run under `AnimatedHarness`. Under `Harness` (no LazyMotion)
-    // AnimatePresence drops an exiting child synchronously, so there is no exit
-    // window at all and the reopen below would be an ordinary closed->open
-    // cycle that exercises nothing. The `toBe(bodyBeforeClose)` identity
-    // assertion is what proves the child was recycled rather than remounted —
-    // i.e. that the race was really entered.
-    //
-    // Runs at lg+ because that is the only width where a mid-exit reopen is
-    // reachable: below lg the Scenario button is inert until the exit finishes.
-    //
-    // The `exiting`-flag half of this race is guarded separately and directly by
-    // the `panePresenceReducer` suite below — it is a pure state transition with
-    // no observable rendering consequence while `open` is true, so no
-    // integration test here can pin it. Kept honest deliberately.
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  /** Opens the rail and applies a preset. */
+  async function applyPreset(
+    user: ReturnType<typeof userEvent.setup>,
+    kind: 'lose_hosts' | 'add_vms' | 'delay_procurement',
+  ): Promise<void> {
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+    await user.click(screen.getByTestId(`scenario-preset-${kind}`));
+  }
+
+  const grid = (): HTMLElement => screen.getByTestId('kpi-grid');
+  const tile = (label: string): HTMLElement => {
+    const found = within(grid()).getByText(label).closest('div');
+    if (found === null) throw new Error(`no tile for ${label}`);
+    return found;
+  };
+
+  it('moves Current utilization and Headroom when the scenario moves the present month', async () => {
+    // Driven by "Lose hosts", which is the preset that provably reaches the
+    // present month: `loseLargestHosts` removes the host from the WHOLE window,
+    // so month 0's capacity drops. (`add_vms` cannot — see the add_vms test
+    // below.) Four 250 GB hosts, one lost: 1,000 → 750 GB capacity against an
+    // unchanged 500 GB of consumption.
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({ hosts: hostsWithCapacity(4, 250) }),
+    );
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({
+        hosts: hostsWithCapacity(3, 250),
+        months: [monthPoint(0, 500, 750), monthPoint(1, 550, 750), monthPoint(2, 600, 750)],
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    // Baseline first: the tiles start on the cluster's real numbers.
+    expect(within(grid()).getByText('50.0%')).toBeInTheDocument();
+    expect(tile('Headroom')).toHaveTextContent('500 GB');
+
+    await applyPreset(user, 'lose_hosts');
+    await screen.findByTestId('scenario-badge');
+
+    // The whole defect: these two used to stay byte-identical under a scenario
+    // that visibly lifted the chart.
+    await waitFor(() => expect(within(grid()).getByText('66.7%')).toBeInTheDocument());
+    expect(tile('Headroom')).toHaveTextContent('250 GB');
+    expect(within(grid()).queryByText('50.0%')).toBeNull();
+
+    // …and only then may the badge claim all of them are hypothetical.
+    expect(screen.getByTestId('scenario-badge')).toHaveTextContent(
+      /KPIs reflect the hypothetical forecast/i,
+    );
+    expect(within(grid()).queryByText(/unchanged by this scenario/i)).toBeNull();
+  });
+
+  it('says the present-tense tiles are baseline under "Add load", which cannot reach the current month', async () => {
+    // The originally reported symptom, and why the honest answer is a scoped
+    // badge rather than moving numbers: `addSyntheticVms` sets the synthetic
+    // application's `startedAt` to `new Date()` (an instant mid-month), while
+    // `computeForecast` evaluates every month at its UTC first-of-month anchor
+    // and `effectiveAllocationAt` returns 0 for `date < startedAt`. The added
+    // load therefore first appears in month +1 — month 0 is unchanged for every
+    // real response, so this fixture is what the engine actually emits.
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 950, 1000), monthPoint(2, 1000, 1000)],
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await applyPreset(user, 'add_vms');
+    const badge = await screen.findByTestId('scenario-badge');
+
+    // The tiles keep the real current-month numbers — correctly, because the
+    // scenario does not touch them — and the badge stops vouching for them.
+    await waitFor(() => expect(badge).toHaveTextContent(/affects Runway and Order by only/i));
+    expect(badge).not.toHaveTextContent(/KPIs reflect the hypothetical forecast/i);
+    expect(within(grid()).getByText('50.0%')).toBeInTheDocument();
+    expect(tile('Headroom')).toHaveTextContent('500 GB');
+    expect(within(grid()).getAllByText(/unchanged by this scenario/i)).toHaveLength(2);
+  });
+
+  it('reports every capacity-dependent KPI as unknown when the scenario removes all capacity', async () => {
+    // The zero-capacity prohibition under a scenario. The cluster HAS capacity
+    // today (metric.utilization 0.5), so a capacity-known flag read off the
+    // stored metric stays true — and `runwayToWarn` skips zero-capacity months,
+    // so Runway/Order by/the heading/the header chip would all keep asserting
+    // "no breach, no order needed" over a forecast with no capacity at all,
+    // beside two tiles correctly reading "unknown". The flag has to come from
+    // the forecast on screen.
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({ hosts: [], months: [monthPoint(0, 500, 0), monthPoint(1, 550, 0)] }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    const strip = await screen.findByTestId('kpi-strip');
+
+    await applyPreset(user, 'lose_hosts');
+    await screen.findByTestId('scenario-badge');
+
+    // All four tiles say "unknown", in text, together.
+    await waitFor(() =>
+      expect(tile('Runway')).toHaveTextContent(/unknown — no capacity recorded/i),
+    );
+    expect(tile('Runway')).not.toHaveTextContent(/no warn breach in horizon/i);
+    expect(tile('Order by')).toHaveTextContent(/capacity required for procurement timing/i);
+    expect(tile('Order by')).not.toHaveTextContent(/no projected breach/i);
+    expect(tile('Current utilization')).toHaveTextContent(/Unknown — no capacity recorded/i);
+    expect(tile('Headroom')).toHaveTextContent(/unknown — no capacity recorded/i);
+    expect(strip).not.toHaveTextContent('0.0%');
+
+    // …and so do the two surfaces outside the strip that read the same flag.
+    expect(
+      screen.getByRole('heading', { name: /forecast — capacity unknown/i }),
+    ).toBeInTheDocument();
+    const chip = screen.getByTestId('recommendation-chip');
+    expect(chip).toHaveTextContent(/capacity unknown/i);
+    expect(chip).not.toHaveTextContent(/no order needed/i);
+  });
+
+  it('never claims the newly selected scenario changes nothing while its forecast is still in flight', async () => {
     stubViewportWidth(1280);
-    render(<AnimatedHarness />);
+    // A held second fetch makes the in-flight window observable. Under
+    // `keepPreviousData` the FIRST scenario's result (a no-op) stays on screen
+    // across the key change — so any sentence about "this scenario" would be a
+    // sentence about the wrong scenario, and an aria-live announcement cannot be
+    // un-said.
+    let releaseSecond: (value: ForecastResponse) => void = () => {};
+    const second = new Promise<ForecastResponse>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const scenarioSpy = vi
+      .spyOn(api.clusters, 'forecastScenario')
+      .mockResolvedValueOnce(forecast()) // identical to the baseline: a real no-op
+      .mockReturnValueOnce(second);
+
+    const user = userEvent.setup();
+    render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
-    const scenarioButton = screen.getByTestId('scenario-button');
-    fireEvent.click(scenarioButton);
-    const bodyBeforeClose = await screen.findByTestId('scenario-pane-body');
+    await applyPreset(user, 'lose_hosts');
+    await screen.findByTestId('scenario-noop-notice');
+    const live = screen.getByTestId('panel-live-region');
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus(),
+      expect(live).toHaveTextContent(
+        'Scenario active: Lose 1 host. It changes nothing in this window.',
+      ),
     );
 
-    // Synchronous dispatch with nothing awaited in between: an animation frame
-    // can only run once the stack unwinds, so the reopen lands inside the exit
-    // window. (`userEvent` awaits internally and would let the 200ms exit
-    // finish first on a loaded runner.)
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Close scenario pane' }), {
-      key: 'Escape',
-    });
-    // Mid-exit: still mounted, still painting over the column.
-    expect(screen.getByTestId('scenario-pane-body')).toBe(bodyBeforeClose);
-    // A real pointer click focuses the button it hits; `fireEvent.click` does
-    // not, so do it explicitly. Without this, focus would never leave the pane
-    // close control and the "focus came back" assertion below would hold
-    // vacuously — including for a mount-driven implementation.
-    scenarioButton.focus();
-    expect(scenarioButton).toHaveFocus();
-    fireEvent.click(scenarioButton);
+    // Change the stack — under #323 tapping a second preset STACKS it rather than
+    // replacing the first, which is the same mechanism under test: a new stack is
+    // a new query key, so the held no-op result stays on screen while the new
+    // answer is in flight. The claim must not stay with it.
+    await user.click(screen.getByTestId('scenario-preset-add_vms'));
+    await waitFor(() => expect(scenarioSpy).toHaveBeenCalledTimes(2));
 
-    // Recycled, not remounted — the same DOM node came back, which is exactly
-    // why a mount-driven focus effect would silently skip moving focus here.
-    expect(screen.getByTestId('scenario-pane-body')).toBe(bodyBeforeClose);
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Close scenario pane' })).toHaveFocus(),
+    expect(live).toHaveTextContent('Scenario active: Lose 1 host + Add 20 × 16 GB VMs.');
+    expect(live).not.toHaveTextContent(/changes nothing/i);
+    expect(screen.queryByTestId('scenario-noop-notice')).toBeNull();
+    expect(screen.getByTestId('scenario-badge')).toHaveTextContent(/recomputing/i);
+    // Nor may a tile attribute its held baseline-ness to the new scenario.
+    expect(within(grid()).queryByText(/unchanged by this scenario/i)).toBeNull();
+
+    // Once the real answer lands — 500 → 900 GB in month +1 — nothing claims a
+    // no-op either.
+    releaseSecond(
+      forecast({
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 900, 1000), monthPoint(2, 950, 1000)],
+      }),
     );
-
-    // And the recycled pane still closes cleanly, restoring focus to the
-    // trigger once the (real, uncancelled) exit has finished.
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Close scenario pane' }), {
-      key: 'Escape',
-    });
-    await waitFor(() => expect(screen.queryByTestId('scenario-controls')).not.toBeInTheDocument());
-    await waitFor(() => expect(scenarioButton).toHaveFocus());
-    expect(navigateMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByTestId('scenario-badge')).toHaveTextContent(
+        /affects Runway and Order by only/i,
+      ),
+    );
+    expect(screen.queryByTestId('scenario-noop-notice')).toBeNull();
   });
 
-  it('applies the containment as soon as the pane opens, not after the enter animation', async () => {
-    // Pins the deliberate enter/exit asymmetry documented at the `inert` site.
-    // The exit side holds the containment until `onExitComplete`; the enter side
-    // applies it on the opening commit, accepting a <=280ms window in which part
-    // of the column is visible but inert. Deferring it to match the exit side
-    // would instead leave the column *interactive* while the sheet covers it —
-    // the WCAG 2.4.11 condition the containment exists to prevent.
-    stubViewportWidth(900);
-    render(<AnimatedHarness />);
+  it('never claims a delay_procurement scenario changed the present-tense KPIs', async () => {
+    // `delayFutureCommissions` shifts only commissions in the FUTURE, so the
+    // present month is unreachable for this preset by construction — a blanket
+    // "KPIs reflect the hypothetical forecast" badge is false for it no matter
+    // how the tiles are wired.
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({
+        // A host commissioning inside the window is what makes the preset
+        // applicable at all (see `deriveBlockedPresets`).
+        hosts: hostsWithFutureCommission(),
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 550, 1000), monthPoint(2, 600, 1000)],
+      }),
+    );
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({
+        hosts: hostsWithFutureCommission(),
+        // Identical present month; only the later capacity moves.
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 550, 800), monthPoint(2, 600, 800)],
+        procurement: {
+          leadTimeWeeks: 6,
+          orderByDate: monthFromNow(1),
+          breachMonth: monthFromNow(2),
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
     await screen.findByTestId('kpi-strip');
 
-    const content = screen.getByTestId('panel-content');
-    expect(content).not.toHaveAttribute('inert');
+    await applyPreset(user, 'delay_procurement');
+    const badge = await screen.findByTestId('scenario-badge');
 
-    fireEvent.click(screen.getByTestId('scenario-button'));
+    // The forward-looking KPIs are genuinely scenario-derived; the present-tense
+    // ones are not, and the badge must say exactly that.
+    await waitFor(() => expect(badge).toHaveTextContent(/affects Runway and Order by only/i));
+    expect(badge).not.toHaveTextContent(/KPIs reflect the hypothetical forecast/i);
 
-    // Asserted before anything is awaited, so the 280ms enter animation cannot
-    // have progressed, let alone completed.
-    expect(content).toHaveAttribute('inert');
+    // Colour is never the only signal: each present-tense tile says it in text.
+    expect(within(grid()).getAllByText(/unchanged by this scenario/i)).toHaveLength(2);
+    expect(within(grid()).getByText('50.0%')).toBeInTheDocument();
+  });
+
+  it('states outright when an applied scenario resolves to no change at all', async () => {
+    // The observed no-op: "Lose 1 host" against hosts with no recorded capacity
+    // returns the baseline unchanged, which used to render as an unchanged,
+    // healthy forecast under a badge claiming a hypothetical.
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(forecast());
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await applyPreset(user, 'add_vms');
+
+    const notice = await screen.findByTestId('scenario-noop-notice');
+    expect(notice).toHaveTextContent(/does not change the forecast/i);
+    expect(screen.getByTestId('scenario-badge')).toHaveTextContent(/changes nothing/i);
+    // It must not go on claiming hypothetical KPIs on top of that.
+    expect(screen.getByTestId('scenario-badge')).not.toHaveTextContent(
+      /KPIs reflect the hypothetical forecast/i,
+    );
+    // A badge and a notice are both silent to a screen reader; the announcement
+    // has to carry it too, without dropping which scenario is applied.
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Scenario active: Add 20 × 16 GB VMs. It changes nothing in this window.',
+      ),
+    );
+  });
+
+  it('falls back to the stored metric — and says so — when the window has no current month', async () => {
+    // A window that opens next month has no honest scenario value for "today".
+    const noCurrentMonth = {
+      fromMonth: monthFromNow(1),
+      toMonth: monthFromNow(3),
+      months: [monthPoint(1, 550, 1000), monthPoint(2, 600, 1000), monthPoint(3, 650, 1000)],
+    };
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(forecast(noCurrentMonth));
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({
+        ...noCurrentMonth,
+        months: [monthPoint(1, 950, 1000), monthPoint(2, 980, 1000), monthPoint(3, 990, 1000)],
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await applyPreset(user, 'add_vms');
+    await screen.findByTestId('scenario-badge');
+
+    // The stored current-month metric (500 of 1,000 GB), never the scenario's
+    // nearest month dressed up as "today".
+    await waitFor(() =>
+      expect(within(grid()).getAllByText(/window does not cover the current month/i)).toHaveLength(
+        2,
+      ),
+    );
+    expect(within(grid()).getByText('50.0%')).toBeInTheDocument();
+    expect(tile('Headroom')).toHaveTextContent('500 GB');
+    expect(screen.getByTestId('scenario-badge')).not.toHaveTextContent(
+      /KPIs reflect the hypothetical forecast/i,
+    );
+  });
+
+  it('keeps the zero-capacity gap under an active scenario — em-dash, reason, and no meter (#200)', async () => {
+    vi.spyOn(api.clusters, 'get').mockResolvedValue(
+      cluster({
+        metrics: [
+          {
+            metricTypeKey: 'memory_gb',
+            metricTypeDisplayName: 'Memory',
+            unit: 'GB',
+            baselineConsumption: 500,
+            baselineCapacity: 0,
+            currentConsumption: 500,
+            currentCapacity: 0,
+            utilization: null,
+          },
+        ],
+      }),
+    );
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({ months: [monthPoint(0, 500, 0), monthPoint(1, 550, 0)] }),
+    );
+    // The scenario moves consumption but capacity stays unknowable: utilization
+    // must stay null all the way through, never 0%.
+    vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({ months: [monthPoint(0, 900, 0), monthPoint(1, 950, 0)] }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    const strip = await screen.findByTestId('kpi-strip');
+
+    await applyPreset(user, 'add_vms');
+    await screen.findByTestId('scenario-badge');
+
+    await waitFor(() => expect(within(grid()).getByText('900 GB used')).toBeInTheDocument());
+    expect(strip).not.toHaveTextContent('0.0%');
+    const utilization = tile('Current utilization');
+    expect(utilization).toHaveTextContent('—');
+    expect(utilization).toHaveTextContent(/Unknown — no capacity recorded/i);
+    // BulletMeter renders role="img"; a 0-width bar is the "0% used, healthy" lie.
+    expect(within(utilization).queryByRole('img')).toBeNull();
+    expect(tile('Headroom')).toHaveTextContent(/unknown — no capacity recorded/i);
+  });
+
+  it('disables "Lose hosts" with a stated reason when no in-scope host has a known capacity', async () => {
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({
+        hosts: [
+          { id: 'h1', name: 'esx-01', contributions: [{ month: monthFromNow(0), amount: 0 }] },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+
+    const preset = screen.getByTestId('scenario-preset-lose_hosts');
+    expect(preset).toHaveAttribute('aria-disabled', 'true');
+    expect(preset).toHaveAccessibleDescription(/no host has a recorded capacity/i);
+    // Only the inapplicable preset is gated.
+    expect(screen.getByTestId('scenario-preset-add_vms')).toBeEnabled();
+  });
+
+  it('disables "Lose hosts" when the cluster has no tracked hosts at all', async () => {
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(forecast({ hosts: [] }));
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+
+    const preset = screen.getByTestId('scenario-preset-lose_hosts');
+    expect(preset).toHaveAttribute('aria-disabled', 'true');
+    expect(preset).toHaveAccessibleDescription(/no tracked hosts/i);
+  });
+
+  it('leaves "Lose hosts" enabled as soon as one host has a recorded capacity', async () => {
+    const user = userEvent.setup();
+    render(<Harness show />); // default fixture: one host contributing 1,000 GB
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+
+    expect(screen.getByTestId('scenario-preset-lose_hosts')).toBeEnabled();
+  });
+
+  it('disables "Delay order" with a stated reason when no host comes online inside the window', async () => {
+    const user = userEvent.setup();
+    // Default fixture: one host contributing the same capacity all window, so
+    // there is no future commissioning date for the preset to shift.
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+
+    const preset = screen.getByTestId('scenario-preset-delay_procurement');
+    expect(preset).toHaveAttribute('aria-disabled', 'true');
+    expect(preset).toHaveAccessibleDescription(/no host is commissioned inside this window/i);
+  });
+
+  it('keeps "Delay order" available on a healthy cluster whose incoming hardware could slip', async () => {
+    // The regression this pins: the gate used to key on
+    // `procurement.orderByDate === null`, which is just "this cluster is
+    // currently projected healthy" — so it disabled the one what-if that reveals
+    // the risk ("what if the new hosts land late?") on exactly the clusters that
+    // are healthy BECAUSE those hosts land inside the window, and stated a reason
+    // about an "order date" the preset never touches.
+    vi.spyOn(api.clusters, 'forecast').mockResolvedValue(
+      forecast({
+        hosts: hostsWithFutureCommission(),
+        // No projected breach anywhere: orderByDate stays null.
+        procurement: { leadTimeWeeks: 6, orderByDate: null, breachMonth: null },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await screen.findByTestId('scenario-controls');
+
+    expect(screen.getByTestId('scenario-preset-delay_procurement')).toBeEnabled();
   });
 });
 
-describe('panePresenceReducer (AnimatePresence exit-window state)', () => {
-  it('marks the pane on screen while it is open', () => {
-    const open = panePresenceReducer(PANE_CLOSED, 'open');
-    expect(open).toEqual({ open: true, exiting: false });
-    expect(paneIsOnScreen(open)).toBe(true);
+describe('resolvePresentKpi / scenarioChangesNothing / deriveBlockedPresets', () => {
+  const metric = cluster().metrics[0]!; // 500 of 1,000 GB, utilization 0.5
+
+  it('agrees with the stored metric when no scenario is active', () => {
+    // The premise of the whole fix: `metric` IS the engine's current-month point
+    // under baseline inputs, so reading it off the forecast is the same number.
+    const base = forecast();
+    const present = resolvePresentKpi(base, base, metric, false);
+    expect(present).toEqual({
+      consumption: metric.currentConsumption,
+      capacity: metric.currentCapacity,
+      utilization: metric.utilization,
+      source: 'forecast',
+      hypothetical: false,
+    });
   });
 
-  it('keeps the pane on screen after close until the exit completes', () => {
-    // This is what holds the content column's `inert` across the 200ms exit:
-    // dropping it the instant `open` flips false would hand the column back
-    // while the sheet is still painted over it.
-    const exiting = panePresenceReducer(panePresenceReducer(PANE_CLOSED, 'open'), 'close');
-    expect(exiting).toEqual({ open: false, exiting: true });
-    expect(paneIsOnScreen(exiting)).toBe(true);
-
-    const gone = panePresenceReducer(exiting, 'exit-complete');
-    expect(gone).toEqual(PANE_CLOSED);
-    expect(paneIsOnScreen(gone)).toBe(false);
+  it('marks the value hypothetical when the baseline has no current month to compare against', () => {
+    // Unreachable through the UI (both forecasts share a window), and the
+    // conservative direction is what matters: an unprovable claim of "unchanged
+    // from baseline" is the one thing this must never print.
+    const active = forecast();
+    const baseline = forecast({ months: [monthPoint(1, 550, 1000)] });
+    expect(resolvePresentKpi(active, baseline, metric, true).hypothetical).toBe(true);
   });
 
-  it('clears the exiting flag when the pane re-enters mid-exit', () => {
-    // The invariant no integration test can observe: a mid-exit re-entry
-    // cancels the exit, and a cancelled exit never fires `onExitComplete`
-    // (AnimatePresence drops the key from its `exitComplete` map), so `open` is
-    // the only place the flag can be cleared. While the pane is open a stale
-    // flag is masked by `open` in `paneIsOnScreen` — it shows up only as
-    // `exiting` no longer meaning "exiting", and as the next close inheriting a
-    // state it did not produce.
-    const exiting = panePresenceReducer(panePresenceReducer(PANE_CLOSED, 'open'), 'close');
-    expect(exiting.exiting).toBe(true);
-
-    const reopened = panePresenceReducer(exiting, 'open');
-    expect(reopened).toEqual({ open: true, exiting: false });
+  it('falls back to the metric, never to a neighbouring month, when the window skips today', () => {
+    const shifted = forecast({ months: [monthPoint(1, 900, 1000), monthPoint(2, 950, 1000)] });
+    const present = resolvePresentKpi(shifted, shifted, metric, true);
+    expect(present.source).toBe('metric');
+    expect(present.consumption).toBe(500);
+    expect(present.hypothetical).toBe(false);
   });
 
-  it('leaves a fully closed pane closed when a stray exit-complete arrives', () => {
-    expect(panePresenceReducer(PANE_CLOSED, 'exit-complete')).toEqual(PANE_CLOSED);
+  it('detects a scenario that reproduces the baseline exactly', () => {
+    expect(scenarioChangesNothing(forecast(), forecast())).toBe(true);
+    expect(
+      scenarioChangesNothing(
+        forecast(),
+        forecast({
+          months: [monthPoint(0, 501, 1000), monthPoint(1, 550, 1000), monthPoint(2, 600, 1000)],
+        }),
+      ),
+    ).toBe(false);
+    // A different horizon is a different forecast, not "no change".
+    expect(
+      scenarioChangesNothing(forecast(), forecast({ months: [monthPoint(0, 500, 1000)] })),
+    ).toBe(false);
   });
-});
 
-describe('scenarioPaneLayout (pane geometry ↔ content containment)', () => {
-  it('is a fixed strip that covers nothing when it can sit beside the column', () => {
-    expect(scenarioPaneLayout(true)).toEqual({ width: 340, coversContent: false });
+  it('blocks nothing while the baseline forecast has not resolved', () => {
+    // Gating on absent data would disable presets during every load.
+    expect(deriveBlockedPresets(undefined)).toEqual({});
   });
 
-  it('spans the whole panel when it has to overlay the column', () => {
-    expect(scenarioPaneLayout(false)).toEqual({ width: '100vw', coversContent: true });
+  it('blocks only the presets the data cannot support', () => {
+    expect(deriveBlockedPresets(forecast())).toEqual({
+      delay_procurement: expect.stringMatching(/no host is commissioned inside this window/i),
+    });
+    expect(deriveBlockedPresets(forecast({ hosts: hostsWithFutureCommission() }))).toEqual({});
   });
 
-  it('never claims to cover the column at a width narrower than the panel', () => {
-    // The invariant the function exists to hold: `coversContent` is what
-    // licenses `inert` on the content column, so it may only be true when the
-    // pane really spans the panel. Decoupling them is how the column ended up
-    // visible-but-inert at 640–1023px.
-    for (const sideBySide of [true, false]) {
-      const layout = scenarioPaneLayout(sideBySide);
-      expect(layout.coversContent).toBe(layout.width === '100vw');
-    }
+  it('judges "Delay order" on host commissioning, never on the procurement outcome', () => {
+    // A projected breach does not give the preset anything to shift…
+    expect(
+      deriveBlockedPresets(
+        forecast({
+          procurement: {
+            leadTimeWeeks: 6,
+            orderByDate: monthFromNow(0),
+            breachMonth: monthFromNow(2),
+          },
+        }),
+      ).delay_procurement,
+    ).toMatch(/no host is commissioned inside this window/i);
+    // …and the absence of one does not take it away.
+    expect(
+      deriveBlockedPresets(
+        forecast({
+          hosts: hostsWithFutureCommission(),
+          procurement: { leadTimeWeeks: 6, orderByDate: null, breachMonth: null },
+        }),
+      ).delay_procurement,
+    ).toBeUndefined();
   });
 });
 
@@ -1380,7 +1746,7 @@ describe('collectFocusable (Tab-trap candidates)', () => {
     vi.restoreAllMocks();
   });
 
-  it('skips elements inside an inert subtree (the pane-covered content column)', () => {
+  it('skips elements inside an inert subtree', () => {
     const container = document.createElement('div');
     container.innerHTML = `
       <div id="content" inert><button id="covered">Back</button></div>

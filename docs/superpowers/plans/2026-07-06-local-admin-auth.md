@@ -4,7 +4,7 @@
 
 **Goal:** Add a persistent username+password local admin account behind a new `local` auth mode (argon2id-hashed), coexisting with OIDC as a break-glass path.
 
-**Architecture:** Reuse the existing `User`/`Session`/`AuthConfig` model and the `plugins/auth.ts` gate (which already treats *any* non-`disabled` mode as "session required"). Local accounts are `User` rows with `issuer='local'`, a new `passwordHash` column, and lockout bookkeeping. A new `LocalUserService` owns credential logic; new routes hang off the existing `routes/auth.ts` (login/password) and `routes/settings-auth.ts` (management), behind the existing admin gate. The `mode` enum widens to `disabled | local | oidc` across `@lcm/shared` and the server.
+**Architecture:** Reuse the existing `User`/`Session`/`AuthConfig` model and the `plugins/auth.ts` gate (which already treats _any_ non-`disabled` mode as "session required"). Local accounts are `User` rows with `issuer='local'`, a new `passwordHash` column, and lockout bookkeeping. A new `LocalUserService` owns credential logic; new routes hang off the existing `routes/auth.ts` (login/password) and `routes/settings-auth.ts` (management), behind the existing admin gate. The `mode` enum widens to `disabled | local | oidc` across `@lcm/shared` and the server.
 
 **Tech Stack:** Node 26, Fastify 5, Prisma 7, Zod 4, `@node-rs/argon2` (argon2id), React 19 + TanStack Router, Vitest + Testcontainers, Playwright.
 
@@ -27,6 +27,7 @@
 ## File Structure
 
 **Create**
+
 - `packages/shared/src/schemas/auth-local.ts` — Zod contracts for local login + account management.
 - `apps/server/src/crypto/password.ts` — argon2id `hashPassword`/`verifyPassword` (mirrors `crypto/secret-box.ts`).
 - `apps/server/src/services/local-users.ts` — `LocalUserService` (create/verify/lockout/list/update/remove).
@@ -38,6 +39,7 @@
 - `apps/web/playwright/local-login.spec.ts` — `local`-mode golden-path E2E.
 
 **Modify**
+
 - `packages/shared/src/index.ts` — export `auth-local.js`.
 - `packages/shared/src/schemas/auth.ts` — widen `authMeResponseSchema` with `loginMethods`.
 - `packages/shared/src/schemas/auth-config.ts` — widen `mode` enum to include `local`.
@@ -57,6 +59,7 @@
 ## Task 1: Shared contracts — widen `mode`, add `loginMethods`, add `auth-local` schemas
 
 **Files:**
+
 - Modify: `packages/shared/src/schemas/auth-config.ts`
 - Modify: `packages/shared/src/schemas/auth.ts`
 - Create: `packages/shared/src/schemas/auth-local.ts`
@@ -64,6 +67,7 @@
 - Test: `packages/shared/src/schemas/__tests__/auth-local.test.ts` (create; mirror any existing shared test layout — if shared has no `__tests__`, colocate as `auth-local.test.ts` next to the schema)
 
 **Interfaces:**
+
 - Produces:
   - `mode` enum value `'local'` in `authConfigUpdateSchema`, `authConfigResponseSchema`, and `AuthConfigResponse['mode']`.
   - `authMeResponseSchema` gains `loginMethods?: { local: boolean; oidc: boolean }`.
@@ -79,11 +83,7 @@
 ```typescript
 import { describe, expect, it } from 'vitest';
 
-import {
-  createLocalUserSchema,
-  localLoginSchema,
-  passwordSchema,
-} from '../auth-local.js';
+import { createLocalUserSchema, localLoginSchema, passwordSchema } from '../auth-local.js';
 
 describe('auth-local schemas', () => {
   it('accepts a valid local login', () => {
@@ -99,7 +99,9 @@ describe('auth-local schemas', () => {
   });
 
   it('rejects usernames with illegal characters and defaults role to ADMIN', () => {
-    expect(createLocalUserSchema.safeParse({ username: 'a b', password: 'twelvechars!!' }).success).toBe(false);
+    expect(
+      createLocalUserSchema.safeParse({ username: 'a b', password: 'twelvechars!!' }).success,
+    ).toBe(false);
     const ok = createLocalUserSchema.parse({ username: 'ops.admin', password: 'twelvechars!!' });
     expect(ok.role).toBe('ADMIN');
   });
@@ -207,10 +209,12 @@ git commit -m "feat(shared): add local-auth contracts and widen mode enum"
 ## Task 2: Prisma schema — local-credential columns + migration
 
 **Files:**
+
 - Modify: `apps/server/prisma/schema.prisma:286-303` (the `User` model)
 - Create: `apps/server/prisma/migrations/<timestamp>_add_local_admin_credentials/migration.sql` (generated)
 
 **Interfaces:**
+
 - Produces: `User.passwordHash`, `User.passwordUpdatedAt`, `User.failedLoginAttempts`, `User.lockedUntil`, `User.disabled` on the generated Prisma client.
 
 - [ ] **Step 1: Edit the `User` model** — add these fields inside `model User { ... }` (after `lastLoginAt`):
@@ -252,11 +256,13 @@ git commit -m "feat(server): add local-credential columns to users"
 ## Task 3: argon2id password helper
 
 **Files:**
+
 - Modify: `apps/server/package.json` (add dependency)
 - Create: `apps/server/src/crypto/password.ts`
 - Test: `apps/server/src/__tests__/password.test.ts`
 
 **Interfaces:**
+
 - Consumes: `@node-rs/argon2` (`hash`, `verify`).
 - Produces:
   - `hashPassword(plain: string): Promise<string>` — returns a self-contained argon2id PHC string.
@@ -349,10 +355,12 @@ git commit -m "feat(server): add argon2id password hashing helper"
 ## Task 4: `LocalUserService`
 
 **Files:**
+
 - Create: `apps/server/src/services/local-users.ts`
 - Test: `apps/server/src/__tests__/local-users.test.ts`
 
 **Interfaces:**
+
 - Consumes: `PrismaClient`, `hashPassword`/`verifyPassword` (Task 3), `LocalUserSummary` (Task 1).
 - Produces:
   - `LOCAL_ISSUER = 'local'`, `MAX_FAILED_ATTEMPTS = 5`
@@ -598,9 +606,11 @@ git commit -m "feat(server): add LocalUserService with lockout"
 ## Task 5: Widen `mode` in the auth-config service
 
 **Files:**
+
 - Modify: `apps/server/src/services/auth-config.ts` (`AuthConfigWriteData.mode`, `EffectiveAuthConfig.mode`, `toEffective`)
 
 **Interfaces:**
+
 - Produces: `EffectiveAuthConfig.mode` includes `'local'`; `toEffective` maps a stored `local` row to `mode: 'local'`.
 
 - [ ] **Step 1: Write the failing test** — append to `apps/server/src/__tests__/auth-config.test.ts`
@@ -612,6 +622,7 @@ it('maps a local-mode row to effective mode "local"', () => {
   expect(svc.toEffective(row).mode).toBe('local');
 });
 ```
+
 (Reuse whatever `baseAuthConfigRow`/imports the existing file already defines; if it has no such fixture, build a row literal matching the `AuthConfig` shape with `mode: 'local'`.)
 
 - [ ] **Step 2: Run to verify it fails**
@@ -648,10 +659,12 @@ git commit -m "feat(server): support local mode in effective auth config"
 ## Task 6: Auth routes — local login, password change, `/auth/me`
 
 **Files:**
+
 - Modify: `apps/server/src/routes/auth.ts`
 - Test: `apps/server/src/__tests__/local-auth-routes.test.ts`
 
 **Interfaces:**
+
 - Consumes: `LocalUserService` (Task 4), `SessionService`, `sessionCookieName`, `localLoginSchema`/`changePasswordSchema` (Task 1), `loginMethodsSchema`.
 - Produces (HTTP):
   - `POST /api/auth/local/login` → 204 + session cookie on success; 401 `{ error: 'invalid_credentials' }` otherwise. Only active when `mode !== 'disabled'`.
@@ -717,7 +730,10 @@ describe('local auth routes', () => {
     const server = await localModeServer();
     created.push(server);
     const res = await server.inject({ method: 'GET', url: '/api/auth/me' });
-    expect(res.json()).toMatchObject({ authRequired: true, loginMethods: { local: true, oidc: false } });
+    expect(res.json()).toMatchObject({
+      authRequired: true,
+      loginMethods: { local: true, oidc: false },
+    });
   });
 
   it('gates a protected mutation until logged in, then allows it', async () => {
@@ -759,75 +775,75 @@ import { LocalUserService } from '../services/local-users.js';
 Inside `authRoutes`, after `const users = new UserService(fastify.prisma);`:
 
 ```typescript
-  const localUsers = new LocalUserService(fastify.prisma);
+const localUsers = new LocalUserService(fastify.prisma);
 
-  const localSecure = (): boolean => {
-    const base = cfg().appBaseUrl;
-    return base ? base.startsWith('https://') : false;
-  };
+const localSecure = (): boolean => {
+  const base = cfg().appBaseUrl;
+  return base ? base.startsWith('https://') : false;
+};
 ```
 
 Add the login route (reuse the existing `authRateLimit`):
 
 ```typescript
-  fastify.post('/auth/local/login', { config: authRateLimit }, async (request, reply) => {
-    const current = cfg();
-    if (current.mode === 'disabled') return reply.code(404).send();
-    const body = localLoginSchema.parse(request.body);
-    const result = await localUsers.verifyLogin(body.username, body.password);
-    if (!result.ok) {
-      request.log.warn({ username: body.username }, 'Local login failed');
-      return reply.code(401).send({ error: 'invalid_credentials' });
-    }
-    const session = await sessions.create(result.user.id, current.sessionTtlHours);
-    const base = current.appBaseUrl;
-    const secure = base ? base.startsWith('https://') : request.protocol === 'https';
-    reply.setCookie(sessionCookieName(current), session.token, {
-      path: '/',
-      httpOnly: true,
-      sameSite: 'lax',
-      secure,
-      expires: session.expiresAt,
-    });
-    return reply.code(204).send();
+fastify.post('/auth/local/login', { config: authRateLimit }, async (request, reply) => {
+  const current = cfg();
+  if (current.mode === 'disabled') return reply.code(404).send();
+  const body = localLoginSchema.parse(request.body);
+  const result = await localUsers.verifyLogin(body.username, body.password);
+  if (!result.ok) {
+    request.log.warn({ username: body.username }, 'Local login failed');
+    return reply.code(401).send({ error: 'invalid_credentials' });
+  }
+  const session = await sessions.create(result.user.id, current.sessionTtlHours);
+  const base = current.appBaseUrl;
+  const secure = base ? base.startsWith('https://') : request.protocol === 'https';
+  reply.setCookie(sessionCookieName(current), session.token, {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure,
+    expires: session.expiresAt,
   });
+  return reply.code(204).send();
+});
 ```
 
 Add the self-service password change (authenticated — `request.user` is set by the auth plugin in non-disabled modes):
 
 ```typescript
-  fastify.post('/auth/local/password', async (request, reply) => {
-    if (!request.user) return reply.code(401).send({ error: 'unauthenticated' });
-    const body = changePasswordSchema.parse(request.body);
-    const ok = await localUsers.changeOwnPassword(
-      request.user.id,
-      body.currentPassword,
-      body.newPassword,
-    );
-    if (!ok) return reply.code(422).send({ error: 'invalid_credentials' });
-    return reply.code(204).send();
-  });
+fastify.post('/auth/local/password', async (request, reply) => {
+  if (!request.user) return reply.code(401).send({ error: 'unauthenticated' });
+  const body = changePasswordSchema.parse(request.body);
+  const ok = await localUsers.changeOwnPassword(
+    request.user.id,
+    body.currentPassword,
+    body.newPassword,
+  );
+  if (!ok) return reply.code(422).send({ error: 'invalid_credentials' });
+  return reply.code(204).send();
+});
 ```
 
 Replace the `/auth/me` handler body:
 
 ```typescript
-  fastify.get('/auth/me', async (request): Promise<AuthMeResponse> => {
-    const current = cfg();
-    if (current.mode === 'disabled') return { authRequired: false };
-    const loginMethods = {
-      local: (await localUsers.enabledCount()) > 0,
-      oidc: current.mode === 'oidc' && fastify.oidc.config !== null,
-    };
-    const token = request.cookies[sessionCookieName(current)];
-    const user = token === undefined ? null : await sessions.findUserByToken(token);
-    if (!user) return { authRequired: true, loginMethods };
-    return {
-      authRequired: true,
-      loginMethods,
-      user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
-    };
-  });
+fastify.get('/auth/me', async (request): Promise<AuthMeResponse> => {
+  const current = cfg();
+  if (current.mode === 'disabled') return { authRequired: false };
+  const loginMethods = {
+    local: (await localUsers.enabledCount()) > 0,
+    oidc: current.mode === 'oidc' && fastify.oidc.config !== null,
+  };
+  const token = request.cookies[sessionCookieName(current)];
+  const user = token === undefined ? null : await sessions.findUserByToken(token);
+  if (!user) return { authRequired: true, loginMethods };
+  return {
+    authRequired: true,
+    loginMethods,
+    user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
+  };
+});
 ```
 
 Note: `localUsername`/`subject` is not part of `SessionUser`; `authUserSchema` stays `{ id, email, displayName, role }`. For a local user `email`/`displayName` are null — acceptable; the UI can fall back to role.
@@ -856,10 +872,12 @@ git commit -m "feat(server): add local login, password change, and mode-aware /a
 ## Task 7: Settings-auth — local account management + `local` transition guard
 
 **Files:**
+
 - Modify: `apps/server/src/routes/settings-auth.ts`
 - Test: `apps/server/src/__tests__/settings-auth-routes.test.ts` (extend the existing file)
 
 **Interfaces:**
+
 - Consumes: `LocalUserService`, `createLocalUserSchema`/`updateLocalUserSchema`/`resetPasswordSchema`/`localUserSummarySchema` (Task 1).
 - Produces (all admin-gated, under `/api/settings/auth`):
   - `GET /settings/auth/local-users` → `LocalUserSummary[]`
@@ -891,12 +909,19 @@ it('refuses to switch to local mode with no enabled local admin', async () => {
   const res = await server.inject({
     method: 'PUT',
     url: '/api/settings/auth',
-    payload: { mode: 'local', scopes: 'openid profile email', defaultRole: 'admin', sessionTtlHours: 12, allowInsecure: false },
+    payload: {
+      mode: 'local',
+      scopes: 'openid profile email',
+      defaultRole: 'admin',
+      sessionTtlHours: 12,
+      allowInsecure: false,
+    },
   });
   expect(res.statusCode).toBe(422);
   expect(res.json().error).toBe('NO_LOCAL_ADMIN');
 });
 ```
+
 (Match the existing file's server-build helper name and cleanup pattern; if it builds servers inline, follow that. The `PUT` payload mirrors `authConfigUpdateSchema` defaults.)
 
 - [ ] **Step 2: Run to verify it fails**
@@ -909,105 +934,105 @@ Expected: FAIL — the local-users routes 404 and the guard is absent.
 Add imports:
 
 ```typescript
-import {
-  createLocalUserSchema,
-  resetPasswordSchema,
-  updateLocalUserSchema,
-} from '@lcm/shared';
+import { createLocalUserSchema, resetPasswordSchema, updateLocalUserSchema } from '@lcm/shared';
 import type { LocalUserSummary } from '@lcm/shared';
 import { LocalUserService } from '../services/local-users.js';
 import { NotFoundError } from '../services/errors.js';
 ```
+
 (Confirm `NotFoundError` exists in `services/errors.ts`; the codebase already exports `ForbiddenError`/`UnprocessableError` from there — reuse the matching not-found error, or `UnprocessableError` if none exists.)
 
 Inside the plugin, after `const service = fastify.authConfig.service;`:
 
 ```typescript
-  const localUsers = new LocalUserService(fastify.prisma);
+const localUsers = new LocalUserService(fastify.prisma);
 ```
 
 Add the `local` guard inside the existing `PUT /settings/auth` handler, before `await service.update(...)`. Insert right after the existing `if (body.mode === 'oidc') { ... }` block:
 
 ```typescript
-    if (body.mode === 'local' && (await localUsers.enabledAdminCount()) === 0) {
-      throw new UnprocessableError(
-        'NO_LOCAL_ADMIN',
-        'Create an enabled local admin account before switching to local authentication.',
-      );
-    }
+if (body.mode === 'local' && (await localUsers.enabledAdminCount()) === 0) {
+  throw new UnprocessableError(
+    'NO_LOCAL_ADMIN',
+    'Create an enabled local admin account before switching to local authentication.',
+  );
+}
 ```
 
 Add the management routes (all inside the plugin body — the file's `preHandler` admin gate already covers them):
 
 ```typescript
-  fastify.get('/settings/auth/local-users', async (): Promise<LocalUserSummary[]> => {
-    return localUsers.list();
-  });
+fastify.get('/settings/auth/local-users', async (): Promise<LocalUserSummary[]> => {
+  return localUsers.list();
+});
 
-  fastify.post('/settings/auth/local-users', async (request, reply): Promise<LocalUserSummary> => {
-    const body = createLocalUserSchema.parse(request.body);
-    const existing = await fastify.prisma.user.findUnique({
-      where: { issuer_subject: { issuer: 'local', subject: body.username } },
-    });
-    if (existing) {
-      throw new UnprocessableError('USERNAME_TAKEN', 'That username is already in use.');
-    }
-    const user = await localUsers.create(body);
-    reply.code(201);
-    return {
-      id: user.id,
-      username: user.subject,
-      role: user.role,
-      disabled: user.disabled,
-      lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
-      createdAt: user.createdAt.toISOString(),
-    };
+fastify.post('/settings/auth/local-users', async (request, reply): Promise<LocalUserSummary> => {
+  const body = createLocalUserSchema.parse(request.body);
+  const existing = await fastify.prisma.user.findUnique({
+    where: { issuer_subject: { issuer: 'local', subject: body.username } },
   });
+  if (existing) {
+    throw new UnprocessableError('USERNAME_TAKEN', 'That username is already in use.');
+  }
+  const user = await localUsers.create(body);
+  reply.code(201);
+  return {
+    id: user.id,
+    username: user.subject,
+    role: user.role,
+    disabled: user.disabled,
+    lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
+    createdAt: user.createdAt.toISOString(),
+  };
+});
 
-  fastify.patch('/settings/auth/local-users/:id', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const body = updateLocalUserSchema.parse(request.body);
-    // Guard: never leave local mode with zero enabled admins.
-    if ((body.disabled === true || body.role === 'VIEWER') && fastify.authConfig.current.mode === 'local') {
-      const target = await fastify.prisma.user.findUnique({ where: { id } });
-      if (target && target.issuer === 'local' && target.role === 'ADMIN' && !target.disabled) {
-        if ((await localUsers.enabledAdminCount()) <= 1) {
-          throw new UnprocessableError(
-            'LAST_LOCAL_ADMIN',
-            'Cannot disable or demote the last enabled local admin while local authentication is active.',
-          );
-        }
+fastify.patch('/settings/auth/local-users/:id', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const body = updateLocalUserSchema.parse(request.body);
+  // Guard: never leave local mode with zero enabled admins.
+  if (
+    (body.disabled === true || body.role === 'VIEWER') &&
+    fastify.authConfig.current.mode === 'local'
+  ) {
+    const target = await fastify.prisma.user.findUnique({ where: { id } });
+    if (target && target.issuer === 'local' && target.role === 'ADMIN' && !target.disabled) {
+      if ((await localUsers.enabledAdminCount()) <= 1) {
+        throw new UnprocessableError(
+          'LAST_LOCAL_ADMIN',
+          'Cannot disable or demote the last enabled local admin while local authentication is active.',
+        );
       }
     }
-    await localUsers.update(id, body);
-    return reply.code(204).send();
-  });
+  }
+  await localUsers.update(id, body);
+  return reply.code(204).send();
+});
 
-  fastify.post('/settings/auth/local-users/:id/reset-password', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const body = resetPasswordSchema.parse(request.body);
-    await localUsers.resetPassword(id, body.newPassword);
-    return reply.code(204).send();
-  });
+fastify.post('/settings/auth/local-users/:id/reset-password', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const body = resetPasswordSchema.parse(request.body);
+  await localUsers.resetPassword(id, body.newPassword);
+  return reply.code(204).send();
+});
 
-  fastify.delete('/settings/auth/local-users/:id', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const target = await fastify.prisma.user.findUnique({ where: { id } });
-    if (
-      target?.issuer === 'local' &&
-      target.role === 'ADMIN' &&
-      !target.disabled &&
-      fastify.authConfig.current.mode === 'local' &&
-      (await localUsers.enabledAdminCount()) <= 1
-    ) {
-      throw new UnprocessableError(
-        'LAST_LOCAL_ADMIN',
-        'Cannot delete the last enabled local admin while local authentication is active.',
-      );
-    }
-    await localUsers.remove(id);
-    return reply.code(204).send();
-  });
+fastify.delete('/settings/auth/local-users/:id', async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const target = await fastify.prisma.user.findUnique({ where: { id } });
+  if (
+    target?.issuer === 'local' &&
+    target.role === 'ADMIN' &&
+    !target.disabled &&
+    fastify.authConfig.current.mode === 'local' &&
+    (await localUsers.enabledAdminCount()) <= 1
+  ) {
+    throw new UnprocessableError(
+      'LAST_LOCAL_ADMIN',
+      'Cannot delete the last enabled local admin while local authentication is active.',
+    );
+  }
+  await localUsers.remove(id);
+  return reply.code(204).send();
+});
 ```
 
 - [ ] **Step 4: Run to verify it passes**
@@ -1027,11 +1052,13 @@ git commit -m "feat(server): manage local accounts and guard local-mode transiti
 ## Task 8: Web — API client + login form
 
 **Files:**
+
 - Modify: `apps/web/src/lib/api-client.ts` (or the module that wraps `fetch` for `/api`; grep for `/api/settings/auth` to find it)
 - Modify: `apps/web/src/routes/login.tsx`
 - Test: extend `apps/web/src/routes/__tests__/login-href.test.ts` or add `apps/web/src/routes/__tests__/login-local.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `authMeResponseSchema.loginMethods` (Task 1), `POST /api/auth/local/login` (Task 6).
 - Produces: `localLogin(username, password): Promise<boolean>` client fn; `login.tsx` renders a username/password form when `loginMethods.local` is true.
 
@@ -1108,17 +1135,33 @@ export function LocalLoginForm({ redirect }: { redirect: string | undefined }): 
   return (
     <form onSubmit={onSubmit} className="space-y-3">
       {error ? (
-        <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <p
+          role="alert"
+          className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
           {error}
         </p>
       ) : null}
       <div className="space-y-1">
         <Label htmlFor="username">Username</Label>
-        <Input id="username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+        <Input
+          id="username"
+          autoComplete="username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          required
+        />
       </div>
       <div className="space-y-1">
         <Label htmlFor="password">Password</Label>
-        <Input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        <Input
+          id="password"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
       </div>
       <Button type="submit" className="w-full" disabled={pending}>
         {pending ? 'Signing in…' : 'Sign in'}
@@ -1147,11 +1190,13 @@ git commit -m "feat(web): local admin login form"
 ## Task 9: Web — Settings local-accounts panel
 
 **Files:**
+
 - Create: `apps/web/src/components/settings/local-accounts-panel.tsx`
 - Test: `apps/web/src/components/settings/local-accounts-panel.test.tsx`
 - Modify: `apps/web/src/components/settings/authentication-form.tsx`
 
 **Interfaces:**
+
 - Consumes: local-user management endpoints (Task 7); `LocalUserSummary`.
 - Produces: `LocalAccountsPanel` (list + create form + disable/reset/delete actions); a `local` option in the mode selector.
 
@@ -1167,21 +1212,30 @@ export async function listLocalUsers(): Promise<LocalUserSummary[]> {
   return z.array(localUserSummarySchema).parse(await res.json());
 }
 
-export async function createLocalUser(input: { username: string; password: string; role: 'ADMIN' | 'VIEWER' }): Promise<void> {
+export async function createLocalUser(input: {
+  username: string;
+  password: string;
+  role: 'ADMIN' | 'VIEWER';
+}): Promise<void> {
   const res = await fetch('/api/settings/auth/local-users', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
   });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message ?? 'Failed to create user');
+  if (!res.ok)
+    throw new Error((await res.json().catch(() => ({}))).message ?? 'Failed to create user');
 }
 
 export async function deleteLocalUser(id: string): Promise<void> {
-  const res = await fetch(`/api/settings/auth/local-users/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+  const res = await fetch(`/api/settings/auth/local-users/${id}`, {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  });
   if (!res.ok) throw new Error('Failed to delete user');
 }
 ```
+
 (Add `setLocalUserDisabled`/`resetLocalUserPassword` the same way, matching the PATCH/reset endpoints.)
 
 - [ ] **Step 2: Write the failing test** — `local-accounts-panel.test.tsx`
@@ -1193,7 +1247,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api-client', () => ({
   listLocalUsers: vi.fn().mockResolvedValue([
-    { id: '1', username: 'admin', role: 'ADMIN', disabled: false, lastLoginAt: null, createdAt: '2026-07-06T00:00:00.000Z' },
+    {
+      id: '1',
+      username: 'admin',
+      role: 'ADMIN',
+      disabled: false,
+      lastLoginAt: null,
+      createdAt: '2026-07-06T00:00:00.000Z',
+    },
   ]),
   createLocalUser: vi.fn(),
   deleteLocalUser: vi.fn(),
@@ -1211,6 +1272,7 @@ it('lists existing local accounts', async () => {
   expect(await screen.findByText('admin')).toBeInTheDocument();
 });
 ```
+
 (Match the exact TanStack Query test wrapper the other settings tests use — grep `QueryClientProvider` in `apps/web/src` for the shared helper.)
 
 - [ ] **Step 3: Run to verify it fails**
@@ -1224,7 +1286,7 @@ Expected: FAIL — component missing.
 
 1. Add a `local` option to the mode `<Select>` (the enum-driven mode picker) — a `<SelectItem value="local">Local accounts</SelectItem>` alongside the existing `disabled`/`oidc` items, with a one-line description matching the surrounding copy.
 2. Render `<LocalAccountsPanel />` when the selected/active mode is `local` (and optionally as a collapsible "Local admin (break-glass)" section when mode is `oidc`).
-Read the file first to match its existing form-state and section conventions; keep the OIDC fields untouched.
+   Read the file first to match its existing form-state and section conventions; keep the OIDC fields untouched.
 
 - [ ] **Step 6: Run to verify it passes**
 
@@ -1243,10 +1305,12 @@ git commit -m "feat(web): manage local accounts in Settings"
 ## Task 10: E2E golden path + build smoke test
 
 **Files:**
+
 - Create: `apps/web/playwright/local-login.spec.ts`
 - (Verification only) the built server image can load argon2.
 
 **Interfaces:**
+
 - Consumes: the full stack (assumes the `pnpm dev` stack, per the existing Playwright config).
 
 - [ ] **Step 1: Write the E2E spec** — mirror the existing `apps/web/playwright/*.spec.ts` setup/fixtures:
@@ -1261,7 +1325,13 @@ test('local admin can sign in and reach the dashboard', async ({ page, request }
     data: { username: 'e2e-admin', password: 'twelvecharsok!', role: 'ADMIN' },
   });
   await request.put('/api/settings/auth', {
-    data: { mode: 'local', scopes: 'openid profile email', defaultRole: 'admin', sessionTtlHours: 12, allowInsecure: false },
+    data: {
+      mode: 'local',
+      scopes: 'openid profile email',
+      defaultRole: 'admin',
+      sessionTtlHours: 12,
+      allowInsecure: false,
+    },
   });
 
   await page.goto('/login');
@@ -1274,10 +1344,17 @@ test('local admin can sign in and reach the dashboard', async ({ page, request }
 
   // Reset to disabled so the suite is idempotent for the next run.
   await request.put('/api/settings/auth', {
-    data: { mode: 'disabled', scopes: 'openid profile email', defaultRole: 'admin', sessionTtlHours: 12, allowInsecure: false },
+    data: {
+      mode: 'disabled',
+      scopes: 'openid profile email',
+      defaultRole: 'admin',
+      sessionTtlHours: 12,
+      allowInsecure: false,
+    },
   });
 });
 ```
+
 (Adjust the base URL / storage-state handling to whatever `playwright.config.ts` already establishes; if that config gates on OIDC, add a `local`-mode project or reuse its `webServer`.)
 
 - [ ] **Step 2: Run the E2E**
@@ -1288,11 +1365,13 @@ Expected: PASS (dev stack running).
 - [ ] **Step 3: Build the server image and smoke-test argon2 in the distroless runtime**
 
 Run:
+
 ```bash
 docker build -f docker/Dockerfile.server -t lcm-server:argon2-smoke .
 docker run --rm --entrypoint node lcm-server:argon2-smoke \
   -e "require('@node-rs/argon2').hash('x').then(h=>require('@node-rs/argon2').verify(h,'x')).then(r=>{if(!r)process.exit(1);console.log('argon2 ok in distroless')}).catch(e=>{console.error(e);process.exit(1)})"
 ```
+
 Expected: prints `argon2 ok in distroless`. If it fails to find the native module, the `@node-rs/argon2-linux-*-musl` optional dep was not carried into the `pnpm deploy` bundle — fix by ensuring the optional platform dep installs in the builder (it should, since builder + runtime share arch+musl) before proceeding.
 
 - [ ] **Step 4: Commit**
@@ -1307,6 +1386,7 @@ git commit -m "test(web): local-mode login e2e golden path"
 ## Task 11: Documentation
 
 **Files:**
+
 - Modify: `CLAUDE.md` (the "OIDC only / no bcrypt/argon2" line + the two-mode description)
 - Modify: `docs/operations.md` (auth modes, bootstrap, recovery)
 - Modify: `docs/vision.md` (if it states an OIDC-only auth stance)

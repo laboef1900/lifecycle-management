@@ -5,6 +5,8 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TooltipProvider } from '@/components/ui/tooltip';
+
 import { api } from '@/lib/api-client';
 
 import { ItemsTab } from './items-tab';
@@ -64,7 +66,11 @@ function renderTab(canManage = true): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <ItemsTab clusterId="cl-1" canManage={canManage} />
+      {/* app.tsx mounts TooltipProvider app-wide; the row-action IconButtons
+          use Radix Tooltip, so isolated renders need it too. */}
+      <TooltipProvider delayDuration={0}>
+        <ItemsTab clusterId="cl-1" canManage={canManage} />
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }
@@ -81,6 +87,20 @@ describe('ItemsTab', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('routes app row actions through an honest kebab (WCAG 3.2.4)', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByText('openshift-lab');
+    // Edit is the one inline row action, reachable by its accessible name.
+    expect(screen.getAllByRole('button', { name: 'Edit' }).length).toBeGreaterThan(0);
+    // Everything else lives behind a "More actions" kebab with honest labels —
+    // no more Plus-means-Resize / kebab-glyph-means-End glyph collisions.
+    await user.click(screen.getAllByRole('button', { name: 'More actions' })[0]!);
+    expect(await screen.findByRole('menuitem', { name: /Resize/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /End/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Delete/ })).toBeInTheDocument();
   });
 
   it('shows the Add app or event button for managers and hides it for viewers', async () => {
