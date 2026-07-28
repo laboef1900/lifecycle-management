@@ -107,6 +107,168 @@ jobs:
       - name: Run OIDC auth e2e
         run: pnpm --filter @lcm/web test:e2e:oidc
 
+  # Gates PROMOTION only — pull requests targeting `main` (the dev → main sync
+  # PR) and pushes to `main`. Deliberately NOT run on the feat/* → dev PRs that
+  # are the day-to-day flow (project-owner decision, 2026-07-28, issue #334).
+  #
+  # Why gate at all: this is the only automated coverage of the golden path, the
+  # cluster panel, the scenario rail, the mobile layout, and several regression
+  # guards that exist because those bugs shipped once (#243, #264). Ungated it
+  # rots — it sat at 33 passed / 6 failed on every branch for an unknown period,
+  # so a real regression was indistinguishable from the standing noise (#331).
+  #
+  # Why only at promotion: unlike `oidc-e2e` this needs a full stack (Postgres +
+  # the API + Vite) and mutates tenant settings, clusters, and the stored auth
+  # mode as it runs. Promotion to `main` is the last point where paying for that
+  # is still cheap, and it is the boundary that actually ships images (`:latest`).
+  #
+  # An `if:`-skipped job reports as "skipped", which branch protection treats as
+  # passing — so this can be a required check on `main` without blocking dev PRs.
+  golden-path-e2e:
+    name: Golden-path e2e (Playwright)
+    if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        # Same throwaway test engine, same tag, as the Testcontainers integration
+        # suite (`apps/server/vitest.global-setup.ts`) — Postgres 18 everywhere.
+        #
+        # Deliberately NOT digest-pinned, unlike the `semgrep` container below.
+        # That one *is* the job's execution environment and runs code over the
+        # checkout, so a rotated `:latest` there is a real supply-chain risk. This
+        # is a sidecar the job only speaks TCP to, holding data that dies with the
+        # runner — the same exposure `verify` already accepts on every PR via
+        # unpinned `postgres:18-alpine`. And no Dependabot ecosystem bumps
+        # `services.*.image`, so a digest here would be an unmaintained pin that
+        # freezes CI on an ageing engine. Keep the two files' tags in step.
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: lcm
+          POSTGRES_PASSWORD: lcm
+          POSTGRES_DB: lcm
+        ports:
+          - 5432:5432
+        # Without a health gate the first `prisma migrate deploy` races initdb.
+        options: >-
+          --health-cmd "pg_isready -U lcm -d lcm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://lcm:lcm@localhost:5432/lcm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '26'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # MUST precede the seed and the API boot: `prisma/seed.ts` imports
+      # `Prisma` from @prisma/client, so without the generated client the seed
+      # dies on `does not provide an export named 'Prisma'` — a missing client,
+      # not a seed bug.
+      - name: Generate Prisma client
+        run: pnpm --filter @lcm/server exec prisma generate
+
+      - name: Generate web route tree
+        run: pnpm --filter @lcm/web generate-routes
+
+      # Only Chromium is needed; --with-deps installs the OS libraries it links.
+      - name: Install Playwright Chromium
+        run: pnpm --filter @lcm/web exec playwright install --with-deps chromium
+
+      - name: Apply migrations
+        run: pnpm --filter @lcm/server exec prisma migrate deploy
+
+      # Several specs assert against seeded clusters and `test.skip` themselves
+      # when none exist. On an unseeded database they would all skip and the job
+      # would pass having verified nothing — `forbid-skipped-reporter` turns that
+      # into a failure, and this step is what keeps it from firing.
+      - name: Seed reference data
+        run: pnpm seed
+
+      # RATE_LIMIT_MAX: the suite runs from one IP and bursts past the API's
+      # 300 req/min default; the tail of the run then gets 429s that surface as
+      # bogus login redirects and `/clusters/undefined` navigations — failures
+      # that look like product bugs (see apps/web/playwright.config.ts).
+      # PORT 8090 is not optional: apps/web/vite.config.ts proxies /api there.
+      # A fresh database leaves `auth_config` empty, so the server resolves
+      # AUTH_MODE=disabled — the state the suite expects.
+      # The log goes to e2e-logs/, NOT apps/web/test-results/ — Playwright wipes
+      # its outputDir at the start of a run, which would delete the log of the
+      # very process whose failure you are trying to diagnose.
+      - name: Start the API
+        run: |
+          mkdir -p e2e-logs
+          nohup pnpm --filter @lcm/server exec tsx src/index.ts > e2e-logs/api.log 2>&1 &
+          api_pid=$!
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:8090/readyz > /dev/null; then
+              echo "API ready on :8090"
+              exit 0
+            fi
+            if ! kill -0 "$api_pid" 2> /dev/null; then
+              echo "::error::API exited before becoming ready"
+              cat e2e-logs/api.log
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "::error::API did not become ready within 60s"
+          cat e2e-logs/api.log
+          exit 1
+        env:
+          PORT: '8090'
+          RATE_LIMIT_MAX: '2000'
+          # `info`, not `warn`: Fastify logs requests at info, and the uploaded
+          # api.log exists precisely to tell an environment failure (a 429 storm,
+          # a mid-run crash) apart from a product regression. At `warn` a rate-limit
+          # burst leaves no trace and the artifact cannot answer the one question
+          # it is collected for.
+          LOG_LEVEL: info
+
+      # Playwright boots Vite itself (webServer). retries stay at 0 and a skipped
+      # test fails the run — both deliberate, see playwright.config.ts.
+      - name: Run golden-path e2e
+        run: |
+          # The API was started in a SEPARATE step. If it died in between, all 39
+          # specs fail with timeouts and bogus login redirects that read exactly
+          # like product bugs — the misdiagnosis this job's artifacts exist to
+          # prevent. Re-check here so that failure mode is unambiguous.
+          if ! curl -sf http://localhost:8090/readyz > /dev/null; then
+            echo "::error::API is not responding on :8090 — environment failure, not a product regression"
+            cat e2e-logs/api.log
+            exit 1
+          fi
+          pnpm --filter @lcm/web test:e2e
+
+      # Playwright's traces plus the API log — together they tell a product
+      # regression apart from an environment failure (an unseeded database, a
+      # rate-limit 429 storm, an API that died mid-run).
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: golden-path-e2e-results
+          path: |
+            apps/web/test-results/
+            e2e-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
   semgrep:
     name: Semgrep security scan
     runs-on: ubuntu-latest

@@ -1427,7 +1427,7 @@ This is a relaxation of a safety control, recorded here for durability. It does 
 
 - A written design (`DESIGN.md` or an equivalent PR section) covering trust boundaries, misuse cases, invariants, failure/recovery, rollback, and security/privacy impact.
 - Independent review by **two** AI reviewers (e.g. `critic` **and** `brahma-analyzer`) at a stricter bar than normal-risk work, with every finding resolved or recorded as explicitly accepted residual risk.
-- The standard gates still pass: `/review`, the full affected verification suite, and green CI (`verify` + `oidc-e2e`).
+- The standard gates still pass: `/review`, the full affected verification suite, and green CI (`verify` + `oidc-e2e` + `semgrep`; the `golden-path-e2e` job additionally gates the `dev → main` sync PR — see `docs/CONTRIBUTING.md`).
 - The approving review, its verdict, and the residual-risk record left in the PR so the decision is auditable.
 
 A human MAY still override or reclaim approval for any specific change. Prisma migrations and destructive/irreversible data operations keep their existing backup (`pg_dump`) and recovery-plan requirements on top of the above. The authoritative rule text lives in `CLAUDE.md` (Change Risk and Required Rigor → _Automated high-risk approval_).

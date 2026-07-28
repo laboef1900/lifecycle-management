@@ -5,8 +5,9 @@ import { expect, test, type Page } from '@playwright/test';
  * real focus order, focus return to the trigger tile, the instant (no
  * transform) entrance, and the Esc chain over the new anatomy.
  *
- * NOT run by CI (see scenario-pane.spec.ts header note) — local suite against
- * the seeded dev stack; every test skips cleanly on an empty database.
+ * Run by CI on the `dev → main` sync PR only (see scenario-pane.spec.ts header
+ * note), and locally against the seeded dev stack. The per-test skips are a
+ * local convenience; under CI a skip fails the run.
  */
 
 async function openFirstCluster(page: Page): Promise<void> {

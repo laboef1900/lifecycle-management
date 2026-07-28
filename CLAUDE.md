@@ -55,7 +55,7 @@ Required evidence scales with risk:
 
 - A written `DESIGN.md` (or equivalent PR section) covering trust boundaries, misuse cases, invariants, failure/recovery, rollback, and security/privacy impact.
 - Independent AI review by **two** reviewers (e.g. `critic` **and** `brahma-analyzer`), clearing a stricter quality bar than normal-risk work, with findings resolved or recorded as explicitly accepted residual risk.
-- The standard PR gates still run and must pass: `/review`, the full affected verification suite, and green CI (`verify` + `oidc-e2e`).
+- The standard PR gates still run and must pass: `/review`, the full affected verification suite, and green CI (`verify` + `oidc-e2e` + `semgrep`; `golden-path-e2e` additionally on the `dev → main` sync PR).
 - The approving AI review, its verdict, and the residual-risk record are captured in the PR so the decision is auditable.
 
 A human MAY still override or reclaim approval for any specific change. Destructive or irreversible data operations and Prisma migrations additionally keep their existing backup + recovery-plan requirements.
@@ -206,11 +206,11 @@ pnpm --filter @lcm/web generate-routes           # TanStack route tree (routeTre
 
 ### 4. CI/CD and Software Supply Chain
 
-- **CI** (`.github/workflows/ci.yml`, every PR + push to `main`): a `verify` job (install → `prisma generate` → `generate-routes` → `pnpm lint` → `pnpm typecheck` → `pnpm test` with Testcontainers Postgres → `pnpm build`) plus an `oidc-e2e` job (Playwright, `pnpm --filter @lcm/web test:e2e:oidc`). Both jobs must be green before merge. All actions are pinned to commit SHAs — pin any new ones too.
+- **CI** (`.github/workflows/ci.yml`, every PR + push to `main`): a `verify` job (install → `prisma generate` → `generate-routes` → `pnpm format:check` → `pnpm lint` → `pnpm typecheck` → `pnpm test` with Testcontainers Postgres → `pnpm build`), an `oidc-e2e` job (Playwright, `pnpm --filter @lcm/web test:e2e:oidc`), and a `semgrep` job (`semgrep scan --config p/default apps packages --error`). All three run on every PR and must be green before merge. A fourth job, `golden-path-e2e`, is **promotion-only**: `if: github.base_ref == 'main' || github.ref == 'refs/heads/main'`, so it runs on the `dev → main` sync PR and pushes to `main` but is skipped on `feat/* → dev` PRs (project-owner decision, 2026-07-28, issue #334). It boots a Postgres 18 service + seeds it + starts the API on `:8090` with `RATE_LIMIT_MAX=2000`, then runs `pnpm --filter @lcm/web test:e2e`; `retries: 0` and a **skipped test fails the run** (`playwright/support/forbid-skipped-reporter.ts` — the specs' `test.skip` preconditions otherwise exit 0 and a fully-skipped run looks green). A GitHub `if:`-skipped job counts as passing for branch protection, so it is safe to require on `main`. All actions are pinned to commit SHAs and CI container/service images to `tag@digest` — pin any new ones too.
 - **Least-privilege CI permissions:** workflows declare explicit minimal `permissions:` blocks (`ci.yml` is `contents: read`). Keep it that way — untrusted code and metadata MUST NOT gain access to privileged credentials or release assets.
 - **Images** (`publish-images.yml`): multi-arch (amd64/arm64) GHCR images with provenance + SBOM. Immutable artifacts: compose is pull-only; `main` → `:latest`, push to `dev` → `:dev` (may lag the latest green commit), release `vX.Y` → `:X.Y`; pin deployments with `LCM_IMAGE_TAG`. Build once, promote the same artifact.
 - **Dependabot:** weekly for github-actions, npm, docker (Dockerfile digests), and docker-compose. Never merge dependency PRs without the normal verification gates. DHI caveat: see Build and Development — `dhi.io` has no Dependabot credentials, so DHI digest bumps are not reliably proposed.
-- **Scanning:** no secret-scanning, SAST, or container-scanning workflow is configured as a blocking gate in v1 (_recorded gap, 2026-07-16_) — adding one is a normal-risk change that needs a recorded decision on blocking thresholds; any suppression must be time-bounded.
+- **Scanning:** SAST is a blocking gate — the `semgrep` CI job above runs `--config p/default` over `apps` and `packages` with `--error` on every PR (added by PR #306, closing the 2026-07-16 recorded gap). Secret-scanning and container-image scanning are still **not** configured as blocking gates (_recorded gap_) — adding either is a normal-risk change that needs a recorded decision on blocking thresholds; any suppression must be time-bounded.
 
 ## AI Collaboration and Development Workflow
 
