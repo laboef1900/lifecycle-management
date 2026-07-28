@@ -351,6 +351,174 @@ describe('POST /api/clusters/:id/forecast/scenario', () => {
 });
 
 /**
+ * COMPOUND WHAT-IFS (#323). The request contract accepts either a bare single
+ * scenario — every case above, which must keep working for an older SPA against
+ * a newer server — or a `{ steps: [...] }` stack normalised to the same shape.
+ */
+describe('POST /api/clusters/:id/forecast/scenario — compound stack (#323)', () => {
+  const WINDOW = 'metric=memory_gb&from=2026-06&to=2026-08';
+
+  const lastConsumption = (raw: string): number => {
+    const body = JSON.parse(raw) as { months: Array<{ consumption: number }> };
+    return body.months[body.months.length - 1]!.consumption;
+  };
+
+  it('composes the steps: the compound delta equals the sum of its parts', async () => {
+    const base = await server.inject({
+      method: 'GET',
+      url: `/api/clusters/${clusterId}/forecast?${WINDOW}`,
+    });
+
+    // Two add-like steps whose effects are independent and additive here: 50×16
+    // GB of new VMs, and a 3-month procurement delay. The seeded cluster has no
+    // future commissions, so delay contributes 0 — which is the point: the
+    // compound must equal the single add_vms exactly, not drift.
+    const single = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      payload: { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2026-06' },
+    });
+    const compound = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      payload: {
+        steps: [
+          { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2026-06' },
+          { kind: 'delay_procurement', months: 3 },
+        ],
+      },
+    });
+
+    expect(compound.statusCode).toBe(200);
+    expect(lastConsumption(compound.body) - lastConsumption(base.body)).toBe(800);
+    expect(lastConsumption(compound.body)).toBe(lastConsumption(single.body));
+  });
+
+  it('gives the same answer whichever order the steps arrive in', async () => {
+    const forward = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      payload: {
+        steps: [
+          { kind: 'lose_hosts', count: 1 },
+          { kind: 'add_vms', count: 4, sizeGb: 32, startMonth: '2026-06' },
+        ],
+      },
+    });
+    const reversed = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      payload: {
+        steps: [
+          { kind: 'add_vms', count: 4, sizeGb: 32, startMonth: '2026-06' },
+          { kind: 'lose_hosts', count: 1 },
+        ],
+      },
+    });
+    expect(forward.statusCode).toBe(200);
+    expect(reversed.statusCode).toBe(200);
+    expect(reversed.body).toBe(forward.body);
+  });
+
+  it('still accepts a bare single scenario (wire back-compat for an older SPA)', async () => {
+    const bare = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      payload: { kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2026-06' },
+    });
+    const wrapped = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      payload: { steps: [{ kind: 'add_vms', count: 50, sizeGb: 16, startMonth: '2026-06' }] },
+    });
+    expect(bare.statusCode).toBe(200);
+    expect(wrapped.statusCode).toBe(200);
+    expect(wrapped.body).toBe(bare.body);
+  });
+
+  it('rejects a duplicate kind with 400 — the id-collision guard', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      payload: {
+        steps: [
+          { kind: 'add_vms', count: 10, sizeGb: 16 },
+          { kind: 'add_vms', count: 10, sizeGb: 16 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a stack over the step cap with 400', async () => {
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      payload: {
+        steps: [
+          { kind: 'lose_hosts', count: 1 },
+          { kind: 'add_vms', count: 1, sizeGb: 1 },
+          { kind: 'delay_procurement', months: 1 },
+          { kind: 'lose_hosts', count: 2 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects an empty stack and a mistyped container key with 400', async () => {
+    const empty = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      payload: { steps: [] },
+    });
+    const typo = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?metric=memory_gb`,
+      payload: { parts: [{ kind: 'lose_hosts', count: 1 }] },
+    });
+    expect(empty.statusCode).toBe(400);
+    expect(typo.statusCode).toBe(400);
+  });
+
+  /**
+   * INV-1 re-proof on the compound path. A hypothetical has no measured error
+   * history and is never an approved order, so it must carry neither an
+   * uncertainty band nor an acknowledgment — regardless of how many steps it has
+   * or whether the band is switched on.
+   */
+  it('carries no uncertainty band and no acknowledgment (INV-1)', async () => {
+    await prisma.tenantSettings.upsert({
+      where: { tenantId: 'default' },
+      update: { forecastUncertaintyBandEnabled: true },
+      create: { tenantId: 'default', forecastUncertaintyBandEnabled: true },
+    });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/clusters/${clusterId}/forecast/scenario?${WINDOW}`,
+      payload: {
+        steps: [
+          { kind: 'lose_hosts', count: 1 },
+          { kind: 'add_vms', count: 10, sizeGb: 16, startMonth: '2026-06' },
+          { kind: 'delay_procurement', months: 3 },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      acknowledgment: unknown;
+      uncertainty?: unknown;
+      uncertaintyAnchorCount?: unknown;
+    };
+    expect(body.acknowledgment).toBeNull();
+    expect(body.uncertainty).toBeUndefined();
+    expect(body.uncertaintyAnchorCount).toBeUndefined();
+  });
+});
+
+/**
  * THE /forecast LOADER'S OWN ABSORPTION BOUNDARY.
  *
  * `absorbed` is fed from TWO independent places. `ClustersService.toResponse`

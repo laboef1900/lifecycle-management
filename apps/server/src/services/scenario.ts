@@ -3,17 +3,66 @@ import { addUtcMonths, type Scenario } from '@lcm/shared';
 import type { ForecastApplication, ForecastHost, ForecastInput } from './forecast.js';
 
 /**
- * Apply a what-if scenario to a forecast input, returning a NEW input. The
+ * Canonical fold order for a compound scenario (#323). The steps commute today —
+ * `lose_hosts` ranks off capacity rows, `delay_procurement` moves only
+ * commissioning dates, `add_vms` touches only applications — so this buys nothing
+ * yet. It is a forward-looking guarantee that the answer never depends on the
+ * order a client happened to serialise the steps in.
+ *
+ * @ai-warning The commuting property is pinned by a permutation test in
+ * `__tests__/scenario.test.ts`, NOT by an "order matters" test — that would pass
+ * vacuously today and hide the day a non-commuting kind is added. If you add a
+ * kind, that test fails and you must decide where it belongs in this order.
+ */
+const STEP_ORDER: Readonly<Record<Scenario['kind'], number>> = {
+  lose_hosts: 0,
+  add_vms: 1,
+  delay_procurement: 2,
+};
+
+/**
+ * Apply a compound what-if — an ordered fold of {@link applyScenario} over the
+ * steps, sorted into {@link STEP_ORDER} first. Returns a NEW input.
+ *
+ * The step index handed to each step comes from the SORTED order, not the
+ * caller's: it seeds `add_vms`'s synthetic application id, so deriving it from
+ * the received order would make the response depend on step order and break
+ * permutation-invariance.
+ */
+export function applyScenarioStack(
+  input: ForecastInput,
+  steps: readonly Scenario[],
+): ForecastInput {
+  return [...steps]
+    .sort((a, b) => STEP_ORDER[a.kind] - STEP_ORDER[b.kind])
+    .reduce((acc, step, index) => applyScenario(acc, step, index), input);
+}
+
+/**
+ * Apply one what-if step to a forecast input, returning a NEW input. The
  * original input must not be mutated — the loader calls this on the result of
  * the same DB read it uses for the baseline forecast, and both must be safe to
  * recompute side by side.
+ *
+ * `stepIndex` scopes the synthetic ids a step mints so they stay unique within a
+ * stack; it defaults to 0 for a single-step preview.
  */
-export function applyScenario(input: ForecastInput, scenario: Scenario): ForecastInput {
+export function applyScenario(
+  input: ForecastInput,
+  scenario: Scenario,
+  stepIndex = 0,
+): ForecastInput {
   switch (scenario.kind) {
     case 'lose_hosts':
       return loseLargestHosts(input, scenario.count);
     case 'add_vms':
-      return addSyntheticVms(input, scenario.count, scenario.sizeGb, scenario.startMonth);
+      return addSyntheticVms(
+        input,
+        scenario.count,
+        scenario.sizeGb,
+        stepIndex,
+        scenario.startMonth,
+      );
     case 'delay_procurement':
       return delayFutureCommissions(input, scenario.months);
   }
@@ -48,16 +97,30 @@ function capacityAt(host: ForecastHost, date: Date): number {
   return amount;
 }
 
+/**
+ * @ai-warning The synthetic id MUST stay unique across the steps of one stack.
+ * `computeForecast` keys `applicationContributions` on a `Map<id, …>`, so two
+ * applications sharing an id emit two response entries backed by the same
+ * aliased array — two amounts per month under one id, while `months[]` totals
+ * stay correct (the sum iterates the array, not the map). That is a wrong
+ * response no total-based assertion catches. `scenarioStackSchema` already
+ * rejects a duplicate `add_vms`; `stepIndex` is the second, structural defence
+ * so relaxing that refine cannot silently corrupt the response.
+ *
+ * The user-visible `name` is deliberately NOT indexed — one `add_vms` per stack
+ * means it is already unambiguous, and an index would just be noise on screen.
+ */
 function addSyntheticVms(
   input: ForecastInput,
   count: number,
   sizeGb: number,
+  stepIndex: number,
   startMonth?: Date,
 ): ForecastInput {
   const startedAt = startMonth ?? new Date();
   const total = count * sizeGb;
   const synthetic: ForecastApplication = {
-    id: `__scenario:add_vms:${count}x${sizeGb}`,
+    id: `__scenario:${stepIndex}:add_vms:${count}x${sizeGb}`,
     name: `Scenario: +${count} × ${sizeGb} GB`,
     startedAt,
     endedAt: null,

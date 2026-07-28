@@ -213,3 +213,58 @@ export type LoseHostsScenario = z.infer<typeof loseHostsScenarioSchema>;
 export type AddVmsScenario = z.infer<typeof addVmsScenarioSchema>;
 export type DelayProcurementScenario = z.infer<typeof delayProcurementScenarioSchema>;
 export type Scenario = z.infer<typeof scenarioSchema>;
+
+/**
+ * Hard cap on a compound what-if (#323) — protects the same O(months × rows)
+ * compute loop as {@link MAX_FORECAST_SPAN_MONTHS}.
+ *
+ * @ai-note This is deliberately a SEPARATE rule from the one-step-per-kind
+ * refine below, even though three kinds × "at most once each" already implies
+ * three. Add a fourth kind and uniqueness stops bounding the stack; this does
+ * not.
+ */
+export const MAX_SCENARIO_STEPS = 3;
+
+/**
+ * A compound what-if: several scenario steps evaluated as one hypothetical.
+ *
+ * @ai-warning A kind may appear AT MOST ONCE, and that is a correctness rule
+ * rather than a UI convenience. `addSyntheticVms` mints a deterministic
+ * application id from `count`/`sizeGb`, and the forecast engine keys its
+ * per-application contributions on a `Map<id, …>` — so two `add_vms` steps
+ * sharing an id emit two response entries backed by the SAME aliased array,
+ * with two amounts per month under one id. Month totals stay correct (the
+ * consumption sum iterates the array, not the map), which is exactly why no
+ * total-based assertion catches it. Relaxing this refine requires making the
+ * synthetic id unique per step first. See
+ * `docs/superpowers/specs/2026-07-28-compound-scenario-stack-design.md`.
+ */
+export const scenarioStackSchema = z
+  .strictObject({
+    steps: z.array(scenarioSchema).min(1).max(MAX_SCENARIO_STEPS),
+  })
+  .refine((stack) => new Set(stack.steps.map((s) => s.kind)).size === stack.steps.length, {
+    message: 'Each scenario kind may appear at most once',
+    path: ['steps'],
+  });
+
+/**
+ * What the preview endpoint accepts: a stack, or a bare single scenario
+ * normalised to a one-step stack.
+ *
+ * @ai-warning Additive on purpose — do NOT collapse this to the stack form
+ * alone. `web` and `server` are separately-tagged GHCR images pinned by
+ * `LCM_IMAGE_TAG`, so a hard cutover would 400 every preview from an older SPA
+ * in a mixed-tag deployment. Same discipline as the additive `acknowledgment`
+ * (#292) and `uncertainty` (#316) response fields.
+ */
+export const scenarioRequestSchema = z.union([
+  scenarioStackSchema,
+  scenarioSchema.transform((scenario) => ({ steps: [scenario] })),
+]);
+
+export type ScenarioStack = z.infer<typeof scenarioStackSchema>;
+export type ScenarioRequest = z.infer<typeof scenarioRequestSchema>;
+/** Wire (pre-transform) shapes — `startMonth` is `'YYYY-MM'`, not a `Date`. */
+export type ScenarioStackWire = z.input<typeof scenarioStackSchema>;
+export type ScenarioRequestWire = z.input<typeof scenarioRequestSchema>;

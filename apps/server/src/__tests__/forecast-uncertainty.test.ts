@@ -126,12 +126,12 @@ describe('ForecastService — uncertainty band', () => {
     const off = await svc.forCluster(TENANT, id, METRIC);
     expect(off.uncertainty).toBeUndefined();
 
-    // Even enabled, a scenario NEVER carries a band (INV-1).
+    // Even enabled, a scenario NEVER carries a band (INV-1). The 4th argument is
+    // a step stack (#323); a single step is just a one-element array.
     await enableBand();
-    const scenario = await svc.forClusterWithScenario(TENANT, id, METRIC, {
-      kind: 'lose_hosts',
-      count: 1,
-    });
+    const scenario = await svc.forClusterWithScenario(TENANT, id, METRIC, [
+      { kind: 'lose_hosts', count: 1 },
+    ]);
     expect(scenario.uncertainty).toBeUndefined();
   });
 

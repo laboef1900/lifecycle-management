@@ -32,7 +32,7 @@ import {
   type StoredApprovalSnapshot,
 } from './order-approval-coverage.js';
 import { computeProcurementInfo } from './procurement.js';
-import { applyScenario } from './scenario.js';
+import { applyScenarioStack } from './scenario.js';
 import { SettingsService } from './settings.js';
 
 const DEFAULT_HORIZON_MONTHS = 24;
@@ -133,20 +133,33 @@ export class ForecastService {
 
   /**
    * Same as forCluster but applies a what-if transform between loading and
-   * computing. The baseline DB state is never modified — the scenario forecast
-   * lives only in this response. `acknowledgment` stays `null`: a hypothetical is
-   * never an approved order (INV-1), and coverage would otherwise be evaluated
-   * against scenario-mutated capacity/order-by values.
+   * computing. `steps` is a compound stack (#323) — one step is the common case
+   * and is just a one-element array. The baseline DB state is never modified —
+   * the scenario forecast lives only in this response. `acknowledgment` stays
+   * `null`: a hypothetical is never an approved order (INV-1), and coverage would
+   * otherwise be evaluated against scenario-mutated capacity/order-by values.
+   *
+   * @ai-warning Three statements on purpose, and INV-1 rides on all of them.
+   * `prepare()` runs ONCE: `capacitySignature`, `anchorMonth` and
+   * `baselineHistory` must describe the REAL loaded state, and the #292
+   * order-approval coverage rule depends on the signature being scenario-free —
+   * folding by re-preparing per step would let a scenario-mutated host list reach
+   * `computeCapacitySignature`. And this must keep returning `finalize()`
+   * DIRECTLY: `finalize` hardcodes `acknowledgment: null` and never calls
+   * `computeUncertainty` (whose only call site is in `forCluster`), which is the
+   * entire structural proof that a hypothetical carries no measured evidence.
+   * Merging the two entry points into one shared method would silently hand
+   * scenarios a band and an acknowledgment.
    */
   async forClusterWithScenario(
     tenantId: string,
     clusterId: string,
     metricKey: string,
-    scenario: Scenario,
+    steps: readonly Scenario[],
     options: LoadOptions = {},
   ): Promise<ForecastResult> {
     const prepared = await this.prepare(tenantId, clusterId, metricKey, options);
-    const scenarioInput = applyScenario(prepared.input, scenario);
+    const scenarioInput = applyScenarioStack(prepared.input, steps);
     return this.finalize(prepared, scenarioInput);
   }
 
