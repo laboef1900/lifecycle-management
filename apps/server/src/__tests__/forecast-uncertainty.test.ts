@@ -126,12 +126,12 @@ describe('ForecastService — uncertainty band', () => {
     const off = await svc.forCluster(TENANT, id, METRIC);
     expect(off.uncertainty).toBeUndefined();
 
-    // Even enabled, a scenario NEVER carries a band (INV-1).
+    // Even enabled, a scenario NEVER carries a band (INV-1). The 4th argument is
+    // a step stack (#323); a single step is just a one-element array.
     await enableBand();
-    const scenario = await svc.forClusterWithScenario(TENANT, id, METRIC, {
-      kind: 'lose_hosts',
-      count: 1,
-    });
+    const scenario = await svc.forClusterWithScenario(TENANT, id, METRIC, [
+      { kind: 'lose_hosts', count: 1 },
+    ]);
     expect(scenario.uncertainty).toBeUndefined();
   });
 
@@ -199,6 +199,128 @@ describe('ForecastService — uncertainty band', () => {
     const h1 = result.uncertainty!.find((p) => p.month === toIso(monthStart(1)));
     expect(h1).toBeDefined();
     expect(h1!.high).toBeLessThan(0.5);
+  });
+
+  /**
+   * INV-1 with a POSITIVE CONTROL — the assertion that actually defends the
+   * invariant (#323).
+   *
+   * @ai-warning Every other scenario-INV-1 assertion in this repo runs on a
+   * cluster with no snapshots and no approval, where `uncertainty === undefined`
+   * and `acknowledgment === null` hold no matter how the code is wired. AI review
+   * demonstrated the consequence: applying the exact refactor the design doc warns
+   * against — making `forClusterWithScenario` attach the band and the
+   * acknowledgment the way `forCluster` does — left the entire suite green.
+   *
+   * This test closes that hole by proving BOTH directions on the SAME cluster and
+   * window, for BOTH halves of INV-1: the real read earns a band **and** a
+   * non-null acknowledgment, while the compound scenario read gets neither.
+   *
+   * @ai-warning Do not "simplify" this by dropping the `forCluster` assertions or
+   * the `OrderApproval` setup. An earlier version controlled only the band; its
+   * cluster never breached and had no approval, so `real.acknowledgment` was
+   * `null` for the same trivial reason the scenario's was, and the acknowledgment
+   * half of INV-1 was still unguarded while the comment claimed otherwise. Both
+   * positive assertions below must keep failing if their half regresses.
+   */
+  it('earns a band AND an acknowledgment on the real read, and refuses both for a compound scenario (INV-1)', async () => {
+    const anchor = monthStart(0);
+    // Breaching by construction: 1600 consumed against a single 2000 GB host is
+    // 0.8, over the 0.7 warn threshold — so the real read has a live breach for an
+    // approval to cover. (The band's inputs are the seeded snapshots below, which
+    // are independent of the live utilization, so one cluster can carry both.)
+    const { id, metricTypeId } = await makeCluster(prisma, {
+      baselineDate: anchor,
+      baselineConsumption: 1600,
+      baselineCapacity: 0,
+    });
+    await makeHost(prisma, {
+      clusterId: id,
+      commissionedAt: monthStart(-12),
+      initialCapacity: [{ effectiveFrom: monthStart(-12), amount: 2000 }],
+    });
+    for (let i = -6; i <= 0; i++) {
+      await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i), 0, 0.5);
+    }
+    for (let i = -6; i <= -1; i++) {
+      await seedSnapshot(id, metricTypeId, monthStart(i), monthStart(i + 1), 1, 0.6);
+    }
+    await enableBand(6);
+
+    const svc = new ForecastService(prisma);
+
+    // Record an approval that COVERS the live breach. The snapshot values are read
+    // back off the engine (`liveBreachContext`, the same source the real write path
+    // uses) rather than hand-computed, so this control cannot silently stop
+    // covering if the procurement arithmetic changes.
+    const live = await svc.liveBreachContext(TENANT, id, METRIC);
+    expect(live.procurement.breachMonth, 'fixture must actually breach').not.toBeNull();
+    expect(live.procurement.orderByDate).not.toBeNull();
+    await prisma.orderApproval.create({
+      data: {
+        tenantId: TENANT,
+        clusterId: id,
+        breachMonth: new Date(`${live.procurement.breachMonth!}T00:00:00.000Z`),
+        orderByDate: new Date(`${live.procurement.orderByDate!}T00:00:00.000Z`),
+        leadTimeWeeks: live.procurement.leadTimeWeeks,
+        warnThreshold: live.warnThreshold,
+        capacitySignature: live.capacitySignature,
+        metricTypeId,
+        approvedByLabel: 'inv-1 positive control',
+        note: 'covers the live breach',
+      },
+    });
+
+    // POSITIVE CONTROL, both halves. Without these the negative assertions below
+    // prove nothing — `undefined`/`null` would hold however the code is wired.
+    const real = await svc.forCluster(TENANT, id, METRIC);
+    expect(real.uncertainty).toBeDefined();
+    expect(real.uncertainty!.length).toBeGreaterThan(0);
+    expect(real.uncertaintyAnchorCount).toBe(6);
+    expect(real.acknowledgment, 'the real read must EARN an acknowledgment here').not.toBeNull();
+    expect(real.acknowledgment!.approvedByLabel).toBe('inv-1 positive control');
+
+    // …and the compound scenario on the same cluster/window refuses both. A
+    // hypothetical has no measured error history and is never an approved order.
+    const scenario = await svc.forClusterWithScenario(TENANT, id, METRIC, [
+      { kind: 'lose_hosts', count: 1 },
+      { kind: 'add_vms', count: 10, sizeGb: 16 },
+      { kind: 'delay_procurement', months: 3 },
+    ]);
+    expect(scenario.uncertainty).toBeUndefined();
+    expect(scenario.uncertaintyAnchorCount).toBeUndefined();
+    expect(scenario.acknowledgment).toBeNull();
+
+    // Same window either way, so the two are genuinely comparable — the scenario
+    // did not dodge the band by landing on a different range.
+    expect(scenario.fromMonth).toBe(real.fromMonth);
+    expect(scenario.toMonth).toBe(real.toMonth);
+
+    /**
+     * THE ACKNOWLEDGMENT LEAK DETECTOR — and the reason it is a separate call.
+     *
+     * @ai-warning The compound above CANNOT detect an acknowledgment leak, and I
+     * verified that by leaking one: it drops the only host, which moves the
+     * breach, so a leaked acknowledgment fails the #292 coverage rule and reads
+     * as `null` for the wrong reason. The assertion passes either way.
+     *
+     * This call fixes that. `delay_procurement` is a strict no-op on a cluster
+     * whose only host was commissioned in the past, so the scenario's procurement
+     * is IDENTICAL to the real read's — a leaked acknowledgment would still
+     * cover, and the only thing that can make it null is `forClusterWithScenario`
+     * refusing to resolve one at all. The `procurement` equality assertion is
+     * what keeps this honest: if a future change makes this step non-trivial, the
+     * test fails loudly rather than quietly going vacuous again.
+     */
+    const coveragePreserving = await svc.forClusterWithScenario(TENANT, id, METRIC, [
+      { kind: 'delay_procurement', months: 3 },
+    ]);
+    expect(
+      coveragePreserving.procurement,
+      'this step must stay coverage-preserving or the leak detector below is vacuous',
+    ).toEqual(real.procurement);
+    expect(coveragePreserving.acknowledgment).toBeNull();
+    expect(coveragePreserving.uncertainty).toBeUndefined();
   });
 
   it('does not count matured re-anchors that produced no measured actual (honest N)', async () => {
