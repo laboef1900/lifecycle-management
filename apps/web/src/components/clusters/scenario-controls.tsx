@@ -1,14 +1,18 @@
 import * as React from 'react';
 import { X } from 'lucide-react';
 
-import { MAX_SCENARIO_STEPS } from '@lcm/shared';
+import { compareScenarioSteps, MAX_SCENARIO_STEPS, type Scenario } from '@lcm/shared';
 
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 import type { ScenarioWire } from '@/lib/api-client';
 
-export type ScenarioKind = 'lose_hosts' | 'add_vms' | 'delay_procurement';
+/**
+ * Derived from the shared contract, not re-declared: a hand-written copy would
+ * let this file disagree with the schema the server validates against.
+ */
+export type ScenarioKind = Scenario['kind'];
 
 /**
  * Presets that cannot move THIS cluster's forecast, each mapped to the reason
@@ -56,26 +60,36 @@ const SIZE_TIERS = [8, 16, 32, 64] as const;
 /** Debounce for slider-driven live updates so a drag isn't one POST per pixel. */
 const LIVE_DEBOUNCE_MS = 200;
 
-const PRESETS: { kind: ScenarioKind; label: string }[] = [
-  { kind: 'lose_hosts', label: 'Lose hosts' },
-  { kind: 'add_vms', label: 'Add load' },
-  { kind: 'delay_procurement', label: 'Delay order' },
-];
-
 /**
- * Canonical step order, mirroring the server's fold (`STEP_ORDER` in
- * `apps/server/src/services/scenario.ts`). Rows render in this order rather than
- * the order the user happened to tap, so the rail reads the same way every time
- * for the same stack — and matches the order the summary text lists them in.
+ * Chip label per kind.
+ *
+ * @ai-warning Declared as an exhaustive `Record`, NOT an array, and NOT derived
+ * via `Object.fromEntries(...) as Record<…>`. Both of those compile happily with
+ * a kind missing and yield `undefined` at runtime — an empty row header and an
+ * aria-label reading "Remove undefined from the scenario". This shape makes a new
+ * `Scenario` kind a compile error here, matching `SCENARIO_STEP_ORDER`'s tripwire
+ * in the shared package.
  */
-const KIND_ORDER: Record<ScenarioKind, number> = {
-  lose_hosts: 0,
-  add_vms: 1,
-  delay_procurement: 2,
+const PRESET_LABEL: Record<ScenarioKind, string> = {
+  lose_hosts: 'Lose hosts',
+  add_vms: 'Add load',
+  delay_procurement: 'Delay order',
 };
 
+/**
+ * Rows render in the SHARED canonical order (`SCENARIO_STEP_ORDER` in
+ * `@lcm/shared`) rather than the order the user happened to tap, so the rail
+ * reads the same way every time for the same stack, matches the order the summary
+ * text lists them in, and — the point — matches the order the server folds them
+ * in. This used to be a second local copy of that order; nothing stopped the two
+ * from drifting, which would have had the rail claiming one order while the
+ * forecast computed another.
+ */
 const orderKinds = (kinds: readonly ScenarioKind[]): ScenarioKind[] =>
-  [...kinds].sort((a, b) => KIND_ORDER[a] - KIND_ORDER[b]);
+  [...kinds].sort(compareScenarioSteps);
+
+/** Chip render order — the same canonical order the rows and the fold use. */
+const PRESETS: readonly ScenarioKind[] = orderKinds(['lose_hosts', 'add_vms', 'delay_procurement']);
 
 const MICRO_LABEL = 'text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle';
 
@@ -106,14 +120,6 @@ function buildScenario(kind: ScenarioKind, d: DraftState, maxLose: number): Scen
       return { kind: 'delay_procurement', months: d.delayMonths };
   }
 }
-
-/** Derived from PRESETS, not re-listed: the chip and its stack row must never
- *  drift apart in wording — the row header is how a user identifies which chip
- *  produced it. */
-const PRESET_LABEL = Object.fromEntries(PRESETS.map((p) => [p.kind, p.label])) as Record<
-  ScenarioKind,
-  string
->;
 
 /**
  * Scenario "presets + live sliders", stackable (#323). The preset chips toggle
@@ -236,16 +242,16 @@ export function ScenarioControls({
     // same thing is landmark noise for screen-reader users, not structure.
     <div data-testid="scenario-controls" className="space-y-3">
       <div role="group" aria-label="Scenario steps" className="grid grid-cols-3 gap-1.5">
-        {PRESETS.map((p) => {
-          const isActive = kinds.includes(p.kind);
-          const reason = blockedReason(p.kind);
+        {PRESETS.map((kind) => {
+          const isActive = kinds.includes(kind);
+          const reason = blockedReason(kind);
           return (
             <button
-              key={p.kind}
+              key={kind}
               type="button"
               aria-pressed={isActive}
-              data-testid={`scenario-preset-${p.kind}`}
-              onClick={() => togglePreset(p.kind)}
+              data-testid={`scenario-preset-${kind}`}
+              onClick={() => togglePreset(kind)}
               // `aria-disabled`, NOT the native `disabled` attribute. Native
               // `disabled` removes the chip from the tab order, so the
               // `aria-describedby` reason below could never be announced — the
@@ -254,7 +260,7 @@ export function ScenarioControls({
               // screen-reader user land on it and hear why it is unavailable;
               // `togglePreset`'s early return is the actual block.
               aria-disabled={reason !== undefined}
-              {...(reason !== undefined ? { 'aria-describedby': `${reasonIdBase}-${p.kind}` } : {})}
+              {...(reason !== undefined ? { 'aria-describedby': `${reasonIdBase}-${kind}` } : {})}
               className={cn(
                 'rounded-[var(--radius)] border px-2 py-1.5 text-xs font-medium transition-[background,border-color,color] duration-150',
                 // Matches the shared Button's disabled treatment (opacity-50 +
@@ -269,7 +275,7 @@ export function ScenarioControls({
                     : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
               )}
             >
-              {p.label}
+              {PRESET_LABEL[kind]}
             </button>
           );
         })}
@@ -278,18 +284,18 @@ export function ScenarioControls({
       {/* Why a preset is off, in text — dimming alone is not a reason, and a
           disabled chip that never explains itself reads as a broken control.
           Each line is its own control's `aria-describedby` target. */}
-      {PRESETS.some((p) => blockedReason(p.kind) !== undefined) ? (
+      {PRESETS.some((kind) => blockedReason(kind) !== undefined) ? (
         <ul className="space-y-1">
-          {PRESETS.map((p) => {
-            const reason = blockedReason(p.kind);
+          {PRESETS.map((kind) => {
+            const reason = blockedReason(kind);
             if (reason === undefined) return null;
             return (
               <li
-                key={p.kind}
-                id={`${reasonIdBase}-${p.kind}`}
+                key={kind}
+                id={`${reasonIdBase}-${kind}`}
                 className="text-[11px] leading-relaxed text-fg-muted"
               >
-                <span className="font-medium text-foreground">{p.label}:</span> {reason}
+                <span className="font-medium text-foreground">{PRESET_LABEL[kind]}:</span> {reason}
               </li>
             );
           })}
