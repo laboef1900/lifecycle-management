@@ -1,10 +1,18 @@
 import * as React from 'react';
+import { X } from 'lucide-react';
 
+import { compareScenarioSteps, MAX_SCENARIO_STEPS, type Scenario } from '@lcm/shared';
+
+import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 import type { ScenarioWire } from '@/lib/api-client';
 
-export type ScenarioKind = 'lose_hosts' | 'add_vms' | 'delay_procurement';
+/**
+ * Derived from the shared contract, not re-declared: a hand-written copy would
+ * let this file disagree with the schema the server validates against.
+ */
+export type ScenarioKind = Scenario['kind'];
 
 /**
  * Presets that cannot move THIS cluster's forecast, each mapped to the reason
@@ -17,8 +25,14 @@ export type ScenarioKind = 'lose_hosts' | 'add_vms' | 'delay_procurement';
 export type BlockedPresets = Partial<Record<ScenarioKind, string>>;
 
 interface ScenarioControlsProps {
-  active: ScenarioWire | null;
-  onChange: (scenario: ScenarioWire | null) => void;
+  /**
+   * The active stack, in the order the user built it. Empty means "baseline".
+   *
+   * @ai-warning An empty array is falsy-adjacent but truthy in JS — never write
+   * `active ? …`. Every consumer must test `active.length > 0`.
+   */
+  active: readonly ScenarioWire[];
+  onChange: (steps: ScenarioWire[]) => void;
   /**
    * Cluster's tracked-host count — bounds the "lose hosts" slider. `undefined`
    * means the baseline forecast that carries it hasn't resolved (or failed), in
@@ -46,25 +60,51 @@ const SIZE_TIERS = [8, 16, 32, 64] as const;
 /** Debounce for slider-driven live updates so a drag isn't one POST per pixel. */
 const LIVE_DEBOUNCE_MS = 200;
 
-const PRESETS: { kind: ScenarioKind; label: string }[] = [
-  { kind: 'lose_hosts', label: 'Lose hosts' },
-  { kind: 'add_vms', label: 'Add load' },
-  { kind: 'delay_procurement', label: 'Delay order' },
-];
+/**
+ * Chip label per kind.
+ *
+ * @ai-warning Declared as an exhaustive `Record`, NOT an array, and NOT derived
+ * via `Object.fromEntries(...) as Record<…>`. Both of those compile happily with
+ * a kind missing and yield `undefined` at runtime — an empty row header and an
+ * aria-label reading "Remove undefined from the scenario". This shape makes a new
+ * `Scenario` kind a compile error here, matching `SCENARIO_STEP_ORDER`'s tripwire
+ * in the shared package.
+ */
+const PRESET_LABEL: Record<ScenarioKind, string> = {
+  lose_hosts: 'Lose hosts',
+  add_vms: 'Add load',
+  delay_procurement: 'Delay order',
+};
+
+/**
+ * Rows render in the SHARED canonical order (`SCENARIO_STEP_ORDER` in
+ * `@lcm/shared`) rather than the order the user happened to tap, so the rail
+ * reads the same way every time for the same stack, matches the order the summary
+ * text lists them in, and — the point — matches the order the server folds them
+ * in. This used to be a second local copy of that order; nothing stopped the two
+ * from drifting, which would have had the rail claiming one order while the
+ * forecast computed another.
+ */
+const orderKinds = (kinds: readonly ScenarioKind[]): ScenarioKind[] =>
+  [...kinds].sort(compareScenarioSteps);
+
+/** Chip render order — the same canonical order the rows and the fold use. */
+const PRESETS: readonly ScenarioKind[] = orderKinds(['lose_hosts', 'add_vms', 'delay_procurement']);
 
 const MICRO_LABEL = 'text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle';
 
-/** Seed the draft from whatever scenario is already applied (pane remounts on open). */
-function scenarioToDraft(active: ScenarioWire | null): DraftState {
-  if (!active) return DEFAULT_DRAFT;
-  switch (active.kind) {
-    case 'lose_hosts':
-      return { ...DEFAULT_DRAFT, loseCount: active.count };
-    case 'add_vms':
-      return { ...DEFAULT_DRAFT, addCount: active.count, addSize: active.sizeGb };
-    case 'delay_procurement':
-      return { ...DEFAULT_DRAFT, delayMonths: active.months };
-  }
+/** Seed the draft from whatever stack is already applied (pane remounts on open). */
+function scenarioToDraft(active: readonly ScenarioWire[]): DraftState {
+  return active.reduce<DraftState>((draft, step) => {
+    switch (step.kind) {
+      case 'lose_hosts':
+        return { ...draft, loseCount: step.count };
+      case 'add_vms':
+        return { ...draft, addCount: step.count, addSize: step.sizeGb };
+      case 'delay_procurement':
+        return { ...draft, delayMonths: step.months };
+    }
+  }, DEFAULT_DRAFT);
 }
 
 function buildScenario(kind: ScenarioKind, d: DraftState, maxLose: number): ScenarioWire {
@@ -82,17 +122,20 @@ function buildScenario(kind: ScenarioKind, d: DraftState, maxLose: number): Scen
 }
 
 /**
- * Scenario "presets + live sliders". A row of preset chips selects the active
- * what-if; the tuning sliders below redraw the forecast LIVE (debounced) as you
- * drag — no Apply step. Bounded sliders make an invalid value unreachable, so
- * the old free-number-input error path is gone. Selecting the active preset
- * again returns to the baseline forecast.
+ * Scenario "presets + live sliders", stackable (#323). The preset chips toggle
+ * steps into and out of a compound what-if of up to {@link MAX_SCENARIO_STEPS}
+ * steps; each step in the stack gets its own tuning row, which redraws the
+ * forecast LIVE (debounced) as you drag — no Apply step. Bounded sliders make an
+ * invalid value unreachable, so the old free-number-input error path is gone.
  *
- * Single scenario for now; stacking several into one compound what-if is the
- * tracked follow-up (needs a composable Scenario contract server-side).
+ * Two ways out of a step, deliberately: re-tap its chip, or use the row's own
+ * Remove control. The chip toggle is what keeps a blocked-but-applied step
+ * escapable (see `blockedReason`); the row control is what makes removal
+ * discoverable once several steps are stacked and the chips no longer read as
+ * "the current one".
  *
  * Renders inside `ScenarioPaneBody`, the docked Scenario rail, which owns the
- * surface, border, and "Scenario" heading.
+ * surface, border, scrolling, and "Scenario" heading.
  */
 export function ScenarioControls({
   active,
@@ -103,19 +146,33 @@ export function ScenarioControls({
   // Initializers, not sync effects: the draft is the user's in-progress edit
   // and must not be clobbered mid-drag. A reopened pane is a fresh mount, which
   // is exactly when re-seeding from the applied scenario is wanted.
-  const [kind, setKind] = React.useState<ScenarioKind | null>(active?.kind ?? null);
+  const [kinds, setKinds] = React.useState<ScenarioKind[]>(() =>
+    orderKinds(active.map((s) => s.kind)),
+  );
   const [draft, setDraft] = React.useState<DraftState>(() => scenarioToDraft(active));
   const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pendingEmit = React.useRef<(() => void) | undefined>(undefined);
   const reasonIdBase = React.useId();
 
+  const atCapacity = kinds.length >= MAX_SCENARIO_STEPS;
+
   /**
-   * The applied preset is never gated, even if its reason later becomes true:
-   * re-tapping it is also the only way to clear it, so disabling it would trap
-   * the user in a scenario they can no longer leave.
+   * A step already IN the stack is never gated, even if its reason later becomes
+   * true: its chip is one of the two ways to remove it, so disabling it would
+   * trap the user in a step they can no longer leave. (The row's Remove control
+   * is the other way out — but both must stay live, because the chip is the only
+   * one a user who learned the single-scenario UI will look for.)
+   *
+   * The capacity reason is separate and only reachable if a fourth kind is ever
+   * added: with three kinds a full stack leaves no inactive chip to gate.
    */
-  const blockedReason = (candidate: ScenarioKind): string | undefined =>
-    candidate === kind ? undefined : blocked?.[candidate];
+  const blockedReason = (candidate: ScenarioKind): string | undefined => {
+    if (kinds.includes(candidate)) return undefined;
+    if (blocked?.[candidate] !== undefined) return blocked[candidate];
+    return atCapacity
+      ? `a scenario combines at most ${MAX_SCENARIO_STEPS} what-ifs. Remove one first.`
+      : undefined;
+  };
 
   // The "lose hosts" bound. When the host count is unknown the slider is pinned
   // to its current value and disabled rather than being given an invented
@@ -143,11 +200,11 @@ export function ScenarioControls({
   );
 
   const emit = React.useCallback(
-    (nextKind: ScenarioKind | null, nextDraft: DraftState, immediate: boolean): void => {
+    (nextKinds: readonly ScenarioKind[], nextDraft: DraftState, immediate: boolean): void => {
       clearTimeout(timer.current);
       const run = (): void => {
         pendingEmit.current = undefined;
-        onChange(nextKind ? buildScenario(nextKind, nextDraft, maxLose) : null);
+        onChange(nextKinds.map((k) => buildScenario(k, nextDraft, maxLose)));
       };
       if (immediate) {
         run();
@@ -159,17 +216,24 @@ export function ScenarioControls({
     [onChange, maxLose],
   );
 
-  const selectPreset = (next: ScenarioKind): void => {
-    if (blockedReason(next) !== undefined) return; // defense in depth; the chip is disabled
-    const nextKind = next === kind ? null : next; // re-tap the active preset → baseline
-    setKind(nextKind);
-    emit(nextKind, draft, true); // type change is immediate, not debounced
+  const setStack = (nextKinds: ScenarioKind[]): void => {
+    setKinds(nextKinds);
+    emit(nextKinds, draft, true); // adding/removing a step is immediate, not debounced
+  };
+
+  const togglePreset = (next: ScenarioKind): void => {
+    if (blockedReason(next) !== undefined) return; // defense in depth; the chip is aria-disabled
+    setStack(kinds.includes(next) ? kinds.filter((k) => k !== next) : orderKinds([...kinds, next]));
+  };
+
+  const removeStep = (target: ScenarioKind): void => {
+    setStack(kinds.filter((k) => k !== target));
   };
 
   const patch = (p: Partial<DraftState>, immediate = false): void => {
     const next = { ...draft, ...p };
     setDraft(next);
-    if (kind) emit(kind, next, immediate);
+    if (kinds.length > 0) emit(kinds, next, immediate);
   };
 
   return (
@@ -177,26 +241,26 @@ export function ScenarioControls({
     // already a landmark named "Scenario", and a nested region repeating the
     // same thing is landmark noise for screen-reader users, not structure.
     <div data-testid="scenario-controls" className="space-y-3">
-      <div role="group" aria-label="Scenario type" className="grid grid-cols-3 gap-1.5">
-        {PRESETS.map((p) => {
-          const isActive = p.kind === kind;
-          const reason = blockedReason(p.kind);
+      <div role="group" aria-label="Scenario steps" className="grid grid-cols-3 gap-1.5">
+        {PRESETS.map((kind) => {
+          const isActive = kinds.includes(kind);
+          const reason = blockedReason(kind);
           return (
             <button
-              key={p.kind}
+              key={kind}
               type="button"
               aria-pressed={isActive}
-              data-testid={`scenario-preset-${p.kind}`}
-              onClick={() => selectPreset(p.kind)}
+              data-testid={`scenario-preset-${kind}`}
+              onClick={() => togglePreset(kind)}
               // `aria-disabled`, NOT the native `disabled` attribute. Native
               // `disabled` removes the chip from the tab order, so the
               // `aria-describedby` reason below could never be announced — the
               // stated reason was reachable only as sighted text, which defeats
               // the point of stating it. Keeping the chip focusable lets a
               // screen-reader user land on it and hear why it is unavailable;
-              // `selectPreset`'s early return at :163 is the actual block.
+              // `togglePreset`'s early return is the actual block.
               aria-disabled={reason !== undefined}
-              {...(reason !== undefined ? { 'aria-describedby': `${reasonIdBase}-${p.kind}` } : {})}
+              {...(reason !== undefined ? { 'aria-describedby': `${reasonIdBase}-${kind}` } : {})}
               className={cn(
                 'rounded-[var(--radius)] border px-2 py-1.5 text-xs font-medium transition-[background,border-color,color] duration-150',
                 // Matches the shared Button's disabled treatment (opacity-50 +
@@ -211,7 +275,7 @@ export function ScenarioControls({
                     : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
               )}
             >
-              {p.label}
+              {PRESET_LABEL[kind]}
             </button>
           );
         })}
@@ -220,107 +284,144 @@ export function ScenarioControls({
       {/* Why a preset is off, in text — dimming alone is not a reason, and a
           disabled chip that never explains itself reads as a broken control.
           Each line is its own control's `aria-describedby` target. */}
-      {PRESETS.some((p) => blockedReason(p.kind) !== undefined) ? (
+      {PRESETS.some((kind) => blockedReason(kind) !== undefined) ? (
         <ul className="space-y-1">
-          {PRESETS.map((p) => {
-            const reason = blockedReason(p.kind);
+          {PRESETS.map((kind) => {
+            const reason = blockedReason(kind);
             if (reason === undefined) return null;
             return (
               <li
-                key={p.kind}
-                id={`${reasonIdBase}-${p.kind}`}
+                key={kind}
+                id={`${reasonIdBase}-${kind}`}
                 className="text-[11px] leading-relaxed text-fg-muted"
               >
-                <span className="font-medium text-foreground">{p.label}:</span> {reason}
+                <span className="font-medium text-foreground">{PRESET_LABEL[kind]}:</span> {reason}
               </li>
             );
           })}
         </ul>
       ) : null}
 
-      {kind === null ? (
+      {kinds.length === 0 ? (
         <p className="text-xs leading-relaxed text-fg-subtle">
-          Pick a scenario to preview a what-if against the baseline forecast.
+          Pick one or more scenarios to preview a combined what-if against the baseline forecast.
         </p>
-      ) : null}
+      ) : (
+        // A list, because it now genuinely is one — an ordered set of steps a
+        // screen-reader user should be able to count and navigate. Hairline
+        // dividers rather than nested cards: three bordered boxes inside a 340px
+        // rail is chrome competing with the data.
+        <ul className="divide-y divide-border" data-testid="scenario-stack">
+          {kinds.map((k) => (
+            <li key={k} data-testid={`scenario-step-${k}`} className="py-3 first:pt-0 last:pb-0">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className={MICRO_LABEL}>{PRESET_LABEL[k]}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="chip"
+                  data-testid={`scenario-step-remove-${k}`}
+                  // Names the step, not just "Remove": with up to three of these
+                  // in one rail, three controls all called "Remove" is exactly
+                  // the ambiguity a screen-reader user cannot resolve.
+                  aria-label={`Remove ${PRESET_LABEL[k]} from the scenario`}
+                  onClick={() => removeStep(k)}
+                  className="text-fg-subtle hover:text-foreground"
+                >
+                  <X className="h-3 w-3" aria-hidden />
+                  Remove
+                </Button>
+              </div>
 
-      {kind === 'lose_hosts' ? (
-        <SliderRow
-          label="Hosts lost"
-          id="scenario-lose"
-          value={loseCount}
-          min={1}
-          max={maxLose}
-          display={`${loseCount}`}
-          valueText={`${loseCount} host${loseCount === 1 ? '' : 's'}`}
-          onValueChange={(v) => patch({ loseCount: v })}
-          disabled={!hostCountKnown}
-          hint={hostCountKnown ? undefined : 'Waiting for the forecast to report the host count.'}
-        />
-      ) : null}
+              {k === 'lose_hosts' ? (
+                <SliderRow
+                  label="Hosts lost"
+                  id="scenario-lose"
+                  value={loseCount}
+                  min={1}
+                  max={maxLose}
+                  display={`${loseCount}`}
+                  valueText={`${loseCount} host${loseCount === 1 ? '' : 's'}`}
+                  onValueChange={(v) => patch({ loseCount: v })}
+                  disabled={!hostCountKnown}
+                  hint={
+                    hostCountKnown
+                      ? undefined
+                      : 'Waiting for the forecast to report the host count.'
+                  }
+                />
+              ) : null}
 
-      {kind === 'add_vms' ? (
-        <div className="space-y-3">
-          <SliderRow
-            label="VM count"
-            id="scenario-vmcount"
-            value={draft.addCount}
-            min={1}
-            max={MAX_VMS}
-            display={`${draft.addCount}`}
-            valueText={`${draft.addCount} VMs`}
-            onValueChange={(v) => patch({ addCount: v })}
-          />
-          <div>
-            <span className={MICRO_LABEL}>VM size</span>
-            <div role="group" aria-label="VM size (GB)" className="mt-1.5 grid grid-cols-4 gap-1.5">
-              {SIZE_TIERS.map((gb) => {
-                const isSel = draft.addSize === gb;
-                return (
-                  <button
-                    key={gb}
-                    type="button"
-                    aria-pressed={isSel}
-                    data-testid={`scenario-size-${gb}`}
-                    onClick={() => patch({ addSize: gb }, true)}
-                    className={cn(
-                      'rounded-[var(--radius)] border py-1 font-mono text-xs tabular-nums transition-colors duration-150 active:scale-[0.98]',
-                      isSel
-                        ? 'border-accent bg-accent text-accent-foreground'
-                        : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
-                    )}
+              {k === 'add_vms' ? (
+                <div className="space-y-3">
+                  <SliderRow
+                    label="VM count"
+                    id="scenario-vmcount"
+                    value={draft.addCount}
+                    min={1}
+                    max={MAX_VMS}
+                    display={`${draft.addCount}`}
+                    valueText={`${draft.addCount} VMs`}
+                    onValueChange={(v) => patch({ addCount: v })}
+                  />
+                  <div>
+                    <span className={MICRO_LABEL}>VM size</span>
+                    <div
+                      role="group"
+                      aria-label="VM size (GB)"
+                      className="mt-1.5 grid grid-cols-4 gap-1.5"
+                    >
+                      {SIZE_TIERS.map((gb) => {
+                        const isSel = draft.addSize === gb;
+                        return (
+                          <button
+                            key={gb}
+                            type="button"
+                            aria-pressed={isSel}
+                            data-testid={`scenario-size-${gb}`}
+                            onClick={() => patch({ addSize: gb }, true)}
+                            className={cn(
+                              'rounded-[var(--radius)] border py-1 font-mono text-xs tabular-nums transition-colors duration-150 active:scale-[0.98]',
+                              isSel
+                                ? 'border-accent bg-accent text-accent-foreground'
+                                : 'border-border text-fg-muted hover:border-border-strong hover:text-foreground',
+                            )}
+                          >
+                            {gb}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <p
+                    className="font-mono text-[11px] tabular-nums text-fg-muted"
+                    data-testid="scenario-total"
                   >
-                    {gb}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <p
-            className="font-mono text-[11px] tabular-nums text-fg-muted"
-            data-testid="scenario-total"
-          >
-            = {draft.addCount * draft.addSize} GB added
-          </p>
-        </div>
-      ) : null}
+                    = {draft.addCount * draft.addSize} GB added
+                  </p>
+                </div>
+              ) : null}
 
-      {kind === 'delay_procurement' ? (
-        <SliderRow
-          label="Delay (months)"
-          id="scenario-delay"
-          value={draft.delayMonths}
-          min={1}
-          max={MAX_DELAY_MONTHS}
-          display={`${draft.delayMonths} mo`}
-          valueText={`${draft.delayMonths} month${draft.delayMonths === 1 ? '' : 's'}`}
-          onValueChange={(v) => patch({ delayMonths: v })}
-        />
-      ) : null}
+              {k === 'delay_procurement' ? (
+                <SliderRow
+                  label="Delay (months)"
+                  id="scenario-delay"
+                  value={draft.delayMonths}
+                  min={1}
+                  max={MAX_DELAY_MONTHS}
+                  display={`${draft.delayMonths} mo`}
+                  valueText={`${draft.delayMonths} month${draft.delayMonths === 1 ? '' : 's'}`}
+                  onValueChange={(v) => patch({ delayMonths: v })}
+                />
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
 
-      {active ? (
+      {active.length > 0 ? (
         <p className="text-[11px] text-fg-muted" data-testid="scenario-summary">
-          Active: {describeScenario(active)}
+          Active: {describeScenarioStack(active)}
         </p>
       ) : null}
     </div>
@@ -393,4 +494,26 @@ export function describeScenario(s: ScenarioWire): string {
     case 'delay_procurement':
       return `Delay procurement by ${s.months} mo`;
   }
+}
+
+/**
+ * One phrase for a whole compound what-if, listed in canonical step order.
+ *
+ * This string is load-bearing in three places at once — the header's
+ * active-scenario indicator, the panel's aria-live announcements, and the chart
+ * legend — so it has to read as a single sentence fragment in all three. " + "
+ * is the join because the steps are simultaneous conditions, not a sequence:
+ * "and then" would imply an ordering the forecast does not model.
+ *
+ * Returns `''` for an empty stack; callers gate on `length > 0` and must not
+ * render this as a label for "no scenario".
+ */
+export function describeScenarioStack(steps: readonly ScenarioWire[]): string {
+  return orderKinds(steps.map((s) => s.kind))
+    .map((kind) => {
+      const step = steps.find((s) => s.kind === kind);
+      return step ? describeScenario(step) : '';
+    })
+    .filter((phrase) => phrase !== '')
+    .join(' + ');
 }

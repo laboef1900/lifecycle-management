@@ -320,3 +320,113 @@ test.describe('scenario forecast fetch failure', () => {
     await expect(page.getByTestId('scenario-active-indicator')).toBeVisible();
   });
 });
+
+/**
+ * #323 — the compound stack, in a real browser.
+ *
+ * Self-contained on purpose. Two of the three presets are gated by
+ * `deriveBlockedPresets` on the reference seed (its hosts carry no recorded
+ * capacity, so `lose_hosts` cannot move the forecast), which would make a
+ * compound built on seeded data conditional — and a conditionally-skipped
+ * assertion in a suite that now gates promotion to `main` (#334) is exactly the
+ * vacuous coverage the `forbid-skipped-reporter` exists to catch. So this creates
+ * its own cluster with a capacity-bearing host, making both `lose_hosts` and
+ * `add_vms` unconditionally available, and tears it down via the API — the same
+ * pattern as golden-path.spec.ts and host-move.spec.ts.
+ *
+ * What only a browser shows: that two tuning rows genuinely coexist inside the
+ * fixed-width rail with the second still operable rather than clipped away.
+ */
+test.describe('compound scenario stack (#323)', () => {
+  test.use({ viewport: SIDE_BY_SIDE });
+
+  test('stacks two what-ifs, keeps both rows operable, and removes them one at a time', async ({
+    page,
+    request,
+  }) => {
+    const clusterName = `CL-E2E-STACK-${Date.now().toString(36)}`;
+    let clusterId: string | null = null;
+
+    try {
+      await page.goto('/settings/inventory');
+      await page.getByRole('button', { name: '+ Add cluster' }).click();
+      const createDialog = page.getByRole('dialog', { name: 'New cluster' });
+      await createDialog.getByRole('textbox', { name: 'Name' }).fill(clusterName);
+      await createDialog.getByRole('spinbutton', { name: 'Consumption (GB)' }).fill('1000');
+      await createDialog.getByRole('spinbutton', { name: 'Capacity (GB)' }).fill('5000');
+      await createDialog.getByRole('button', { name: 'Create cluster' }).click();
+      await expect(createDialog).toBeHidden();
+
+      await page.goto('/');
+      await page.getByRole('link', { name: clusterName }).click();
+      await expect(page).toHaveURL(/\/clusters\/[^/]+$/);
+      clusterId = /\/clusters\/([^/?#]+)/.exec(page.url())?.[1] ?? null;
+
+      // A host with RECORDED capacity is what makes `lose_hosts` applicable —
+      // without it the preset is (correctly) gated and there is no second step.
+      const panel = page.locator('.cluster-panel');
+      await panel.getByRole('tab', { name: 'Hosts' }).click();
+      await panel.getByRole('button', { name: 'Add host' }).click();
+      const hostDialog = page.getByRole('dialog', { name: 'Add host' });
+      await hostDialog.getByRole('textbox', { name: 'Name' }).fill('stack-host');
+      await hostDialog
+        .getByRole('spinbutton', { name: 'Initial memory capacity (GB)' })
+        .fill('512');
+      await hostDialog.getByRole('button', { name: 'Add host' }).click();
+      await expect(hostDialog).toBeHidden();
+
+      await openScenarioRail(page);
+
+      // Both presets are live on this cluster — no conditional path.
+      const lose = page.getByTestId('scenario-preset-lose_hosts');
+      const add = page.getByTestId('scenario-preset-add_vms');
+      await expect(lose).toHaveAttribute('aria-disabled', 'false');
+      await expect(add).toHaveAttribute('aria-disabled', 'false');
+
+      await lose.click();
+      await add.click();
+
+      // Two rows coexist — the thing the single-scenario rail could not do.
+      await expect(page.getByTestId('scenario-step-lose_hosts')).toBeVisible();
+      await expect(page.getByTestId('scenario-step-add_vms')).toBeVisible();
+      await expect(lose).toHaveAttribute('aria-pressed', 'true');
+      await expect(add).toHaveAttribute('aria-pressed', 'true');
+
+      // Rows render in canonical order (lose → add), matching the server's fold.
+      const rows = page.locator('[data-testid^="scenario-step-"]:not([data-testid*="remove"])');
+      await expect(rows).toHaveCount(2);
+      expect(
+        await rows.evaluateAll((els) => els.map((el) => el.getAttribute('data-testid'))),
+      ).toEqual(['scenario-step-lose_hosts', 'scenario-step-add_vms']);
+
+      // Both the summary and the closed-rail indicator name the WHOLE compound.
+      await expect(page.getByTestId('scenario-summary')).toContainText('+');
+      await expect(page.getByTestId('scenario-active-indicator')).toContainText('+');
+
+      // The SECOND row's slider is genuinely reachable and operable — not clipped
+      // out of the fixed-width rail.
+      const second = page.getByTestId('scenario-step-add_vms').getByLabel('VM count');
+      await second.scrollIntoViewIfNeeded();
+      await expect(second).toBeVisible();
+      await second.focus();
+      await page.keyboard.press('ArrowRight');
+      await expect(page.getByTestId('scenario-total')).toContainText('GB added');
+
+      // Removing one step leaves the other active — not a drop to baseline.
+      await page.getByTestId('scenario-step-remove-lose_hosts').click();
+      await expect(page.getByTestId('scenario-step-lose_hosts')).toHaveCount(0);
+      await expect(page.getByTestId('scenario-step-add_vms')).toBeVisible();
+      await expect(page.getByTestId('scenario-active-indicator')).toBeVisible();
+
+      // Removing the last one restores the baseline: the indicator is the only cue
+      // a closed rail leaves behind, so it must go.
+      await page.getByTestId('scenario-step-remove-add_vms').click();
+      await expect(page.getByTestId('scenario-summary')).toHaveCount(0);
+      await expect(page.getByTestId('scenario-active-indicator')).toHaveCount(0);
+    } finally {
+      if (clusterId) {
+        await request.delete(`http://localhost:8090/api/clusters/${clusterId}`);
+      }
+    }
+  });
+});

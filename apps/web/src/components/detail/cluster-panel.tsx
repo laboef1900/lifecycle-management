@@ -15,7 +15,7 @@ import { HostsTab } from '@/components/clusters/hosts-tab';
 import { ItemsTab } from '@/components/clusters/items-tab';
 import {
   ScenarioControls,
-  describeScenario,
+  describeScenarioStack,
   type BlockedPresets,
 } from '@/components/clusters/scenario-controls';
 import { SettingsTab } from '@/components/clusters/settings-tab';
@@ -164,7 +164,14 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // "opened" announcement — it falls out of the query resolving).
   const [announcementOverride, setAnnouncementOverride] = useState<string | null>(null);
   const [windowSelection, setWindowSelection] = useState<ForecastWindow>('24mo');
-  const [scenario, setScenario] = useState<ScenarioWire | null>(null);
+  // The compound what-if, in canonical step order; `[]` is "baseline" (#323).
+  //
+  // @ai-warning An empty array is TRUTHY. Every gate here must read
+  // `hasScenario` (or `.length > 0`), never `scenario ? …` — the previous
+  // `ScenarioWire | null` shape made `Boolean(scenario)` correct, and this shape
+  // silently makes it always-true.
+  const [scenario, setScenario] = useState<ScenarioWire[]>([]);
+  const hasScenario = scenario.length > 0;
   const [activeTab, setActiveTab] = useState<PanelTab>('hosts');
   const [approveOpen, setApproveOpen] = useState(false);
   const isWide = useMediaQuery('(min-width: 640px)');
@@ -305,10 +312,12 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // under the chart below `lg`), so the redraw is visible while editing in both
   // layouts. The change is announced on the live region regardless, since the
   // chart is not an assistive-tech affordance.
-  const handleScenarioChange = useCallback((next: ScenarioWire | null): void => {
+  const handleScenarioChange = useCallback((next: ScenarioWire[]): void => {
     setScenario(next);
     setAnnouncementOverride(
-      next ? `Scenario active: ${describeScenario(next)}.` : 'Baseline forecast restored.',
+      next.length > 0
+        ? `Scenario active: ${describeScenarioStack(next)}.`
+        : 'Baseline forecast restored.',
     );
   }, []);
 
@@ -383,11 +392,12 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       api.clusters.forecastScenario(
         clusterId,
         { metric: metric!.metricTypeKey, from: range!.from, to: range!.to },
-        scenario!,
+        scenario,
       ),
-    enabled: Boolean(metric && range && scenario),
+    // `hasScenario`, not `Boolean(scenario)` — an empty stack is a truthy array.
+    enabled: Boolean(metric && range) && hasScenario,
     // Scenario edits are LIVE: every debounced slider settle is a new `scenario`
-    // object, hence a new query key, hence — without this — an `undefined` data
+    // array, hence a new query key, hence — without this — an `undefined` data
     // window on every single tick. That window collapses `activeForecast` back
     // to the baseline, so the violet scenario line, the "Scenario active" KPI
     // badge, and all four KPI numbers would blink out and back on each edit.
@@ -406,7 +416,8 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     placeholderData: keepPreviousData,
   });
 
-  const activeForecast = scenario && scenarioQuery.data ? scenarioQuery.data : forecastQuery.data;
+  const activeForecast =
+    hasScenario && scenarioQuery.data ? scenarioQuery.data : forecastQuery.data;
   // Capacity-honesty follows the forecast that is ON SCREEN, not the stored
   // baseline metric. This one flag gates the Runway tile, the Order-by tile, the
   // chart heading and the header chip — so while it was baseline-derived, a
@@ -429,7 +440,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
     [forecastQuery.data],
   );
   const scenarioDeltaLabel =
-    scenario && forecastQuery.data && scenarioQuery.data
+    hasScenario && forecastQuery.data && scenarioQuery.data
       ? computeScenarioDeltaLabel(forecastQuery.data, scenarioQuery.data)
       : undefined;
   // A scenario is set but its forecast fetch failed (#243 Part B item 1).
@@ -440,7 +451,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // `scenario` alone), which is why it kept announcing a hypothetical
   // forecast over what the rest of the panel had already, correctly, fallen
   // back to showing: the baseline.
-  const scenarioFailed = Boolean(scenario && scenarioQuery.isError);
+  const scenarioFailed = hasScenario && scenarioQuery.isError;
   // The scenario computed successfully and reproduced the baseline exactly —
   // an un-modelable what-if (see `scenarioChangesNothing`). Nothing on the
   // chart or in the KPI numbers can show this by itself: an unchanged forecast
@@ -455,7 +466,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // deliberate for the CHART (it is what makes a slider drag read as one
   // continuous redraw); making an equality CLAIM about it is not.
   const scenarioIsNoop = Boolean(
-    scenario &&
+    hasScenario &&
     !scenarioQuery.isPlaceholderData &&
     forecastQuery.data &&
     scenarioQuery.data &&
@@ -479,8 +490,8 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
   // named — only now with what it did.
   const liveMessage = scenarioFailed
     ? 'Scenario could not be computed — showing baseline.'
-    : scenarioIsNoop && scenario
-      ? `Scenario active: ${describeScenario(scenario)}. It changes nothing in this window.`
+    : scenarioIsNoop
+      ? `Scenario active: ${describeScenarioStack(scenario)}. It changes nothing in this window.`
       : (announcementOverride ?? (clusterName ? `Cluster ${clusterName} detail opened.` : ''));
 
   return (
@@ -555,15 +566,15 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                   // Acknowledgment reflects the REAL forecast, never a what-if:
                   // suppressed while a scenario is active (as is the approve
                   // action — you cannot approve a hypothetical order).
-                  acknowledgment={scenario ? null : (forecastQuery.data?.acknowledgment ?? null)}
-                  onApprove={canManage && !scenario ? () => setApproveOpen(true) : undefined}
+                  acknowledgment={hasScenario ? null : (forecastQuery.data?.acknowledgment ?? null)}
+                  onApprove={canManage && !hasScenario ? () => setApproveOpen(true) : undefined}
                 />
               )}
               <div className="ml-auto flex shrink-0 items-center gap-2">
                 {clusterQuery.data && metric ? (
                   <ScenarioButton
                     ref={scenarioButtonRef}
-                    active={scenarioFailed ? null : scenario}
+                    active={scenarioFailed ? [] : scenario}
                     open={paneOpen}
                     controlsId={paneId}
                     onClick={togglePane}
@@ -588,9 +599,9 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                   baseline={forecastQuery.data}
                   metric={metric}
                   capacityKnown={activeCapacityKnown}
-                  isScenario={Boolean(scenario && scenarioQuery.data)}
+                  isScenario={hasScenario && Boolean(scenarioQuery.data)}
                   noChange={scenarioIsNoop}
-                  recomputing={Boolean(scenario && scenarioQuery.isPlaceholderData)}
+                  recomputing={hasScenario && scenarioQuery.isPlaceholderData}
                 />
               ) : null}
 
@@ -648,8 +659,8 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
                   forecast={forecastQuery.data}
                   compact={!isWide}
                   scenario={
-                    scenario && scenarioQuery.data
-                      ? { label: describeScenario(scenario), forecast: scenarioQuery.data }
+                    hasScenario && scenarioQuery.data
+                      ? { label: describeScenarioStack(scenario), forecast: scenarioQuery.data }
                       : null
                   }
                   {...(scenarioDeltaLabel ? { scenarioDeltaLabel } : {})}
@@ -977,9 +988,9 @@ function forecastHeading(procurement: ProcurementInfo, capacityKnown: boolean): 
 
 /**
  * Header toggle for the Scenario pane (#226). When a scenario is active it
- * carries the scenario summary as visible text (not colour alone — the tint is
- * paired with the `describeScenario` label), so a closed pane never hides that
- * the displayed forecast is hypothetical. `aria-expanded` + `aria-controls`
+ * carries the compound scenario summary as visible text (not colour alone — the
+ * tint is paired with the `describeScenarioStack` label), so a closed pane never
+ * hides that the displayed forecast is hypothetical. `aria-expanded` + `aria-controls`
  * expose the disclosure state to assistive tech.
  *
  * The active tint is `--chart-consumption` (violet), matching the scenario
@@ -994,7 +1005,7 @@ function ScenarioButton({
   onClick,
   ref,
 }: {
-  active: ScenarioWire | null;
+  active: readonly ScenarioWire[];
   open: boolean;
   controlsId: string;
   onClick: () => void;
@@ -1010,16 +1021,16 @@ function ScenarioButton({
       aria-expanded={open}
       {...(open ? { 'aria-controls': controlsId } : {})}
       data-testid="scenario-button"
-      {...(active ? { className: SCENARIO_ACTIVE_TONE } : {})}
+      {...(active.length > 0 ? { className: SCENARIO_ACTIVE_TONE } : {})}
     >
       <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
       Scenario
-      {active ? (
+      {active.length > 0 ? (
         <span
           data-testid="scenario-active-indicator"
           className="rounded-sm border border-[color-mix(in_oklab,var(--chart-consumption)_40%,transparent)] px-1 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-[var(--chart-consumption)]"
         >
-          {describeScenario(active)}
+          {describeScenarioStack(active)}
         </span>
       ) : null}
     </Button>
@@ -1052,8 +1063,8 @@ function ScenarioPaneBody({
   blocked,
 }: {
   headingId: string;
-  scenario: ScenarioWire | null;
-  onChange: (next: ScenarioWire | null) => void;
+  scenario: readonly ScenarioWire[];
+  onChange: (next: ScenarioWire[]) => void;
   onClose: () => void;
   closeRef: React.RefObject<HTMLButtonElement | null>;
   maxHosts: number | undefined;
