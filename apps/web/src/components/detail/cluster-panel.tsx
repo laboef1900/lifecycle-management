@@ -490,7 +490,7 @@ export function ClusterPanel({ clusterId }: ClusterPanelProps): React.JSX.Elemen
       aria-modal="true"
       aria-label={dialogLabel}
       className="cluster-panel fixed bottom-0 right-0 top-14 z-40 flex overflow-hidden"
-      style={{ background: 'var(--surface-card)' }}
+      style={{ background: 'var(--surface-backdrop)' }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           if (
