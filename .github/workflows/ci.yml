@@ -233,12 +233,27 @@ jobs:
         env:
           PORT: '8090'
           RATE_LIMIT_MAX: '2000'
-          LOG_LEVEL: warn
+          # `info`, not `warn`: Fastify logs requests at info, and the uploaded
+          # api.log exists precisely to tell an environment failure (a 429 storm,
+          # a mid-run crash) apart from a product regression. At `warn` a rate-limit
+          # burst leaves no trace and the artifact cannot answer the one question
+          # it is collected for.
+          LOG_LEVEL: info
 
       # Playwright boots Vite itself (webServer). retries stay at 0 and a skipped
       # test fails the run — both deliberate, see playwright.config.ts.
       - name: Run golden-path e2e
-        run: pnpm --filter @lcm/web test:e2e
+        run: |
+          # The API was started in a SEPARATE step. If it died in between, all 39
+          # specs fail with timeouts and bogus login redirects that read exactly
+          # like product bugs — the misdiagnosis this job's artifacts exist to
+          # prevent. Re-check here so that failure mode is unambiguous.
+          if ! curl -sf http://localhost:8090/readyz > /dev/null; then
+            echo "::error::API is not responding on :8090 — environment failure, not a product regression"
+            cat e2e-logs/api.log
+            exit 1
+          fi
+          pnpm --filter @lcm/web test:e2e
 
       # Playwright's traces plus the API log — together they tell a product
       # regression apart from an environment failure (an unseeded database, a
