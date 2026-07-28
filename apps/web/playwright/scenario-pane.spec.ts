@@ -11,11 +11,16 @@ import { expect, test, type Page } from '@playwright/test';
  * so are the target size of the sliders and the absence of any glass material.
  * This spec covers exactly that gap.
  *
- * NOT run by CI. `.github/workflows/ci.yml` runs only the OIDC e2e job
- * (`test:e2e:oidc`, its own config); this default `playwright/` suite needs a
- * seeded dev DB and is run locally via `pnpm --filter @lcm/web test:e2e`. Every
- * test here skips cleanly when no clusters are seeded, so it cannot fail a run
- * on an empty database.
+ * Run by CI on the `dev → main` sync PR only — the `golden-path-e2e` job (#334)
+ * — and locally via `pnpm --filter @lcm/web test:e2e` against a seeded dev DB.
+ * Deliberately NOT run on `feat/* → dev` PRs: this suite needs Postgres + the
+ * API + Vite and mutates real data as it goes, unlike the self-contained OIDC
+ * e2e job.
+ *
+ * The tests below skip cleanly when no clusters are seeded, but that is a local
+ * convenience only: under CI a skip FAILS the run
+ * (`support/forbid-skipped-reporter.ts`), because an all-skipped suite is
+ * indistinguishable from an all-passed one.
  */
 
 const SUB_LG = { width: 900, height: 800 };
