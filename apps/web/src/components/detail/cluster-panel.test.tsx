@@ -637,6 +637,84 @@ describe('<ClusterPanel>', () => {
       ),
     );
   });
+
+  it('posts a compound stack and names every step in the indicator and announcement (#323)', async () => {
+    // `add_vms` as the second step: it is the one preset `deriveBlockedPresets`
+    // never gates, so the stack does not depend on the fixture growing a
+    // commissioning step (which is what `delay_procurement` needs).
+    const scenarioSpy = vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 900, 1000), monthPoint(2, 950, 1000)],
+      }),
+    );
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await user.click(screen.getByTestId('scenario-preset-add_vms'));
+
+    // The request carries BOTH steps, in canonical order — the panel must not
+    // quietly send only the last one tapped.
+    await waitFor(() =>
+      expect(scenarioSpy).toHaveBeenLastCalledWith(expect.any(String), expect.any(Object), [
+        { kind: 'lose_hosts', count: 1 },
+        { kind: 'add_vms', count: 20, sizeGb: 16 },
+      ]),
+    );
+
+    // The header indicator is the only place a closed rail still reveals that the
+    // forecast is hypothetical, so it has to name the WHOLE compound.
+    await waitFor(() =>
+      expect(screen.getByTestId('scenario-active-indicator')).toHaveTextContent(
+        'Lose 1 host + Add 20 × 16 GB VMs',
+      ),
+    );
+    expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+      'Scenario active: Lose 1 host + Add 20 × 16 GB VMs.',
+    );
+  });
+
+  it('drops back to the baseline only when the LAST step is removed (#323)', async () => {
+    const scenarioSpy = vi.spyOn(api.clusters, 'forecastScenario').mockResolvedValue(
+      forecast({
+        months: [monthPoint(0, 500, 1000), monthPoint(1, 900, 1000), monthPoint(2, 950, 1000)],
+      }),
+    );
+    stubViewportWidth(1280);
+    const user = userEvent.setup();
+    render(<Harness show />);
+    await screen.findByTestId('kpi-strip');
+
+    await user.click(screen.getByTestId('scenario-button'));
+    await user.click(screen.getByTestId('scenario-preset-lose_hosts'));
+    await user.click(screen.getByTestId('scenario-preset-add_vms'));
+    await waitFor(() => expect(scenarioSpy).toHaveBeenCalled());
+
+    // Removing one of two leaves a scenario still active — the indicator must not
+    // vanish and the panel must not claim the baseline is back.
+    await user.click(screen.getByTestId('scenario-step-remove-lose_hosts'));
+    await waitFor(() =>
+      expect(screen.getByTestId('scenario-active-indicator')).toHaveTextContent(
+        'Add 20 × 16 GB VMs',
+      ),
+    );
+    expect(screen.getByTestId('scenario-active-indicator')).not.toHaveTextContent('Lose 1 host');
+    expect(screen.getByTestId('panel-live-region')).not.toHaveTextContent(
+      'Baseline forecast restored.',
+    );
+
+    // Removing the last one does restore the baseline.
+    await user.click(screen.getByTestId('scenario-step-remove-add_vms'));
+    await waitFor(() =>
+      expect(screen.getByTestId('panel-live-region')).toHaveTextContent(
+        'Baseline forecast restored.',
+      ),
+    );
+    expect(screen.queryByTestId('scenario-active-indicator')).toBeNull();
+  });
 });
 
 describe('<ClusterPanel> scenario pane (#226, docked rail)', () => {
@@ -1302,11 +1380,14 @@ describe('<ClusterPanel> scenario KPI honesty', () => {
       ),
     );
 
-    // Switch presets. The no-op result is held on screen; the claim must not be.
+    // Change the stack — under #323 tapping a second preset STACKS it rather than
+    // replacing the first, which is the same mechanism under test: a new stack is
+    // a new query key, so the held no-op result stays on screen while the new
+    // answer is in flight. The claim must not stay with it.
     await user.click(screen.getByTestId('scenario-preset-add_vms'));
     await waitFor(() => expect(scenarioSpy).toHaveBeenCalledTimes(2));
 
-    expect(live).toHaveTextContent('Scenario active: Add 20 × 16 GB VMs.');
+    expect(live).toHaveTextContent('Scenario active: Lose 1 host + Add 20 × 16 GB VMs.');
     expect(live).not.toHaveTextContent(/changes nothing/i);
     expect(screen.queryByTestId('scenario-noop-notice')).toBeNull();
     expect(screen.getByTestId('scenario-badge')).toHaveTextContent(/recomputing/i);
