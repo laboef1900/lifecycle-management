@@ -1,6 +1,6 @@
 import type { ClusterResponse, ForecastMonthPoint, ForecastResponse } from '@lcm/shared';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { ClusterForecastEntry } from '@/lib/forecast-summary';
@@ -120,6 +120,16 @@ function forecast(overrides: Partial<ForecastResponse> = {}): ForecastResponse {
 }
 
 describe('<ClusterTile>', () => {
+  // The chips judge the fixture dates against today, so the clock is pinned or they expire
+  // as real time passes. Only `Date` is faked, so React's own timers keep running.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-25T12:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('links to the cluster detail page', () => {
     render(
       <ClusterTile entry={entry()} forecast={forecast()} thresholds={{ warn: 0.7, crit: 0.9 }} />,
