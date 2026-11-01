@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type {
   CollectedInventory,
@@ -97,6 +97,14 @@ describe('⚠️ the snapshot must not double-count capacity', () => {
   });
 
   it('accrues a forecast snapshot when a new baseline is captured (uncertainty-band re-anchor)', async () => {
+    // The snapshot date below is fixed, so hold `Date` at it. Only `Date`: faking every timer
+    // could stall the database calls.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-01T00:00:00Z'));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+
     const conn = await makeConn();
     const svc = new VsphereSnapshotService(prisma, collector(inventory()));
     await svc.runSnapshot('default', conn, CREDS, new Date('2026-08-01T00:00:00Z'));
