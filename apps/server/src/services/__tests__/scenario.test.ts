@@ -105,6 +105,16 @@ describe('applyScenario — add_vms', () => {
 });
 
 describe('applyScenario — delay_procurement', () => {
+  // The shift applies only to future commissions, judged against `new Date()`, so the
+  // clock is pinned or these dates expire as real time passes.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-15T12:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('shifts future commissionedAt by N calendar months', () => {
     const future = makeHost('upcoming', 500, {
       commissionedAt: new Date('2026-09-01T00:00:00Z'),
